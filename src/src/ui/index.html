@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TeamClaw - Virtual Team Dashboard</title>
+  <link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+  <header class="header">
+    <h1 class="header-title">TeamClaw</h1>
+    <div class="header-status">
+      <span id="connection-status" class="status-dot disconnected"></span>
+      <span id="team-name">Team</span>
+    </div>
+  </header>
+
+  <main class="main">
+    <aside class="sidebar">
+      <div class="sidebar-section">
+        <h2 class="sidebar-heading">Workers</h2>
+        <div id="workers-list" class="workers-list">
+          <div class="empty-state">No workers connected</div>
+        </div>
+      </div>
+      <div class="sidebar-section">
+        <h2 class="sidebar-heading">Roles</h2>
+        <div id="roles-list" class="roles-list"></div>
+      </div>
+    </aside>
+
+    <div class="content">
+      <div class="tabs">
+        <button class="tab active" data-tab="tasks">Tasks</button>
+        <button class="tab" data-tab="messages">Messages</button>
+        <button class="tab" data-tab="create-task">New Task</button>
+      </div>
+
+      <div class="tab-content">
+        <!-- Tasks Tab -->
+        <div id="tab-tasks" class="tab-panel active">
+          <div class="task-filters">
+            <button class="filter-btn active" data-filter="all">All</button>
+            <button class="filter-btn" data-filter="pending">Pending</button>
+            <button class="filter-btn" data-filter="assigned">Assigned</button>
+            <button class="filter-btn" data-filter="in_progress">In Progress</button>
+            <button class="filter-btn" data-filter="completed">Completed</button>
+            <button class="filter-btn" data-filter="failed">Failed</button>
+          </div>
+          <div id="tasks-board" class="tasks-board">
+            <div class="empty-state">No tasks yet</div>
+          </div>
+        </div>
+
+        <!-- Messages Tab -->
+        <div id="tab-messages" class="tab-panel">
+          <div id="messages-feed" class="messages-feed">
+            <div class="empty-state">No messages yet</div>
+          </div>
+        </div>
+
+        <!-- Create Task Tab -->
+        <div id="tab-create-task" class="tab-panel">
+          <form id="create-task-form" class="create-task-form">
+            <div class="form-group">
+              <label for="task-title">Title</label>
+              <input type="text" id="task-title" placeholder="Task title..." required>
+            </div>
+            <div class="form-group">
+              <label for="task-desc">Description</label>
+              <textarea id="task-desc" placeholder="Detailed task description..." rows="4" required></textarea>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="task-priority">Priority</label>
+                <select id="task-priority">
+                  <option value="low">Low</option>
+                  <option value="medium" selected>Medium</option>
+                  <option value="high">High</option>
+                  <option value="critical">Critical</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="task-role">Assigned Role</label>
+                <select id="task-role">
+                  <option value="">Auto-assign</option>
+                  <option value="pm">Product Manager</option>
+                  <option value="architect">Software Architect</option>
+                  <option value="developer">Developer</option>
+                  <option value="qa">QA Engineer</option>
+                  <option value="release-engineer">Release Engineer</option>
+                  <option value="devops">DevOps Engineer</option>
+                  <option value="designer">UI/UX Designer</option>
+                  <option value="marketing">Marketing Specialist</option>
+                </select>
+              </div>
+            </div>
+            <button type="submit" class="btn btn-primary">Create Task</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="command-bar">
+      <input type="text" id="command-input" placeholder="Type a command... (e.g., /status, /assign task-id to developer)" autocomplete="off">
+      <button id="command-send" class="btn btn-small">Send</button>
+    </div>
+  </footer>
+
+  <script src="/ui/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+{
+  "providers": {
+    "zai": {
+      "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
+      "apiKey": "fdc4cb12a82a44958bdcab2e560ac8a1.4ee7JnJLEbZiGp8t",
+      "api": "openai-completions",
+      "models": [
+        {
+          "id": "glm-5-turbo",
+          "name": "GLM-5 Turbo",
+          "reasoning": false,
+          "input": [
+            "text"
+          ],
+          "cost": {
+            "input": 0.1,
+            "output": 0.1,
+            "cacheRead": 0.01,
+            "cacheWrite": 0.01
+          },
+          "contextWindow": 128000,
+          "maxTokens": 8192,
+          "api": "openai-completions"
+        }
+      ]
+    }
+  }
+}

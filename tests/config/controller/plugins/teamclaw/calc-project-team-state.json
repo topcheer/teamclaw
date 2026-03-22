@@ -1,0 +1,100 @@
+{
+  "teamName": "calc-project",
+  "workers": {
+    "mn154258-xhomoa": {
+      "id": "mn154258-xhomoa",
+      "role": "qa",
+      "label": "QA Engineer",
+      "status": "idle",
+      "url": "http://192.168.97.4:9527",
+      "lastHeartbeat": 1774149779358,
+      "capabilities": [
+        "test-planning",
+        "test-case-writing",
+        "bug-reporting",
+        "regression-testing",
+        "quality-assurance"
+      ],
+      "registeredAt": 1774146657527
+    },
+    "mn1542g0-09x1oj": {
+      "id": "mn1542g0-09x1oj",
+      "role": "architect",
+      "label": "Software Architect",
+      "status": "idle",
+      "url": "http://192.168.97.5:9527",
+      "lastHeartbeat": 1774149780011,
+      "capabilities": [
+        "system-design",
+        "api-design",
+        "database-schema",
+        "technology-selection",
+        "code-review-architecture"
+      ],
+      "registeredAt": 1774146657895
+    },
+    "mn1542gs-o1reku": {
+      "id": "mn1542gs-o1reku",
+      "role": "developer",
+      "label": "Developer",
+      "status": "idle",
+      "url": "http://192.168.97.3:9527",
+      "lastHeartbeat": 1774149780505,
+      "capabilities": [
+        "coding",
+        "debugging",
+        "feature-implementation",
+        "code-refactoring",
+        "unit-testing"
+      ],
+      "registeredAt": 1774146657930
+    }
+  },
+  "tasks": {
+    "mn13554c-deehju": {
+      "id": "mn13554c-deehju",
+      "title": "Design todo REST API",
+      "description": "Design a REST API for a todo-list. CRUD: create, list, get, update, delete. Todo fields: id (UUID), title (string), completed (boolean), createdAt (ISO 8601). Provide endpoints, methods, request/response JSON, error codes.",
+      "status": "completed",
+      "priority": "high",
+      "assignedRole": "architect",
+      "createdBy": "boss",
+      "createdAt": 1774143348780,
+      "updatedAt": 1774143392064,
+      "assignedWorkerId": "mn134qbb-10d2ab",
+      "result": "# Todo List REST API — Design\n\n## Base URL\n\n```\n/api/v1/todos\n```\n\n---\n\n## Endpoints\n\n| Method | Path | Description |\n|--------|------|-------------|\n| `POST` | `/todos` | Create a todo |\n| `GET` | `/todos` | List all todos |\n| `GET` | `/todos/{id}` | Get a single todo |\n| `PATCH` | `/todos/{id}` | Update a todo |\n| `DELETE` | `/todos/{id}` | Delete a todo |\n\n**Why PATCH over PUT?** — Clients should only send the fields they want to change. A full PUT replacement is brittle and wasteful for partial updates.\n\n---\n\n## Data Model\n\n| Field | Type | Read-only | Notes |\n|-------|------|-----------|-------|\n| `id` | `string` (UUID v4) | ✅ | Server-generated |\n| `title` | `string` | ❌ | 1–255 chars, required on create |\n| `completed` | `boolean` | ❌ | Defaults to `false` |\n| `createdAt` | `string` (ISO 8601) | ✅ | Server-generated |\n\n---\n\n## Endpoints in Detail\n\n### `POST /todos` — Create\n\n**Request:**\n```json\n{\n  \"title\": \"Buy groceries\"\n}\n```\n\n**Response `201 Created`:**\n```json\n{\n  \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"title\": \"Buy groceries\",\n  \"completed\": false,\n  \"createdAt\": \"2026-03-22T09:35:00.000Z\"\n}\n```\n\n---\n\n### `GET /todos` — List\n\n**Query Parameters (all optional):**\n\n| Param | Type | Default | Description |\n|-------|------|---------|-------------|\n| `completed` | `boolean` | — | Filter by status |\n| `limit` | `integer` | `50` | Max items (1–100) |\n| `offset` | `integer` | `0` | Pagination offset |\n\n**Response `200 OK`:**\n```json\n{\n  \"data\": [\n    {\n      \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n      \"title\": \"Buy groceries\",\n      \"completed\": false,\n      \"createdAt\": \"2026-03-22T09:35:00.000Z\"\n    },\n    {\n      \"id\": \"f9e8d7c6-b5a4-3210-fedc-ba0987654321\",\n      \"title\": \"Ship feature\",\n      \"completed\": true,\n      \"createdAt\": \"2026-03-21T14:00:00.000Z\"\n    }\n  ],\n  \"meta\": {\n    \"total\": 42,\n    \"limit\": 50,\n    \"offset\": 0\n  }\n}\n```\n\n**Why `meta.total`?** — Clients need the total count to build proper pagination UIs (e.g., \"Page 3 of 9\").\n\n---\n\n### `GET /todos/{id}` — Get\n\n**Response `200 OK`:**\n```json\n{\n  \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"title\": \"Buy groceries\",\n  \"completed\": false,\n  \"createdAt\": \"2026-03-22T09:35:00.000Z\"\n}\n```\n\n---\n\n### `PATCH /todos/{id}` — Update\n\nAll fields optional. Send only what changes.\n\n**Request (mark complete):**\n```json\n{\n  \"completed\": true\n}\n```\n\n**Request (rename):**\n```json\n{\n  \"title\": \"Buy groceries and snacks\"\n}\n```\n\n**Response `200 OK`:**\n```json\n{\n  \"id\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"title\": \"Buy groceries and snacks\",\n  \"completed\": true,\n  \"createdAt\": \"2026-03-22T09:35:00.000Z\"\n}\n```\n\n> No `updatedAt` field by design — the spec only called for four fields. If audit trails matter later, add it. Don't over-engineer day one.\n\n---\n\n### `DELETE /todos/{id}` — Delete\n\n**Response `204 No Content`**\n\nEmpty body. `204` means \"I did it, nothing to return.\" Clean.\n\n---\n\n## Error Responses\n\nAll errors follow a consistent envelope:\n\n```json\n{\n  \"error\": {\n    \"code\": \"VALIDATION_ERROR\",\n    \"message\": \"Title is required and must be 1-255 characters.\"\n  }\n}\n```\n\n| HTTP Status | Error Code | When |\n|-------------|------------|------|\n| `400` | `VALIDATION_ERROR` | Missing/invalid fields, bad query params |\n| `404` | `NOT_FOUND` | Todo `{id}` doesn't exist |\n| `409` | `CONFLICT` | UUID collision (theoretical) |\n| `422` | `UNPROCESSABLE_ENTITY` | Valid JSON but semantically wrong (e.g. `completed: \"maybe\"`) |\n| `429` | `RATE_LIMITED` | Too many requests |\n\n**5xx errors** are internal — never expose stack traces. Return:\n\n```json\n{\n  \"error\": {\n    \"code\": \"INTERNAL_ERROR\",\n    \"message\": \"Something went wrong.\"\n  }\n}\n```\n\n---\n\n## Design Decisions & Rationale\n\n| Decision | Why |\n|----------|-----|\n| **Plural noun resource** `/todos` | REST convention. No verbs in URLs. |\n| **UUID v4** | No ID enumeration attacks. Client never guesses IDs. |\n| **Envelope with `data` + `meta` on list** | Separates payload from pagination. Room to grow (links, cursors). |\n| **Flat envelope on single item** | One item doesn't need `data`/`meta` wrapping — it's the resource itself. |\n| **`PATCH` not `PUT`** | Partial updates. Reduces payload size and race-condition surface. |\n| **`204` on delete** | Standard. No body to parse. |\n| **Error envelope with `code` + `message`** | Machine-parseable `code`, human-readable `message`. Client can switch on codes. |\n| **No auth in v1** | Keep it simple. Add `Authorization: Bearer <jwt>` middleware when needed. |\n\n---\n\n## Next Steps (when you're ready)\n\n- **Auth** — JWT middleware, scoped to user. Add `userId` as a filter.\n- **Soft delete** — `deletedAt` timestamp instead of hard delete.\n- **Cursor pagination** — Replace `offset`/`limit` with opaque cursors for stable pagination at scale.\n- **OpenAPI/Swagger spec** — Auto-generate docs from this design.\n- **Etags / `If-Match`** — Optimistic concurrency control for updates.\n\nWant me to turn this into an OpenAPI 3.1 spec, scaffold a working implementation (Express/FastAPI/Go), or wire up the database schema?",
+      "completedAt": 1774143392064
+    },
+    "mn1364e6-u1loj2": {
+      "id": "mn1364e6-u1loj2",
+      "title": "Implement todo API server",
+      "description": "Implement a simple todo-list REST API server in Python using only stdlib (http.server). Endpoints: POST /todos (create), GET /todos (list), GET /todos/<id> (get), PATCH /todos/<id> (update), DELETE /todos/<id> (delete). Store todos in memory. Return JSON responses. Handle 404 for missing todos.",
+      "status": "completed",
+      "priority": "critical",
+      "assignedRole": "developer",
+      "createdBy": "boss",
+      "createdAt": 1774143394494,
+      "updatedAt": 1774143449493,
+      "assignedWorkerId": "mn134qb6-andmfh",
+      "result": "All green. Here's what's in `todo_server.py`:\n\n| Method | Endpoint | Description | Status |\n|--------|----------|-------------|--------|\n| `POST` | `/todos` | Create a todo (JSON body) | 201 |\n| `GET` | `/todos` | List all todos | 200 |\n| `GET` | `/todos/<id>` | Get one todo | 200 / 404 |\n| `PATCH` | `/todos/<id>` | Partial update (JSON body) | 200 / 404 |\n| `DELETE` | `/todos/<id>` | Delete a todo | 200 / 404 |\n\n**Key details:**\n- Pure stdlib — `http.server` + `json`, no deps\n- In-memory dict store with auto-incrementing IDs\n- JSON in/out on all endpoints\n- `id` field is immutable (PATCH can't overwrite it)\n- Unknown routes and methods return 404/405\n- Runs on `0.0.0.0:8000` — `python3 todo_server.py`\n\nWant me to persist it to disk, add filtering/query params, or anything else?",
+      "completedAt": 1774143449493
+    },
+    "mn137bej-debv79": {
+      "id": "mn137bej-debv79",
+      "title": "QA review todo API design",
+      "description": "Review the todo REST API design and implementation. Check: 1) All CRUD operations defined 2) Proper HTTP status codes 3) Error handling complete 4) JSON schemas consistent 5) Edge cases covered. Provide a pass/fail assessment with specific issues found.",
+      "status": "completed",
+      "priority": "high",
+      "assignedRole": "qa",
+      "createdBy": "boss",
+      "createdAt": 1774143450235,
+      "updatedAt": 1774143470873,
+      "assignedWorkerId": "mn134qb6-mc7v5f",
+      "result": "I can't find any todo REST API code to review. Here's what I checked:\n\n- **Workspace files** — only the default OpenClaw bootstrap/config files, no project source code.\n- **Memory** — no prior context about a todo API project.\n- **Team status** — no team tasks assigned.\n\n**To proceed, I need one of these:**\n\n1. **Paste the code** — drop the API implementation (routes, handlers, models, schemas) into chat and I'll review it line by line.\n2. **Point me to a repo** — give me a GitHub URL or file path and I'll clone/fetch it.\n3. **Check your project location** — if the code lives somewhere else on the system, tell me the path and I'll read it directly.\n\nWhich works for you?",
+      "completedAt": 1774143470873
+    }
+  },
+  "messages": [],
+  "createdAt": 1774143328795,
+  "updatedAt": 1774149780506
+}
