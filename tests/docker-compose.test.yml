@@ -1,0 +1,108 @@
+services:
+  teamclaw-controller:
+    image: ${OPENCLAW_IMAGE:-openclaw:teamclaw-test}
+    container_name: tc-controller
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      TZ: Asia/Shanghai
+    volumes:
+      - ./config/controller:/home/node/.openclaw
+    ports:
+      - "${CONTROLLER_PORT:-9527}:9527"
+    networks:
+      - teamclaw-net
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--allow-unconfigured",
+      ]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:9527/api/v1/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    init: true
+
+  teamclaw-dev:
+    image: ${OPENCLAW_IMAGE:-openclaw:teamclaw-test}
+    container_name: tc-worker-dev
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      TZ: Asia/Shanghai
+    volumes:
+      - ./config/worker-dev:/home/node/.openclaw
+    networks:
+      - teamclaw-net
+    depends_on:
+      teamclaw-controller:
+        condition: service_started
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--allow-unconfigured",
+      ]
+    init: true
+
+  teamclaw-qa:
+    image: ${OPENCLAW_IMAGE:-openclaw:teamclaw-test}
+    container_name: tc-worker-qa
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      TZ: Asia/Shanghai
+    volumes:
+      - ./config/worker-qa:/home/node/.openclaw
+    networks:
+      - teamclaw-net
+    depends_on:
+      teamclaw-controller:
+        condition: service_started
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--allow-unconfigured",
+      ]
+    init: true
+
+  teamclaw-arch:
+    image: ${OPENCLAW_IMAGE:-openclaw:teamclaw-test}
+    container_name: tc-worker-arch
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      TZ: Asia/Shanghai
+    volumes:
+      - ./config/worker-arch:/home/node/.openclaw
+    networks:
+      - teamclaw-net
+    depends_on:
+      teamclaw-controller:
+        condition: service_started
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway",
+        "--allow-unconfigured",
+      ]
+    init: true
+
+networks:
+  teamclaw-net:
+    driver: bridge
+    name: teamclaw-test-net

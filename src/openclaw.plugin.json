@@ -1,0 +1,41 @@
+{
+  "id": "teamclaw",
+  "name": "TeamClaw",
+  "description": "Virtual team collaboration plugin - multiple OpenClaw instances form a virtual software company with role-based task routing.",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "mode": {
+        "type": "string",
+        "enum": ["controller", "worker"],
+        "default": "worker",
+        "description": "Plugin mode: controller manages the team, worker executes tasks"
+      },
+      "port": {
+        "type": "number",
+        "default": 9527,
+        "description": "HTTP server port for this instance"
+      },
+      "role": {
+        "type": "string",
+        "default": "developer",
+        "description": "Worker role (only used in worker mode)"
+      },
+      "controllerUrl": {
+        "type": "string",
+        "default": "",
+        "description": "Manual controller URL fallback (used when mDNS discovery fails)"
+      },
+      "teamName": {
+        "type": "string",
+        "default": "default",
+        "description": "Team name for mDNS identification"
+      },
+      "heartbeatIntervalMs": {
+        "type": "number",
+        "default": 10000,
+        "description": "Heartbeat interval in milliseconds"
+      }
+    }
+  }
+}
