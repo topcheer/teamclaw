@@ -4,7 +4,7 @@
 
 ### 1.1 目标
 
-TeamClaw 是 OpenClaw 的一个插件，让多个 OpenClaw 实例组成一个虚拟软件团队。每个实例扮演一个软件开发中的角色（产品经理、架构师、开发者等），通过 Controller/Worker 模式实现任务分配、消息路由和协作工作流。
+TeamClaw 是 OpenClaw 的一个插件，让多个 OpenClaw 实例组成一个虚拟软件团队，也支持在单个 OpenClaw 实例中通过 `controller + localRoles` 运行本地虚拟团队。各角色通过 Controller/Worker 路由实现任务分配、消息路由和协作工作流。
 
 ### 1.2 定位
 
@@ -20,6 +20,7 @@ TeamClaw 是 OpenClaw 的一个插件，让多个 OpenClaw 实例组成一个虚
 |------|------|
 | **Controller** | 团队管理中心，运行 HTTP 服务器、WebSocket 广播、任务路由和消息路由 |
 | **Worker** | 团队成员（一个 OpenClaw 实例），向 Controller 注册后接收任务和消息 |
+| **Local Worker** | 由 Controller 在同一 OpenClaw 进程内托管的虚拟 Worker，通过 subagent 执行任务 |
 | **Task** | 工作单元，包含标题、描述、优先级、角色指派和状态流转 |
 | **Message** | 团队内部消息，支持直接消息、广播和审查请求三种类型 |
 | **Role** | 团队角色定义，包含能力标签和系统提示词 |
@@ -57,6 +58,8 @@ TeamClaw 是 OpenClaw 的一个插件，让多个 OpenClaw 实例组成一个虚
               └────────────┘   └────────────┘   └────────────┘
 ```
 
+在单实例部署时，Controller 仍然保留同样的 API、任务路由和消息路由，只是将部分角色作为 `localRoles` 托管为**本地子 Worker**。这些角色会被 Controller 拉起为独立的 OpenClaw child process：拥有各自隔离的状态目录、HTTP 端口与注册身份，但继续共享同一个 workspace。这样仍保留“单实例”的使用体验，同时把实际 subagent 执行从 Controller 主进程隔离出去，减少活跃任务对 Web UI / API 响应的影响。
+
 ### 2.2 通信协议
 
 所有通信基于 HTTP REST API，使用 JSON 格式。WebSocket 用于实时事件推送（仅 Controller 端）。
@@ -92,15 +95,17 @@ extensions/teamclaw/
 ├── src/
 │   ├── types.ts                      # 所有类型定义 + 配置解析
 │   ├── config.ts                     # 配置 schema (JSON Schema)
-│   ├── roles.ts                      # 8 个角色定义 + 辅助函数
+│   ├── roles.ts                      # 10 个角色定义 + 辅助函数
 │   ├── state.ts                      # 状态持久化 (读写 JSON)
 │   ├── protocol.ts                   # 协议常量、工具函数
+│   ├── task-executor.ts              # 共享的角色任务执行器（subagent 封装）
 │   ├── discovery.ts                  # mDNS 服务发现 (Advertiser + Browser)
 │   ├── identity.ts                   # Worker 身份管理 (IdentityManager)
 │   ├── controller/
 │   │   ├── controller-service.ts     # Controller 服务生命周期
 │   │   ├── http-server.ts            # Controller HTTP 路由 (20+ 端点)
 │   │   ├── controller-tools.ts       # Controller Agent 工具 (4 个)
+│   │   ├── local-worker-manager.ts   # Controller 托管本地虚拟 Worker
 │   │   ├── prompt-injector.ts        # Controller 系统提示词注入
 │   │   ├── task-router.ts            # 任务路由算法
 │   │   ├── message-router.ts         # 消息路由 (direct/broadcast/review)
@@ -137,7 +142,7 @@ definePluginEntry({
 ```
 
 根据 `config.mode` 分流：
-- **Controller 模式**: 注册 Service + PromptInjector + Tools
+- **Controller 模式**: 注册 Service + PromptInjector + Tools；当配置 `localRoles` 时，同时托管本地子 Worker 生命周期（spawn / restart / shared-workspace wiring）
 - **Worker 模式**: 注册 Service + PromptInjector + Tools + MessageQueue
 
 ### 3.3 类型定义 (`types.ts`)
@@ -148,26 +153,35 @@ definePluginEntry({
 |------|------|
 | `TeamClawMode` | `"controller" \| "worker"` |
 | `WorkerStatus` | `"idle" \| "busy" \| "offline"` |
-| `TaskStatus` | `"pending" \| "assigned" \| "in_progress" \| "review" \| "completed" \| "failed"` |
+| `TaskStatus` | `"pending" \| "assigned" \| "in_progress" \| "review" \| "blocked" \| "completed" \| "failed"` |
 | `TaskPriority` | `"low" \| "medium" \| "high" \| "critical"` |
-| `RoleId` | 8 个角色 ID 的联合类型 |
+| `RoleId` | 10 个角色 ID 的联合类型 |
 | `RoleDefinition` | 角色完整定义（标签、能力、提示词、建议后续角色） |
-| `WorkerInfo` | Worker 运行时状态 |
+| `WorkerInfo` | Worker 运行时状态（含 `transport: "http" \| "local"`） |
 | `TaskInfo` | 任务完整信息 |
 | `TeamMessage` | 消息（支持 direct/broadcast/review-request） |
-| `PluginConfig` | 插件配置 |
+| `ClarificationRequest` | 人类澄清请求与答复状态 |
+| `PluginConfig` | 插件配置（含 `localRoles`、`taskTimeoutMs`） |
 | `WorkerIdentity` | Worker 注册身份 |
 | `TeamState` | 团队全局状态 |
 | `RegistrationRequest` | Worker 注册请求体 |
 | `HeartbeatPayload` | 心跳请求体 |
 | `DiscoveryResult` | mDNS 发现结果 |
 
-`parsePluginConfig()` 函数解析原始配置，提供默认值验证。
+`parsePluginConfig()` 函数解析原始配置，提供默认值验证；其中 `taskTimeoutMs` 默认值为 30 分钟，用于控制单个角色任务的最长执行等待时间。
+
+运行时还存在一层 OpenClaw agent 自身的 timeout（`agents.defaults.timeoutSeconds`）。如果该值小于 TeamClaw 的 `taskTimeoutMs / 1000`，则内层 agent 会先超时，导致 TeamClaw 任务被提前打断。因此真实长链路 practical / benchmark 环境应把两者一起调大，并确保 OpenClaw 侧 timeout 不小于 TeamClaw 侧。
+
+`TeamState` 还持久化 `clarifications` 队列：当角色因缺少关键信息而无法安全推进时，任务会转为 `blocked`，并由 Controller 统一等待人类答复。
+
+当前 TeamClaw task 更偏向“正在流转的 live work item”，而不是带完整依赖语义的 backlog placeholder。因此 Controller 在 intake 或规划阶段应只创建**已满足前置条件、可以立即启动**的任务；对未来阶段先保留为分析结论或计划说明，等前置结果产出后再物化成新任务。对于由 Controller intake 创建出来的任务链，当前实现会在该任务完成后再次进入同一条 intake 会话，让 Controller 基于最新完成产物继续判断是否需要创建下一阶段的 execution-ready task，而不是把整个流程停在第一张任务卡上。
+
+对基础设施与外部工具同样适用上述规则：若 Infra / DevOps 在当前运行环境中拿不到所需的 Docker / Kubernetes / 凭据 / 外部服务接入，或者只有商业/专有方案才能继续，必须把任务保持为 `blocked` 并请求人类澄清；默认优先采用开源/免费方案。
 
 ### 3.4 角色系统 (`roles.ts`)
 
 导出：
-- `ROLES`: `RoleDefinition[]` — 8 个角色的完整定义数组
+- `ROLES`: `RoleDefinition[]` — 10 个角色的完整定义数组
 - `ROLE_IDS`: `RoleId[]` — 所有角色 ID
 - `getRole(id)`: 按 ID 获取角色定义
 - `buildRolePrompt(role, teamContext?)`: 构建角色的系统提示词
@@ -217,12 +231,12 @@ definePluginEntry({
 #### controller-service.ts
 
 服务生命周期管理：
-- `start()`: 加载/创建 TeamState → 启动 mDNS 广播 → 启动 HTTP 服务器 → 启动超时监控（每 15 秒检查 Worker 心跳，超时 30 秒标记 offline）
+- `start()`: 加载/创建 TeamState → 同步 `localRoles` 到团队状态 → 启动 mDNS 广播 → 启动 HTTP 服务器 → 启动超时监控（每 15 秒检查远程 Worker 心跳，超时 30 秒标记 offline）
 - `stop()`: 清理定时器、关闭 WebSocket、停止 mDNS
 
 #### http-server.ts
 
-路由所有 Controller 端点（详见第 5 节）。同时挂载 WebSocket 服务（路径 `/ws`）。
+路由所有 Controller 端点（详见第 5 节）。同时挂载 WebSocket 服务（路径 `/ws`），并统一处理远程 HTTP Worker 与本地虚拟 Worker 的任务派发、消息投递和结果回收。
 
 #### task-router.ts
 
@@ -248,10 +262,12 @@ definePluginEntry({
 
 Controller 端的 `before_prompt_build` 钩子，向 Agent 的系统提示词注入：
 - 团队模式说明
+- 原始人类输入 = 需求入口，Controller 先做需求分析与澄清
 - 可用工具列表
 - 当前 Worker 列表及状态
 - 任务统计和待处理任务
 - 可用角色列表
+- 控制纪律：需求明确后再派工，不把未分析的原始需求直接丢给 Worker
 
 ### 3.10 Worker 模块
 
@@ -299,6 +315,7 @@ Worker 端的 `before_prompt_build` 钩子，向 Agent 注入：
 | `controllerUrl` | string | `""` | 手动指定 Controller URL（mDNS 失败时回退） |
 | `teamName` | string | `"default"` | 团队名称（用于 mDNS 标识） |
 | `heartbeatIntervalMs` | number | `10000` | 心跳间隔（毫秒），最小值 1000 |
+| `localRoles` | `RoleId[]` | `[]` | Controller 模式下在同实例内托管的本地虚拟 Worker 角色列表 |
 
 ### 4.2 协议常量
 
@@ -421,7 +438,8 @@ Worker 端的 `before_prompt_build` 钩子，向 Agent 注入：
 请求体：
 ```json
 {
-  "workerId": "string (可选，省略则自动路由)"
+  "workerId": "string (可选，省略则自动路由)",
+  "targetRole": "RoleId (可选，用于按角色重新路由)"
 }
 ```
 
@@ -438,13 +456,11 @@ Worker 端的 `before_prompt_build` 钩子，向 Agent 注入：
 请求体：
 ```json
 {
-  "targetRole": "RoleId",
-  "fromWorkerId": "string",
-  "reason": "string"
+  "targetRole": "RoleId (可选)"
 }
 ```
 
-将任务状态重置为 `pending`，释放原 Worker，尝试自动分配到新角色。
+将任务状态重置为 `pending`，释放原 Worker，尝试自动分配到新角色；若新角色无可用 Worker，则任务保留为待处理状态。
 
 **POST /tasks/:id/result**
 
@@ -542,6 +558,7 @@ Worker 端的 `before_prompt_build` 钩子，向 Agent 注入：
   "teamName": "string",
   "workers": [{ "WorkerInfo" }],
   "tasks": [{ "TaskInfo" }],
+  "messages": [{ "TeamMessage" }],
   "taskCount": "number",
   "workerCount": "number"
 }
@@ -864,6 +881,8 @@ Type.Object({
 
 任务路由器 (`TaskRouter`) 使用角色的 `capabilities` 数组做关键词匹配。例如，任务描述包含 "API design" 时，会优先匹配 `architect` 角色（因其 capabilities 包含 `api-design`）。
 
+角色 prompt 还额外约束了执行纪律：团队成员不能私自扩张 backlog、不能在缺少关键信息时猜测，且在 infra/tooling 不可用时必须通过 clarification 回到人类，而不是旁路创建一套虚假的环境。
+
 ---
 
 ## 9. 状态持久化
@@ -941,7 +960,8 @@ Web UI 位于 `http://localhost:{port}/ui`，为纯静态页面（HTML + CSS + J
 ┌──────────────────────────────────────────────┐
 │  TeamClaw            ● connected  Team Name  │  ← Header
 ├──────────┬───────────────────────────────────┤
-│ Workers  │  [Tasks] [Messages] [New Task]    │  ← Tabs
+│ Workers  │  [Tasks] [Clarifications]         │
+│          │  [Messages] [New Task]            │  ← Tabs
 │ ──────── │  ─────────────────────────────── │
 │ D: idle  │  [All] [Pending] [Assigned] ...   │  ← Filters
 │ A: busy  │  ┌────────────────────────────┐   │
@@ -968,10 +988,11 @@ Web UI 位于 `http://localhost:{port}/ui`，为纯静态页面（HTML + CSS + J
 |------|------|
 | **Header** | 标题、WebSocket 连接状态指示灯（connected/disconnected/connecting）、团队名称 |
 | **Sidebar - Workers** | 已注册 Worker 列表，显示标签和状态（idle/busy/offline） |
-| **Sidebar - Roles** | 8 个角色的图标和标签列表 |
-| **Tasks Tab** | 任务看板，支持按状态过滤（All/Pending/Assigned/In Progress/Completed/Failed） |
+| **Sidebar - Roles** | 10 个角色的图标和标签列表 |
+| **Tasks Tab** | 任务看板，支持按状态过滤（All/Pending/Assigned/In Progress/Blocked/Completed/Failed） |
+| **Clarifications Tab** | 待答复/已答复澄清队列；人类可直接提交答案，触发任务恢复 |
 | **Messages Tab** | 消息流，显示最近 50 条消息，标注来源角色和消息类型 |
-| **New Task Tab** | 创建任务表单（标题、描述、优先级、指派角色） |
+| **New Task Tab** | 手工任务注入入口；原始需求应优先走 Controller 对话，再由 Controller 转成执行任务 |
 | **Command Bar** | 命令输入框，支持 `/status`、`/assign <taskId> <role>`，其他输入作为广播消息 |
 
 ### 10.3 交互流程
@@ -1046,6 +1067,15 @@ openclaw gateway run
 3. Worker 自动通过 mDNS 发现 Controller 并注册（如 mDNS 不可用，配置 `controllerUrl` 为 `http://localhost:9527`）。
 
 ### 11.2 测试场景
+
+在 Docker 集成测试中，可通过环境变量开启 host provisioning 模式：
+
+- `TEAMCLAW_TEST_HOST_PROVISIONING=1`：将 TeamClaw 测试容器切为 `root + privileged`
+- `TEAMCLAW_TEST_DOCKER_SOCK=/var/run/docker.sock`：把宿主 Docker socket 传入容器
+- `TEAMCLAW_TEST_KUBECONFIG=/path/to/config`：把 kubeconfig 挂入容器
+- `TEAMCLAW_TEST_KUBE_CONTEXT=name`：为容器内 CLI 指定首选 context
+
+该模式用于验证虚拟团队能否在受控前提下自行 provision benchmark 所需的共享依赖（如 Git 服务、issue tracker、mock 部署环境）。TeamClaw 本身不假定这些能力永远存在；如果宿主没有显式提供对应挂载/凭据，角色应通过 clarification 阻塞并等待人类补充。
 
 #### 场景 1：Worker 注册
 

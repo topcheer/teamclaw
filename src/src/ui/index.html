@@ -32,8 +32,10 @@
     <div class="content">
       <div class="tabs">
         <button class="tab active" data-tab="tasks">Tasks</button>
+        <button class="tab" data-tab="workspace">Workspace</button>
+        <button class="tab" data-tab="clarifications">Clarifications <span id="clarifications-tab-count" class="tab-badge">0</span></button>
         <button class="tab" data-tab="messages">Messages</button>
-        <button class="tab" data-tab="create-task">New Task</button>
+        <button class="tab" data-tab="create-task">Manual Task</button>
       </div>
 
       <div class="tab-content">
@@ -44,6 +46,7 @@
             <button class="filter-btn" data-filter="pending">Pending</button>
             <button class="filter-btn" data-filter="assigned">Assigned</button>
             <button class="filter-btn" data-filter="in_progress">In Progress</button>
+            <button class="filter-btn" data-filter="blocked">Blocked</button>
             <button class="filter-btn" data-filter="completed">Completed</button>
             <button class="filter-btn" data-filter="failed">Failed</button>
           </div>
@@ -52,8 +55,62 @@
           </div>
         </div>
 
+        <!-- Workspace Tab -->
+        <div id="tab-workspace" class="tab-panel">
+          <div class="workspace-browser">
+            <aside class="workspace-sidebar-panel">
+              <div class="workspace-panel-header">
+                <div>
+                  <div class="workspace-panel-kicker">Workspace</div>
+                  <h3>Files</h3>
+                </div>
+                <button id="workspace-tree-refresh" class="btn btn-small" type="button">Refresh</button>
+              </div>
+              <div id="workspace-tree" class="workspace-tree">
+                <div class="empty-state">Workspace tree loading…</div>
+              </div>
+            </aside>
+
+            <section class="workspace-viewer-panel">
+              <div class="workspace-panel-header">
+                <div>
+                  <div class="workspace-panel-kicker">Preview</div>
+                  <h3 id="workspace-file-name">Select a file</h3>
+                  <div id="workspace-file-meta" class="workspace-file-meta"></div>
+                </div>
+                <div class="workspace-viewer-actions">
+                  <a id="workspace-open-raw" class="btn btn-small workspace-open-raw hidden" href="#" target="_blank" rel="noreferrer">Open Raw</a>
+                </div>
+              </div>
+
+              <div class="workspace-view-tabs">
+                <button id="workspace-view-source" class="workspace-view-tab active" type="button" data-workspace-view="source">Source</button>
+                <button id="workspace-view-preview" class="workspace-view-tab" type="button" data-workspace-view="preview">Preview</button>
+              </div>
+
+              <div class="workspace-view-body">
+                <div id="workspace-source-view" class="workspace-view-panel active"></div>
+                <div id="workspace-preview-view" class="workspace-view-panel"></div>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <!-- Clarifications Tab -->
+        <div id="tab-clarifications" class="tab-panel">
+          <div id="clarifications-list" class="clarifications-list">
+            <div class="empty-state">No clarification requests</div>
+          </div>
+        </div>
+
         <!-- Messages Tab -->
         <div id="tab-messages" class="tab-panel">
+          <div class="panel-note">
+            Controller activity is persisted here so you can follow requirement intake, orchestration, and follow-up runs from the web UI.
+          </div>
+          <div id="controller-runs" class="controller-runs">
+            <div class="empty-state">No controller activity yet</div>
+          </div>
           <div id="messages-feed" class="messages-feed">
             <div class="empty-state">No messages yet</div>
           </div>
@@ -61,6 +118,9 @@
 
         <!-- Create Task Tab -->
         <div id="tab-create-task" class="tab-panel">
+          <div class="panel-note">
+            Raw human requirements should go to the controller conversation first. Use this form only for explicit manual task injection or testing.
+          </div>
           <form id="create-task-form" class="create-task-form">
             <div class="form-group">
               <label for="task-title">Title</label>
@@ -68,7 +128,11 @@
             </div>
             <div class="form-group">
               <label for="task-desc">Description</label>
-              <textarea id="task-desc" placeholder="Detailed task description..." rows="4" required></textarea>
+              <textarea id="task-desc" placeholder="Execution-ready task description..." rows="4" required></textarea>
+            </div>
+            <div class="form-group">
+              <label for="task-recommended-skills">Recommended Skills</label>
+              <input type="text" id="task-recommended-skills" placeholder="Comma-separated skill slugs, e.g. find-skills, ui-ux-pro-max">
             </div>
             <div class="form-row">
               <div class="form-group">
@@ -89,25 +153,64 @@
                   <option value="developer">Developer</option>
                   <option value="qa">QA Engineer</option>
                   <option value="release-engineer">Release Engineer</option>
+                  <option value="infra-engineer">Infra Engineer</option>
                   <option value="devops">DevOps Engineer</option>
+                  <option value="security-engineer">Security Engineer</option>
                   <option value="designer">UI/UX Designer</option>
                   <option value="marketing">Marketing Specialist</option>
                 </select>
               </div>
             </div>
-            <button type="submit" class="btn btn-primary">Create Task</button>
+            <button type="submit" class="btn btn-primary">Create Manual Task</button>
           </form>
         </div>
       </div>
     </div>
   </main>
 
-  <footer class="footer">
-    <div class="command-bar">
-      <input type="text" id="command-input" placeholder="Type a command... (e.g., /status, /assign task-id to developer)" autocomplete="off">
-      <button id="command-send" class="btn btn-small">Send</button>
-    </div>
-  </footer>
+  <div id="task-detail-modal" class="task-detail-modal" aria-hidden="true">
+    <div class="task-detail-backdrop" data-task-detail-close></div>
+    <section class="task-detail-panel" role="dialog" aria-modal="true" aria-labelledby="task-detail-title">
+      <header class="task-detail-header">
+        <div class="task-detail-heading">
+          <div class="task-detail-kicker">Task Details</div>
+          <h2 id="task-detail-title">Select a task</h2>
+          <div id="task-detail-subtitle" class="task-detail-subtitle"></div>
+        </div>
+        <div class="task-detail-actions">
+          <button id="task-detail-refresh" class="btn btn-small" type="button">Refresh</button>
+          <button id="task-detail-close" class="btn btn-small" type="button">Close</button>
+        </div>
+      </header>
+
+      <div class="task-detail-toolbar">
+        <label class="task-detail-follow">
+          <input id="task-detail-follow-toggle" type="checkbox" checked>
+          <span>Follow live output</span>
+        </label>
+        <span id="task-detail-live-badge" class="task-detail-live-badge">Idle</span>
+      </div>
+
+      <div class="task-detail-tabs">
+        <button class="task-detail-tab active" type="button" data-task-detail-tab="overview">Overview</button>
+        <button class="task-detail-tab" type="button" data-task-detail-tab="timeline">Timeline</button>
+        <button class="task-detail-tab" type="button" data-task-detail-tab="output">Output</button>
+      </div>
+
+      <div class="task-detail-body">
+        <div id="task-detail-overview" class="task-detail-panel-content active"></div>
+        <div id="task-detail-timeline" class="task-detail-panel-content"></div>
+        <div id="task-detail-output" class="task-detail-panel-content"></div>
+      </div>
+    </section>
+  </div>
+
+    <footer class="footer">
+      <div class="command-bar">
+        <input type="text" id="command-input" placeholder="Send a controller message or slash command... (e.g., 继续工作, /status, /assign task-id developer)" autocomplete="off">
+        <button id="command-send" class="btn btn-small">Send to Controller</button>
+      </div>
+    </footer>
 
   <script src="/ui/app.js"></script>
 </body>

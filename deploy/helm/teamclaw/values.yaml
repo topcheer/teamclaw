@@ -1,0 +1,118 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/topcheer/teamclaw-openclaw
+  pullPolicy: IfNotPresent
+  tag: latest
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  automount: true
+  annotations: {}
+  name: ""
+
+workerServiceAccount:
+  create: true
+  automount: false
+  annotations: {}
+  name: ""
+
+rbac:
+  create: true
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  fsGroup: 1000
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  allowPrivilegeEscalation: false
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 9527
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: teamclaw.iot2.win
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: teamclaw-iot2-win-tls
+      hosts:
+        - teamclaw.iot2.win
+
+workspace:
+  enabled: true
+  existingClaim: ""
+  mountPath: /home/node/.openclaw/workspace
+  storageClassName: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 20Gi
+
+config:
+  existingSecret: ""
+  secretName: ""
+  openclaw:
+    models:
+      providers: {}
+    agents:
+      defaults:
+        model: ""
+        timeoutSeconds: 2400
+        workspace: /home/node/.openclaw/workspace
+    gateway:
+      port: 18789
+      mode: local
+      bind: lan
+    plugins:
+      enabled: true
+      entries:
+        teamclaw:
+          enabled: true
+          config:
+            mode: controller
+            port: 9527
+            teamName: teamclaw
+            taskTimeoutMs: 1800000
+            heartbeatIntervalMs: 10000
+            gitEnabled: true
+            gitDefaultBranch: main
+            gitAuthorName: TeamClaw
+            gitAuthorEmail: teamclaw@local
+            workerProvisioningType: none
+            workerProvisioningKubernetesNamespace: default
+            workerProvisioningKubernetesServiceAccount: ""
+
+controller:
+  env: []
+  extraVolumes: []
+  extraVolumeMounts: []
+  command:
+    - sh
+    - -lc
+  args:
+    - |
+      set -eu
+      exec node dist/index.js gateway --allow-unconfigured
+
+resources: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -1,13 +1,14 @@
 services:
   teamclaw-controller:
     image: ${OPENCLAW_IMAGE:-openclaw:teamclaw-test}
+    platform: ${OPENCLAW_PLATFORM:-linux/amd64}
     container_name: tc-controller
     environment:
       HOME: /home/node
       TERM: xterm-256color
       TZ: Asia/Shanghai
     volumes:
-      - ./config/controller:/home/node/.openclaw
+      - ${TEAMCLAW_CONTROLLER_CONFIG_DIR:?TEAMCLAW_CONTROLLER_CONFIG_DIR is required}:/home/node/.openclaw
     ports:
       - "${CONTROLLER_PORT:-9527}:9527"
     networks:
@@ -35,13 +36,14 @@ services:
 
   teamclaw-dev:
     image: ${OPENCLAW_IMAGE:-openclaw:teamclaw-test}
+    platform: ${OPENCLAW_PLATFORM:-linux/amd64}
     container_name: tc-worker-dev
     environment:
       HOME: /home/node
       TERM: xterm-256color
       TZ: Asia/Shanghai
     volumes:
-      - ./config/worker-dev:/home/node/.openclaw
+      - ${TEAMCLAW_DEV_CONFIG_DIR:?TEAMCLAW_DEV_CONFIG_DIR is required}:/home/node/.openclaw
     networks:
       - teamclaw-net
     depends_on:
@@ -58,13 +60,14 @@ services:
 
   teamclaw-qa:
     image: ${OPENCLAW_IMAGE:-openclaw:teamclaw-test}
+    platform: ${OPENCLAW_PLATFORM:-linux/amd64}
     container_name: tc-worker-qa
     environment:
       HOME: /home/node
       TERM: xterm-256color
       TZ: Asia/Shanghai
     volumes:
-      - ./config/worker-qa:/home/node/.openclaw
+      - ${TEAMCLAW_QA_CONFIG_DIR:?TEAMCLAW_QA_CONFIG_DIR is required}:/home/node/.openclaw
     networks:
       - teamclaw-net
     depends_on:
@@ -81,13 +84,14 @@ services:
 
   teamclaw-arch:
     image: ${OPENCLAW_IMAGE:-openclaw:teamclaw-test}
+    platform: ${OPENCLAW_PLATFORM:-linux/amd64}
     container_name: tc-worker-arch
     environment:
       HOME: /home/node
       TERM: xterm-256color
       TZ: Asia/Shanghai
     volumes:
-      - ./config/worker-arch:/home/node/.openclaw
+      - ${TEAMCLAW_ARCH_CONFIG_DIR:?TEAMCLAW_ARCH_CONFIG_DIR is required}:/home/node/.openclaw
     networks:
       - teamclaw-net
     depends_on:

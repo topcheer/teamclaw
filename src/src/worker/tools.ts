@@ -1,6 +1,8 @@
 import { Type } from "@sinclair/typebox";
 import type { PluginConfig, WorkerIdentity } from "../types.js";
 
+const ALLOWED_PROGRESS_STATUSES = new Set(["in_progress", "review"]);
+
 export type WorkerToolsDeps = {
   config: PluginConfig;
   getIdentity: () => WorkerIdentity | null;
@@ -15,7 +17,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
       label: "Ask Team Peer",
       description: "Send a question to another team member by role",
       parameters: Type.Object({
-        targetRole: Type.String({ description: "Target role (e.g., architect, qa, pm)" }),
+        targetRole: Type.String({ description: "Exact target role ID (pm, architect, developer, qa, release-engineer, infra-engineer, devops, security-engineer, designer, marketing)" }),
         question: Type.String({ description: "The question to ask" }),
         taskId: Type.Optional(Type.String({ description: "Related task ID if any" })),
       }),
@@ -101,7 +103,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
       label: "Request Review",
       description: "Request a review from a specific role (e.g., qa for testing, architect for design review)",
       parameters: Type.Object({
-        targetRole: Type.String({ description: "Role to request review from" }),
+        targetRole: Type.String({ description: "Exact target role ID to request review from" }),
         reviewContent: Type.String({ description: "Content to review or description of what needs review" }),
         taskId: Type.String({ description: "Related task ID" }),
       }),
@@ -148,7 +150,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
       description: "Suggest handing off the current task to another role",
       parameters: Type.Object({
         taskId: Type.String({ description: "Task ID to hand off" }),
-        targetRole: Type.String({ description: "Role to hand off to" }),
+        targetRole: Type.String({ description: "Exact target role ID to hand off to" }),
         reason: Type.String({ description: "Reason for the handoff" }),
       }),
       async execute(_id: string, params: Record<string, unknown>) {
@@ -187,6 +189,56 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
       },
     },
     {
+      name: "teamclaw_request_clarification",
+      label: "Request Clarification",
+      description: "Block the current task and send an explicit clarification question to the controller/human",
+      parameters: Type.Object({
+        taskId: Type.String({ description: "Task ID that is blocked" }),
+        question: Type.String({ description: "The exact question that must be answered before work can continue" }),
+        blockingReason: Type.String({ description: "Why this task cannot proceed safely without clarification" }),
+        context: Type.Optional(Type.String({ description: "Optional brief context or the specific decision that is missing" })),
+      }),
+      async execute(_id: string, params: Record<string, unknown>) {
+        const identity = getIdentity();
+        if (!identity) {
+          return { content: [{ type: "text" as const, text: "Not registered with a team." }] };
+        }
+
+        const taskId = String(params.taskId ?? "");
+        const question = String(params.question ?? "");
+        const blockingReason = String(params.blockingReason ?? "");
+        const context = typeof params.context === "string" ? params.context : undefined;
+
+        if (!taskId || !question || !blockingReason) {
+          return { content: [{ type: "text" as const, text: "taskId, question, and blockingReason are required." }] };
+        }
+
+        try {
+          const res = await fetch(`${identity.controllerUrl}/api/v1/clarifications`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              taskId,
+              requestedBy: identity.workerId,
+              requestedByWorkerId: identity.workerId,
+              requestedByRole: identity.role,
+              question,
+              blockingReason,
+              context,
+            }),
+          });
+
+          if (!res.ok) {
+            return { content: [{ type: "text" as const, text: `Failed to request clarification: ${res.status}` }] };
+          }
+
+          return { content: [{ type: "text" as const, text: "Clarification requested. The task is now blocked until a human answers." }] };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+        }
+      },
+    },
+    {
       name: "teamclaw_get_team_status",
       label: "Get Team Status",
       description: "Get current team status including all workers and tasks",
@@ -216,7 +268,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
       parameters: Type.Object({
         taskId: Type.String({ description: "Task ID" }),
         progress: Type.String({ description: "Progress update message" }),
-        status: Type.Optional(Type.String({ description: "New status: in_progress, review, completed, failed" })),
+        status: Type.Optional(Type.String({ description: "Optional non-terminal status: in_progress or review. Do not use completed or failed here." })),
       }),
       async execute(_id: string, params: Record<string, unknown>) {
         const identity = getIdentity();
@@ -226,15 +278,24 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
 
         const taskId = String(params.taskId ?? "");
         const progress = String(params.progress ?? "");
+        const status = typeof params.status === "string" ? params.status : undefined;
 
         if (!taskId) {
           return { content: [{ type: "text" as const, text: "taskId is required." }] };
         }
+        if (status && !ALLOWED_PROGRESS_STATUSES.has(status)) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: "status must be in_progress or review. Do not mark tasks completed or failed via teamclaw_report_progress; finish by returning the deliverable or surfacing the error.",
+            }],
+          };
+        }
 
         try {
           const patch: Record<string, unknown> = { progress };
-          if (params.status) {
-            patch.status = params.status;
+          if (status) {
+            patch.status = status;
           }
 
           const res = await fetch(`${identity.controllerUrl}/api/v1/tasks/${taskId}`, {

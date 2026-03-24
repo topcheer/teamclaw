@@ -5,10 +5,14 @@ import type { PluginLogger } from "../../api.js";
 export type WsEvent =
   | { type: "worker:online"; data: unknown }
   | { type: "worker:offline"; data: unknown }
+  | { type: "controller:run"; data: unknown }
   | { type: "task:created"; data: unknown }
   | { type: "task:updated"; data: unknown }
   | { type: "task:completed"; data: unknown }
-  | { type: "message:new"; data: unknown };
+  | { type: "task:execution"; data: unknown }
+  | { type: "message:new"; data: unknown }
+  | { type: "clarification:requested"; data: unknown }
+  | { type: "clarification:answered"; data: unknown };
 
 export class TeamWebSocketServer {
   private wss: WebSocketServer | null = null;

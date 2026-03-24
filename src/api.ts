@@ -1,7 +1,4 @@
-export {
-  definePluginEntry,
-  emptyPluginConfigSchema,
-} from "openclaw/plugin-sdk/plugin-entry";
+export { definePluginEntry, emptyPluginConfigSchema } from "openclaw/plugin-sdk/plugin-entry";
 export type {
   AnyAgentTool,
   OpenClawPluginApi,

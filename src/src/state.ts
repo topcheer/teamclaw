@@ -1,9 +1,26 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import type { TeamState, WorkerIdentity } from "./types.js";
+import type { TeamProvisioningState, TeamState, WorkerIdentity } from "./types.js";
 
-const STATE_DIR = path.join(os.homedir(), ".openclaw", "plugins", "teamclaw");
+function resolvePluginStateDir(): string {
+  const explicitStateDir = process.env.OPENCLAW_STATE_DIR?.trim();
+  if (explicitStateDir) {
+    return path.join(explicitStateDir, "plugins", "teamclaw");
+  }
+
+  const explicitHome = process.env.OPENCLAW_HOME?.trim() || process.env.HOME?.trim();
+  const homeDir = explicitHome ? path.resolve(explicitHome) : os.homedir();
+  return path.join(homeDir, ".openclaw", "plugins", "teamclaw");
+}
+
+const STATE_DIR = resolvePluginStateDir();
+
+function createEmptyProvisioningState(): TeamProvisioningState {
+  return {
+    workers: {},
+  };
+}
 
 async function ensureDir(dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
@@ -23,8 +40,23 @@ async function loadTeamState(teamName: string): Promise<TeamState | null> {
     ) {
       return null;
     }
+    if (!parsed.controllerRuns || typeof parsed.controllerRuns !== "object") {
+      parsed.controllerRuns = {};
+    }
     if (!Array.isArray(parsed.messages)) {
       parsed.messages = [];
+    }
+    if (!parsed.clarifications || typeof parsed.clarifications !== "object") {
+      parsed.clarifications = {};
+    }
+    if (parsed.repo && typeof parsed.repo !== "object") {
+      delete parsed.repo;
+    }
+    if (!parsed.provisioning || typeof parsed.provisioning !== "object") {
+      parsed.provisioning = createEmptyProvisioningState();
+    }
+    if (!parsed.provisioning.workers || typeof parsed.provisioning.workers !== "object") {
+      parsed.provisioning.workers = {};
     }
     return parsed;
   } catch {
@@ -36,6 +68,15 @@ async function saveTeamState(state: TeamState): Promise<void> {
   await ensureDir(STATE_DIR);
   const filePath = path.join(STATE_DIR, `${state.teamName}-team-state.json`);
   state.updatedAt = Date.now();
+  state.provisioning = state.provisioning && typeof state.provisioning === "object"
+    ? state.provisioning
+    : createEmptyProvisioningState();
+  state.provisioning.workers = state.provisioning.workers && typeof state.provisioning.workers === "object"
+    ? state.provisioning.workers
+    : {};
+  state.controllerRuns = state.controllerRuns && typeof state.controllerRuns === "object"
+    ? state.controllerRuns
+    : {};
   await fs.writeFile(filePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
 }
 

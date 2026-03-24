@@ -7,6 +7,16 @@ export type ControllerToolsDeps = {
   getTeamState: () => TeamState | null;
 };
 
+const EXECUTION_READY_BLOCKERS: Array<{ pattern: RegExp; reason: string }> = [
+  { pattern: /\bdepends?\s+on\b/i, reason: "it explicitly depends on other unfinished work" },
+  { pattern: /\bprerequisite\b/i, reason: "it references a prerequisite that may not be satisfied yet" },
+  { pattern: /\bwait(?:ing)?\s+for\b/i, reason: "it says the work should wait for another output first" },
+  { pattern: /\bafter\b.+\b(complete|completed|ready|available|exists?)\b/i, reason: "it is phrased as a later-phase task" },
+  { pattern: /\bonce\b.+\b(complete|completed|ready|available|exists?)\b/i, reason: "it is phrased as a later-phase task" },
+  { pattern: /依赖|前置|前提/u, reason: "it explicitly mentions a predecessor dependency" },
+  { pattern: /完成后|就绪后|待.*完成|等待.*完成/u, reason: "it is described as work for a later phase" },
+];
+
 export function createControllerTools(deps: ControllerToolsDeps) {
   const { config, controllerUrl, getTeamState } = deps;
   const baseUrl = controllerUrl;
@@ -15,18 +25,35 @@ export function createControllerTools(deps: ControllerToolsDeps) {
     {
       name: "teamclaw_create_task",
       label: "Create Team Task",
-      description: "Create a new task for the virtual team",
+      description: "Create an execution-ready team task after the controller has analyzed the raw human requirement, clarified missing decisions, and confirmed the task can start immediately",
       parameters: Type.Object({
         title: Type.String({ description: "Task title" }),
-        description: Type.String({ description: "Detailed task description" }),
+        description: Type.String({ description: "Execution-ready task description with scope, expected deliverable, constraints, resolved clarifications, and no unmet predecessor dependency" }),
         priority: Type.Optional(Type.String({ description: "Priority: low, medium, high, critical" })),
-        assignedRole: Type.Optional(Type.String({ description: "Target role (e.g., developer, qa, architect)" })),
+        assignedRole: Type.Optional(Type.String({ description: "Exact target role ID (pm, architect, developer, qa, release-engineer, infra-engineer, devops, security-engineer, designer, marketing)" })),
+        recommendedSkills: Type.Optional(
+          Type.Array(
+            Type.String({
+              description: "Exact OpenClaw/ClawHub skill slug when known; otherwise a short skill-discovery query",
+            }),
+          ),
+        ),
       }),
       async execute(_id: string, params: Record<string, unknown>) {
         const title = String(params.title ?? "");
         const description = String(params.description ?? "");
         if (!title) {
           return { content: [{ type: "text" as const, text: "title is required." }] };
+        }
+
+        const blocker = detectExecutionReadyBlocker(description);
+        if (blocker) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `Refusing to create task "${title}" because it is not execution-ready: ${blocker}. Only create tasks that can start immediately; keep downstream work in the controller plan until prerequisites are already complete.`,
+            }],
+          };
         }
 
         try {
@@ -38,7 +65,8 @@ export function createControllerTools(deps: ControllerToolsDeps) {
               description,
               priority: params.priority ?? "medium",
               assignedRole: params.assignedRole ?? undefined,
-              createdBy: "boss",
+              recommendedSkills: Array.isArray(params.recommendedSkills) ? params.recommendedSkills : undefined,
+              createdBy: "controller",
             }),
           });
 
@@ -54,11 +82,14 @@ export function createControllerTools(deps: ControllerToolsDeps) {
             : task.status === "pending"
               ? " (pending - no available worker)"
               : "";
+          const recommended = Array.isArray(task.recommendedSkills) && task.recommendedSkills.length > 0
+            ? ` | skills: ${task.recommendedSkills.join(", ")}`
+            : "";
 
           return {
             content: [{
               type: "text" as const,
-              text: `Task created: ${task.title} [${task.id}] [${task.priority}]${assigned}`,
+              text: `Task created: ${task.title} [${task.id}] [${task.priority}]${assigned}${recommended}`,
             }],
           };
         } catch (err) {
@@ -71,7 +102,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
       label: "List Team Tasks",
       description: "List all tasks with optional status filter",
       parameters: Type.Object({
-        status: Type.Optional(Type.String({ description: "Filter by status: pending, assigned, in_progress, review, completed, failed" })),
+        status: Type.Optional(Type.String({ description: "Filter by status: pending, assigned, in_progress, review, blocked, completed, failed" })),
       }),
       async execute(_id: string, params: Record<string, unknown>) {
         const status = typeof params.status === "string" ? params.status : undefined;
@@ -141,7 +172,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
     {
       name: "teamclaw_send_message",
       label: "Send Team Message",
-      description: "Send a direct message or broadcast to team members",
+      description: "Send a direct message or broadcast to team members after requirement analysis when coordination is actually needed",
       parameters: Type.Object({
         content: Type.String({ description: "Message content" }),
         toRole: Type.Optional(Type.String({ description: "Target role for direct message (omit for broadcast)" })),
@@ -186,4 +217,19 @@ export function createControllerTools(deps: ControllerToolsDeps) {
       },
     },
   ];
+}
+
+function detectExecutionReadyBlocker(description: string): string | null {
+  const text = description.trim();
+  if (!text) {
+    return null;
+  }
+
+  for (const blocker of EXECUTION_READY_BLOCKERS) {
+    if (blocker.pattern.test(text)) {
+      return blocker.reason;
+    }
+  }
+
+  return null;
 }

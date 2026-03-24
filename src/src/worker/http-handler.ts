@@ -1,11 +1,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { PluginLogger } from "../../api.js";
-import type { TeamMessage } from "../types.js";
+import type { TaskAssignmentPayload, TeamMessage } from "../types.js";
 import { parseJsonBody, sendJson, sendError } from "../protocol.js";
 import { MessageQueue } from "./message-queue.js";
 
-export type TaskExecutor = (taskDescription: string, taskId: string) => Promise<string>;
+export type TaskExecutor = (assignment: TaskAssignmentPayload) => Promise<string>;
 export type ResultReporter = (taskId: string, result: string, error: string | null) => void;
+export type TaskCanceller = (taskId: string) => Promise<boolean> | boolean;
+export type TaskCancelChecker = (taskId: string) => boolean;
 
 export function createWorkerHttpHandler(
   config: { role: string; port: number },
@@ -14,6 +16,8 @@ export function createWorkerHttpHandler(
   workerId: string,
   taskExecutor?: TaskExecutor,
   resultReporter?: ResultReporter,
+  cancelTaskExecution?: TaskCanceller,
+  isTaskCancelled?: TaskCancelChecker,
 ) {
   return async (req: IncomingMessage, res: ServerResponse) => {
     // CORS preflight
@@ -55,6 +59,12 @@ export function createWorkerHttpHandler(
         const taskId = typeof body.taskId === "string" ? body.taskId : "";
         const title = typeof body.title === "string" ? body.title : "";
         const description = typeof body.description === "string" ? body.description : "";
+        const recommendedSkills = Array.isArray(body.recommendedSkills)
+          ? body.recommendedSkills.map((entry) => String(entry ?? ""))
+          : undefined;
+        const repo = body.repo && typeof body.repo === "object"
+          ? body.repo as TaskAssignmentPayload["repo"]
+          : undefined;
 
         if (!taskId || !title || !description) {
           sendError(res, 400, "taskId, title, and description are required");
@@ -64,15 +74,44 @@ export function createWorkerHttpHandler(
         logger.info(`Worker: received task assignment - ${title} (${taskId})`);
 
         if (taskExecutor && resultReporter) {
-          taskExecutor(description, taskId)
-            .then((result) => resultReporter(taskId, result, null))
+          taskExecutor({
+            taskId,
+            title,
+            description,
+            recommendedSkills,
+            repo,
+          })
+            .then((result) => {
+              if (isTaskCancelled?.(taskId)) {
+                logger.info(`Worker: skipping result report for cancelled task ${taskId}`);
+                return;
+              }
+              resultReporter(taskId, result, null);
+            })
             .catch((err) => {
+              if (isTaskCancelled?.(taskId)) {
+                logger.info(`Worker: skipping error report for cancelled task ${taskId}`);
+                return;
+              }
               const errorMsg = err instanceof Error ? err.message : String(err);
               resultReporter(taskId, "", errorMsg);
             });
         }
 
         sendJson(res, 202, { status: "accepted", taskId });
+        return;
+      }
+
+      // POST /api/v1/tasks/:id/cancel
+      if (req.method === "POST" && pathname.match(/^\/api\/v1\/tasks\/[^/]+\/cancel$/)) {
+        if (!cancelTaskExecution) {
+          sendError(res, 501, "Task cancellation is not supported");
+          return;
+        }
+
+        const taskId = pathname.split("/")[4]!;
+        const cancelled = await cancelTaskExecution(taskId);
+        sendJson(res, 200, { status: cancelled ? "cancelled" : "not-active", taskId });
         return;
       }
 

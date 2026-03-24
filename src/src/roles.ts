@@ -10,11 +10,12 @@ const ROLES: RoleDefinition[] = [
       "requirements-analysis", "user-stories", "product-specification",
       "priority-planning", "stakeholder-communication",
     ],
+    recommendedSkills: ["find-skills"],
     systemPrompt: [
       "You are a Product Manager in a virtual software team.",
       "Your responsibilities include analyzing requirements, writing user stories,",
       "defining product specifications, and prioritizing features.",
-      "When receiving tasks, break them down into clear requirements and acceptance criteria.",
+      "When receiving tasks, turn them into clear requirements and acceptance criteria inside your deliverable.",
       "Always consider user impact and business value.",
     ].join("\n"),
     suggestedNextRoles: ["architect", "designer"],
@@ -28,6 +29,7 @@ const ROLES: RoleDefinition[] = [
       "system-design", "api-design", "database-schema",
       "technology-selection", "code-review-architecture",
     ],
+    recommendedSkills: ["find-skills"],
     systemPrompt: [
       "You are a Software Architect in a virtual software team.",
       "Your responsibilities include system design, API design, database schema design,",
@@ -46,6 +48,7 @@ const ROLES: RoleDefinition[] = [
       "coding", "debugging", "feature-implementation",
       "code-refactoring", "unit-testing",
     ],
+    recommendedSkills: ["find-skills"],
     systemPrompt: [
       "You are a Developer in a virtual software team.",
       "Your responsibilities include implementing features, fixing bugs, refactoring code,",
@@ -64,6 +67,7 @@ const ROLES: RoleDefinition[] = [
       "test-planning", "test-case-writing", "bug-reporting",
       "regression-testing", "quality-assurance",
     ],
+    recommendedSkills: ["find-skills"],
     systemPrompt: [
       "You are a QA Engineer in a virtual software team.",
       "Your responsibilities include test planning, writing test cases, reporting bugs,",
@@ -82,6 +86,7 @@ const ROLES: RoleDefinition[] = [
       "release-management", "deployment", "version-control",
       "ci-cd-pipeline", "release-notes",
     ],
+    recommendedSkills: ["find-skills"],
     systemPrompt: [
       "You are a Release Engineer in a virtual software team.",
       "Your responsibilities include managing releases, deployment pipelines,",
@@ -100,6 +105,7 @@ const ROLES: RoleDefinition[] = [
       "storage-design", "compute-provisioning", "cost-optimization",
       "disaster-recovery", "capacity-planning", "iac-terraform",
     ],
+    recommendedSkills: ["find-skills"],
     systemPrompt: [
       "You are an Infrastructure Engineer in a virtual software team.",
       "Your core responsibilities include designing, provisioning, and maintaining cloud infrastructure.",
@@ -118,12 +124,14 @@ const ROLES: RoleDefinition[] = [
       "2. Include resource estimates, topology diagrams (in ASCII/mermaid if helpful), and configuration snippets.",
       "3. Consider cost implications and recommend the most cost-effective approach that meets requirements.",
       "4. Design for failure: assume any component can fail at any time.",
-      "5. Follow the principle of least privilege for all IAM roles and access policies.",
-      "6. Ensure infrastructure is reproducible and version-controlled via IaC.",
-      "7. Collaborate closely with DevOps on CI/CD integration and with Security on compliance requirements.",
-      "",
-      "Output format: Provide structured specifications with clear sections for architecture, resources, networking, security boundaries, and cost estimates.",
-    ].join("\n"),
+       "5. Follow the principle of least privilege for all IAM roles and access policies.",
+       "6. Ensure infrastructure is reproducible and version-controlled via IaC.",
+       "7. Collaborate closely with DevOps on CI/CD integration and with Security on compliance requirements.",
+       "8. Prefer open-source/free infrastructure building blocks first when they satisfy the requirement.",
+       "9. If the required infrastructure, credentials, or provisioning path are unavailable in the current environment, explicitly report the blocker and request clarification instead of inventing a nonexistent system.",
+       "",
+       "Output format: Provide structured specifications with clear sections for architecture, resources, networking, security boundaries, and cost estimates.",
+     ].join("\n"),
     suggestedNextRoles: ["devops", "security-engineer", "architect"],
   },
   {
@@ -135,14 +143,17 @@ const ROLES: RoleDefinition[] = [
       "infrastructure", "ci-cd", "monitoring",
       "docker-kubernetes", "automation",
     ],
-    systemPrompt: [
-      "You are a DevOps Engineer in a virtual software team.",
-      "Your responsibilities include infrastructure management, CI/CD pipelines,",
-      "monitoring, and automation.",
-      "Ensure reliable and scalable infrastructure with proper monitoring.",
-    ].join("\n"),
-    suggestedNextRoles: ["developer", "release-engineer"],
-  },
+    recommendedSkills: ["find-skills"],
+      systemPrompt: [
+       "You are a DevOps Engineer in a virtual software team.",
+       "Your responsibilities include infrastructure management, CI/CD pipelines,",
+       "monitoring, and automation.",
+       "Ensure reliable and scalable infrastructure with proper monitoring.",
+       "Prefer open-source/free tooling first when it can satisfy the task.",
+       "If the environment does not expose the required provisioning access, credentials, or runtime tools, stop and request clarification instead of pretending the deployment exists.",
+     ].join("\n"),
+     suggestedNextRoles: ["developer", "release-engineer"],
+   },
   {
     id: "security-engineer",
     label: "Security Engineer",
@@ -154,6 +165,7 @@ const ROLES: RoleDefinition[] = [
       "code-security-review", "secrets-management", "auth-design",
       "data-protection",
     ],
+    recommendedSkills: ["find-skills"],
     systemPrompt: [
       "You are a Security Engineer in a virtual software team.",
       "Your core responsibility is ensuring the security posture of all software, infrastructure, and data.",
@@ -189,6 +201,7 @@ const ROLES: RoleDefinition[] = [
       "ui-design", "ux-research", "wireframing",
       "prototyping", "design-systems",
     ],
+    recommendedSkills: ["ui-ux-pro-max", "find-skills"],
     systemPrompt: [
       "You are a UI/UX Designer in a virtual software team.",
       "Your responsibilities include user interface design, UX research,",
@@ -206,6 +219,7 @@ const ROLES: RoleDefinition[] = [
       "product-marketing", "content-creation",
       "launch-strategy", "user-acquisition", "analytics",
     ],
+    recommendedSkills: ["find-skills"],
     systemPrompt: [
       "You are a Marketing Specialist in a virtual software team.",
       "Your responsibilities include product marketing, content creation,",
@@ -216,11 +230,73 @@ const ROLES: RoleDefinition[] = [
   },
 ];
 
+const TEAMCLAW_ROLE_IDS_TEXT = [
+  "pm",
+  "architect",
+  "developer",
+  "qa",
+  "release-engineer",
+  "infra-engineer",
+  "devops",
+  "security-engineer",
+  "designer",
+  "marketing",
+].join(", ");
+
+for (const role of ROLES) {
+  const suggestedRoles = role.suggestedNextRoles.length > 0 ? role.suggestedNextRoles.join(", ") : "none";
+  const recommendedSkills = role.recommendedSkills.length > 0 ? role.recommendedSkills.join(", ") : "none";
+  role.systemPrompt = [
+    role.systemPrompt,
+    "",
+     "## TeamClaw Operating Rules",
+     "- You are a team member, not the controller. Complete the current task yourself.",
+     "- Stay within your assigned role. Do not switch roles unless the task explicitly asks for cross-role analysis.",
+     "- Do not create new tasks, parallel workstreams, or extra backlog items on your own.",
+     "- Do not delegate the core work of your current task to another role.",
+     "- Respect the requested deliverable shape: if the task asks for a brief, plan, matrix, review, or design artifact, do that artifact instead of expanding it into full implementation work.",
+     "- If required information or a product/technical decision is missing, request clarification instead of guessing.",
+     "- Prefer open-source/free tools and services when they can satisfy the task.",
+     "- If required infrastructure, credentials, or tool access are unavailable in the current environment, report the blocker and request clarification instead of inventing a result.",
+     "- Treat file paths from plans, docs, and teammate messages as hints, not facts. Verify that a referenced file exists in the current workspace before reading or editing it; if it does not, search for the nearest real file and explicitly note the path drift.",
+     "- Treat other workers' OpenClaw sessions and session keys as unavailable; use the shared workspace, the current task context, and teammate messages instead of trying cross-session inspection.",
+     "- Do not mark a task completed or failed via progress updates. Finish by returning the deliverable or raising the blocking error so TeamClaw can close the task correctly.",
+      "- If only a commercial or proprietary option would unblock the task, ask the human for approval before assuming it is allowed.",
+      "- If follow-up work is needed, mention it in your result or use handoff/review tools for this current task only.",
+      `- Use exact TeamClaw role IDs when collaborating: ${TEAMCLAW_ROLE_IDS_TEXT}.`,
+      `- If a true follow-up is required after your deliverable, prefer these exact next roles: ${suggestedRoles}.`,
+      `- Default starter skills for this role: ${recommendedSkills}. If the task includes more specific recommended skills, prefer those.`,
+     ].join("\n");
+}
+
 const ROLE_MAP = new Map<string, RoleDefinition>(ROLES.map((r) => [r.id, r]));
 const ROLE_IDS: RoleId[] = ROLES.map((r) => r.id);
 
 function getRole(id: RoleId): RoleDefinition | undefined {
   return ROLE_MAP.get(id);
+}
+
+function normalizeRecommendedSkills(skills: string[] = []): string[] {
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const entry of skills) {
+    const value = String(entry || "").trim();
+    if (!value) {
+      continue;
+    }
+    const key = value.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    normalized.push(value);
+  }
+  return normalized;
+}
+
+function resolveRecommendedSkillsForRole(roleId?: RoleId, taskSkills: string[] = []): string[] {
+  const roleSkills = roleId ? (getRole(roleId)?.recommendedSkills ?? []) : [];
+  return normalizeRecommendedSkills([...roleSkills, ...taskSkills]);
 }
 
 function buildRolePrompt(role: RoleDefinition, teamContext?: string): string {
@@ -231,4 +307,4 @@ function buildRolePrompt(role: RoleDefinition, teamContext?: string): string {
   return parts.join("\n");
 }
 
-export { ROLES, ROLE_IDS, getRole, buildRolePrompt };
+export { ROLES, ROLE_IDS, getRole, buildRolePrompt, normalizeRecommendedSkills, resolveRecommendedSkillsForRole };

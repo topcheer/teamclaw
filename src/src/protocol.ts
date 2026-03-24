@@ -14,20 +14,24 @@ function generateId(): string {
 }
 
 async function parseJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
+  const raw = await readRequestBody(req);
+  if (!raw.length) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(raw.toString("utf8")) as Record<string, unknown>;
+  } catch (err) {
+    throw new Error(`Invalid JSON body: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+async function readRequestBody(req: IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     req.on("data", (chunk: Buffer) => chunks.push(chunk));
     req.on("end", () => {
-      const raw = Buffer.concat(chunks).toString("utf8");
-      if (!raw.trim()) {
-        resolve({});
-        return;
-      }
-      try {
-        resolve(JSON.parse(raw) as Record<string, unknown>);
-      } catch (err) {
-        reject(new Error(`Invalid JSON body: ${err instanceof Error ? err.message : String(err)}`));
-      }
+      resolve(Buffer.concat(chunks));
     });
     req.on("error", reject);
   });
@@ -55,8 +59,9 @@ function createRegistrationRequest(
   label: string,
   url: string,
   capabilities: string[],
+  launchToken?: string,
 ): RegistrationRequest {
-  return { workerId, role, label, url, capabilities };
+  return { workerId, role, label, url, capabilities, launchToken };
 }
 
 function createHeartbeatPayload(
@@ -75,6 +80,7 @@ function createHeartbeatPayload(
 export {
   generateId,
   parseJsonBody,
+  readRequestBody,
   sendJson,
   sendError,
   createRegistrationRequest,

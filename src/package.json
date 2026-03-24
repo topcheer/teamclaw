@@ -1,17 +1,58 @@
 {
-  "name": "@openclaw/teamclaw",
-  "version": "2026.3.21",
+  "name": "@teamclaws/teamclaw",
+  "version": "2026.3.24",
+  "description": "OpenClaw virtual software team orchestration plugin",
   "private": false,
+  "keywords": [
+    "openclaw",
+    "plugin",
+    "teamclaw",
+    "multi-agent",
+    "orchestration"
+  ],
+  "homepage": "https://github.com/topcheer/teamclaw/tree/main/src#readme",
+  "bugs": {
+    "url": "https://github.com/topcheer/teamclaw/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/topcheer/teamclaw.git",
+    "directory": "src"
+  },
   "type": "module",
+  "bin": "./cli.mjs",
+  "files": [
+    "README.md",
+    "api.ts",
+    "cli.mjs",
+    "index.ts",
+    "openclaw.plugin.json",
+    "src/",
+    "tsconfig.json"
+  ],
+  "scripts": {
+    "pack:dry-run": "npm pack --dry-run --json --ignore-scripts",
+    "release:check": "node ../scripts/teamclaw-package-check.mjs src"
+  },
   "dependencies": {
     "@sinclair/typebox": "0.34.48",
     "bonjour-service": "^1.3.0",
+    "json5": "^2.2.3",
+    "openclaw": "2026.3.23-2",
     "ws": "^8.19.0"
   },
   "devDependencies": {
     "typescript": "^5.9.0"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "openclaw": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ],
+    "release": {
+      "publishToNpm": true
+    }
   }
 }
