@@ -31,7 +31,7 @@ package_name="$(node -e 'const fs=require("node:fs"); const p=JSON.parse(fs.read
 package_version="$(node -e 'const fs=require("node:fs"); const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); console.log(p.packageVersion);' "${metadata_file}")"
 publish_tag="$(node -e 'const fs=require("node:fs"); const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); console.log(p.publishTag);' "${metadata_file}")"
 
-publish_cmd=(npm publish --registry "${npm_registry}" --access public)
+publish_cmd=(npm publish --registry "${npm_registry}" --access public --tag latest)
 if [[ "${publish_tag}" == "beta" ]]; then
   publish_cmd=(npm publish --registry "${npm_registry}" --access public --tag beta)
 fi
