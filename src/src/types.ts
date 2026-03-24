@@ -1,3 +1,5 @@
+import { TEAMCLAW_PUBLISHED_RUNTIME_IMAGE } from "./install-defaults.js";
+
 export type TeamClawMode = "controller" | "worker";
 
 export type WorkerStatus = "idle" | "busy" | "offline";
@@ -6,11 +8,51 @@ export type TaskStatus =
   | "pending"
   | "assigned"
   | "in_progress"
+  | "blocked"
   | "review"
   | "completed"
   | "failed";
 
 export type TaskPriority = "low" | "medium" | "high" | "critical";
+
+export type TaskExecutionEventType = "lifecycle" | "progress" | "output" | "error";
+
+export type TaskExecutionStatus = "pending" | "running" | "completed" | "failed";
+
+export type GitSyncMode = "shared" | "bundle" | "remote";
+
+export type WorkerProvisioningType = "none" | "process" | "docker" | "kubernetes";
+
+export type ProvisionedWorkerStatus =
+  | "launching"
+  | "registered"
+  | "terminating"
+  | "terminated"
+  | "failed";
+
+export type GitRepoState = {
+  enabled: boolean;
+  mode: GitSyncMode;
+  defaultBranch: string;
+  remoteUrl?: string;
+  remoteReady: boolean;
+  headCommit?: string;
+  headSummary?: string;
+  dirty: boolean;
+  lastPreparedAt: number;
+  error?: string;
+};
+
+export type RepoSyncInfo = {
+  enabled: boolean;
+  mode: GitSyncMode;
+  defaultBranch: string;
+  remoteUrl?: string;
+  bundleUrl?: string;
+  importUrl?: string;
+  headCommit?: string;
+  headSummary?: string;
+};
 
 export type RoleId =
   | "pm"
@@ -30,6 +72,7 @@ export type RoleDefinition = {
   icon: string;
   description: string;
   capabilities: string[];
+  recommendedSkills: string[];
   systemPrompt: string;
   suggestedNextRoles: RoleId[];
 };
@@ -39,6 +82,7 @@ export type WorkerInfo = {
   role: RoleId;
   label: string;
   status: WorkerStatus;
+  transport?: "http" | "local";
   url: string;
   lastHeartbeat: number;
   capabilities: string[];
@@ -55,6 +99,8 @@ export type TaskInfo = {
   assignedRole?: RoleId;
   assignedWorkerId?: string;
   createdBy: string;
+  recommendedSkills?: string[];
+  controllerSessionKey?: string;
   createdAt: number;
   updatedAt: number;
   startedAt?: number;
@@ -62,6 +108,104 @@ export type TaskInfo = {
   progress?: string;
   result?: string;
   error?: string;
+  clarificationRequestId?: string;
+  execution?: TaskExecution;
+};
+
+export type TaskExecutionEvent = {
+  id: string;
+  type: TaskExecutionEventType;
+  createdAt: number;
+  message: string;
+  phase?: string;
+  source?: "controller" | "worker" | "subagent";
+  stream?: string;
+  role?: RoleId;
+  workerId?: string;
+};
+
+export type TaskAssignmentPayload = {
+  taskId: string;
+  title: string;
+  description: string;
+  priority?: TaskPriority;
+  recommendedSkills?: string[];
+  repo?: RepoSyncInfo;
+};
+
+export type ControllerRunSource = "human" | "task_follow_up";
+
+export type ControllerRunInfo = {
+  id: string;
+  title: string;
+  sessionKey: string;
+  runId?: string;
+  source: ControllerRunSource;
+  sourceTaskId?: string;
+  sourceTaskTitle?: string;
+  request: string;
+  reply?: string;
+  error?: string;
+  createdTaskIds: string[];
+  status: TaskExecutionStatus;
+  createdAt: number;
+  updatedAt: number;
+  startedAt?: number;
+  completedAt?: number;
+  execution?: TaskExecution;
+};
+
+export type TaskExecution = {
+  status: TaskExecutionStatus;
+  runId?: string;
+  sessionKey?: string;
+  startedAt?: number;
+  endedAt?: number;
+  lastUpdatedAt?: number;
+  events: TaskExecutionEvent[];
+};
+
+export type TaskExecutionSummary = {
+  status: TaskExecutionStatus;
+  runId?: string;
+  startedAt?: number;
+  endedAt?: number;
+  lastUpdatedAt?: number;
+  eventCount: number;
+  lastEvent?: TaskExecutionEvent;
+};
+
+export type TaskExecutionEventInput = {
+  type: TaskExecutionEventType;
+  message: string;
+  createdAt?: number;
+  phase?: string;
+  source?: "controller" | "worker" | "subagent";
+  stream?: string;
+  role?: RoleId;
+  workerId?: string;
+  runId?: string;
+  sessionKey?: string;
+  status?: TaskExecutionStatus;
+};
+
+export type ClarificationStatus = "pending" | "answered";
+
+export type ClarificationRequest = {
+  id: string;
+  taskId: string;
+  requestedBy: string;
+  requestedByWorkerId?: string;
+  requestedByRole?: RoleId;
+  question: string;
+  blockingReason: string;
+  context?: string;
+  status: ClarificationStatus;
+  answer?: string;
+  answeredBy?: string;
+  createdAt: number;
+  updatedAt: number;
+  answeredAt?: number;
 };
 
 export type TeamMessage = {
@@ -76,6 +220,26 @@ export type TeamMessage = {
   createdAt: number;
 };
 
+export type ProvisionedWorkerRecord = {
+  workerId: string;
+  role: RoleId;
+  provider: WorkerProvisioningType;
+  status: ProvisionedWorkerStatus;
+  launchToken: string;
+  requestedAt: number;
+  updatedAt: number;
+  registeredAt?: number;
+  idleSince?: number;
+  instanceId?: string;
+  instanceName?: string;
+  runtimeHomeDir?: string;
+  lastError?: string;
+};
+
+export type TeamProvisioningState = {
+  workers: Record<string, ProvisionedWorkerRecord>;
+};
+
 export type PluginConfig = {
   mode: TeamClawMode;
   port: number;
@@ -83,6 +247,33 @@ export type PluginConfig = {
   controllerUrl: string;
   teamName: string;
   heartbeatIntervalMs: number;
+  localRoles: RoleId[];
+  taskTimeoutMs: number;
+  gitEnabled: boolean;
+  gitRemoteUrl: string;
+  gitDefaultBranch: string;
+  gitAuthorName: string;
+  gitAuthorEmail: string;
+  workerProvisioningType: WorkerProvisioningType;
+  workerProvisioningControllerUrl: string;
+  workerProvisioningRoles: RoleId[];
+  workerProvisioningMinPerRole: number;
+  workerProvisioningMaxPerRole: number;
+  workerProvisioningIdleTtlMs: number;
+  workerProvisioningStartupTimeoutMs: number;
+  workerProvisioningImage: string;
+  workerProvisioningPassEnv: string[];
+  workerProvisioningExtraEnv: Record<string, string>;
+  workerProvisioningDockerNetwork: string;
+  workerProvisioningDockerMounts: string[];
+  workerProvisioningWorkspaceRoot: string;
+  workerProvisioningDockerWorkspaceVolume: string;
+  workerProvisioningKubernetesNamespace: string;
+  workerProvisioningKubernetesContext: string;
+  workerProvisioningKubernetesServiceAccount: string;
+  workerProvisioningKubernetesWorkspacePersistentVolumeClaim: string;
+  workerProvisioningKubernetesLabels: Record<string, string>;
+  workerProvisioningKubernetesAnnotations: Record<string, string>;
 };
 
 export type WorkerIdentity = {
@@ -96,7 +287,11 @@ export type TeamState = {
   teamName: string;
   workers: Record<string, WorkerInfo>;
   tasks: Record<string, TaskInfo>;
+  controllerRuns: Record<string, ControllerRunInfo>;
   messages: TeamMessage[];
+  clarifications: Record<string, ClarificationRequest>;
+  repo?: GitRepoState;
+  provisioning?: TeamProvisioningState;
   createdAt: number;
   updatedAt: number;
 };
@@ -114,6 +309,7 @@ export type RegistrationRequest = {
   label: string;
   url: string;
   capabilities: string[];
+  launchToken?: string;
 };
 
 export type HeartbeatPayload = {
@@ -148,8 +344,175 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
     ? raw.heartbeatIntervalMs
     : 10000;
 
-  return { mode, port, role, controllerUrl, teamName, heartbeatIntervalMs };
+  const localRoles = parseRoleList(raw.localRoles);
+
+  const taskTimeoutMs = typeof raw.taskTimeoutMs === "number" && raw.taskTimeoutMs >= 1000
+    ? raw.taskTimeoutMs
+    : 1_800_000;
+
+  const gitEnabled = typeof raw.gitEnabled === "boolean" ? raw.gitEnabled : true;
+
+  const gitRemoteUrl = typeof raw.gitRemoteUrl === "string"
+    ? raw.gitRemoteUrl.trim()
+    : "";
+
+  const gitDefaultBranch = typeof raw.gitDefaultBranch === "string" && raw.gitDefaultBranch.trim()
+    ? raw.gitDefaultBranch.trim()
+    : "main";
+
+  const gitAuthorName = typeof raw.gitAuthorName === "string" && raw.gitAuthorName.trim()
+    ? raw.gitAuthorName.trim()
+    : "TeamClaw";
+
+  const gitAuthorEmail = typeof raw.gitAuthorEmail === "string" && raw.gitAuthorEmail.trim()
+    ? raw.gitAuthorEmail.trim()
+    : "teamclaw@local";
+
+  const workerProvisioningType = parseProvisioningType(raw.workerProvisioningType);
+  const workerProvisioningControllerUrl = typeof raw.workerProvisioningControllerUrl === "string"
+    ? raw.workerProvisioningControllerUrl.trim()
+    : "";
+  const workerProvisioningRoles = parseRoleList(raw.workerProvisioningRoles);
+  const workerProvisioningMinPerRole = typeof raw.workerProvisioningMinPerRole === "number" && raw.workerProvisioningMinPerRole >= 0
+    ? Math.floor(raw.workerProvisioningMinPerRole)
+    : 0;
+  const rawProvisioningMaxPerRole = typeof raw.workerProvisioningMaxPerRole === "number" && raw.workerProvisioningMaxPerRole >= 1
+    ? Math.floor(raw.workerProvisioningMaxPerRole)
+    : 1;
+  const workerProvisioningMaxPerRole = Math.max(rawProvisioningMaxPerRole, workerProvisioningMinPerRole);
+  const workerProvisioningIdleTtlMs = typeof raw.workerProvisioningIdleTtlMs === "number" && raw.workerProvisioningIdleTtlMs >= 1000
+    ? raw.workerProvisioningIdleTtlMs
+    : 120_000;
+  const workerProvisioningStartupTimeoutMs =
+    typeof raw.workerProvisioningStartupTimeoutMs === "number" && raw.workerProvisioningStartupTimeoutMs >= 1000
+      ? raw.workerProvisioningStartupTimeoutMs
+      : 120_000;
+  const rawWorkerProvisioningImage = typeof raw.workerProvisioningImage === "string"
+    ? raw.workerProvisioningImage.trim()
+    : "";
+  const workerProvisioningImage = rawWorkerProvisioningImage ||
+    (workerProvisioningType === "docker" || workerProvisioningType === "kubernetes"
+      ? TEAMCLAW_PUBLISHED_RUNTIME_IMAGE
+      : "");
+  const workerProvisioningPassEnv = parseStringArray(raw.workerProvisioningPassEnv);
+  const workerProvisioningExtraEnv = parseStringRecord(raw.workerProvisioningExtraEnv);
+  const workerProvisioningDockerNetwork = typeof raw.workerProvisioningDockerNetwork === "string"
+    ? raw.workerProvisioningDockerNetwork.trim()
+    : "";
+  const workerProvisioningDockerMounts = parseStringArray(raw.workerProvisioningDockerMounts);
+  const rawWorkerProvisioningWorkspaceRoot = typeof raw.workerProvisioningWorkspaceRoot === "string"
+    ? raw.workerProvisioningWorkspaceRoot.trim()
+    : "";
+  const workerProvisioningDockerWorkspaceVolume = typeof raw.workerProvisioningDockerWorkspaceVolume === "string"
+    ? raw.workerProvisioningDockerWorkspaceVolume.trim()
+    : "";
+  const workerProvisioningKubernetesNamespace = typeof raw.workerProvisioningKubernetesNamespace === "string" &&
+      raw.workerProvisioningKubernetesNamespace.trim()
+    ? raw.workerProvisioningKubernetesNamespace.trim()
+    : "default";
+  const workerProvisioningKubernetesContext = typeof raw.workerProvisioningKubernetesContext === "string"
+    ? raw.workerProvisioningKubernetesContext.trim()
+    : "";
+  const workerProvisioningKubernetesServiceAccount = typeof raw.workerProvisioningKubernetesServiceAccount === "string"
+    ? raw.workerProvisioningKubernetesServiceAccount.trim()
+    : "";
+  const workerProvisioningKubernetesWorkspacePersistentVolumeClaim =
+    typeof raw.workerProvisioningKubernetesWorkspacePersistentVolumeClaim === "string"
+      ? raw.workerProvisioningKubernetesWorkspacePersistentVolumeClaim.trim()
+      : "";
+  const workerProvisioningWorkspaceRoot = rawWorkerProvisioningWorkspaceRoot ||
+    (workerProvisioningDockerWorkspaceVolume || workerProvisioningKubernetesWorkspacePersistentVolumeClaim
+      ? "/workspace-root"
+      : "");
+  const workerProvisioningKubernetesLabels = parseStringRecord(raw.workerProvisioningKubernetesLabels);
+  const workerProvisioningKubernetesAnnotations = parseStringRecord(raw.workerProvisioningKubernetesAnnotations);
+
+  return {
+    mode,
+    port,
+    role,
+    controllerUrl,
+    teamName,
+    heartbeatIntervalMs,
+    localRoles,
+    taskTimeoutMs,
+    gitEnabled,
+    gitRemoteUrl,
+    gitDefaultBranch,
+    gitAuthorName,
+    gitAuthorEmail,
+    workerProvisioningType,
+    workerProvisioningControllerUrl,
+    workerProvisioningRoles,
+    workerProvisioningMinPerRole,
+    workerProvisioningMaxPerRole,
+    workerProvisioningIdleTtlMs,
+    workerProvisioningStartupTimeoutMs,
+    workerProvisioningImage,
+    workerProvisioningPassEnv,
+    workerProvisioningExtraEnv,
+    workerProvisioningDockerNetwork,
+    workerProvisioningDockerMounts,
+    workerProvisioningWorkspaceRoot,
+    workerProvisioningDockerWorkspaceVolume,
+    workerProvisioningKubernetesNamespace,
+    workerProvisioningKubernetesContext,
+    workerProvisioningKubernetesServiceAccount,
+    workerProvisioningKubernetesWorkspacePersistentVolumeClaim,
+    workerProvisioningKubernetesLabels,
+    workerProvisioningKubernetesAnnotations,
+  };
 }
+
+function parseRoleList(raw: unknown): RoleId[] {
+  return Array.isArray(raw)
+    ? [...new Set(raw
+        .filter((entry): entry is RoleId => typeof entry === "string" && VALID_ROLES.includes(entry as RoleId))
+        .map((entry) => entry as RoleId))]
+    : [];
+}
+
+function parseProvisioningType(raw: unknown): WorkerProvisioningType {
+  return typeof raw === "string" && VALID_PROVISIONING_TYPES.includes(raw as WorkerProvisioningType)
+    ? raw as WorkerProvisioningType
+    : "none";
+}
+
+function parseStringArray(raw: unknown): string[] {
+  return Array.isArray(raw)
+    ? [...new Set(raw
+        .filter((entry): entry is string => typeof entry === "string")
+        .map((entry) => entry.trim())
+        .filter(Boolean))]
+    : [];
+}
+
+function parseStringRecord(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return {};
+  }
+
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const normalizedKey = key.trim();
+    const normalizedValue = value.trim();
+    if (!normalizedKey || !normalizedValue) {
+      continue;
+    }
+    result[normalizedKey] = normalizedValue;
+  }
+  return result;
+}
+
+const VALID_PROVISIONING_TYPES: WorkerProvisioningType[] = [
+  "none",
+  "process",
+  "docker",
+  "kubernetes",
+];
 
 const VALID_ROLES: RoleId[] = [
   "pm", "architect", "developer", "qa",

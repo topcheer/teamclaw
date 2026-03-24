@@ -1,0 +1,130 @@
+name: TeamClaw Runtime Image
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/teamclaw-runtime-image.yml"
+      - "openclaw/**"
+      - "src/**"
+      - "scripts/prepare-teamclaw-runtime-context.mjs"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit SHA on main to publish from
+        required: true
+        type: string
+
+concurrency:
+  group: teamclaw-runtime-image-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/topcheer/teamclaw-openclaw
+
+jobs:
+  publish_runtime_image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Resolve checked-out ref
+        id: ref
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Validate ref is on main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor HEAD origin/main
+
+      - name: Resolve image tags
+        id: tags
+        run: |
+          set -euo pipefail
+          package_version="$(node -e 'const fs=require("node:fs"); console.log(JSON.parse(fs.readFileSync("src/package.json","utf8")).version)')"
+          short_sha="$(git rev-parse --short=12 HEAD)"
+          main_head="$(git rev-parse origin/main)"
+          current_sha="$(git rev-parse HEAD)"
+          channel_tag="latest"
+          if [[ "${package_version}" == *-beta.* ]]; then
+            channel_tag="beta"
+          fi
+          {
+            echo "package_version=${package_version}"
+            echo "short_sha=${short_sha}"
+            echo "channel_tag=${channel_tag}"
+            if [[ "${current_sha}" == "${main_head}" ]]; then
+              echo "is_main_head=true"
+            else
+              echo "is_main_head=false"
+            fi
+            echo "tags<<EOF"
+            echo "${IMAGE_NAME}:${package_version}"
+            echo "${IMAGE_NAME}:sha-${short_sha}"
+            if [[ "${current_sha}" == "${main_head}" ]]; then
+              echo "${IMAGE_NAME}:${channel_tag}"
+            fi
+            echo "EOF"
+            echo "labels<<EOF"
+            echo "org.opencontainers.image.source=https://github.com/topcheer/teamclaw"
+            echo "org.opencontainers.image.url=https://github.com/topcheer/teamclaw"
+            echo "org.opencontainers.image.documentation=https://github.com/topcheer/teamclaw/blob/main/INSTALL.md"
+            echo "org.opencontainers.image.title=TeamClaw OpenClaw Runtime"
+            echo "org.opencontainers.image.description=OpenClaw runtime image bundled with the TeamClaw extension"
+            echo "org.opencontainers.image.version=${package_version}"
+            echo "org.opencontainers.image.revision=${current_sha}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Prepare TeamClaw runtime build context
+        id: context
+        run: node scripts/prepare-teamclaw-runtime-context.mjs --output-dir "$RUNNER_TEMP/teamclaw-runtime-image" --github-output "$GITHUB_OUTPUT"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish TeamClaw runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ steps.context.outputs.context_dir }}
+          file: ${{ steps.context.outputs.dockerfile_path }}
+          build-args: |
+            OPENCLAW_EXTENSIONS=teamclaw
+          labels: ${{ steps.tags.outputs.labels }}
+          tags: ${{ steps.tags.outputs.tags }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          cache-from: type=gha,scope=teamclaw-runtime-image
+          cache-to: type=gha,mode=max,scope=teamclaw-runtime-image
+
+      - name: Publish summary
+        run: |
+          {
+            echo "## TeamClaw Runtime Image"
+            echo ""
+            echo "- Package version: \`${{ steps.tags.outputs.package_version }}\`"
+            echo "- Published tags:"
+            while IFS= read -r tag; do
+              [[ -n "$tag" ]] && echo "  - \`${tag}\`"
+            done <<< "${{ steps.tags.outputs.tags }}"
+          } >> "$GITHUB_STEP_SUMMARY"

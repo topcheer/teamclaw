@@ -1,0 +1,114 @@
+name: TeamClaw Plugin NPM Release
+
+# Before the first publish, configure npm trusted publishing for:
+# - GitHub repo: topcheer/teamclaw
+# - Workflow file: .github/workflows/teamclaw-plugin-npm-release.yml
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+    paths:
+      - ".github/workflows/teamclaw-plugin-npm-release.yml"
+      - "src/**"
+      - "scripts/teamclaw-package-check.mjs"
+      - "scripts/teamclaw-npm-publish.sh"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Commit SHA on main to publish from
+        required: true
+        type: string
+
+concurrency:
+  group: teamclaw-plugin-npm-release-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24.x"
+
+jobs:
+  preview_package:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      ref_sha: ${{ steps.ref.outputs.sha }}
+      package_dir: ${{ steps.metadata.outputs.package_dir }}
+      package_name: ${{ steps.metadata.outputs.package_name }}
+      package_version: ${{ steps.metadata.outputs.package_version }}
+      publish_tag: ${{ steps.metadata.outputs.publish_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Resolve checked-out ref
+        id: ref
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Validate ref is on main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor HEAD origin/main
+
+      - name: Validate TeamClaw package metadata
+        id: metadata
+        run: node scripts/teamclaw-package-check.mjs src --github-output "$GITHUB_OUTPUT"
+
+      - name: Preview publish command
+        run: bash scripts/teamclaw-npm-publish.sh --dry-run src
+
+      - name: Preview npm pack contents
+        working-directory: src
+        run: npm pack --dry-run --json --ignore-scripts
+
+  publish_package:
+    needs: preview_package
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: npm-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preview_package.outputs.ref_sha }}
+          fetch-depth: 1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Validate TeamClaw package metadata
+        run: node scripts/teamclaw-package-check.mjs src
+
+      - name: Ensure version is not already published
+        env:
+          PACKAGE_NAME: ${{ needs.preview_package.outputs.package_name }}
+          PACKAGE_VERSION: ${{ needs.preview_package.outputs.package_version }}
+        run: |
+          set -euo pipefail
+          if npm view --registry https://registry.npmjs.org/ "${PACKAGE_NAME}@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
+            echo "${PACKAGE_NAME}@${PACKAGE_VERSION} is already published on npm."
+            exit 1
+          fi
+
+      - name: Publish package
+        env:
+          TEAMCLAW_NPM_PROVENANCE: always
+        run: bash scripts/teamclaw-npm-publish.sh --publish src

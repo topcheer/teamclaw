@@ -1,0 +1,20 @@
+1. TeamClaw controller service:
+   {{ include "teamclaw.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}
+
+2. Ingress:
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+   http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}
+{{- end }}
+{{- else }}
+   disabled
+{{- end }}
+
+3. Test ingress example (default ingress class, cert-manager annotation override):
+   helm upgrade --install {{ .Release.Name }} ./deploy/helm/teamclaw \
+     --namespace {{ .Release.Namespace }} --create-namespace \
+     --set ingress.enabled=true \
+     --set ingress.hosts[0].host=teamclaw.iot2.win \
+     --set ingress.tls[0].hosts[0]=teamclaw.iot2.win \
+     --set ingress.tls[0].secretName=teamclaw-iot2-win-tls \
+     --set-string ingress.annotations.cert-manager\\.io/cluster-issuer=letsencrypt-production

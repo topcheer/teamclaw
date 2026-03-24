@@ -6,17 +6,11 @@ import { getRole } from "./roles.js";
 import { loadWorkerIdentity, saveWorkerIdentity, clearWorkerIdentity } from "./state.js";
 import { MDnsBrowser } from "./discovery.js";
 
-/**
- * Get the local IP address that can reach a given host.
- * Falls back to the first non-loopback IPv4 address.
- */
 function getLocalIp(targetHost?: string): string {
-  // If target is localhost/127.0.0.1, use localhost for worker URL too
   if (!targetHost || targetHost === "localhost" || targetHost === "127.0.0.1") {
     return "localhost";
   }
 
-  // For remote targets (e.g., Docker container names), find a reachable non-loopback IP
   const interfaces = os.networkInterfaces();
   for (const name of Object.keys(interfaces)) {
     const addrs = interfaces[name];
@@ -52,40 +46,49 @@ export class IdentityManager {
   }
 
   async discoverControllerUrl(): Promise<string | null> {
-    // Try mDNS first
+    if (this.config.controllerUrl) {
+      return this.config.controllerUrl;
+    }
+
     const results = await this.browser.browse(this.config.teamName, 5000);
     if (results.length > 0) {
       const controller = results[0]!;
       return `http://${controller.host}:${controller.port}`;
     }
 
-    // Fallback to manual URL
-    if (this.config.controllerUrl) {
-      return this.config.controllerUrl;
-    }
-
     return null;
   }
 
   async register(): Promise<WorkerIdentity | null> {
-    // Check existing identity
+    const requestedWorkerId = process.env.TEAMCLAW_WORKER_ID?.trim() || undefined;
+    const launchToken = process.env.TEAMCLAW_LAUNCH_TOKEN?.trim() || undefined;
+
     const existing = await loadWorkerIdentity();
     if (existing) {
-      this.identity = existing;
-      this.logger.info(`Identity: restored existing identity (workerId=${existing.workerId})`);
-      return existing;
+      if (requestedWorkerId && existing.workerId !== requestedWorkerId) {
+        await clearWorkerIdentity();
+      } else {
+        this.identity = existing;
+        this.logger.info(`Identity: restored existing identity (workerId=${existing.workerId})`);
+        return existing;
+      }
     }
 
-    // Discover controller
+    const restored = await loadWorkerIdentity();
+    if (restored) {
+      this.identity = restored;
+      this.logger.info(`Identity: restored existing identity (workerId=${restored.workerId})`);
+      return restored;
+    }
+
     const controllerUrl = await this.discoverControllerUrl();
     if (!controllerUrl) {
       this.logger.warn("Identity: no controller found via mDNS or manual URL");
       return null;
     }
 
-    // Generate identity
     const roleDef = getRole(this.config.role);
-    const workerId = generateId();
+    const workerId = requestedWorkerId ?? generateId();
     const localIp = getLocalIp(new URL(controllerUrl).hostname);
     const workerUrl = `http://${localIp}:${this.config.port}`;
 
@@ -95,9 +98,9 @@ export class IdentityManager {
       roleDef?.label ?? this.config.role,
       workerUrl,
       roleDef?.capabilities ?? [],
+      launchToken,
     );
 
-    // Register with controller
     try {
       const res = await fetch(`${controllerUrl}/api/v1/workers/register`, {
         method: "POST",
@@ -129,7 +132,6 @@ export class IdentityManager {
   }
 
   async clear(): Promise<void> {
-    // Notify controller if possible
     if (this.identity) {
       try {
         await fetch(`${this.identity.controllerUrl}/api/v1/workers/${this.identity.workerId}`, {

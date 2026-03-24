@@ -1,0 +1,17 @@
+{{- if and .Values.workspace.enabled (not .Values.workspace.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "teamclaw.workspaceClaimName" . }}
+  labels:
+    {{- include "teamclaw.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.workspace.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.workspace.size }}
+  {{- with .Values.workspace.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+{{- end }}

@@ -1,29 +1,28 @@
-import {
-  definePluginEntry,
-  type OpenClawPluginApi,
-} from "./api.js";
+import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import { parsePluginConfig } from "./src/types.js";
-import type { WorkerIdentity } from "./src/types.js";
+import type { TaskExecutionEventInput, WorkerIdentity } from "./src/types.js";
 import { buildConfigSchema } from "./src/config.js";
 import { loadTeamState } from "./src/state.js";
+import { createRoleTaskExecutor } from "./src/task-executor.js";
 import { createWorkerService } from "./src/worker/worker-service.js";
 import { createWorkerPromptInjector } from "./src/worker/prompt-injector.js";
 import { createWorkerTools } from "./src/worker/tools.js";
 import { MessageQueue } from "./src/worker/message-queue.js";
-import { getRole } from "./src/roles.js";
 import { createControllerService } from "./src/controller/controller-service.js";
+import { LocalWorkerManager } from "./src/controller/local-worker-manager.js";
 import { createControllerPromptInjector } from "./src/controller/prompt-injector.js";
 import { createControllerTools } from "./src/controller/controller-tools.js";
+import { publishWorkerRepo, syncWorkerRepo } from "./src/git-collaboration.js";
+import { installRecommendedSkills } from "./src/worker/skill-installer.js";
 
 export default definePluginEntry({
   id: "teamclaw",
   name: "TeamClaw",
   description:
     "Virtual team collaboration - multiple OpenClaw instances form a virtual software company with role-based task routing.",
-  configSchema: buildConfigSchema(),
+  configSchema: buildConfigSchema,
   register(api: OpenClawPluginApi) {
     const config = parsePluginConfig(api.pluginConfig as Record<string, unknown>);
-    const logger = api.logger;
 
     if (config.mode === "controller") {
       registerController(api, config);
@@ -35,12 +34,28 @@ export default definePluginEntry({
 
 function registerController(api: OpenClawPluginApi, config: ReturnType<typeof parsePluginConfig>) {
   const logger = api.logger;
+  const localWorkerManager = new LocalWorkerManager({
+    config,
+    logger,
+    runtime: api.runtime,
+  });
 
   // Service (starts HTTP server + mDNS + WebSocket)
-  api.registerService(createControllerService({ config, logger }));
+  api.registerService(createControllerService({ config, logger, runtime: api.runtime, localWorkerManager }));
 
   // Prompt injection
-  api.on("before_prompt_build", async () => {
+  api.on("before_prompt_build", async (_event: unknown, ctx: { sessionKey?: string | null }) => {
+    const localIdentity = localWorkerManager.getIdentityForSession(ctx.sessionKey);
+    const localMessageQueue = localWorkerManager.getMessageQueueForSession(ctx.sessionKey);
+    if (localIdentity && localMessageQueue) {
+      const injector = createWorkerPromptInjector(
+        { ...config, role: localIdentity.role },
+        () => localIdentity,
+        localMessageQueue,
+      );
+      return injector() ?? {};
+    }
+
     const state = await loadTeamState(config.teamName);
     const injector = createControllerPromptInjector({
       config,
@@ -51,13 +66,20 @@ function registerController(api: OpenClawPluginApi, config: ReturnType<typeof pa
 
   // Tools - register all controller tools via factory returning an array
   const controllerUrl = `http://localhost:${config.port}`;
-  api.registerTool(() => {
-    const tools = createControllerTools({
+  api.registerTool((ctx: { sessionKey?: string | null }) => {
+    const localIdentity = localWorkerManager.getIdentityForSession(ctx.sessionKey);
+    if (localIdentity) {
+      return createWorkerTools({
+        config: { ...config, role: localIdentity.role },
+        getIdentity: () => localIdentity,
+      });
+    }
+
+    return createControllerTools({
       config,
       controllerUrl,
       getTeamState: () => null,
     });
-    return tools;
   });
 }
 
@@ -77,76 +99,40 @@ function registerWorker(api: OpenClawPluginApi, config: ReturnType<typeof parseP
     };
   }
 
-  // Build role-specific system prompt for task execution
-  const roleDef = getRole(config.role);
-  const roleSystemPrompt = roleDef
-    ? roleDef.systemPrompt
-    : `You are a ${config.role} in a virtual software team. Complete the assigned task.`;
-
-  // Task executor: uses OpenClaw's subagent to run LLM agent for each task
-  const taskExecutor = async (taskDescription: string, taskId: string): Promise<string> => {
-    const sessionKey = `teamclaw-task-${taskId}`;
-    logger.info(`Worker: executing task ${taskId} via subagent`);
+  async function reportExecutionEvent(taskId: string, event: TaskExecutionEventInput): Promise<void> {
+    if (!currentControllerUrl) {
+      return;
+    }
 
     try {
-      const runResult = await api.runtime.subagent.run({
-        sessionKey,
-        message: taskDescription,
-        extraSystemPrompt: roleSystemPrompt,
-        idempotencyKey: `teamclaw-${taskId}`,
+      const res = await fetch(`${currentControllerUrl}/api/v1/tasks/${taskId}/execution`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...event,
+          workerId: currentWorkerId ?? undefined,
+          role: config.role,
+        }),
       });
-
-      logger.info(`Worker: subagent run started for task ${taskId}, runId=${runResult.runId}`);
-
-      const waitResult = await api.runtime.subagent.waitForRun({
-        runId: runResult.runId,
-        timeoutMs: 300_000, // 5 minute timeout
-      });
-
-      if (waitResult.status === "ok") {
-        // Extract the last assistant message as the result
-        const sessionMessages = await api.runtime.subagent.getSessionMessages({
-          sessionKey,
-          limit: 5,
-        });
-
-        // Find the last assistant message content
-        const assistantMessages = sessionMessages.messages.filter(
-          (m: { role?: string }) => m.role === "assistant",
-        );
-        const lastAssistant = assistantMessages[assistantMessages.length - 1];
-
-        // Extract text content from the last assistant message
-        let result = "";
-        if (lastAssistant) {
-          const content = (lastAssistant as { content?: unknown }).content;
-          if (typeof content === "string") {
-            result = content;
-          } else if (Array.isArray(content)) {
-            // Content blocks: [{ type: "text", text: "..." }, { type: "thinking", thinking: "..." }]
-            const textBlocks = content
-              .filter((b: { type?: string }) => b.type === "text")
-              .map((b: { text?: string }) => b.text ?? "");
-            result = textBlocks.join("\n");
-          }
-          if (!result) {
-            result = JSON.stringify(lastAssistant);
-          }
-        }
-
-        logger.info(`Worker: task ${taskId} completed successfully`);
-        return result;
-      } else if (waitResult.status === "timeout") {
-        throw new Error("Task execution timed out after 5 minutes");
-      } else {
-        throw new Error(waitResult.error || "Task execution failed");
+      if (!res.ok) {
+        logger.warn(`Worker: failed to record execution event for ${taskId} (${res.status})`);
       }
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      logger.error(`Worker: task ${taskId} execution failed: ${errorMsg}`);
-      throw err;
+      logger.warn(`Worker: failed to POST execution event for ${taskId}: ${String(err)}`);
     }
-  };
+  }
+
+  const getWorkerSessionKey = (taskId: string) => `teamclaw-task-${taskId}`;
+
+  const taskExecutor = createRoleTaskExecutor({
+    runtime: api.runtime,
+    logger,
+    role: config.role,
+    taskTimeoutMs: config.taskTimeoutMs,
+    getSessionKey: getWorkerSessionKey,
+    getIdempotencyKey: (taskId) => `teamclaw-${taskId}`,
+    reportExecutionEvent,
+  });
 
   // Service
   api.registerService(
@@ -157,7 +143,110 @@ function registerWorker(api: OpenClawPluginApi, config: ReturnType<typeof parseP
         currentControllerUrl = identity.controllerUrl;
         currentWorkerId = identity.workerId;
       },
+      prepareTaskAssignment: async (assignment) => {
+        if (assignment.recommendedSkills?.length) {
+          try {
+            const skillInstall = await installRecommendedSkills(assignment, logger);
+            for (const event of skillInstall.events) {
+              await reportExecutionEvent(assignment.taskId, event);
+            }
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            await reportExecutionEvent(assignment.taskId, {
+              type: "error",
+              phase: "skills_preflight_failed",
+              source: "worker",
+              status: "running",
+              message,
+            });
+            logger.warn(`Worker: skill preflight failed for ${assignment.taskId}: ${message}`);
+          }
+        }
+
+        if (!assignment.repo?.enabled || !currentControllerUrl) {
+          return;
+        }
+
+        await reportExecutionEvent(assignment.taskId, {
+          type: "lifecycle",
+          phase: "repo_sync_started",
+          source: "worker",
+          status: "running",
+          message: `Preparing ${assignment.repo.mode} git workspace sync before task execution.`,
+        });
+
+        try {
+          const syncResult = await syncWorkerRepo(config, logger, currentControllerUrl, assignment.repo);
+          await reportExecutionEvent(assignment.taskId, {
+            type: "lifecycle",
+            phase: "repo_sync_completed",
+            source: "worker",
+            status: "running",
+            message: syncResult.message,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          await reportExecutionEvent(assignment.taskId, {
+            type: "error",
+            phase: "repo_sync_failed",
+            source: "worker",
+            status: "running",
+            message,
+          });
+          throw err;
+        }
+      },
+      publishTaskAssignment: async (assignment) => {
+        if (!assignment.repo?.enabled || !currentControllerUrl || !currentWorkerId) {
+          return;
+        }
+
+        await reportExecutionEvent(assignment.taskId, {
+          type: "lifecycle",
+          phase: "repo_publish_started",
+          source: "worker",
+          status: "running",
+          message: `Publishing task changes through ${assignment.repo.mode} git collaboration.`,
+        });
+
+        try {
+          const publishResult = await publishWorkerRepo(config, logger, currentControllerUrl, assignment.repo, {
+            taskId: assignment.taskId,
+            workerId: currentWorkerId,
+            role: config.role,
+          });
+          await reportExecutionEvent(assignment.taskId, {
+            type: "lifecycle",
+            phase: publishResult.published ? "repo_publish_completed" : "repo_publish_skipped",
+            source: "worker",
+            status: "running",
+            message: publishResult.message,
+          });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          await reportExecutionEvent(assignment.taskId, {
+            type: "error",
+            phase: "repo_publish_failed",
+            source: "worker",
+            status: "running",
+            message,
+          });
+          throw err;
+        }
+      },
       taskExecutor,
+      cancelTaskExecution: async (taskId) => {
+        const sessionKey = getWorkerSessionKey(taskId);
+        try {
+          await api.runtime.subagent.deleteSession({ sessionKey });
+          logger.info(`Worker: cancelled subagent session ${sessionKey} for task ${taskId}`);
+          return true;
+        } catch (err) {
+          logger.warn(`Worker: failed to cancel session ${sessionKey} for task ${taskId}: ${String(err)}`);
+          return false;
+        }
+      },
+      messageQueue,
     }),
   );
 

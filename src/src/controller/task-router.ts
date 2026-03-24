@@ -21,6 +21,11 @@ export class TaskRouter {
       if (candidates.length > 0) {
         return candidates[0]!;
       }
+
+      this.logger.info(
+        `TaskRouter: no idle worker for explicitly assigned role ${task.assignedRole} on task ${task.id}; keeping task pending`,
+      );
+      return null;
     }
 
     // Try keyword matching on capabilities
