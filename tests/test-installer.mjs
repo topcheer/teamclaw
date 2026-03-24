@@ -128,7 +128,6 @@ async function runInstallerExactPluginVersionSmoke() {
     const binDir = path.join(tempRoot, "bin");
     const capturePath = path.join(tempRoot, "openclaw-args.txt");
     const packageMetadata = await readPackageMetadata();
-    const expectedInstallSpec = `${packageMetadata.name}@${packageMetadata.version}`;
     const initialConfig = {
       models: {
         providers: {
@@ -194,13 +193,118 @@ exit 0
     const capturedArgs = (await fs.readFile(capturePath, "utf8"))
       .split(/\r?\n/)
       .filter(Boolean);
+    assert.equal(capturedArgs[0], "plugins");
+    assert.equal(capturedArgs[1], "install");
+    assert.match(
+      capturedArgs[2] || "",
+      /\.tgz$/,
+      "installer should prefer a local tarball during plugin install",
+    );
+    assert.match(
+      path.basename(capturedArgs[2] || ""),
+      new RegExp(`${packageMetadata.version.replace(/\./g, "\\.")}.*\\.tgz$`),
+      "installer tarball should include the current TeamClaw version",
+    );
+
+    console.log("Installer tarball-first plugin-install smoke passed.");
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
+async function runInstallerExactVersionFallbackSmoke() {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "teamclaw-installer-plugin-fallback-test-"));
+  try {
+    const stateDir = path.join(tempRoot, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const workspacePath = path.join(tempRoot, "workspace");
+    const binDir = path.join(tempRoot, "bin");
+    const capturePath = path.join(tempRoot, "openclaw-args.txt");
+    const packageMetadata = await readPackageMetadata();
+    const expectedInstallSpec = `${packageMetadata.name}@${packageMetadata.version}`;
+    const initialConfig = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5",
+                name: "GPT-5",
+              },
+            ],
+          },
+        },
+      },
+      gateway: {
+        mode: "local",
+        port: 18789,
+        bind: "lan",
+      },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5",
+          workspace: workspacePath,
+        },
+      },
+      plugins: {
+        enabled: true,
+        entries: {},
+      },
+    };
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf8");
+    await writeExecutable(
+      path.join(binDir, "openclaw"),
+      `#!/bin/sh
+printf '%s\n' "$@" > "$TEAMCLAW_CAPTURE_FILE"
+exit 0
+`,
+    );
+    await writeExecutable(
+      path.join(binDir, "npm"),
+      `#!/bin/sh
+if [ "$1" = "pack" ]; then
+  echo "simulated npm pack failure" >&2
+  exit 1
+fi
+echo "unexpected npm invocation: $*" >&2
+exit 99
+`,
+    );
+
+    const result = spawnSync(
+      "node",
+      [cliPath, "install", "--config", configPath, "--yes"],
+      {
+        cwd: projectRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: tempRoot,
+          PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+          TEAMCLAW_CAPTURE_FILE: capturePath,
+        },
+      },
+    );
+
+    if (result.status !== 0) {
+      throw new Error(
+        `Installer plugin-install fallback smoke failed with status ${result.status}.\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`,
+      );
+    }
+
+    const capturedArgs = (await fs.readFile(capturePath, "utf8"))
+      .split(/\r?\n/)
+      .filter(Boolean);
     assert.deepEqual(
       capturedArgs,
       ["plugins", "install", expectedInstallSpec],
-      "installer should request the exact TeamClaw package version during plugin install",
+      "installer should fall back to the exact TeamClaw package version when local packing fails",
     );
 
-    console.log("Installer exact-version plugin-install smoke passed.");
+    console.log("Installer exact-version fallback smoke passed.");
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
@@ -208,3 +312,4 @@ exit 0
 
 await runInstallerSmoke();
 await runInstallerExactPluginVersionSmoke();
+await runInstallerExactVersionFallbackSmoke();

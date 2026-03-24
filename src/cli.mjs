@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import os from "node:os";
@@ -11,6 +12,7 @@ import JSON5 from "json5";
 
 const require = createRequire(import.meta.url);
 const packageMetadata = require("./package.json");
+const PACKAGE_ROOT = path.dirname(require.resolve("./package.json"));
 const PACKAGE_NAME = packageMetadata.name;
 const PACKAGE_VERSION = packageMetadata.version;
 const PACKAGE_INSTALL_SPEC = `${PACKAGE_NAME}@${PACKAGE_VERSION}`;
@@ -544,54 +546,132 @@ function installPluginWithCommand(command, args, env) {
   };
 }
 
+function createPackageTarball(env) {
+  let tempDir = "";
+  try {
+    tempDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "teamclaw-installer-pack-"));
+    const result = spawnSync(
+      "npm",
+      ["pack", PACKAGE_ROOT, "--pack-destination", tempDir, "--json", "--ignore-scripts"],
+      {
+        env,
+        encoding: "utf8",
+      },
+    );
+    if (result.status !== 0 || result.error) {
+      const detail = result.error
+        ? result.error.message
+        : (result.stderr || result.stdout || `exited with code ${result.status}`).trim();
+      throw new Error(detail || "npm pack failed");
+    }
+    const payload = JSON.parse(result.stdout);
+    const filename = Array.isArray(payload) && payload[0] && typeof payload[0].filename === "string"
+      ? payload[0].filename.trim()
+      : "";
+    if (!filename) {
+      throw new Error("npm pack did not report a tarball filename");
+    }
+    const tarballPath = path.join(tempDir, filename);
+    if (!fsSync.existsSync(tarballPath)) {
+      throw new Error(`tarball was not created at ${tarballPath}`);
+    }
+    return {
+      ok: true,
+      tempDir,
+      tarballPath,
+    };
+  } catch (error) {
+    if (tempDir) {
+      fsSync.rmSync(tempDir, { recursive: true, force: true });
+    }
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
 function attemptPluginInstall({ configPath }) {
   const env = {
     ...process.env,
     OPENCLAW_CONFIG_PATH: configPath,
   };
-  const candidates = [
+  const candidates = [];
+  const tarballResult = createPackageTarball(env);
+  if (tarballResult.ok) {
+    console.log(
+      `\nPacked ${PACKAGE_INSTALL_SPEC} into ${path.basename(tarballResult.tarballPath)} for local plugin install.`,
+    );
+    candidates.push(
+      {
+        label: "openclaw (local tarball)",
+        command: "openclaw",
+        args: ["plugins", "install", tarballResult.tarballPath],
+        targetDescription: tarballResult.tarballPath,
+      },
+      {
+        label: "npm exec fallback (local tarball)",
+        command: "npm",
+        args: ["exec", "-y", "openclaw@latest", "--", "plugins", "install", tarballResult.tarballPath],
+        targetDescription: tarballResult.tarballPath,
+      },
+    );
+  } else {
+    console.log(
+      `\nCould not pack ${PACKAGE_INSTALL_SPEC} into a local tarball (${tarballResult.error}). Falling back to registry install...`,
+    );
+  }
+  candidates.push(
     {
-      label: "openclaw",
+      label: "openclaw (exact version fallback)",
       command: "openclaw",
       args: ["plugins", "install", PACKAGE_INSTALL_SPEC],
+      targetDescription: PACKAGE_INSTALL_SPEC,
     },
     {
-      label: "npm exec fallback",
+      label: "npm exec fallback (exact version fallback)",
       command: "npm",
       args: ["exec", "-y", "openclaw@latest", "--", "plugins", "install", PACKAGE_INSTALL_SPEC],
+      targetDescription: PACKAGE_INSTALL_SPEC,
     },
-  ];
+  );
 
-  for (let index = 0; index < candidates.length; index += 1) {
-    const candidate = candidates[index];
-    console.log(`\nInstalling ${PACKAGE_INSTALL_SPEC} with ${candidate.label}...`);
-    const result = installPluginWithCommand(candidate.command, candidate.args, env);
-    if (result.status === 0 && !result.error) {
-      return {
-        ok: true,
-        method: candidate.label,
-      };
+  try {
+    const failures = [];
+    for (let index = 0; index < candidates.length; index += 1) {
+      const candidate = candidates[index];
+      console.log(`\nInstalling ${candidate.targetDescription} with ${candidate.label}...`);
+      const result = installPluginWithCommand(candidate.command, candidate.args, env);
+      if (result.status === 0 && !result.error) {
+        return {
+          ok: true,
+          method: candidate.label,
+        };
+      }
+      const errorCode = result.error && typeof result.error === "object" ? result.error.code : "";
+      const detail = result.error
+        ? result.error.message
+        : result.signal
+          ? `terminated by signal ${result.signal}`
+          : `exited with code ${result.status}`;
+      failures.push(`${candidate.label} failed: ${detail}`);
+      if (errorCode === "ENOENT" && index < candidates.length - 1) {
+        console.log(`${candidate.command} was not found. Trying the next install fallback...`);
+        continue;
+      }
+      if (index < candidates.length - 1) {
+        console.log(`${candidate.label} failed (${detail}). Trying the next install fallback...`);
+      }
     }
-    const errorCode = result.error && typeof result.error === "object" ? result.error.code : "";
-    if (errorCode === "ENOENT" && index < candidates.length - 1) {
-      console.log(`${candidate.command} was not found. Trying the npm exec fallback...`);
-      continue;
-    }
-    const detail = result.error
-      ? result.error.message
-      : result.signal
-        ? `terminated by signal ${result.signal}`
-        : `exited with code ${result.status}`;
     return {
       ok: false,
-      error: `${candidate.label} failed: ${detail}`,
+      error: failures.length > 0 ? failures.join("; ") : "No install command was available.",
     };
+  } finally {
+    if (tarballResult.ok) {
+      fsSync.rmSync(tarballResult.tempDir, { recursive: true, force: true });
+    }
   }
-
-  return {
-    ok: false,
-    error: "No install command was available.",
-  };
 }
 
 async function collectInstallChoices(config, prompter) {
