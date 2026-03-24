@@ -1,6 +1,6 @@
 {
   "name": "@teamclaws/teamclaw",
-  "version": "2026.3.24",
+  "version": "2026.3.25",
   "description": "OpenClaw virtual software team orchestration plugin",
   "private": false,
   "keywords": [
@@ -20,7 +20,9 @@
     "directory": "src"
   },
   "type": "module",
-  "bin": "./cli.mjs",
+  "bin": {
+    "teamclaw": "./cli.mjs"
+  },
   "files": [
     "README.md",
     "api.ts",
