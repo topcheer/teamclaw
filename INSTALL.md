@@ -12,6 +12,8 @@
 npx -y @teamclaws/teamclaw install
 ```
 
+installer 会把自己当前运行的 TeamClaw 精确版本安装到 OpenClaw（例如 `@teamclaws/teamclaw@2026.3.24-4`），这样即使 TeamClaw 使用 `YYYY.M.D-N` 这种 date+build-number 版本格式，也不会被 OpenClaw 当成“未显式选择的 prerelease”而拒绝。
+
 这个 guided installer 会帮你：
 
 - 安装/更新 TeamClaw 插件
