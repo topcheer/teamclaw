@@ -578,7 +578,7 @@ async function promptOptionalRoleList(prompter, message, defaultRoles) {
   const defaultValue = defaultRoles.join(",");
   if (!prompter.yes) {
     console.log(
-      `Available roles: ${ROLE_OPTIONS.map((option) => `${option.value} (${option.label})`).join(", ")}. Leave empty to allow all roles.`,
+      `Available roles: ${ROLE_OPTIONS.map((option) => `${option.value} (${option.label})`).join(", ")}. These are preferred defaults only; task-required roles can still launch automatically.`,
     );
   }
   const raw = await prompter.text({
@@ -621,7 +621,7 @@ function isOnDemandControllerInstallMode(installMode) {
 
 function describeProvisioningRoles(roles) {
   return Array.isArray(roles) && roles.length > 0
-    ? roles.join(", ")
+    ? `${roles.join(", ")} (plus any task-required roles)`
     : "all TeamClaw roles (controller decides at runtime)";
 }
 
@@ -1152,7 +1152,7 @@ async function collectInstallChoices(configPath, config, prompter) {
 
   const provisioningRoles = await promptOptionalRoleList(
     prompter,
-    "On-demand roles to allow (comma-separated, leave empty for all roles)",
+    "Preferred on-demand roles (comma-separated, leave empty for controller-decided defaults)",
     resolveDefaultProvisioningRoles(existingTeamClaw),
   );
   const maxPerRole = await prompter.number({

@@ -2,7 +2,7 @@
   "id": "teamclaw",
   "name": "TeamClaw",
   "description": "Virtual team collaboration - multiple OpenClaw instances form a virtual software company with role-based task routing.",
-  "version": "2026.3.24-7",
+  "version": "2026.3.24-8",
   "uiHints": {
     "mode": {
       "label": "Mode",
@@ -66,7 +66,7 @@
     },
     "workerProvisioningRoles": {
       "label": "Provisioned Roles",
-      "help": "Only launch these roles on demand; leave empty for all roles"
+      "help": "Preferred on-demand roles; task-required roles can still launch automatically"
     },
     "workerProvisioningMinPerRole": {
       "label": "Warm Workers Per Role",
@@ -243,7 +243,7 @@
       "workerProvisioningRoles": {
         "type": "array",
         "default": [],
-        "description": "Restrict on-demand launches to specific roles; empty means all roles",
+        "description": "Preferred on-demand roles; task-required roles can still launch automatically. Empty means controller-decided defaults across all roles",
         "items": {
           "type": "string",
           "enum": [

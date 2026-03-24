@@ -92,7 +92,7 @@ function buildConfigSchema() {
         workerProvisioningRoles: {
           type: "array" as const,
           default: [],
-          description: "Restrict on-demand launches to specific roles; empty means all roles",
+          description: "Preferred on-demand roles; task-required roles can still launch automatically. Empty means controller-decided defaults across all roles",
           items: {
             type: "string" as const,
             enum: ROLE_IDS,
@@ -245,7 +245,7 @@ function buildConfigSchema() {
       },
       workerProvisioningRoles: {
         label: "Provisioned Roles",
-        help: "Only launch these roles on demand; leave empty for all roles",
+        help: "Preferred on-demand roles; task-required roles can still launch automatically",
       },
       workerProvisioningMinPerRole: {
         label: "Warm Workers Per Role",
