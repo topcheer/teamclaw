@@ -271,8 +271,106 @@ exit 0
       "",
       "docker installs should not configure a persistent workspace root when no workspace volume is requested",
     );
+    assert.deepEqual(
+      updated.plugins?.entries?.teamclaw?.config?.workerProvisioningRoles,
+      [],
+      "installer should clear the legacy default on-demand role subset so controller-managed provisioning can launch all roles by default",
+    );
+    assert.match(
+      result.stdout,
+      /On-demand roles: all TeamClaw roles \(controller decides at runtime\)/,
+      "installer summary should explain that on-demand controllers can launch any TeamClaw role by default",
+    );
 
     console.log("Installer dedicated-workspace default smoke passed.");
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
+async function runInstallerExplicitProvisioningRolesSmoke() {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "teamclaw-installer-provisioning-roles-test-"));
+  try {
+    const stateDir = path.join(tempRoot, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const workspacePath = path.join(tempRoot, "workspace");
+    const initialConfig = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5",
+                name: "GPT-5",
+              },
+            ],
+          },
+        },
+      },
+      gateway: {
+        mode: "local",
+        port: 18789,
+        bind: "lan",
+      },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5",
+          workspace: workspacePath,
+        },
+      },
+      plugins: {
+        enabled: true,
+        entries: {
+          teamclaw: {
+            enabled: true,
+            config: {
+              mode: "controller",
+              port: 9527,
+              teamName: "default",
+              workerProvisioningType: "process",
+              workerProvisioningRoles: ["developer", "qa"],
+              workerProvisioningMaxPerRole: 2,
+            },
+          },
+        },
+      },
+    };
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf8");
+
+    const result = spawnSync(
+      "node",
+      [cliPath, "install", "--config", configPath, "--skip-plugin-install", "--yes"],
+      {
+        cwd: projectRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: tempRoot,
+        },
+      },
+    );
+
+    if (result.status !== 0) {
+      throw new Error(
+        `Installer explicit provisioning-role smoke failed with status ${result.status}.\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`,
+      );
+    }
+
+    const updated = JSON.parse(await fs.readFile(configPath, "utf8"));
+    assert.deepEqual(
+      updated.plugins?.entries?.teamclaw?.config?.workerProvisioningRoles,
+      ["developer", "qa"],
+      "installer should preserve an explicit on-demand role restriction instead of forcing all roles",
+    );
+    assert.match(
+      result.stdout,
+      /On-demand roles: developer, qa/,
+      "installer summary should keep explicit on-demand role restrictions visible",
+    );
+
+    console.log("Installer explicit provisioning-role smoke passed.");
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
@@ -846,6 +944,7 @@ exit 0
 
 await runInstallerSmoke();
 await runInstallerDedicatedWorkspaceDefaultSmoke();
+await runInstallerExplicitProvisioningRolesSmoke();
 await runInstallerExactPluginVersionSmoke();
 await runInstallerExactVersionFallbackSmoke();
 await runInstallerExistingPluginSkipSmoke();

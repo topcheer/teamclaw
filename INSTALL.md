@@ -12,7 +12,7 @@
 npx -y @teamclaws/teamclaw install
 ```
 
-installer 会优先把自己当前运行的 TeamClaw 打成**本地 tar 包**再交给 OpenClaw 安装，这样可以绕开 ClawHub 限流和“尚未上架插件”的问题；如果本地打包失败，才会回退到精确版本安装（例如 `@teamclaws/teamclaw@2026.3.24-6`），避免 `YYYY.M.D-N` 这种 date+build-number 版本格式被 OpenClaw 当成“未显式选择的 prerelease”而拒绝。
+installer 会优先把自己当前运行的 TeamClaw 打成**本地 tar 包**再交给 OpenClaw 安装，这样可以绕开 ClawHub 限流和“尚未上架插件”的问题；如果本地打包失败，才会回退到精确版本安装（例如 `@teamclaws/teamclaw@2026.3.24-7`），避免 `YYYY.M.D-N` 这种 date+build-number 版本格式被 OpenClaw 当成“未显式选择的 prerelease”而拒绝。
 
 这个 guided installer 会帮你：
 
@@ -299,13 +299,15 @@ http://127.0.0.1:9527/ui
   "port": 9527,
   "teamName": "my-team",
   "workerProvisioningType": "process",
-  "workerProvisioningRoles": ["developer", "qa"],
+  "workerProvisioningRoles": [],
   "workerProvisioningMinPerRole": 0,
   "workerProvisioningMaxPerRole": 2,
   "workerProvisioningIdleTtlMs": 120000,
   "workerProvisioningStartupTimeoutMs": 120000
 }
 ```
+
+`workerProvisioningRoles` 留空或设为 `[]`，表示 controller 可以在运行时按需启用全部 TeamClaw 角色；只有你想显式限制可拉起的角色时，才填写一个子集。
 
 如果 `process` 都没跑顺，再上 `docker` / `kubernetes` 只会更难排查。
 

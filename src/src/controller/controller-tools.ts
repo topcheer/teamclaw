@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 import type { PluginConfig, TaskInfo, TeamState } from "../types.js";
+import { buildControllerNoWorkersMessage, hasOnDemandWorkerProvisioning, shouldBlockControllerWithoutWorkers } from "./controller-capacity.js";
 
 export type ControllerToolsDeps = {
   config: PluginConfig;
@@ -46,6 +47,16 @@ export function createControllerTools(deps: ControllerToolsDeps) {
           return { content: [{ type: "text" as const, text: "title is required." }] };
         }
 
+        const state = getTeamState();
+        if (shouldBlockControllerWithoutWorkers(config, state)) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `${buildControllerNoWorkersMessage()} Stop after reporting this block to the human.`,
+            }],
+          };
+        }
+
         const blocker = detectExecutionReadyBlocker(description);
         if (blocker) {
           return {
@@ -80,7 +91,9 @@ export function createControllerTools(deps: ControllerToolsDeps) {
           const assigned = task.assignedWorkerId
             ? ` -> assigned to ${task.assignedWorkerId}`
             : task.status === "pending"
-              ? " (pending - no available worker)"
+              ? hasOnDemandWorkerProvisioning(config)
+                ? " (pending - waiting for worker provisioning or an available worker)"
+                : " (pending - no registered/available worker)"
               : "";
           const recommended = Array.isArray(task.recommendedSkills) && task.recommendedSkills.length > 0
             ? ` | skills: ${task.recommendedSkills.join(", ")}`

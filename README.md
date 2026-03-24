@@ -121,7 +121,7 @@ pnpm openclaw gateway run
   "port": 9527,
   "teamName": "my-team",
   "workerProvisioningType": "process",
-  "workerProvisioningRoles": ["developer", "qa"],
+  "workerProvisioningRoles": [],
   "workerProvisioningMinPerRole": 0,
   "workerProvisioningMaxPerRole": 2,
   "workerProvisioningIdleTtlMs": 120000,
@@ -168,6 +168,8 @@ Kubernetes 示例：
   "workerProvisioningPassEnv": ["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"]
 }
 ```
+
+`workerProvisioningRoles` 留空或设为 `[]` 表示 controller 可按需启用所有 TeamClaw 角色；只有你需要硬性限制可启动角色时，才填写一个明确子集。
 
 注意事项：
 
