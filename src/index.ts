@@ -1,6 +1,6 @@
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import { parsePluginConfig } from "./src/types.js";
-import type { TaskExecutionEventInput, WorkerIdentity } from "./src/types.js";
+import type { TaskExecutionEventInput, TeamState, WorkerIdentity } from "./src/types.js";
 import { buildConfigSchema } from "./src/config.js";
 import { loadTeamState } from "./src/state.js";
 import { createRoleTaskExecutor } from "./src/task-executor.js";
@@ -39,9 +39,18 @@ function registerController(api: OpenClawPluginApi, config: ReturnType<typeof pa
     logger,
     runtime: api.runtime,
   });
+  let getControllerTeamState = (): TeamState | null => null;
 
   // Service (starts HTTP server + mDNS + WebSocket)
-  api.registerService(createControllerService({ config, logger, runtime: api.runtime, localWorkerManager }));
+  api.registerService(createControllerService({
+    config,
+    logger,
+    runtime: api.runtime,
+    localWorkerManager,
+    onTeamStateAvailable: (getter) => {
+      getControllerTeamState = getter;
+    },
+  }));
 
   // Prompt injection
   api.on("before_prompt_build", async (_event: unknown, ctx: { sessionKey?: string | null }) => {
@@ -56,7 +65,7 @@ function registerController(api: OpenClawPluginApi, config: ReturnType<typeof pa
       return injector() ?? {};
     }
 
-    const state = await loadTeamState(config.teamName);
+    const state = getControllerTeamState() ?? await loadTeamState(config.teamName);
     const injector = createControllerPromptInjector({
       config,
       getTeamState: () => state,
@@ -78,7 +87,7 @@ function registerController(api: OpenClawPluginApi, config: ReturnType<typeof pa
     return createControllerTools({
       config,
       controllerUrl,
-      getTeamState: () => null,
+      getTeamState: getControllerTeamState,
     });
   });
 }

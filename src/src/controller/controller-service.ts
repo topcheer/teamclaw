@@ -1,4 +1,5 @@
 import type { OpenClawPluginApi, OpenClawPluginService, OpenClawPluginServiceContext, PluginLogger } from "../../api.js";
+import os from "node:os";
 import type { PluginConfig, TeamState } from "../types.js";
 import { loadTeamState, saveTeamState } from "../state.js";
 import { MDnsAdvertiser } from "../discovery.js";
@@ -17,7 +18,26 @@ export type ControllerServiceDeps = {
   logger: PluginLogger;
   runtime: OpenClawPluginApi["runtime"];
   localWorkerManager?: LocalWorkerManager;
+  onTeamStateAvailable?: (getter: () => TeamState | null) => void;
 };
+
+function getPreferredLanUiUrl(port: number): string | null {
+  const candidates: string[] = [];
+  const interfaces = os.networkInterfaces();
+  for (const records of Object.values(interfaces)) {
+    for (const record of records ?? []) {
+      if (!record || record.internal || record.family !== "IPv4") {
+        continue;
+      }
+      candidates.push(record.address);
+    }
+  }
+  candidates.sort((left, right) => left.localeCompare(right));
+  if (candidates.length === 0) {
+    return null;
+  }
+  return `http://${candidates[0]}:${port}/ui`;
+}
 
 export function createControllerService(deps: ControllerServiceDeps): OpenClawPluginService {
   const { config, logger, localWorkerManager } = deps;
@@ -61,6 +81,7 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
         repoStateChanged = JSON.stringify(teamState.repo ?? null) !== previousRepoState;
         logger.info(`Controller: restored team "${config.teamName}" with ${Object.keys(teamState.workers).length} workers`);
       }
+      deps.onTeamStateAvailable?.(() => teamState);
 
       const updateState = (updater: (state: TeamState) => void): TeamState => {
         updater(teamState!);
@@ -108,7 +129,11 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
       await new Promise<void>((resolve, reject) => {
         server.listen(config.port, () => {
           logger.info(`Controller: HTTP server listening on port ${config.port}`);
-          logger.info(`Controller: Web UI available at http://localhost:${config.port}/ui`);
+          logger.info(`Controller: Web UI available at http://127.0.0.1:${config.port}/ui`);
+          const lanUiUrl = getPreferredLanUiUrl(config.port);
+          if (lanUiUrl) {
+            logger.info(`Controller: Web UI available on LAN at ${lanUiUrl}`);
+          }
           resolve();
         });
         server.on("error", reject);
@@ -180,6 +205,7 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
       }
     },
     async stop() {
+      deps.onTeamStateAvailable?.(() => null);
       if (timeoutTimer) {
         clearInterval(timeoutTimer);
         timeoutTimer = null;

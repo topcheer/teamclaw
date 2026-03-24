@@ -38,6 +38,7 @@ import { TaskRouter } from "./task-router.js";
 import { MessageRouter } from "./message-router.js";
 import { TeamWebSocketServer } from "./websocket.js";
 import type { WorkerProvisioningManager } from "./worker-provisioning.js";
+import { createControllerPromptInjector } from "./prompt-injector.js";
 
 export type ControllerHttpDeps = {
   config: PluginConfig;
@@ -58,6 +59,16 @@ const MAX_RECENT_TASK_CONTEXT = 3;
 const MAX_TASK_CONTEXT_SUMMARY_CHARS = 500;
 const CONTROLLER_INTAKE_TIMEOUT_CAP_MS = 180_000;
 const CONTROLLER_INTAKE_SESSION_PREFIX = "teamclaw-controller-web:";
+
+export function buildControllerIntakeSystemPrompt(
+  deps: Pick<ControllerHttpDeps, "config" | "getTeamState">,
+): string {
+  const injector = createControllerPromptInjector({
+    config: deps.config,
+    getTeamState: deps.getTeamState,
+  });
+  return injector()?.prependSystemContext ?? "";
+}
 
 function mapTaskStatusToExecutionStatus(taskStatus: TaskStatus, current?: TaskExecution["status"]): TaskExecution["status"] {
   switch (taskStatus) {
@@ -524,6 +535,7 @@ async function runControllerIntake(
   const runResult = await deps.runtime.subagent.run({
     sessionKey,
     message,
+    extraSystemPrompt: buildControllerIntakeSystemPrompt(deps),
     idempotencyKey: `controller-intake-${generateId()}`,
   });
   recordControllerRunEvent(controllerRun.id, {
@@ -1241,6 +1253,13 @@ async function handleRequest(
   const requestUrl = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
 
   // ==================== Web UI ====================
+  if (req.method === "GET" && pathname === "/") {
+    res.statusCode = 302;
+    res.setHeader("Location", "/ui");
+    res.end();
+    return;
+  }
+
   if (req.method === "GET" && (pathname === "/ui" || pathname === "/ui/")) {
     const uiPath = path.join(import.meta.dirname, "..", "ui");
     serveStaticFile(res, path.join(uiPath, "index.html"), "text/html; charset=utf-8");
