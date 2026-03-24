@@ -155,9 +155,9 @@ if (pkg.peerDependencies?.openclaw) {
 if (pkg.private === true) {
   errors.push("package.json private must not be true.");
 }
-if (!pkg.version || !/^\d{4}\.\d{1,2}\.\d{1,2}(?:-beta\.\d+)?$/.test(pkg.version)) {
+if (!pkg.version || !/^\d{4}\.\d{1,2}\.\d{1,2}(?:-\d+|-beta\.\d+)?$/.test(pkg.version)) {
   errors.push(
-    `package.json version must match YYYY.M.D or YYYY.M.D-beta.N; found "${pkg.version ?? "<missing>"}".`,
+    `package.json version must match YYYY.M.D-N or YYYY.M.D-beta.N; found "${pkg.version ?? "<missing>"}".`,
   );
 }
 if (!Array.isArray(pkg.openclaw?.extensions) || pkg.openclaw.extensions.length === 0) {
