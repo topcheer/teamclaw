@@ -2,13 +2,18 @@
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { createInterface } from "node:readline/promises";
 import JSON5 from "json5";
 
-const PACKAGE_NAME = "@teamclaws/teamclaw";
+const require = createRequire(import.meta.url);
+const packageMetadata = require("./package.json");
+const PACKAGE_NAME = packageMetadata.name;
+const PACKAGE_VERSION = packageMetadata.version;
+const PACKAGE_INSTALL_SPEC = `${PACKAGE_NAME}@${PACKAGE_VERSION}`;
 const PLUGIN_ID = "teamclaw";
 const DEFAULT_TEAMCLAW_IMAGE = "ghcr.io/topcheer/teamclaw-openclaw:latest";
 const DEFAULT_CONTROLLER_PORT = 9527;
@@ -548,18 +553,18 @@ function attemptPluginInstall({ configPath }) {
     {
       label: "openclaw",
       command: "openclaw",
-      args: ["plugins", "install", PACKAGE_NAME],
+      args: ["plugins", "install", PACKAGE_INSTALL_SPEC],
     },
     {
       label: "npm exec fallback",
       command: "npm",
-      args: ["exec", "-y", "openclaw@latest", "--", "plugins", "install", PACKAGE_NAME],
+      args: ["exec", "-y", "openclaw@latest", "--", "plugins", "install", PACKAGE_INSTALL_SPEC],
     },
   ];
 
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index];
-    console.log(`\nInstalling ${PACKAGE_NAME} with ${candidate.label}...`);
+    console.log(`\nInstalling ${PACKAGE_INSTALL_SPEC} with ${candidate.label}...`);
     const result = installPluginWithCommand(candidate.command, candidate.args, env);
     if (result.status === 0 && !result.error) {
       return {

@@ -11,6 +11,16 @@ import { fileURLToPath } from "node:url";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, "..");
 const cliPath = path.join(projectRoot, "src", "cli.mjs");
+const packagePath = path.join(projectRoot, "src", "package.json");
+
+async function readPackageMetadata() {
+  return JSON.parse(await fs.readFile(packagePath, "utf8"));
+}
+
+async function writeExecutable(filePath, contents) {
+  await fs.writeFile(filePath, contents, "utf8");
+  await fs.chmod(filePath, 0o755);
+}
 
 async function runInstallerSmoke() {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "teamclaw-installer-test-"));
@@ -109,4 +119,92 @@ async function runInstallerSmoke() {
   }
 }
 
+async function runInstallerExactPluginVersionSmoke() {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "teamclaw-installer-plugin-test-"));
+  try {
+    const stateDir = path.join(tempRoot, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const workspacePath = path.join(tempRoot, "workspace");
+    const binDir = path.join(tempRoot, "bin");
+    const capturePath = path.join(tempRoot, "openclaw-args.txt");
+    const packageMetadata = await readPackageMetadata();
+    const expectedInstallSpec = `${packageMetadata.name}@${packageMetadata.version}`;
+    const initialConfig = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5",
+                name: "GPT-5",
+              },
+            ],
+          },
+        },
+      },
+      gateway: {
+        mode: "local",
+        port: 18789,
+        bind: "lan",
+      },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5",
+          workspace: workspacePath,
+        },
+      },
+      plugins: {
+        enabled: true,
+        entries: {},
+      },
+    };
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf8");
+    await writeExecutable(
+      path.join(binDir, "openclaw"),
+      `#!/bin/sh
+printf '%s\n' "$@" > "$TEAMCLAW_CAPTURE_FILE"
+exit 0
+`,
+    );
+
+    const result = spawnSync(
+      "node",
+      [cliPath, "install", "--config", configPath, "--yes"],
+      {
+        cwd: projectRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: tempRoot,
+          PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+          TEAMCLAW_CAPTURE_FILE: capturePath,
+        },
+      },
+    );
+
+    if (result.status !== 0) {
+      throw new Error(
+        `Installer plugin-install smoke failed with status ${result.status}.\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`,
+      );
+    }
+
+    const capturedArgs = (await fs.readFile(capturePath, "utf8"))
+      .split(/\r?\n/)
+      .filter(Boolean);
+    assert.deepEqual(
+      capturedArgs,
+      ["plugins", "install", expectedInstallSpec],
+      "installer should request the exact TeamClaw package version during plugin install",
+    );
+
+    console.log("Installer exact-version plugin-install smoke passed.");
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
 await runInstallerSmoke();
+await runInstallerExactPluginVersionSmoke();
