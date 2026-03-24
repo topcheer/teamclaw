@@ -39,6 +39,7 @@ import { MessageRouter } from "./message-router.js";
 import { TeamWebSocketServer } from "./websocket.js";
 import type { WorkerProvisioningManager } from "./worker-provisioning.js";
 import { createControllerPromptInjector } from "./prompt-injector.js";
+import { buildControllerNoWorkersMessage, shouldBlockControllerWithoutWorkers } from "./controller-capacity.js";
 
 export type ControllerHttpDeps = {
   config: PluginConfig;
@@ -1473,6 +1474,10 @@ async function handleRequest(
 
     if (!title) {
       sendError(res, 400, "title is required");
+      return;
+    }
+    if (createdBy === "controller" && shouldBlockControllerWithoutWorkers(deps.config, getTeamState())) {
+      sendError(res, 409, buildControllerNoWorkersMessage());
       return;
     }
 

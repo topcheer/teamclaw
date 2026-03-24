@@ -26,7 +26,7 @@ const DEFAULT_TEAM_NAME = "default";
 const DEFAULT_TASK_TIMEOUT_MS = 1_800_000;
 const DEFAULT_AGENT_TIMEOUT_SECONDS = 2_400;
 const DEFAULT_LOCAL_ROLES = ["architect", "developer", "qa"];
-const DEFAULT_PROVISIONING_ROLES = ["architect", "developer", "qa"];
+const LEGACY_DEFAULT_PROVISIONING_ROLES = ["architect", "developer", "qa"];
 
 const ROLE_OPTIONS = [
   { value: "pm", label: "Product Manager" },
@@ -347,6 +347,27 @@ function dedupeStrings(values) {
   return Array.from(new Set(values.filter((value) => typeof value === "string" && value.trim()).map((value) => value.trim())));
 }
 
+function hasSameStringSet(left, right) {
+  const normalizedLeft = dedupeStrings(left).slice().sort();
+  const normalizedRight = dedupeStrings(right).slice().sort();
+  if (normalizedLeft.length !== normalizedRight.length) {
+    return false;
+  }
+  return normalizedLeft.every((value, index) => value === normalizedRight[index]);
+}
+
+function normalizeConfiguredRoleList(raw) {
+  return Array.isArray(raw) ? dedupeStrings(raw) : [];
+}
+
+function resolveDefaultProvisioningRoles(existingTeamClaw) {
+  const existingRoles = normalizeConfiguredRoleList(existingTeamClaw.workerProvisioningRoles);
+  if (existingRoles.length === 0) {
+    return [];
+  }
+  return hasSameStringSet(existingRoles, LEGACY_DEFAULT_PROVISIONING_ROLES) ? [] : existingRoles;
+}
+
 function extractModelOptions(config) {
   const currentModel = getCurrentModel(config);
   const models = [];
@@ -553,6 +574,28 @@ async function promptRoleList(prompter, message, defaultRoles) {
   return parseRoleList(raw).values;
 }
 
+async function promptOptionalRoleList(prompter, message, defaultRoles) {
+  const defaultValue = defaultRoles.join(",");
+  if (!prompter.yes) {
+    console.log(
+      `Available roles: ${ROLE_OPTIONS.map((option) => `${option.value} (${option.label})`).join(", ")}. Leave empty to allow all roles.`,
+    );
+  }
+  const raw = await prompter.text({
+    message,
+    defaultValue,
+    allowEmpty: true,
+    validate: (value) => {
+      const parsed = parseRoleList(value);
+      if (parsed.invalid.length > 0) {
+        return `Unknown role ids: ${parsed.invalid.join(", ")}`;
+      }
+      return "";
+    },
+  });
+  return parseRoleList(raw).values;
+}
+
 function buildStartCommand(configPath) {
   const defaultPath = resolveDefaultOpenClawConfigPath();
   if (path.resolve(configPath) === path.resolve(defaultPath)) {
@@ -570,6 +613,16 @@ function shellEscape(value) {
 
 function isControllerInstallMode(installMode) {
   return installMode !== "worker";
+}
+
+function isOnDemandControllerInstallMode(installMode) {
+  return installMode === "controller-process" || installMode === "controller-docker" || installMode === "controller-kubernetes";
+}
+
+function describeProvisioningRoles(roles) {
+  return Array.isArray(roles) && roles.length > 0
+    ? roles.join(", ")
+    : "all TeamClaw roles (controller decides at runtime)";
 }
 
 function getLocalUiUrl(port) {
@@ -1097,12 +1150,10 @@ async function collectInstallChoices(configPath, config, prompter) {
     };
   }
 
-  const provisioningRoles = await promptRoleList(
+  const provisioningRoles = await promptOptionalRoleList(
     prompter,
-    "On-demand roles to launch (comma-separated)",
-    Array.isArray(existingTeamClaw.workerProvisioningRoles) && existingTeamClaw.workerProvisioningRoles.length > 0
-      ? existingTeamClaw.workerProvisioningRoles
-      : DEFAULT_PROVISIONING_ROLES,
+    "On-demand roles to allow (comma-separated, leave empty for all roles)",
+    resolveDefaultProvisioningRoles(existingTeamClaw),
   );
   const maxPerRole = await prompter.number({
     message: "Maximum on-demand workers per role",
@@ -1468,6 +1519,9 @@ function buildSummaryLines(params) {
   }
   if (params.choices.installMode === "controller-docker" || params.choices.installMode === "controller-kubernetes") {
     lines.push(`Provisioning image: ${params.choices.workerImage}`);
+  }
+  if (isOnDemandControllerInstallMode(params.choices.installMode)) {
+    lines.push(`On-demand roles: ${describeProvisioningRoles(params.choices.provisioningRoles)}`);
   }
   if (params.choices.installMode === "controller-docker" && params.choices.dockerWorkspaceVolume) {
     lines.push(`Docker workspace volume: ${params.choices.dockerWorkspaceVolume}`);
