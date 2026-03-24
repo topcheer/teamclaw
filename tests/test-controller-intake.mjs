@@ -11,13 +11,15 @@ const httpServerPath = path.join(projectRoot, "src", "src", "controller", "http-
 const promptInjectorPath = path.join(projectRoot, "src", "src", "controller", "prompt-injector.ts");
 const controllerToolsPath = path.join(projectRoot, "src", "src", "controller", "controller-tools.ts");
 const controllerCapacityPath = path.join(projectRoot, "src", "src", "controller", "controller-capacity.ts");
+const workerProvisioningPath = path.join(projectRoot, "src", "src", "controller", "worker-provisioning.ts");
 
 async function runControllerIntakePromptSmoke() {
-  const [httpServerSource, promptInjectorSource, controllerToolsSource, controllerCapacitySource] = await Promise.all([
+  const [httpServerSource, promptInjectorSource, controllerToolsSource, controllerCapacitySource, workerProvisioningSource] = await Promise.all([
     fs.readFile(httpServerPath, "utf8"),
     fs.readFile(promptInjectorPath, "utf8"),
     fs.readFile(controllerToolsPath, "utf8"),
     fs.readFile(controllerCapacityPath, "utf8"),
+    fs.readFile(workerProvisioningPath, "utf8"),
   ]);
 
   assert.match(
@@ -69,6 +71,16 @@ async function runControllerIntakePromptSmoke() {
     controllerCapacitySource,
     /workerProvisioningType !== "none"/,
     "controller capacity guard should still allow the on-demand provisioning path",
+  );
+  assert.match(
+    workerProvisioningSource,
+    /allowing role .*pending task demand exists outside configured workerProvisioningRoles/,
+    "worker provisioning should log when a task requires launching a role outside the configured preferred role list",
+  );
+  assert.match(
+    workerProvisioningSource,
+    /for \(const task of Object\.values\(state\.tasks\)\)[\s\S]*roleIds\.add\(taskRole\)/,
+    "worker provisioning should union pending task demand roles into the provisionable role set",
   );
 
   console.log("Controller intake prompt smoke passed.");

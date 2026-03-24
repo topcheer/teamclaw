@@ -169,7 +169,7 @@ Kubernetes 示例：
 }
 ```
 
-`workerProvisioningRoles` 留空或设为 `[]` 表示 controller 可按需启用所有 TeamClaw 角色；只有你需要硬性限制可启动角色时，才填写一个明确子集。
+`workerProvisioningRoles` 留空或设为 `[]` 表示 controller 可按需决定默认启用哪些 TeamClaw 角色；即使你填写了一个偏好的角色子集，只要出现了明确需要其它角色的 pending task，controller 仍然会按需拉起那个角色。
 
 注意事项：
 

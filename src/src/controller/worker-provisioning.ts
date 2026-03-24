@@ -258,10 +258,18 @@ export class WorkerProvisioningManager {
       return;
     }
 
-    const roles = this.getProvisionableRoles();
+    const roles = this.getProvisionableRoles(state);
     for (const role of roles) {
       const demand = this.computeRoleDemand(state, role);
       if (demand > 0) {
+        if (
+          this.deps.config.workerProvisioningRoles.length > 0 &&
+          !this.deps.config.workerProvisioningRoles.includes(role)
+        ) {
+          this.deps.logger.info(
+            `Provisioner: allowing role ${role} because pending task demand exists outside configured workerProvisioningRoles`,
+          );
+        }
         this.deps.logger.info(`Provisioner: role ${role} needs ${demand} additional worker(s) (${reason})`);
       }
       for (let i = 0; i < demand; i += 1) {
@@ -301,7 +309,7 @@ export class WorkerProvisioningManager {
       return;
     }
 
-    const roles = this.getProvisionableRoles();
+    const roles = this.getProvisionableRoles(state);
     for (const role of roles) {
       const activeWorkers = Object.values(state.workers).filter(
         (worker) => worker.role === role && worker.status !== "offline",
@@ -473,10 +481,35 @@ export class WorkerProvisioningManager {
     });
   }
 
-  private getProvisionableRoles(): RoleId[] {
-    return this.deps.config.workerProvisioningRoles.length > 0
-      ? this.deps.config.workerProvisioningRoles
-      : ROLES.map((role) => role.id);
+  private getProvisionableRoles(state: TeamState | null): RoleId[] {
+    const roleIds = new Set<RoleId>(
+      this.deps.config.workerProvisioningRoles.length > 0
+        ? this.deps.config.workerProvisioningRoles
+        : ROLES.map((role) => role.id),
+    );
+
+    if (!state) {
+      return [...roleIds];
+    }
+
+    for (const task of Object.values(state.tasks)) {
+      if (task.status !== "pending" && task.status !== "assigned") {
+        continue;
+      }
+      const taskRole = this.inferTaskRole(task);
+      if (taskRole) {
+        roleIds.add(taskRole);
+      }
+    }
+
+    for (const worker of Object.values(state.workers)) {
+      roleIds.add(worker.role);
+    }
+    for (const record of Object.values(state.provisioning?.workers ?? {})) {
+      roleIds.add(record.role);
+    }
+
+    return [...roleIds];
   }
 
   private countPendingTasksForRole(state: TeamState, role: RoleId): number {
@@ -492,6 +525,9 @@ export class WorkerProvisioningManager {
       if (assignedWorker && assignedWorker.status !== "offline") {
         return false;
       }
+    }
+    if (task.assignedRole) {
+      return task.assignedRole === role;
     }
     return this.inferTaskRole(task) === role;
   }

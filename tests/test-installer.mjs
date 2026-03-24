@@ -366,8 +366,8 @@ async function runInstallerExplicitProvisioningRolesSmoke() {
     );
     assert.match(
       result.stdout,
-      /On-demand roles: developer, qa/,
-      "installer summary should keep explicit on-demand role restrictions visible",
+      /On-demand roles: developer, qa \(plus any task-required roles\)/,
+      "installer summary should explain that configured on-demand roles are preferences, not hard limits",
     );
 
     console.log("Installer explicit provisioning-role smoke passed.");
