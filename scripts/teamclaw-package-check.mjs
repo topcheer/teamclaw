@@ -137,8 +137,8 @@ if (!pkg.name || typeof pkg.name !== "string") {
 if (pkg.name !== "@teamclaws/teamclaw") {
   errors.push(`package.json name must be "@teamclaws/teamclaw"; found "${pkg.name ?? "<missing>"}".`);
 }
-if (pkg.bin !== "./cli.mjs") {
-  errors.push(`package.json bin must be "./cli.mjs"; found "${pkg.bin ?? "<missing>"}".`);
+if (pkg.bin?.teamclaw !== "./cli.mjs") {
+  errors.push(`package.json bin.teamclaw must be "./cli.mjs"; found "${pkg.bin?.teamclaw ?? "<missing>"}".`);
 }
 if (!Array.isArray(pkg.files) || !pkg.files.includes("cli.mjs")) {
   errors.push('package.json files must include "cli.mjs".');
