@@ -12,7 +12,7 @@
 npx -y @teamclaws/teamclaw install
 ```
 
-installer 会把自己当前运行的 TeamClaw 精确版本安装到 OpenClaw（例如 `@teamclaws/teamclaw@2026.3.24-4`），这样即使 TeamClaw 使用 `YYYY.M.D-N` 这种 date+build-number 版本格式，也不会被 OpenClaw 当成“未显式选择的 prerelease”而拒绝。
+installer 会优先把自己当前运行的 TeamClaw 打成**本地 tar 包**再交给 OpenClaw 安装，这样可以绕开 ClawHub 限流和“尚未上架插件”的问题；如果本地打包失败，才会回退到精确版本安装（例如 `@teamclaws/teamclaw@2026.3.24-5`），避免 `YYYY.M.D-N` 这种 date+build-number 版本格式被 OpenClaw 当成“未显式选择的 prerelease”而拒绝。
 
 这个 guided installer 会帮你：
 
