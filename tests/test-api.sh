@@ -74,6 +74,18 @@ if wait_for_health 30 2; then
   MODE=$(echo "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('mode',''))" 2>/dev/null || echo "")
   if [ "$MODE" = "controller" ]; then
     log_pass "Controller is healthy, mode=controller"
+    ROOT_HEADERS=$(curl -s -o /dev/null -D - "${BASE_URL}/" 2>/dev/null || true)
+    ROOT_STATUS=$(printf '%s' "$ROOT_HEADERS" | awk 'NR==1 {print $2}')
+    ROOT_LOCATION=$(printf '%s' "$ROOT_HEADERS" | awk 'tolower($1)=="location:" {gsub("\r","",$2); print $2}')
+    if [[ "$ROOT_STATUS" =~ ^30[1278]$ || "$ROOT_STATUS" = "303" ]]; then
+      if [ "$ROOT_LOCATION" = "/ui" ]; then
+        log_pass "Root path redirects to /ui"
+      else
+        log_fail "Root redirect target was '${ROOT_LOCATION}', expected '/ui'"
+      fi
+    else
+      log_fail "Root path did not redirect, status='${ROOT_STATUS}'"
+    fi
   else
     log_fail "Controller responded but mode='${MODE}', expected 'controller'"
   fi

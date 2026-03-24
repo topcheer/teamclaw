@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import http from "node:http";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -189,6 +190,30 @@ function resolveDefaultOpenClawWorkspaceDir(env = process.env) {
   return path.join(resolveDefaultOpenClawStateDir(env), "workspace");
 }
 
+function resolveOpenClawStateDirForConfigPath(configPath) {
+  return path.dirname(path.resolve(configPath));
+}
+
+function resolveOpenClawWorkspaceDirForConfigPath(configPath) {
+  return path.join(resolveOpenClawStateDirForConfigPath(configPath), "workspace");
+}
+
+function sanitizeInstallerPathSegment(value) {
+  const normalized = String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return normalized || "default";
+}
+
+function resolveDefaultTeamClawWorkspaceDir(configPath, teamName) {
+  return path.join(
+    resolveOpenClawStateDirForConfigPath(configPath),
+    "teamclaw-workspaces",
+    sanitizeInstallerPathSegment(teamName),
+  );
+}
+
 async function pathExists(targetPath) {
   try {
     await fs.access(targetPath);
@@ -307,6 +332,15 @@ function getCurrentWorkspacePath(config) {
   const agents = isRecord(config.agents) ? config.agents : {};
   const defaults = isRecord(agents.defaults) ? agents.defaults : {};
   return typeof defaults.workspace === "string" ? expandUserPath(defaults.workspace) : "";
+}
+
+function resolveInstallerWorkspaceDefault(configPath, config, teamName) {
+  const currentWorkspacePath = getCurrentWorkspacePath(config);
+  const sharedWorkspacePath = resolveOpenClawWorkspaceDirForConfigPath(configPath);
+  if (currentWorkspacePath && path.resolve(currentWorkspacePath) !== path.resolve(sharedWorkspacePath)) {
+    return currentWorkspacePath;
+  }
+  return resolveDefaultTeamClawWorkspaceDir(configPath, teamName);
 }
 
 function dedupeStrings(values) {
@@ -534,6 +568,47 @@ function shellEscape(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
+function isControllerInstallMode(installMode) {
+  return installMode !== "worker";
+}
+
+function getLocalUiUrl(port) {
+  return `http://127.0.0.1:${port}/ui`;
+}
+
+function rankLanAddress(address) {
+  if (address.startsWith("192.168.")) {
+    return 0;
+  }
+  if (address.startsWith("10.")) {
+    return 1;
+  }
+  const parts = address.split(".").map((value) => Number.parseInt(value, 10));
+  if (parts.length === 4 && parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) {
+    return 2;
+  }
+  return 3;
+}
+
+function listLanUiUrls(port) {
+  const urls = [];
+  const interfaces = os.networkInterfaces();
+  for (const records of Object.values(interfaces)) {
+    for (const record of records ?? []) {
+      if (!record || record.internal || record.family !== "IPv4") {
+        continue;
+      }
+      urls.push({
+        address: record.address,
+        url: `http://${record.address}:${port}/ui`,
+      });
+    }
+  }
+  return urls
+    .sort((left, right) => rankLanAddress(left.address) - rankLanAddress(right.address) || left.address.localeCompare(right.address))
+    .map((entry) => entry.url);
+}
+
 function installPluginWithCommand(command, args, env) {
   const result = spawnSync(command, args, {
     stdio: "inherit",
@@ -543,6 +618,50 @@ function installPluginWithCommand(command, args, env) {
     status: result.status ?? 1,
     signal: result.signal ?? null,
     error: result.error ?? null,
+  };
+}
+
+function runGatewayCommand(command, args, env) {
+  const result = spawnSync(command, args, {
+    env,
+    encoding: "utf8",
+  });
+  return {
+    status: result.status ?? 1,
+    signal: result.signal ?? null,
+    error: result.error ?? null,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+  };
+}
+
+function readJsonIfExists(filePath) {
+  try {
+    if (!fsSync.existsSync(filePath)) {
+      return null;
+    }
+    return JSON.parse(fsSync.readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function inspectInstalledPlugin(configPath) {
+  const stateDir = path.dirname(path.resolve(configPath));
+  const pluginDir = path.join(stateDir, "extensions", PLUGIN_ID);
+  if (!fsSync.existsSync(pluginDir)) {
+    return null;
+  }
+  const manifest = readJsonIfExists(path.join(pluginDir, "openclaw.plugin.json"));
+  const packageJson = readJsonIfExists(path.join(pluginDir, "package.json"));
+  const version = typeof manifest?.version === "string" && manifest.version.trim()
+    ? manifest.version.trim()
+    : typeof packageJson?.version === "string" && packageJson.version.trim()
+      ? packageJson.version.trim()
+      : "";
+  return {
+    pluginDir,
+    version: version || null,
   };
 }
 
@@ -591,11 +710,82 @@ function createPackageTarball(env) {
   }
 }
 
+function attemptPluginUninstall({ configPath }) {
+  const env = {
+    ...process.env,
+    OPENCLAW_CONFIG_PATH: configPath,
+  };
+  const candidates = [
+    {
+      label: "openclaw",
+      command: "openclaw",
+      args: ["plugins", "uninstall", PLUGIN_ID, "--force"],
+    },
+    {
+      label: "npm exec fallback",
+      command: "npm",
+      args: ["exec", "-y", "openclaw@latest", "--", "plugins", "uninstall", PLUGIN_ID, "--force"],
+    },
+  ];
+  const failures = [];
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    console.log(`\nRemoving existing ${PLUGIN_ID} plugin with ${candidate.label}...`);
+    const result = installPluginWithCommand(candidate.command, candidate.args, env);
+    if (result.status === 0 && !result.error) {
+      return {
+        ok: true,
+        method: candidate.label,
+      };
+    }
+    const errorCode = result.error && typeof result.error === "object" ? result.error.code : "";
+    const detail = result.error
+      ? result.error.message
+      : result.signal
+        ? `terminated by signal ${result.signal}`
+        : `exited with code ${result.status}`;
+    failures.push(`${candidate.label} failed: ${detail}`);
+    if (errorCode === "ENOENT" && index < candidates.length - 1) {
+      console.log(`${candidate.command} was not found. Trying the next uninstall fallback...`);
+      continue;
+    }
+    break;
+  }
+  return {
+    ok: false,
+    error: failures.join("; "),
+  };
+}
+
 function attemptPluginInstall({ configPath }) {
   const env = {
     ...process.env,
     OPENCLAW_CONFIG_PATH: configPath,
   };
+  const installedPlugin = inspectInstalledPlugin(configPath);
+  if (installedPlugin?.version === PACKAGE_VERSION) {
+    console.log(
+      `\nFound existing TeamClaw plugin at ${installedPlugin.pluginDir} (version ${installedPlugin.version}). Skipping plugin reinstall.`,
+    );
+    return {
+      ok: true,
+      method: `already installed (${installedPlugin.version})`,
+      skipped: true,
+    };
+  }
+  if (installedPlugin) {
+    const installedVersion = installedPlugin.version ? `version ${installedPlugin.version}` : "an unknown version";
+    console.log(
+      `\nFound existing TeamClaw plugin at ${installedPlugin.pluginDir} (${installedVersion}). Removing it before install...`,
+    );
+    const uninstallResult = attemptPluginUninstall({ configPath });
+    if (!uninstallResult.ok) {
+      return {
+        ok: false,
+        error: `Could not remove existing TeamClaw plugin at ${installedPlugin.pluginDir}: ${uninstallResult.error}`,
+      };
+    }
+  }
   const candidates = [];
   const tarballResult = createPackageTarball(env);
   if (tarballResult.ok) {
@@ -674,10 +864,127 @@ function attemptPluginInstall({ configPath }) {
   }
 }
 
-async function collectInstallChoices(config, prompter) {
+function attemptGatewayRestart({ configPath }) {
+  const env = {
+    ...process.env,
+    OPENCLAW_CONFIG_PATH: configPath,
+  };
+  const candidates = [
+    {
+      label: "openclaw",
+      command: "openclaw",
+      args: ["gateway", "restart"],
+    },
+    {
+      label: "npm exec fallback",
+      command: "npm",
+      args: ["exec", "-y", "openclaw@latest", "--", "gateway", "restart"],
+    },
+  ];
+  const failures = [];
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    const result = runGatewayCommand(candidate.command, candidate.args, env);
+    if (result.status === 0 && !result.error) {
+      return {
+        ok: true,
+        method: candidate.label,
+      };
+    }
+    const detail = result.error
+      ? result.error.message
+      : (result.stderr || result.stdout || (result.signal
+          ? `terminated by signal ${result.signal}`
+          : `exited with code ${result.status}`)).trim();
+    failures.push(`${candidate.label} failed: ${detail}`);
+    const errorCode = result.error && typeof result.error === "object" ? result.error.code : "";
+    if (!(errorCode === "ENOENT" && index < candidates.length - 1)) {
+      break;
+    }
+  }
+  return {
+    ok: false,
+    error: failures.join("; "),
+  };
+}
+
+async function waitForControllerHealth(port) {
+  const url = `http://127.0.0.1:${port}/api/v1/health`;
+  const deadline = Date.now() + 30_000;
+  let lastError = "";
+  while (Date.now() < deadline) {
+    try {
+      const response = await new Promise((resolve, reject) => {
+        const request = http.get(
+          url,
+          {
+            agent: false,
+            headers: {
+              Connection: "close",
+            },
+          },
+          (incoming) => {
+            let body = "";
+            incoming.setEncoding("utf8");
+            incoming.on("data", (chunk) => {
+              body += chunk;
+            });
+            incoming.on("end", () => {
+              resolve({
+                statusCode: incoming.statusCode ?? 0,
+                body,
+              });
+            });
+          },
+        );
+        request.setTimeout(5_000, () => {
+          request.destroy(new Error("request timed out"));
+        });
+        request.on("error", reject);
+      });
+      if (response.statusCode >= 200 && response.statusCode < 300) {
+        const payload = JSON.parse(response.body);
+        if (payload && payload.status === "ok" && payload.mode === "controller") {
+          return {
+            ok: true,
+            url,
+          };
+        }
+        lastError = "unexpected health payload";
+      } else {
+        lastError = `HTTP ${response.statusCode}`;
+      }
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  return {
+    ok: false,
+    url,
+    error: lastError || "timed out after 30s",
+  };
+}
+
+async function collectInstallChoices(configPath, config, prompter) {
   const existingTeamClaw = getExistingTeamClawConfig(config);
   const existingMode = typeof existingTeamClaw.mode === "string" ? existingTeamClaw.mode.trim() : "";
-  const modeDefault = existingMode === "worker" ? "worker" : "single-local";
+  const existingProvisioningType =
+    typeof existingTeamClaw.workerProvisioningType === "string" ? existingTeamClaw.workerProvisioningType.trim() : "";
+  let modeDefault = "single-local";
+  if (existingMode === "worker") {
+    modeDefault = "worker";
+  } else if (existingMode === "controller") {
+    if (existingProvisioningType === "docker") {
+      modeDefault = "controller-docker";
+    } else if (existingProvisioningType === "kubernetes") {
+      modeDefault = "controller-kubernetes";
+    } else if (existingProvisioningType === "process") {
+      modeDefault = "controller-process";
+    } else if (!Array.isArray(existingTeamClaw.localRoles) || existingTeamClaw.localRoles.length === 0) {
+      modeDefault = "controller-manual";
+    }
+  }
 
   const installMode = await prompter.select({
     message: "Choose an installation mode",
@@ -710,7 +1017,7 @@ async function collectInstallChoices(config, prompter) {
   });
   const workspacePath = expandUserPath(await prompter.text({
     message: "OpenClaw workspace directory",
-    defaultValue: getCurrentWorkspacePath(config) || resolveDefaultOpenClawWorkspaceDir(),
+    defaultValue: resolveInstallerWorkspaceDefault(configPath, config, teamName),
   }));
 
   if (installMode === "worker") {
@@ -838,11 +1145,11 @@ async function collectInstallChoices(config, prompter) {
           : DEFAULT_TEAMCLAW_IMAGE,
     });
     const dockerWorkspaceVolume = await prompter.text({
-      message: "Docker workspace volume or host path (leave empty for ephemeral workspaces)",
+      message: "Docker workspace volume or host path (leave empty for isolated ephemeral workspaces)",
       defaultValue:
         typeof existingTeamClaw.workerProvisioningDockerWorkspaceVolume === "string"
           ? existingTeamClaw.workerProvisioningDockerWorkspaceVolume.trim()
-          : "teamclaw-workspaces",
+          : "",
       allowEmpty: true,
     });
     return {
@@ -893,7 +1200,7 @@ async function collectInstallChoices(config, prompter) {
         : "teamclaw-worker",
   });
   const kubernetesWorkspacePersistentVolumeClaim = await prompter.text({
-    message: "Kubernetes workspace PVC (leave empty for ephemeral workspaces)",
+    message: "Kubernetes workspace PVC (leave empty for isolated ephemeral workspaces)",
     defaultValue:
       typeof existingTeamClaw.workerProvisioningKubernetesWorkspacePersistentVolumeClaim === "string"
         ? existingTeamClaw.workerProvisioningKubernetesWorkspacePersistentVolumeClaim.trim()
@@ -1133,15 +1440,31 @@ function buildSummaryLines(params) {
   }
   if (params.pluginInstallStatus === "installed") {
     lines.push(`Plugin install: completed via ${params.pluginInstallMethod}`);
+  } else if (params.pluginInstallStatus === "already-installed") {
+    lines.push(`Plugin install: ${params.pluginInstallMethod}`);
   } else if (params.pluginInstallStatus === "skipped") {
     lines.push("Plugin install: skipped");
   } else if (params.pluginInstallError) {
     lines.push(`Plugin install: ${params.pluginInstallError}`);
   }
+  if (params.gatewayRestartStatus === "restarted") {
+    lines.push(`Gateway restart: completed via ${params.gatewayRestartMethod}`);
+  } else if (params.gatewayRestartStatus === "failed") {
+    lines.push(`Gateway restart: ${params.gatewayRestartError}`);
+  }
+  if (params.controllerHealthStatus === "ok") {
+    lines.push(`Controller health: ok (${params.controllerHealthUrl})`);
+  } else if (params.controllerHealthStatus === "failed") {
+    lines.push(`Controller health: ${params.controllerHealthError} (${params.controllerHealthUrl})`);
+  }
   lines.push(`Start command: ${buildStartCommand(params.configPath)}`);
 
-  if (params.choices.installMode === "single-local") {
-    lines.push(`Open UI: http://127.0.0.1:${params.choices.controllerPort}/ui`);
+  if (isControllerInstallMode(params.choices.installMode)) {
+    const lanUiUrls = listLanUiUrls(params.choices.controllerPort);
+    if (lanUiUrls.length > 0) {
+      lines.push(`Open UI (LAN): ${lanUiUrls[0]}`);
+    }
+    lines.push(`Open UI (local): ${getLocalUiUrl(params.choices.controllerPort)}`);
   }
   if (params.choices.installMode === "controller-docker" || params.choices.installMode === "controller-kubernetes") {
     lines.push(`Provisioning image: ${params.choices.workerImage}`);
@@ -1197,7 +1520,7 @@ async function runInstall(options) {
     if (!options.skipPluginInstall && !options.dryRun) {
       const installResult = attemptPluginInstall({ configPath });
       if (installResult.ok) {
-        pluginInstallStatus = "installed";
+        pluginInstallStatus = installResult.skipped ? "already-installed" : "installed";
         pluginInstallMethod = installResult.method;
       } else {
         pluginInstallStatus = "failed";
@@ -1214,13 +1537,36 @@ async function runInstall(options) {
     }
 
     const config = await readOpenClawConfig(configPath);
-    const choices = await collectInstallChoices(config, prompter);
+    const choices = await collectInstallChoices(configPath, config, prompter);
     const nextConfig = applyInstallerChoices(config, choices);
 
     if (options.dryRun) {
       prompter.note("\nDry run only; no files were written.");
     } else {
       await writeConfig(configPath, nextConfig);
+    }
+
+    let gatewayRestartStatus = "skipped";
+    let gatewayRestartMethod = "";
+    let gatewayRestartError = "";
+    let controllerHealthStatus = "skipped";
+    let controllerHealthUrl = "";
+    let controllerHealthError = "";
+    if (!options.dryRun) {
+      const restartResult = attemptGatewayRestart({ configPath });
+      if (restartResult.ok) {
+        gatewayRestartStatus = "restarted";
+        gatewayRestartMethod = restartResult.method;
+        if (isControllerInstallMode(choices.installMode)) {
+          const healthResult = await waitForControllerHealth(choices.controllerPort);
+          controllerHealthStatus = healthResult.ok ? "ok" : "failed";
+          controllerHealthUrl = healthResult.url;
+          controllerHealthError = healthResult.error ?? "";
+        }
+      } else {
+        gatewayRestartStatus = "failed";
+        gatewayRestartError = restartResult.error;
+      }
     }
 
     const summaryLines = buildSummaryLines({
@@ -1230,6 +1576,12 @@ async function runInstall(options) {
       pluginInstallStatus,
       pluginInstallMethod,
       pluginInstallError,
+      gatewayRestartStatus,
+      gatewayRestartMethod,
+      gatewayRestartError,
+      controllerHealthStatus,
+      controllerHealthUrl,
+      controllerHealthError,
     });
 
     prompter.note("\nTeamClaw installer summary");

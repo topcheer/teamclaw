@@ -12,7 +12,7 @@
 npx -y @teamclaws/teamclaw install
 ```
 
-installer 会优先把自己当前运行的 TeamClaw 打成**本地 tar 包**再交给 OpenClaw 安装，这样可以绕开 ClawHub 限流和“尚未上架插件”的问题；如果本地打包失败，才会回退到精确版本安装（例如 `@teamclaws/teamclaw@2026.3.24-5`），避免 `YYYY.M.D-N` 这种 date+build-number 版本格式被 OpenClaw 当成“未显式选择的 prerelease”而拒绝。
+installer 会优先把自己当前运行的 TeamClaw 打成**本地 tar 包**再交给 OpenClaw 安装，这样可以绕开 ClawHub 限流和“尚未上架插件”的问题；如果本地打包失败，才会回退到精确版本安装（例如 `@teamclaws/teamclaw@2026.3.24-6`），避免 `YYYY.M.D-N` 这种 date+build-number 版本格式被 OpenClaw 当成“未显式选择的 prerelease”而拒绝。
 
 这个 guided installer 会帮你：
 
@@ -20,11 +20,10 @@ installer 会优先把自己当前运行的 TeamClaw 打成**本地 tar 包**再
 - 自动定位本地 `openclaw.json`
 - 让你选择安装模式（单机 localRoles / controller / worker / on-demand）
 - 从你现有的 OpenClaw 模型配置里列出模型供你选择
-- 让你显式选择 OpenClaw workspace 目录
+- 让你显式选择 OpenClaw workspace 目录（默认改为 TeamClaw 独立 workspace，而不是直接复用现有 OpenClaw workspace）
 - 为 Docker / Kubernetes 预填默认运行镜像：
   - `ghcr.io/topcheer/teamclaw-openclaw:latest`
-- 在 Docker 模式下预填一个持久化 workspace volume
-- 在 Kubernetes 模式下允许你填写 PVC 名称
+- 在 Docker / Kubernetes 模式下默认使用隔离的临时 workspace；如果你需要持久化/复用，再显式填写 volume 或 PVC
 
 它只会读取模型列表和当前默认模型，不会把你现有的 API key 打印到终端。
 

@@ -327,8 +327,9 @@ echo ""
 # ============================================================
 # Step 1: Run installer regression
 # ============================================================
-echo -e "${BOLD}[1/5]${NC} Running installer regression smoke..."
+echo -e "${BOLD}[1/5]${NC} Running installer/controller regression smoke..."
 node "${SCRIPT_DIR}/test-installer.mjs"
+node "${SCRIPT_DIR}/test-controller-intake.mjs"
 echo -e "${GREEN}  Installer regression passed.${NC}"
 
 # ============================================================

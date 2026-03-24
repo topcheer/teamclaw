@@ -22,15 +22,13 @@ export type ControllerPromptDeps = {
 export function createControllerPromptInjector(deps: ControllerPromptDeps) {
   return () => {
     const state = deps.getTeamState();
-    if (!state) return null;
-
-    const workers = Object.values(state.workers);
-    const tasks = Object.values(state.tasks);
+    const workers = Object.values(state?.workers ?? {});
+    const tasks = Object.values(state?.tasks ?? {});
     const pendingTasks = tasks.filter((t) => t.status === "pending");
     const activeTasks = tasks.filter((t) => t.status === "in_progress" || t.status === "assigned");
     const blockedTasks = tasks.filter((t) => t.status === "blocked");
     const completedTasks = tasks.filter((t) => t.status === "completed");
-    const pendingClarifications = Object.values(state.clarifications).filter((c) => c.status === "pending");
+    const pendingClarifications = Object.values(state?.clarifications ?? {}).filter((c) => c.status === "pending");
 
     const parts: string[] = [
       "## TeamClaw Controller Mode",
@@ -46,7 +44,9 @@ export function createControllerPromptInjector(deps: ControllerPromptDeps) {
       "### Current Team Status",
     ];
 
-    if (workers.length === 0) {
+    if (!state) {
+      parts.push("- Team state is not loaded yet; treat this as a fresh controller intake and establish execution-ready tasks from the human requirement.");
+    } else if (workers.length === 0) {
       parts.push("- No workers registered yet");
     } else {
       for (const w of workers) {
