@@ -5,6 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawPluginApi, PluginLogger } from "../../api.js";
 import type {
   ClarificationRequest,
+  ControllerOrchestrationManifest,
   ControllerRunInfo,
   ControllerRunSource,
   GitRepoState,
@@ -21,7 +22,9 @@ import type {
   TaskStatus,
   TeamMessage,
   TeamState,
+  WorkerProgressContract,
   WorkerInfo,
+  WorkerTaskResultContract,
 } from "../types.js";
 import {
   parseJsonBody,
@@ -40,6 +43,15 @@ import { TeamWebSocketServer } from "./websocket.js";
 import type { WorkerProvisioningManager } from "./worker-provisioning.js";
 import { createControllerPromptInjector } from "./prompt-injector.js";
 import { buildControllerNoWorkersMessage, shouldBlockControllerWithoutWorkers } from "./controller-capacity.js";
+import {
+  backfillWorkerProgressContract,
+  backfillWorkerTaskResultContract,
+  ensureTeamMessageContract,
+  normalizeTaskHandoffContract,
+  normalizeWorkerProgressContract,
+  normalizeWorkerTaskResultContract,
+} from "../interaction-contracts.js";
+import { normalizeControllerManifest } from "./orchestration-manifest.js";
 
 export type ControllerHttpDeps = {
   config: PluginConfig;
@@ -470,6 +482,193 @@ function tagControllerCreatedTasks(
   return taggedTaskIds;
 }
 
+function findLatestControllerRunIdForSession(sessionKey: string, state: TeamState | null): string | null {
+  const matchingRuns = Object.values(state?.controllerRuns ?? {})
+    .filter((run) => run.sessionKey === sessionKey)
+    .sort((left, right) => right.updatedAt - left.updatedAt);
+  return matchingRuns[0]?.id ?? null;
+}
+
+function buildControllerManifestEventMessage(manifest: ControllerOrchestrationManifest): string {
+  const parts = [
+    `Structured orchestration manifest recorded.`,
+    `roles=${manifest.requiredRoles.join(", ") || "none"}`,
+    `created=${manifest.createdTasks.length}`,
+    `deferred=${manifest.deferredTasks.length}`,
+  ];
+  if (manifest.clarificationsNeeded) {
+    parts.push(`clarifications=${manifest.clarificationQuestions.length}`);
+  }
+  return parts.join(" ");
+}
+
+function buildControllerManifestReply(
+  manifest: ControllerOrchestrationManifest | undefined,
+  createdTaskIds: string[],
+  state: TeamState | null,
+  fallbackReply: string,
+): string {
+  if (!manifest) {
+    const warning = "Warning: controller did not submit a structured orchestration manifest for this run.";
+    return fallbackReply ? `${fallbackReply}\n\n${warning}` : warning;
+  }
+
+  const actualCreatedTasks = createdTaskIds
+    .map((taskId) => state?.tasks?.[taskId])
+    .filter((task): task is TaskInfo => !!task);
+
+  const lines: string[] = [
+    `Requirement summary: ${manifest.requirementSummary}`,
+    `Required roles: ${manifest.requiredRoles.join(", ") || "none"}`,
+  ];
+
+  if (actualCreatedTasks.length > 0) {
+    lines.push("", "Created execution-ready tasks:");
+    for (const task of actualCreatedTasks) {
+      const roleLabel = task.assignedRole ? ` (${task.assignedRole})` : "";
+      lines.push(`- [${task.id}] ${task.title}${roleLabel}`);
+    }
+  } else if (manifest.createdTasks.length > 0) {
+    lines.push("", "Manifest planned created tasks:");
+    for (const task of manifest.createdTasks) {
+      const roleLabel = task.assignedRole ? ` (${task.assignedRole})` : "";
+      lines.push(`- ${task.title}${roleLabel}: ${task.expectedOutcome}`);
+    }
+  } else {
+    lines.push("", "Created execution-ready tasks: none.");
+  }
+
+  if (manifest.deferredTasks.length > 0) {
+    lines.push("", "Deferred tasks:");
+    for (const task of manifest.deferredTasks) {
+      const roleLabel = task.assignedRole ? ` (${task.assignedRole})` : "";
+      lines.push(`- ${task.title}${roleLabel}: blocked by ${task.blockedBy}; create when ${task.whenReady}`);
+    }
+  }
+
+  if (manifest.clarificationsNeeded) {
+    lines.push("", "Clarifications needed:");
+    for (const question of manifest.clarificationQuestions) {
+      lines.push(`- ${question}`);
+    }
+  }
+
+  if (manifest.handoffPlan) {
+    lines.push("", `Handoff plan: ${manifest.handoffPlan}`);
+  }
+  if (manifest.notes) {
+    lines.push("", `Notes: ${manifest.notes}`);
+  }
+  if (manifest.createdTasks.length !== createdTaskIds.length) {
+    lines.push(
+      "",
+      `Warning: manifest declared ${manifest.createdTasks.length} created task(s), but TeamClaw recorded ${createdTaskIds.length}.`,
+    );
+  }
+
+  return lines.join("\n");
+}
+
+function summarizeManifestExpectedOutcome(task: TaskInfo): string {
+  const raw = task.result || task.progress || task.description || "";
+  const normalized = raw.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "Produce the concrete deliverable described by this task and report the result back to the controller.";
+  }
+  if (normalized.length <= 180) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 180).trimEnd()}…`;
+}
+
+function inferManifestRolesFromText(text: string): RoleId[] {
+  const normalized = text.toLowerCase();
+  const roleIds: RoleId[] = [];
+  for (const role of ROLES) {
+    if (normalized.includes(role.id) || normalized.includes(role.label.toLowerCase())) {
+      roleIds.push(role.id);
+    }
+  }
+  return roleIds;
+}
+
+function inferClarificationQuestionsFromReply(text: string): string[] {
+  const candidates = text
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter((line) => line.includes("?"))
+    .map((line) => line.replace(/^[-*]\s*/, ""))
+    .filter(Boolean);
+  return Array.from(new Set(candidates)).slice(0, 5);
+}
+
+function buildBackfilledControllerManifest(
+  request: string,
+  rawReply: string,
+  createdTaskIds: string[],
+  state: TeamState | null,
+): ControllerOrchestrationManifest {
+  const actualCreatedTasks = createdTaskIds
+    .map((taskId) => state?.tasks?.[taskId])
+    .filter((task): task is TaskInfo => !!task);
+  const inferredRoles = new Set<RoleId>();
+  for (const task of actualCreatedTasks) {
+    if (task.assignedRole) {
+      inferredRoles.add(task.assignedRole);
+    }
+  }
+  for (const roleId of inferManifestRolesFromText(rawReply)) {
+    inferredRoles.add(roleId);
+  }
+  const clarificationQuestions = inferClarificationQuestionsFromReply(rawReply);
+  return {
+    version: "1.0",
+    requirementSummary: request.replace(/\s+/g, " ").trim() || "Controller requirement summary unavailable.",
+    requiredRoles: Array.from(inferredRoles),
+    clarificationsNeeded: clarificationQuestions.length > 0 && actualCreatedTasks.length === 0,
+    clarificationQuestions,
+    createdTasks: actualCreatedTasks.map((task) => ({
+      title: task.title,
+      assignedRole: task.assignedRole,
+      expectedOutcome: summarizeManifestExpectedOutcome(task),
+    })),
+    deferredTasks: [],
+    handoffPlan: actualCreatedTasks.length > 0
+      ? "Assigned workers should complete the created execution-ready tasks, report progress, and let the controller schedule downstream work after prerequisites are satisfied."
+      : undefined,
+    notes: "Backfilled by the controller because the model did not submit the required structured manifest.",
+  };
+}
+
+function ensureControllerManifest(
+  controllerRunId: string,
+  sessionKey: string,
+  request: string,
+  rawReply: string,
+  createdTaskIds: string[],
+  deps: ControllerHttpDeps,
+): ControllerOrchestrationManifest {
+  const currentState = deps.getTeamState();
+  const existingManifest = currentState?.controllerRuns?.[controllerRunId]?.manifest;
+  if (existingManifest) {
+    return existingManifest;
+  }
+
+  const manifest = buildBackfilledControllerManifest(request, rawReply, createdTaskIds, currentState);
+  updateControllerRun(controllerRunId, deps, (run) => {
+    run.manifest = manifest;
+    appendControllerRunEvent(run, {
+      type: "warning",
+      phase: "manifest_backfilled",
+      source: "controller",
+      status: "running",
+      sessionKey,
+      message: "Controller did not submit a structured manifest; TeamClaw backfilled a minimal manifest from the recorded run state.",
+    });
+  });
+  return manifest;
+}
+
 function buildControllerFollowUpMessage(task: TaskInfo): string {
   const parts = [
     `A controller-created TeamClaw task has ${task.status === "failed" ? "failed" : "completed"}.`,
@@ -483,6 +682,10 @@ function buildControllerFollowUpMessage(task: TaskInfo): string {
 
   if (task.result) {
     parts.push("", "## Task Result", task.result);
+  }
+  const resultContractSection = buildResultContractSection(task);
+  if (resultContractSection) {
+    parts.push("", resultContractSection);
   }
   if (task.error) {
     parts.push("", "## Task Error", task.error);
@@ -596,8 +799,18 @@ async function runControllerIntake(
     sessionKey,
     limit: 100,
   });
-  const reply = extractLastAssistantText(sessionMessages.messages)
+  const rawReply = extractLastAssistantText(sessionMessages.messages)
     || "Controller completed the intake run but did not return any text.";
+  const recordedManifest = ensureControllerManifest(
+    controllerRun.id,
+    sessionKey,
+    message,
+    rawReply,
+    createdTaskIds,
+    deps,
+  );
+  const latestTeamState = deps.getTeamState();
+  const reply = buildControllerManifestReply(recordedManifest, createdTaskIds, latestTeamState, rawReply);
 
   updateControllerRun(controllerRun.id, deps, (run) => {
     run.reply = reply;
@@ -644,7 +857,13 @@ async function runControllerIntake(
 
 function summarizeTaskForAssignment(task: TaskInfo): string {
   const lastExecutionMessage = task.execution?.events[task.execution.events.length - 1]?.message;
-  const raw = task.result || task.progress || lastExecutionMessage || task.description || "";
+  const contractSummary = task.resultContract
+    ? [
+        task.resultContract.summary,
+        ...task.resultContract.deliverables.slice(0, 3).map((deliverable) => `${deliverable.kind}: ${deliverable.value}`),
+      ].join(" | ")
+    : "";
+  const raw = contractSummary || task.result || task.progress || lastExecutionMessage || task.description || "";
   const normalized = raw.replace(/\s+/g, " ").trim();
   if (!normalized) {
     return "No upstream summary available.";
@@ -954,6 +1173,89 @@ function applyTaskResult(
   }
 
   return updatedTask;
+}
+
+function ensureTaskResultContract(
+  taskId: string,
+  result: string,
+  error: string | undefined,
+  deps: ControllerHttpDeps,
+): WorkerTaskResultContract | undefined {
+  const state = deps.getTeamState();
+  const currentTask = state?.tasks[taskId];
+  if (!currentTask) {
+    return undefined;
+  }
+  if (currentTask.resultContract) {
+    return currentTask.resultContract;
+  }
+
+  const contract = backfillWorkerTaskResultContract(currentTask, result, error);
+  deps.updateTeamState((teamState) => {
+    const task = teamState.tasks[taskId];
+    if (!task || task.resultContract) {
+      return;
+    }
+    task.resultContract = contract;
+  });
+  recordTaskExecutionEvent(taskId, {
+    type: "lifecycle",
+    phase: "result_contract_backfilled",
+    source: "controller",
+    message: "Worker did not submit a structured result contract; TeamClaw backfilled one from the recorded task result.",
+    workerId: currentTask.assignedWorkerId,
+    role: currentTask.assignedRole,
+  }, deps);
+  return contract;
+}
+
+function buildResultContractSection(task: TaskInfo): string {
+  const contract = task.resultContract;
+  if (!contract) {
+    return "";
+  }
+
+  const lines = [
+    "## Structured Result Contract",
+    `Outcome: ${contract.outcome}`,
+    `Summary: ${contract.summary}`,
+  ];
+  if (contract.deliverables.length > 0) {
+    lines.push("Deliverables:");
+    for (const deliverable of contract.deliverables) {
+      const summary = deliverable.summary ? ` — ${deliverable.summary}` : "";
+      lines.push(`- ${deliverable.kind}: ${deliverable.value}${summary}`);
+    }
+  }
+  if (contract.keyPoints.length > 0) {
+    lines.push("Key points:");
+    for (const keyPoint of contract.keyPoints) {
+      lines.push(`- ${keyPoint}`);
+    }
+  }
+  if (contract.blockers.length > 0) {
+    lines.push("Blockers:");
+    for (const blocker of contract.blockers) {
+      lines.push(`- ${blocker}`);
+    }
+  }
+  if (contract.followUps.length > 0) {
+    lines.push("Suggested follow-ups:");
+    for (const followUp of contract.followUps) {
+      const roleLabel = followUp.targetRole ? ` (${followUp.targetRole})` : "";
+      lines.push(`- ${followUp.type}${roleLabel}: ${followUp.reason}`);
+    }
+  }
+  if (contract.questions.length > 0) {
+    lines.push("Open questions:");
+    for (const question of contract.questions) {
+      lines.push(`- ${question}`);
+    }
+  }
+  if (contract.notes) {
+    lines.push(`Notes: ${contract.notes}`);
+  }
+  return lines.join("\n");
 }
 
 function revertTaskAssignment(taskId: string, workerId: string, deps: ControllerHttpDeps): TaskInfo | undefined {
@@ -1596,12 +1898,14 @@ async function handleRequest(
     const body = await parseJsonBody(req);
     let statusEvent: TaskExecutionEvent | undefined;
     let progressEvent: TaskExecutionEvent | undefined;
+    let progressContract: WorkerProgressContract | undefined;
 
     const state = updateTeamState((s) => {
       const task = s.tasks[taskId];
       if (!task) return;
       const previousStatus = task.status;
       const previousProgress = task.progress;
+      const previousProgressContract = task.progressContract;
       if (typeof body.status === "string") task.status = body.status as TaskStatus;
       if (typeof body.progress === "string") task.progress = body.progress as string;
       if (typeof body.priority === "string") task.priority = body.priority as TaskPriority;
@@ -1611,6 +1915,12 @@ async function handleRequest(
           body.recommendedSkills.map((entry: unknown) => String(entry ?? "")),
         );
         task.recommendedSkills = recommendedSkills.length > 0 ? recommendedSkills : undefined;
+      }
+      progressContract = normalizeWorkerProgressContract(body.progressContract)
+        ?? (typeof body.progress === "string" ? backfillWorkerProgressContract(body.progress, typeof body.status === "string" ? body.status : undefined) : undefined);
+      if (progressContract) {
+        task.progressContract = progressContract;
+        task.progress = task.progress || progressContract.summary;
       }
       task.updatedAt = Date.now();
 
@@ -1630,6 +1940,14 @@ async function handleRequest(
           source: "worker",
           status: task.status === "in_progress" || task.status === "review" ? "running" : undefined,
           message: body.progress as string,
+        });
+      } else if (progressContract && JSON.stringify(progressContract) !== JSON.stringify(previousProgressContract)) {
+        progressEvent = appendTaskExecutionEvent(task, {
+          type: "progress",
+          phase: "progress_contract_reported",
+          source: "worker",
+          status: task.status === "in_progress" || task.status === "review" ? "running" : undefined,
+          message: progressContract.summary,
         });
       }
     });
@@ -1689,6 +2007,13 @@ async function handleRequest(
     const taskId = pathname.split("/")[4]!;
     const body = await parseJsonBody(req);
     const targetRole = typeof body.targetRole === "string" ? body.targetRole as RoleId : undefined;
+    const handoffContract = normalizeTaskHandoffContract(body.contract, {
+      targetRole,
+      reason: typeof body.reason === "string" ? body.reason : targetRole ? `The next step should move to ${targetRole}.` : "The task needs a new assignee.",
+      summary: typeof body.summary === "string" ? body.summary : undefined,
+      expectedNextStep: typeof body.expectedNextStep === "string" ? body.expectedNextStep : undefined,
+      artifacts: [],
+    });
 
     const state = getTeamState();
     if (!state?.tasks[taskId]) {
@@ -1702,6 +2027,7 @@ async function handleRequest(
       s.tasks[taskId].status = "pending";
       s.tasks[taskId].assignedWorkerId = undefined;
       s.tasks[taskId].assignedRole = targetRole ?? s.tasks[taskId].assignedRole;
+      s.tasks[taskId].lastHandoff = handoffContract;
       s.tasks[taskId].updatedAt = Date.now();
 
       // Free old worker
@@ -1726,12 +2052,54 @@ async function handleRequest(
       phase: "handoff",
       source: "controller",
       message: targetRole
-        ? `Task handed off and re-routed to role ${targetRole}.`
-        : "Task handed off for re-routing.",
+        ? `Task handed off and re-routed to role ${targetRole}: ${handoffContract.summary}`
+        : `Task handed off for re-routing: ${handoffContract.summary}`,
       role: targetRole,
     }, deps);
     wsServer.broadcastUpdate({ type: "task:updated", data: serializeTask(updatedTask) });
     sendJson(res, 200, { task: serializeTask(updatedTask) });
+    return;
+  }
+
+  // POST /api/v1/tasks/:id/result-contract
+  if (req.method === "POST" && pathname.match(/^\/api\/v1\/tasks\/[^/]+\/result-contract$/)) {
+    const taskId = pathname.split("/")[4]!;
+    const body = await parseJsonBody(req);
+    const contract = normalizeWorkerTaskResultContract(body.contract ?? body.resultContract);
+    const workerId = typeof body.workerId === "string" ? body.workerId : undefined;
+    const currentTask = getTeamState()?.tasks[taskId];
+    if (!currentTask) {
+      sendError(res, 404, "Task not found");
+      return;
+    }
+    if (!contract) {
+      sendError(res, 400, "result contract is required");
+      return;
+    }
+    if (workerId && !canAcceptWorkerUpdate(currentTask, workerId)) {
+      logger.info(`Controller: ignoring stale result contract for ${taskId} from ${workerId}`);
+      sendJson(res, 202, { status: "ignored", reason: "stale-worker-result-contract" });
+      return;
+    }
+
+    const state = updateTeamState((teamState) => {
+      const task = teamState.tasks[taskId];
+      if (!task) {
+        return;
+      }
+      task.resultContract = contract;
+      task.updatedAt = Date.now();
+    });
+    recordTaskExecutionEvent(taskId, {
+      type: "output",
+      phase: "result_contract_recorded",
+      source: "worker",
+      status: contract.outcome === "failed" ? "failed" : "running",
+      message: contract.summary,
+      workerId,
+      role: currentTask.assignedRole,
+    }, deps);
+    sendJson(res, 201, { task: serializeTask(state.tasks[taskId]) });
     return;
   }
 
@@ -1754,11 +2122,32 @@ async function handleRequest(
     }
     const previousWorkerId = getTeamState()?.tasks[taskId]?.assignedWorkerId;
 
+    const submittedContract = normalizeWorkerTaskResultContract(body.contract ?? body.resultContract);
+    if (submittedContract) {
+      updateTeamState((teamState) => {
+        const task = teamState.tasks[taskId];
+        if (!task) {
+          return;
+        }
+        task.resultContract = submittedContract;
+      });
+      recordTaskExecutionEvent(taskId, {
+        type: "output",
+        phase: "result_contract_recorded",
+        source: "worker",
+        status: error ? "failed" : "running",
+        message: submittedContract.summary,
+        workerId,
+        role: currentTask.assignedRole,
+      }, deps);
+    }
+
     const updatedTask = applyTaskResult(taskId, result, error, deps);
+    ensureTaskResultContract(taskId, result, error, deps);
     if (!workerId || workerId !== previousWorkerId) {
       await cancelTaskExecution(taskId, previousWorkerId, "manual result submission", deps);
     }
-    sendJson(res, 200, { task: serializeTask(updatedTask) });
+    sendJson(res, 200, { task: serializeTask(getTeamState()?.tasks[taskId] ?? updatedTask) });
     return;
   }
 
@@ -1816,6 +2205,46 @@ async function handleRequest(
 
   // ==================== Message Routing ====================
 
+  // POST /api/v1/controller/manifest
+  if (req.method === "POST" && pathname === "/api/v1/controller/manifest") {
+    const body = await parseJsonBody(req);
+    const sessionKey = normalizeControllerIntakeSessionKey(body.sessionKey);
+    const manifest = normalizeControllerManifest(body.manifest);
+    if (!manifest) {
+      sendError(res, 400, "manifest is required and must include requirementSummary");
+      return;
+    }
+
+    const runId = findLatestControllerRunIdForSession(sessionKey, deps.getTeamState());
+    if (!runId) {
+      sendError(res, 404, "Controller run not found for session");
+      return;
+    }
+
+    const updatedRun = updateControllerRun(runId, deps, (run) => {
+      run.manifest = manifest;
+      appendControllerRunEvent(run, {
+        type: "output",
+        phase: "manifest_recorded",
+        source: "controller",
+        status: "running",
+        sessionKey,
+        message: buildControllerManifestEventMessage(manifest),
+      });
+    });
+
+    if (!updatedRun) {
+      sendError(res, 404, "Controller run not found");
+      return;
+    }
+
+    sendJson(res, 201, {
+      controllerRun: serializeControllerRun(updatedRun),
+      manifest,
+    });
+    return;
+  }
+
   // GET /api/v1/controller/runs
   if (req.method === "GET" && pathname === "/api/v1/controller/runs") {
     const state = getTeamState();
@@ -1860,6 +2289,12 @@ async function handleRequest(
       toRole: typeof body.toRole === "string" ? body.toRole as RoleId : undefined,
       type: "direct",
       content: typeof body.content === "string" ? body.content : "",
+      contract: ensureTeamMessageContract(body.contract, {
+        type: "direct",
+        content: typeof body.content === "string" ? body.content : "",
+        toRole: typeof body.toRole === "string" ? body.toRole as RoleId : undefined,
+        taskId: typeof body.taskId === "string" ? body.taskId : undefined,
+      }),
       taskId: typeof body.taskId === "string" ? body.taskId : undefined,
       createdAt: Date.now(),
     };
@@ -1882,6 +2317,11 @@ async function handleRequest(
       fromRole: typeof body.fromRole === "string" ? body.fromRole as RoleId : undefined,
       type: "broadcast",
       content: typeof body.content === "string" ? body.content : "",
+      contract: ensureTeamMessageContract(body.contract, {
+        type: "broadcast",
+        content: typeof body.content === "string" ? body.content : "",
+        taskId: typeof body.taskId === "string" ? body.taskId : undefined,
+      }),
       taskId: typeof body.taskId === "string" ? body.taskId : undefined,
       createdAt: Date.now(),
     };
@@ -1913,6 +2353,14 @@ async function handleRequest(
       toRole: typeof body.toRole === "string" ? body.toRole as RoleId : undefined,
       type: "review-request",
       content: typeof body.content === "string" ? body.content : "",
+      contract: ensureTeamMessageContract(body.contract, {
+        type: "review-request",
+        content: typeof body.content === "string" ? body.content : "",
+        toRole: typeof body.toRole === "string" ? body.toRole as RoleId : undefined,
+        taskId: typeof body.taskId === "string" ? body.taskId : undefined,
+        intent: "review-request",
+        needsResponse: true,
+      }),
       taskId: typeof body.taskId === "string" ? body.taskId : undefined,
       createdAt: Date.now(),
     };
@@ -2116,6 +2564,17 @@ async function handleRequest(
         toRole: clarification.requestedByRole,
         type: "direct",
         content: `Clarification answer for task ${task.id}: ${answer}`,
+        contract: ensureTeamMessageContract(null, {
+          type: "direct",
+          content: `Clarification answer for task ${task.id}: ${answer}`,
+          toRole: clarification.requestedByRole,
+          taskId: task.id,
+          summary: `Clarification answered for task ${task.id}`,
+          details: answer,
+          requestedAction: "Resume the task using this clarification.",
+          needsResponse: false,
+          intent: "update",
+        }),
         taskId: task.id,
         createdAt: now,
       };

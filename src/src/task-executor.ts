@@ -442,6 +442,8 @@ function buildTaskMessage(taskDescription: string, taskId: string, roleLabel: st
     "- Do NOT mark the task completed or failed via progress tools. Return the final deliverable (or raise an error) and let TeamClaw close the task.",
     "- If critical information is missing and you cannot proceed safely, request clarification and wait instead of guessing.",
     "- If more work is needed, mention it briefly in your result or use a handoff/review tool on this same task.",
+    "- Before your final reply, submit a structured worker result contract with teamclaw_submit_result_contract so TeamClaw can route the next step without parsing prose.",
+    "- Use structured fields on progress, review, handoff, and messaging tools whenever coordination is needed.",
     `- When naming a role, use exact TeamClaw role IDs: ${TEAMCLAW_ROLE_IDS_TEXT}.`,
   ].join("\n");
 }

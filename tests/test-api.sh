@@ -265,15 +265,23 @@ if [ -n "$TASK_ID" ]; then
   HANDOFF_RESPONSE=$(curl -sf -X POST "${BASE_URL}/api/v1/tasks/${TASK_ID}/handoff" \
     -H "Content-Type: application/json" \
     -d '{
-      "targetRole": "qa"
+      "targetRole": "qa",
+      "contract": {
+        "summary": "QA should validate the JWT login flow next.",
+        "reason": "Implementation is ready for verification.",
+        "targetRole": "qa",
+        "expectedNextStep": "Run the login acceptance checks and report defects.",
+        "artifacts": ["auth/login.ts", "tests/login.spec.ts"]
+      }
     }' 2>/dev/null || echo "{}")
 
   HANDOFF_STATUS=$(echo "$HANDOFF_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('task',{}).get('status',''))" 2>/dev/null || echo "")
+  HANDOFF_CONTRACT_OK=$(echo "$HANDOFF_RESPONSE" | python3 -c "import sys,json; task=json.load(sys.stdin).get('task',{}); contract=task.get('lastHandoff') or {}; print('yes' if contract.get('summary') and contract.get('targetRole') == 'qa' else 'no')" 2>/dev/null || echo "no")
 
-  if [ "$HANDOFF_STATUS" = "assigned" ] || [ "$HANDOFF_STATUS" = "pending" ]; then
+  if { [ "$HANDOFF_STATUS" = "assigned" ] || [ "$HANDOFF_STATUS" = "pending" ]; } && [ "$HANDOFF_CONTRACT_OK" = "yes" ]; then
     log_pass "Task handed off, new status=${HANDOFF_STATUS}"
   else
-    log_fail "Task handoff unexpected status='${HANDOFF_STATUS}'"
+    log_fail "Task handoff unexpected status='${HANDOFF_STATUS}', contract=${HANDOFF_CONTRACT_OK}"
   fi
 else
   log_skip "No task ID available for handoff test"
@@ -285,6 +293,23 @@ fi
 echo -e "${CYAN}[10/18]${NC} Task result submission"
 
 if [ -n "$TASK_ID" ]; then
+  RESULT_CONTRACT_RESPONSE=$(curl -sf -X POST "${BASE_URL}/api/v1/tasks/${TASK_ID}/result-contract" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "contract": {
+        "summary": "JWT login flow is implemented and ready.",
+        "outcome": "completed",
+        "deliverables": [
+          { "kind": "file", "value": "auth/login.ts", "summary": "Login handler implementation" }
+        ],
+        "keyPoints": ["JWT authentication path wired for login/logout."],
+        "followUps": [
+          { "type": "review", "targetRole": "qa", "reason": "Validate the login workflow end-to-end." }
+        ]
+      }
+    }' 2>/dev/null || echo "{}")
+  RESULT_CONTRACT_OK=$(echo "$RESULT_CONTRACT_RESPONSE" | python3 -c "import sys,json; task=json.load(sys.stdin).get('task',{}); contract=task.get('resultContract') or {}; print('yes' if contract.get('summary') and contract.get('deliverables') else 'no')" 2>/dev/null || echo "no")
+
   RESULT_RESPONSE=$(curl -sf -X POST "${BASE_URL}/api/v1/tasks/${TASK_ID}/result" \
     -H "Content-Type: application/json" \
     -d '{
@@ -292,11 +317,12 @@ if [ -n "$TASK_ID" ]; then
     }' 2>/dev/null || echo "{}")
 
   RESULT_STATUS=$(echo "$RESULT_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('task',{}).get('status',''))" 2>/dev/null || echo "")
+  RESULT_HAS_CONTRACT=$(echo "$RESULT_RESPONSE" | python3 -c "import sys,json; task=json.load(sys.stdin).get('task',{}); contract=task.get('resultContract') or {}; print('yes' if contract.get('summary') and contract.get('deliverables') else 'no')" 2>/dev/null || echo "no")
 
-  if [ "$RESULT_STATUS" = "completed" ]; then
+  if [ "$RESULT_STATUS" = "completed" ] && [ "$RESULT_CONTRACT_OK" = "yes" ] && [ "$RESULT_HAS_CONTRACT" = "yes" ]; then
     log_pass "Task completed, status=${RESULT_STATUS}"
   else
-    log_fail "Task result submission unexpected status='${RESULT_STATUS}'"
+    log_fail "Task result submission unexpected status='${RESULT_STATUS}', contractRecorded=${RESULT_CONTRACT_OK}, contractPersisted=${RESULT_HAS_CONTRACT}"
   fi
 else
   log_skip "No task ID available for result submission"
@@ -314,13 +340,17 @@ if [ -n "$TASK_ID" ]; then
   EXECUTION_HAS_MESSAGES=$(echo "$EXECUTION_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print('yes' if 'messages' in d else 'no')" 2>/dev/null || echo "no")
   EXECUTION_HAS_CLARIFICATIONS=$(echo "$EXECUTION_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print('yes' if 'clarifications' in d else 'no')" 2>/dev/null || echo "no")
   EXECUTION_HAS_SKILL_EVENT=$(echo "$EXECUTION_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print('yes' if any(e.get('phase') == 'skills_recommended' for e in d.get('task',{}).get('execution',{}).get('events',[])) else 'no')" 2>/dev/null || echo "no")
+  EXECUTION_HAS_RESULT_CONTRACT=$(echo "$EXECUTION_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); contract=d.get('task',{}).get('resultContract') or {}; print('yes' if contract.get('summary') else 'no')" 2>/dev/null || echo "no")
+  EXECUTION_HAS_HANDOFF_CONTRACT=$(echo "$EXECUTION_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); contract=d.get('task',{}).get('lastHandoff') or {}; print('yes' if contract.get('summary') else 'no')" 2>/dev/null || echo "no")
+  EXECUTION_HAS_MESSAGE_CONTRACT=$(echo "$EXECUTION_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print('yes' if any((m.get('contract') or {}).get('summary') for m in d.get('messages',[])) else 'no')" 2>/dev/null || echo "no")
 
   if [ "$EXECUTION_TASK_ID" = "$TASK_ID" ] && [ "$EXECUTION_EVENT_COUNT" -ge 1 ] && \
-     [ "$EXECUTION_HAS_MESSAGES" = "yes" ] && [ "$EXECUTION_HAS_CLARIFICATIONS" = "yes" ] && \
-     [ "$EXECUTION_HAS_SKILL_EVENT" = "yes" ]; then
-    log_pass "Task execution detail returned ${EXECUTION_EVENT_COUNT} event(s) with related history and skill guidance"
+      [ "$EXECUTION_HAS_MESSAGES" = "yes" ] && [ "$EXECUTION_HAS_CLARIFICATIONS" = "yes" ] && \
+      [ "$EXECUTION_HAS_SKILL_EVENT" = "yes" ] && [ "$EXECUTION_HAS_RESULT_CONTRACT" = "yes" ] && \
+      [ "$EXECUTION_HAS_HANDOFF_CONTRACT" = "yes" ] && [ "$EXECUTION_HAS_MESSAGE_CONTRACT" = "yes" ]; then
+    log_pass "Task execution detail returned ${EXECUTION_EVENT_COUNT} event(s) with contract-backed history and skill guidance"
   else
-    log_fail "Task execution detail incomplete: task='${EXECUTION_TASK_ID}', events=${EXECUTION_EVENT_COUNT}, messages=${EXECUTION_HAS_MESSAGES}, clarifications=${EXECUTION_HAS_CLARIFICATIONS}, skillEvent=${EXECUTION_HAS_SKILL_EVENT}"
+    log_fail "Task execution detail incomplete: task='${EXECUTION_TASK_ID}', events=${EXECUTION_EVENT_COUNT}, messages=${EXECUTION_HAS_MESSAGES}, clarifications=${EXECUTION_HAS_CLARIFICATIONS}, skillEvent=${EXECUTION_HAS_SKILL_EVENT}, resultContract=${EXECUTION_HAS_RESULT_CONTRACT}, handoffContract=${EXECUTION_HAS_HANDOFF_CONTRACT}, messageContract=${EXECUTION_HAS_MESSAGE_CONTRACT}"
   fi
 else
   log_skip "No task ID available for execution detail test"
@@ -480,15 +510,18 @@ HAS_TASKS=$(echo "$STATUS_BODY" | python3 -c "import sys,json; d=json.load(sys.s
 HAS_CONTROLLER_RUNS=$(echo "$STATUS_BODY" | python3 -c "import sys,json; d=json.load(sys.stdin); print('yes' if 'controllerRuns' in d else 'no')" 2>/dev/null || echo "no")
 STATUS_CONTROLLER_RUN_COUNT=$(echo "$STATUS_BODY" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('controllerRuns',[])))" 2>/dev/null || echo "0")
 CONTROLLER_RUN_FOUND=$(echo "$CONTROLLER_RUNS_BODY" | python3 -c "import sys,json; data=json.load(sys.stdin); run_id='${CONTROLLER_RUN_ID}'; print('yes' if run_id and any(run.get('id') == run_id for run in data.get('controllerRuns',[])) else 'no')" 2>/dev/null || echo "no")
+CONTROLLER_MANIFEST_OK=$(echo "$CONTROLLER_RUNS_BODY" | python3 -c "import sys,json; data=json.load(sys.stdin); run_id='${CONTROLLER_RUN_ID}'; runs=[r for r in data.get('controllerRuns',[]) if r.get('id') == run_id]; manifest=runs[0].get('manifest') if runs else None; print('yes' if isinstance(manifest, dict) and manifest.get('requirementSummary') and isinstance(manifest.get('requiredRoles',[]), list) else 'no')" 2>/dev/null || echo "no")
+CONTROLLER_REPLY_STRUCTURED=$(echo "$CONTROLLER_REPLY" | python3 -c "import sys; reply=sys.stdin.read(); print('yes' if 'Requirement summary:' in reply and 'Required roles:' in reply else 'no')" 2>/dev/null || echo "no")
 
 if [ -n "$TEAM_NAME" ] && [ "$HAS_WORKERS" = "yes" ] && [ "$HAS_TASKS" = "yes" ] && \
    [ "$HAS_CONTROLLER_RUNS" = "yes" ] && [ -n "$CONTROLLER_RUN_ID" ] && [ -n "$CONTROLLER_REPLY" ] && \
-   [ "$CONTROLLER_RUN_FOUND" = "yes" ] && [ "$STATUS_CONTROLLER_RUN_COUNT" -ge 1 ]; then
+   [ "$CONTROLLER_RUN_FOUND" = "yes" ] && [ "$STATUS_CONTROLLER_RUN_COUNT" -ge 1 ] && \
+   [ "$CONTROLLER_MANIFEST_OK" = "yes" ] && [ "$CONTROLLER_REPLY_STRUCTURED" = "yes" ]; then
   STATUS_WORKERS=$(echo "$STATUS_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('workerCount',0))" 2>/dev/null || echo "0")
   STATUS_TASKS=$(echo "$STATUS_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('taskCount',0))" 2>/dev/null || echo "0")
   log_pass "Team status: name=${TEAM_NAME}, workers=${STATUS_WORKERS}, tasks=${STATUS_TASKS}, controllerRuns=${STATUS_CONTROLLER_RUN_COUNT}"
 else
-  log_fail "Team status incomplete: name='${TEAM_NAME}', workers=${HAS_WORKERS}, tasks=${HAS_TASKS}, controllerRuns=${HAS_CONTROLLER_RUNS}, runId='${CONTROLLER_RUN_ID}', runFound=${CONTROLLER_RUN_FOUND}"
+  log_fail "Team status incomplete: name='${TEAM_NAME}', workers=${HAS_WORKERS}, tasks=${HAS_TASKS}, controllerRuns=${HAS_CONTROLLER_RUNS}, runId='${CONTROLLER_RUN_ID}', runFound=${CONTROLLER_RUN_FOUND}, manifest=${CONTROLLER_MANIFEST_OK}, structuredReply=${CONTROLLER_REPLY_STRUCTURED}"
 fi
 
 # ----------------------------------------------------------
@@ -569,15 +602,20 @@ if [ "$UI_HTTP_CODE" = "200" ] && \
    echo "$UI_HTML" | grep -q 'id="task-detail-modal"' && \
    echo "$UI_HTML" | grep -q 'data-task-detail-tab="timeline"' && \
    echo "$UI_APP_JS" | grep -q 'renderControllerRuns' && \
-   echo "$UI_APP_JS" | grep -q 'controller:run' && \
-   echo "$UI_APP_JS" | grep -q 'message-content markdown-body' && \
-   echo "$UI_APP_JS" | grep -q 'task-output-body markdown-body' && \
-   echo "$UI_STYLE_CSS" | grep -Fq '.markdown-body' && \
-   echo "$UI_STYLE_CSS" | grep -Fq '.controller-run-card' && \
-   echo "$UI_STYLE_CSS" | grep -Fq '.skill-pill'; then
-  log_pass "Web UI returned HTTP 200 and includes task detail, controller activity, skills, and markdown rendering hooks"
+    echo "$UI_APP_JS" | grep -q 'renderControllerManifestCard' && \
+    echo "$UI_APP_JS" | grep -q 'renderResultContractCard' && \
+    echo "$UI_APP_JS" | grep -q 'renderTeamMessageContractCard' && \
+    echo "$UI_APP_JS" | grep -q 'controller:run' && \
+    echo "$UI_APP_JS" | grep -q 'message-content markdown-body' && \
+    echo "$UI_APP_JS" | grep -q 'task-output-body markdown-body' && \
+    echo "$UI_STYLE_CSS" | grep -Fq '.markdown-body' && \
+    echo "$UI_STYLE_CSS" | grep -Fq '.controller-run-card' && \
+    echo "$UI_STYLE_CSS" | grep -Fq '.skill-pill' && \
+    echo "$UI_STYLE_CSS" | grep -Fq '.contract-card' && \
+    echo "$UI_STYLE_CSS" | grep -Fq '.contract-chip'; then
+  log_pass "Web UI returned HTTP 200 and includes task detail, controller activity, contract cards, skills, and markdown rendering hooks"
 else
-  log_fail "Web UI returned HTTP ${UI_HTTP_CODE} or missing task detail / controller activity / markdown UI hooks"
+  log_fail "Web UI returned HTTP ${UI_HTTP_CODE} or missing task detail / controller activity / contract UI / markdown hooks"
 fi
 
 # ----------------------------------------------------------

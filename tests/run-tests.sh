@@ -325,11 +325,13 @@ echo "  Kubeconfig:    ${TEAMCLAW_TEST_KUBECONFIG:-disabled}"
 echo ""
 
 # ============================================================
-# Step 1: Run installer regression
+# Step 1: Run installer/controller/worker regression
 # ============================================================
-echo -e "${BOLD}[1/5]${NC} Running installer/controller regression smoke..."
+echo -e "${BOLD}[1/5]${NC} Running installer/controller/worker regression smoke..."
 node "${SCRIPT_DIR}/test-installer.mjs"
 node "${SCRIPT_DIR}/test-controller-intake.mjs"
+node "${SCRIPT_DIR}/test-worker-contracts.mjs"
+node "${SCRIPT_DIR}/test-ui-contracts.mjs"
 echo -e "${GREEN}  Installer regression passed.${NC}"
 
 # ============================================================

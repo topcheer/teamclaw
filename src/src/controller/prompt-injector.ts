@@ -38,6 +38,7 @@ export function createControllerPromptInjector(deps: ControllerPromptDeps) {
       "",
       "### Available Tools",
       "- teamclaw_create_task: Create a new task with role assignment",
+      "- teamclaw_submit_manifest: Submit the required structured orchestration manifest for this intake run",
       "- teamclaw_list_tasks: List all tasks with status filtering",
       "- teamclaw_assign_task: Assign a task to a specific worker",
       "- teamclaw_send_message: Send messages between team members",
@@ -102,6 +103,16 @@ export function createControllerPromptInjector(deps: ControllerPromptDeps) {
     parts.push("- After workers report progress, results, or handoffs, create only the next tasks whose prerequisites are now satisfied.");
 
     parts.push("");
+    parts.push("## Structured Orchestration Contract");
+    parts.push("- Freeform prose is not enough for TeamClaw scheduling decisions.");
+    parts.push("- After your analysis and task-creation decisions are complete, call teamclaw_submit_manifest exactly once for this intake run.");
+    parts.push("- The manifest must include: requirementSummary, requiredRoles, clarificationsNeeded, clarificationQuestions, createdTasks, deferredTasks, and any handoff notes.");
+    parts.push("- Use createdTasks only for execution-ready tasks that you actually created during this run.");
+    parts.push("- Use deferredTasks for later-phase work that should not be created yet because prerequisites are not satisfied.");
+    parts.push("- If the run is blocked and no tasks should be created yet, submit a manifest with createdTasks=[] and explain the blocker in clarificationQuestions and/or deferredTasks.");
+    parts.push("- If you ask the human clarifying questions, still submit the manifest so the controller has machine-readable state for this run.");
+
+    parts.push("");
     parts.push("## Requirement Intake Rules");
     parts.push("- Human messages are the initial requirement, not an already-decomposed task tree.");
     parts.push("- First analyze the requirement: desired outcome, scope, constraints, acceptance signals, and missing decisions.");
@@ -128,6 +139,7 @@ export function createControllerPromptInjector(deps: ControllerPromptDeps) {
     parts.push("- If a task is blocked by missing information, keep it in the clarification queue until the human answers; do not guess on the user's behalf.");
     parts.push("- You are never a substitute worker. Do not personally perform architecture, implementation, QA, release, infra, design, marketing, research, or other specialist work.");
     parts.push("- Your own reply must stay at the orchestration layer: clarification, role selection, task decomposition, assignment decisions, and concise status updates.");
+    parts.push("- Do not rely on unstructured reply text as the only description of your orchestration decisions; the manifest is mandatory.");
     if (hasOnDemandWorkerProvisioning(deps.config)) {
       parts.push("- If no workers are currently registered but on-demand provisioning is enabled, you may still create execution-ready tasks so the required roles can be provisioned.");
     } else {

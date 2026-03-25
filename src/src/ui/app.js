@@ -292,6 +292,243 @@
     return '<div class="task-detail-card markdown-body">' + renderMarkdownContent(content) + "</div>";
   }
 
+  function normalizeTextValue(value) {
+    return String(value == null ? "" : value).replace(/\s+/g, " ").trim();
+  }
+
+  function renderContractChips(items, className) {
+    const normalized = Array.isArray(items)
+      ? items.map(function (item) { return normalizeTextValue(item); }).filter(Boolean)
+      : [];
+    if (normalized.length === 0) {
+      return "";
+    }
+    return '<div class="' + escapeHtml(className || "contract-chip-row") + '">' + normalized.map(function (item) {
+      return '<span class="contract-chip">' + escapeHtml(item) + "</span>";
+    }).join("") + "</div>";
+  }
+
+  function renderContractList(items, formatter, className) {
+    const values = Array.isArray(items) ? items.filter(Boolean) : [];
+    if (values.length === 0) {
+      return "";
+    }
+    return '<ul class="' + escapeHtml(className || "contract-list") + '">' + values.map(function (item) {
+      return "<li>" + formatter(item) + "</li>";
+    }).join("") + "</ul>";
+  }
+
+  function renderContractMetaRows(rows) {
+    const items = (rows || []).filter(function (row) {
+      return row && normalizeTextValue(row.label) && normalizeTextValue(row.value);
+    });
+    if (items.length === 0) {
+      return "";
+    }
+    return '<div class="contract-meta-grid">' + items.map(function (row) {
+      return (
+        '<div class="contract-meta-item">' +
+        '  <div class="contract-meta-label">' + escapeHtml(row.label) + "</div>" +
+        '  <div class="contract-meta-value">' + escapeHtml(row.value) + "</div>" +
+        "</div>"
+      );
+    }).join("") + "</div>";
+  }
+
+  function renderContractSection(title, bodyHtml) {
+    if (!normalizeTextValue(bodyHtml)) {
+      return "";
+    }
+    return (
+      '<div class="contract-section">' +
+      '  <div class="contract-section-title">' + escapeHtml(title) + "</div>" +
+      bodyHtml +
+      "</div>"
+    );
+  }
+
+  function renderContractMarkdownBody(content) {
+    if (!normalizeTextValue(content)) {
+      return "";
+    }
+    return '<div class="contract-markdown markdown-body">' + renderMarkdownContent(content) + "</div>";
+  }
+
+  function renderContractCard(options) {
+    const tone = options && options.tone ? " contract-card-" + options.tone : "";
+    const kicker = options && options.kicker ? '<div class="contract-card-kicker">' + escapeHtml(options.kicker) + "</div>" : "";
+    const title = options && options.title ? '<h4 class="contract-card-title">' + escapeHtml(options.title) + "</h4>" : "";
+    const meta = options && options.metaHtml ? options.metaHtml : "";
+    const sections = Array.isArray(options && options.sections)
+      ? options.sections.filter(function (section) { return normalizeTextValue(section); }).join("")
+      : "";
+    const footer = options && options.footerHtml ? options.footerHtml : "";
+
+    if (!kicker && !title && !meta && !sections && !footer) {
+      return "";
+    }
+
+    return (
+      '<div class="contract-card' + tone + '">' +
+      '  <div class="contract-card-header">' +
+      kicker +
+      title +
+      meta +
+      "  </div>" +
+      sections +
+      footer +
+      "</div>"
+    );
+  }
+
+  function renderResultContractCard(contract) {
+    if (!contract || !normalizeTextValue(contract.summary)) {
+      return "";
+    }
+    const deliverables = Array.isArray(contract.deliverables) ? contract.deliverables : [];
+    const followUps = Array.isArray(contract.followUps) ? contract.followUps : [];
+    return renderContractCard({
+      tone: contract.outcome || "completed",
+      kicker: "Structured Result Contract",
+      title: contract.summary,
+      metaHtml: renderContractMetaRows([
+        { label: "Outcome", value: humanizeStatus(contract.outcome || "completed") },
+        { label: "Deliverables", value: String(deliverables.length) },
+        { label: "Follow-ups", value: String(followUps.length) },
+      ]),
+      sections: [
+        renderContractSection("Deliverables", renderContractList(deliverables, function (item) {
+          const prefix = escapeHtml(item.kind || "artifact") + ": " + escapeHtml(item.value || "");
+          return prefix + (item.summary ? ' <span class="contract-inline-note">— ' + escapeHtml(item.summary) + "</span>" : "");
+        })),
+        renderContractSection("Key Points", renderContractList(contract.keyPoints, function (item) {
+          return renderMarkdownInline(item);
+        })),
+        renderContractSection("Blockers", renderContractList(contract.blockers, function (item) {
+          return renderMarkdownInline(item);
+        })),
+        renderContractSection("Follow-ups", renderContractList(followUps, function (item) {
+          const prefix = escapeHtml(item.type || "follow-up") + (item.targetRole ? " (" + escapeHtml(item.targetRole) + ")" : "");
+          return prefix + ": " + renderMarkdownInline(item.reason || "");
+        })),
+        renderContractSection("Open Questions", renderContractList(contract.questions, function (item) {
+          return renderMarkdownInline(item);
+        })),
+        renderContractSection("Notes", renderContractMarkdownBody(contract.notes)),
+      ],
+    });
+  }
+
+  function renderProgressContractCard(contract) {
+    if (!contract || !normalizeTextValue(contract.summary)) {
+      return "";
+    }
+    return renderContractCard({
+      tone: contract.status || "in_progress",
+      kicker: "Structured Progress Contract",
+      title: contract.summary,
+      metaHtml: renderContractMetaRows([
+        { label: "Status", value: humanizeStatus(contract.status || "in_progress") },
+        { label: "Blockers", value: String((contract.blockers || []).length) },
+      ]),
+      sections: [
+        renderContractSection("Current Step", renderContractMarkdownBody(contract.currentStep)),
+        renderContractSection("Next Step", renderContractMarkdownBody(contract.nextStep)),
+        renderContractSection("Blockers", renderContractList(contract.blockers, function (item) {
+          return renderMarkdownInline(item);
+        })),
+      ],
+    });
+  }
+
+  function renderHandoffContractCard(contract) {
+    if (!contract || !normalizeTextValue(contract.summary)) {
+      return "";
+    }
+    return renderContractCard({
+      tone: "handoff",
+      kicker: "Structured Handoff Contract",
+      title: contract.summary,
+      metaHtml: renderContractMetaRows([
+        { label: "Target Role", value: contract.targetRole || "—" },
+        { label: "Artifacts", value: String((contract.artifacts || []).length) },
+      ]),
+      sections: [
+        renderContractSection("Reason", renderContractMarkdownBody(contract.reason)),
+        renderContractSection("Expected Next Step", renderContractMarkdownBody(contract.expectedNextStep)),
+      ],
+      footerHtml: renderContractChips(contract.artifacts, "contract-chip-row contract-reference-row"),
+    });
+  }
+
+  function renderTeamMessageContractCard(contract) {
+    if (!contract || !normalizeTextValue(contract.summary)) {
+      return "";
+    }
+    return renderContractCard({
+      tone: contract.intent || "update",
+      kicker: "Structured Message Contract",
+      title: contract.summary,
+      metaHtml: renderContractMetaRows([
+        { label: "Intent", value: humanizeStatus(contract.intent || "update") },
+        { label: "Needs Response", value: contract.needsResponse ? "Yes" : "No" },
+        { label: "Requested Role", value: contract.requestedRole || "—" },
+      ]),
+      sections: [
+        renderContractSection("Details", renderContractMarkdownBody(contract.details)),
+        renderContractSection("Requested Action", renderContractMarkdownBody(contract.requestedAction)),
+      ],
+      footerHtml: renderContractChips(contract.references, "contract-chip-row contract-reference-row"),
+    });
+  }
+
+  function renderControllerManifestCard(manifest) {
+    if (!manifest || !normalizeTextValue(manifest.requirementSummary)) {
+      return "";
+    }
+    const createdTasks = Array.isArray(manifest.createdTasks) ? manifest.createdTasks : [];
+    const deferredTasks = Array.isArray(manifest.deferredTasks) ? manifest.deferredTasks : [];
+    return renderContractCard({
+      tone: "manifest",
+      kicker: "Structured Manifest",
+      title: manifest.requirementSummary,
+      metaHtml: renderContractMetaRows([
+        { label: "Required Roles", value: String((manifest.requiredRoles || []).length) },
+        { label: "Created Tasks", value: String(createdTasks.length) },
+        { label: "Deferred Tasks", value: String(deferredTasks.length) },
+      ]),
+      sections: [
+        renderContractSection("Required Roles", renderContractChips(manifest.requiredRoles, "contract-chip-row contract-role-row")),
+        renderContractSection("Created Tasks", renderContractList(createdTasks, function (item) {
+          const roleLabel = item.assignedRole ? " (" + escapeHtml(item.assignedRole) + ")" : "";
+          return '<strong>' + escapeHtml(item.title || "Task") + roleLabel + "</strong>: " + renderMarkdownInline(item.expectedOutcome || "");
+        })),
+        renderContractSection("Deferred Tasks", renderContractList(deferredTasks, function (item) {
+          const roleLabel = item.assignedRole ? " (" + escapeHtml(item.assignedRole) + ")" : "";
+          return '<strong>' + escapeHtml(item.title || "Task") + roleLabel + "</strong>: " + renderMarkdownInline(item.blockedBy || "") + " — create when " + renderMarkdownInline(item.whenReady || "");
+        })),
+        renderContractSection("Clarifications", renderContractList(manifest.clarificationQuestions, function (item) {
+          return renderMarkdownInline(item);
+        })),
+        renderContractSection("Handoff Plan", renderContractMarkdownBody(manifest.handoffPlan)),
+        renderContractSection("Notes", renderContractMarkdownBody(manifest.notes)),
+      ],
+    });
+  }
+
+  function buildMessageDisplayContent(message) {
+    const content = normalizeTextValue(message && message.content);
+    const contract = message && message.contract ? message.contract : null;
+    if (!contract || !normalizeTextValue(contract.summary)) {
+      return renderMarkdownContent(content);
+    }
+    const detailContent = normalizeTextValue(contract.details || "");
+    if (!content || content === normalizeTextValue(contract.summary) || content === detailContent) {
+      return "";
+    }
+    return renderMarkdownContent(message.content || "");
+  }
+
   function findWorkspaceNodeByPath(nodes, relativePath) {
     for (let index = 0; index < nodes.length; index += 1) {
       const node = nodes[index];
@@ -735,6 +972,13 @@
       const creatorBadge = task.createdBy
         ? '<span class="task-origin-badge">' + escapeHtml(task.createdBy) + "</span>"
         : "";
+      const contractSummary = task.resultContract
+        ? '<div class="task-contract-summary"><strong>Result:</strong> ' + escapeHtml(task.resultContract.summary || "") + "</div>"
+        : task.lastHandoff
+          ? '<div class="task-contract-summary"><strong>Handoff:</strong> ' + escapeHtml(task.lastHandoff.summary || "") + "</div>"
+          : task.progressContract
+            ? '<div class="task-contract-summary"><strong>Progress:</strong> ' + escapeHtml(task.progressContract.summary || "") + "</div>"
+            : "";
       const note = task.progress
         ? '<div class="task-note">' + escapeHtml(task.progress).slice(0, 220) + "</div>"
         : "";
@@ -750,6 +994,7 @@
         '    <div class="task-title-row"><div class="task-title">' + escapeHtml(task.title) + "</div>" + creatorBadge + "</div>" +
         (task.description ? '<div class="task-desc">' + escapeHtml(task.description).slice(0, 220) + "</div>" : "") +
         renderSkillPills(recommendedSkills, "skill-pills task-skill-pills") +
+        contractSummary +
         note +
         '    <div class="task-meta">' +
         '      <span class="task-status-badge ' + escapeHtml(status) + '">' + escapeHtml(humanizeStatus(status)) + "</span>" +
@@ -790,6 +1035,9 @@
           return '<button type="button" class="controller-run-task-link" data-open-task-id="' + escapeHtml(taskId) + '">' + escapeHtml(taskId) + "</button>";
         }).join("") + "</div>"
         : "";
+      const manifestBlock = run.manifest
+        ? '<div class="controller-run-section"><div class="controller-run-section-title">Manifest</div>' + renderControllerManifestCard(run.manifest) + "</div>"
+        : "";
       const replyBlock = run.reply
         ? '<div class="controller-run-section"><div class="controller-run-section-title">Reply</div><div class="markdown-body">' + renderMarkdownContent(run.reply) + "</div></div>"
         : "";
@@ -822,6 +1070,7 @@
         '    <span class="controller-run-status ' + escapeHtml(status) + '">' + escapeHtml(humanizeStatus(status)) + "</span>" +
         "  </div>" +
         '  <div class="controller-run-section"><div class="controller-run-section-title">Request</div><div class="markdown-body">' + renderMarkdownContent(run.request || "") + "</div></div>" +
+        manifestBlock +
         replyBlock +
         errorBlock +
         (createdTaskButtons
@@ -978,12 +1227,42 @@
       (task.progress
         ? '<div class="task-detail-section"><h3>Latest Progress</h3>' + renderMarkdownCard(task.progress) + "</div>"
         : "") +
+      (task.progressContract
+        ? '<div class="task-detail-section"><h3>Structured Progress</h3>' + renderProgressContractCard(task.progressContract) + "</div>"
+        : "") +
       (task.result
         ? '<div class="task-detail-section"><h3>Result</h3>' + renderMarkdownCard(task.result) + "</div>"
+        : "") +
+      (task.resultContract
+        ? '<div class="task-detail-section"><h3>Structured Result</h3>' + renderResultContractCard(task.resultContract) + "</div>"
+        : "") +
+      (task.lastHandoff
+        ? '<div class="task-detail-section"><h3>Last Handoff</h3>' + renderHandoffContractCard(task.lastHandoff) + "</div>"
         : "") +
       (task.error
         ? '<div class="task-detail-section"><h3>Error</h3>' + renderMarkdownCard(task.error) + "</div>"
         : "");
+  }
+
+  function buildTimelineMessageBody(message) {
+    const contractBlock = renderTeamMessageContractCard(message && message.contract);
+    const rawContent = buildMessageDisplayContent(message);
+    return (contractBlock || "") + (rawContent ? '<div class="timeline-raw-markdown markdown-body">' + rawContent + "</div>" : "");
+  }
+
+  function buildTimelineClarificationBody(item) {
+    const answerBlock = item && item.answer
+      ? '<div class="timeline-contract-note"><strong>Answer:</strong> ' + renderMarkdownInline(item.answer) + "</div>"
+      : "";
+    const contextBlock = item && item.context
+      ? '<div class="timeline-contract-note"><strong>Context:</strong> ' + renderMarkdownInline(item.context) + "</div>"
+      : "";
+    return (
+      '<div class="timeline-contract-note"><strong>Question:</strong> ' + renderMarkdownInline(item.question || "") + "</div>" +
+      '<div class="timeline-contract-note"><strong>Blocking Reason:</strong> ' + renderMarkdownInline(item.blockingReason || "") + "</div>" +
+      contextBlock +
+      answerBlock
+    );
   }
 
   function buildTimelineEntries(task) {
@@ -997,7 +1276,7 @@
         createdAt: event.createdAt || 0,
         label: humanizeStatus(event.phase || event.type),
         meta: [event.source || "execution", event.workerId || event.role || event.stream].filter(Boolean).join(" • "),
-        body: event.message || "",
+        bodyHtml: renderMarkdownContent(event.message || ""),
       };
     });
 
@@ -1005,13 +1284,30 @@
       return {
         kind: "message",
         createdAt: message.createdAt || 0,
-        label: humanizeStatus(message.type || "message"),
-        meta: [message.fromRole || message.from || "unknown", message.toRole ? ("to " + message.toRole) : null].filter(Boolean).join(" • "),
-        body: message.content || "",
+        label: humanizeStatus((message.contract && message.contract.intent) || message.type || "message"),
+        meta: [
+          message.fromRole || message.from || "unknown",
+          message.toRole ? ("to " + message.toRole) : null,
+          message.contract && message.contract.needsResponse ? "response expected" : null,
+        ].filter(Boolean).join(" • "),
+        bodyHtml: buildTimelineMessageBody(message),
       };
     });
 
-    return executionEvents.concat(messages).sort(function (left, right) {
+    const clarifications = (selectedTaskDetail.clarifications || []).map(function (item) {
+      return {
+        kind: "clarification",
+        createdAt: item.updatedAt || item.createdAt || 0,
+        label: item.status === "answered" ? "clarification answered" : "clarification requested",
+        meta: [
+          item.requestedByRole || "unknown role",
+          item.requestedByWorkerId || item.requestedBy || null,
+        ].filter(Boolean).join(" • "),
+        bodyHtml: buildTimelineClarificationBody(item),
+      };
+    });
+
+    return executionEvents.concat(messages).concat(clarifications).sort(function (left, right) {
       return (left.createdAt || 0) - (right.createdAt || 0);
     });
   }
@@ -1040,7 +1336,7 @@
           '    <div class="timeline-entry-meta">' + escapeHtml(formatTime(entry.createdAt)) + "</div>" +
           "  </div>" +
           (entry.meta ? '<div class="timeline-entry-meta">' + escapeHtml(entry.meta) + "</div>" : "") +
-          '  <div class="timeline-entry-body markdown-body">' + renderMarkdownContent(entry.body) + "</div>" +
+          '  <div class="timeline-entry-body markdown-body">' + (entry.bodyHtml || renderMarkdownContent(entry.body || "")) + "</div>" +
           "</article>"
         );
       }).join("") +
@@ -1222,7 +1518,14 @@
 
     container.innerHTML = recent.map(function (message) {
       const from = message.fromRole || message.from || "unknown";
-      const type = message.type || "direct";
+      const type = (message.contract && message.contract.intent) || message.type || "direct";
+      const contractBlock = renderTeamMessageContractCard(message.contract);
+      const rawContent = buildMessageDisplayContent(message);
+      const meta = [
+        message.toRole ? ("to " + message.toRole) : null,
+        message.taskId ? ("task " + message.taskId) : null,
+        formatTime(message.createdAt),
+      ].filter(Boolean).join(" • ");
 
       return (
         '<div class="message-card">' +
@@ -1230,7 +1533,9 @@
         '    <span class="message-from">' + escapeHtml(from) + "</span>" +
         '    <span class="message-type ' + escapeHtml(type) + '">' + escapeHtml(humanizeStatus(type)) + "</span>" +
         "  </div>" +
-        '  <div class="message-content markdown-body">' + renderMarkdownContent(message.content) + "</div>" +
+        (meta ? '<div class="message-meta">' + escapeHtml(meta) + "</div>" : "") +
+        contractBlock +
+        (rawContent ? '<div class="message-content markdown-body">' + rawContent + "</div>" : "") +
         "</div>"
       );
     }).join("");

@@ -11,14 +11,16 @@ const httpServerPath = path.join(projectRoot, "src", "src", "controller", "http-
 const promptInjectorPath = path.join(projectRoot, "src", "src", "controller", "prompt-injector.ts");
 const controllerToolsPath = path.join(projectRoot, "src", "src", "controller", "controller-tools.ts");
 const controllerCapacityPath = path.join(projectRoot, "src", "src", "controller", "controller-capacity.ts");
+const orchestrationManifestPath = path.join(projectRoot, "src", "src", "controller", "orchestration-manifest.ts");
 const workerProvisioningPath = path.join(projectRoot, "src", "src", "controller", "worker-provisioning.ts");
 
 async function runControllerIntakePromptSmoke() {
-  const [httpServerSource, promptInjectorSource, controllerToolsSource, controllerCapacitySource, workerProvisioningSource] = await Promise.all([
+  const [httpServerSource, promptInjectorSource, controllerToolsSource, controllerCapacitySource, orchestrationManifestSource, workerProvisioningSource] = await Promise.all([
     fs.readFile(httpServerPath, "utf8"),
     fs.readFile(promptInjectorPath, "utf8"),
     fs.readFile(controllerToolsPath, "utf8"),
     fs.readFile(controllerCapacityPath, "utf8"),
+    fs.readFile(orchestrationManifestPath, "utf8"),
     fs.readFile(workerProvisioningPath, "utf8"),
   ]);
 
@@ -44,6 +46,16 @@ async function runControllerIntakePromptSmoke() {
   );
   assert.match(
     promptInjectorSource,
+    /## Structured Orchestration Contract/,
+    "controller prompt injector should require a structured orchestration contract for intake runs",
+  );
+  assert.match(
+    promptInjectorSource,
+    /teamclaw_submit_manifest/,
+    "controller prompt injector should explicitly require the manifest submission tool",
+  );
+  assert.match(
+    promptInjectorSource,
     /You are never a substitute worker\./,
     "controller prompt injector should explicitly forbid the controller from doing specialist worker work itself",
   );
@@ -63,9 +75,39 @@ async function runControllerIntakePromptSmoke() {
     "controller task-creation tool should guard against controller-created tasks when there are no workers and no on-demand provisioning",
   );
   assert.match(
+    controllerToolsSource,
+    /name:\s*"teamclaw_submit_manifest"/,
+    "controller tools should expose a structured manifest submission tool",
+  );
+  assert.match(
+    controllerToolsSource,
+    /\/api\/v1\/controller\/manifest/,
+    "controller manifest tool should post to the dedicated controller manifest endpoint",
+  );
+  assert.match(
     httpServerSource,
     /createdBy === "controller" && shouldBlockControllerWithoutWorkers\(deps\.config,\s*getTeamState\(\)\)/,
     "controller task endpoint should enforce the same no-worker guard for controller-created tasks",
+  );
+  assert.match(
+    httpServerSource,
+    /POST \/api\/v1\/controller\/manifest/,
+    "controller HTTP server should expose a controller manifest endpoint",
+  );
+  assert.match(
+    httpServerSource,
+    /buildControllerManifestReply/,
+    "controller HTTP server should synthesize final replies from the structured manifest",
+  );
+  assert.match(
+    httpServerSource,
+    /manifest_backfilled/,
+    "controller HTTP server should backfill a minimal manifest when the model misses the required manifest tool call",
+  );
+  assert.match(
+    orchestrationManifestSource,
+    /export function normalizeControllerManifest/,
+    "controller manifest helper should normalize and validate manifest payloads",
   );
   assert.match(
     controllerCapacitySource,

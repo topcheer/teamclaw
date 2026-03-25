@@ -301,6 +301,19 @@ body {
   margin-bottom: 6px;
   line-height: 1.5;
 }
+.task-contract-summary {
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  background: rgba(99, 102, 241, 0.08);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.task-contract-summary strong {
+  color: var(--text-primary);
+}
 .skill-pills {
   display: flex;
   flex-wrap: wrap;
@@ -558,6 +571,135 @@ body {
   font-size: 13px;
 }
 
+.contract-card {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.contract-card-completed { border-left-color: var(--success); }
+.contract-card-failed { border-left-color: var(--danger); }
+.contract-card-blocked,
+.contract-card-handoff { border-left-color: var(--warning); }
+.contract-card-in_progress,
+.contract-card-review,
+.contract-card-update,
+.contract-card-coordination,
+.contract-card-question { border-left-color: var(--info); }
+.contract-card-review-request,
+.contract-card-review-response { border-left-color: #8b5cf6; }
+.contract-card-announcement,
+.contract-card-manifest { border-left-color: var(--accent-hover); }
+
+.contract-card-header {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.contract-card-kicker,
+.contract-meta-label,
+.contract-section-title,
+.message-meta {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.contract-card-title {
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+
+.contract-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.contract-meta-item {
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.contract-meta-value {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.5;
+}
+
+.contract-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.contract-markdown,
+.timeline-raw-markdown,
+.timeline-contract-note {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-primary);
+}
+
+.contract-list {
+  padding-left: 18px;
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.contract-list li {
+  line-height: 1.6;
+}
+
+.contract-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.contract-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(96, 165, 250, 0.22);
+  background: rgba(96, 165, 250, 0.1);
+  color: #c7d2fe;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.contract-reference-row .contract-chip {
+  border-color: rgba(52, 211, 153, 0.22);
+  background: rgba(52, 211, 153, 0.08);
+  color: #bbf7d0;
+}
+
+.contract-role-row .contract-chip {
+  border-color: rgba(168, 85, 247, 0.22);
+  background: rgba(168, 85, 247, 0.08);
+  color: #e9d5ff;
+}
+
+.contract-inline-note {
+  color: var(--text-secondary);
+}
+
 .messages-feed {
   display: flex;
   flex-direction: column;
@@ -592,6 +734,12 @@ body {
 .message-type.review-request { background: #7c3aed; color: #fff; }
 
 .message-content { font-size: 13px; color: var(--text-primary); line-height: 1.5; }
+.message-meta {
+  margin-bottom: 8px;
+}
+.message-card .contract-card {
+  margin-bottom: 10px;
+}
 
 .create-task-form {
   max-width: 500px;
@@ -1326,6 +1474,10 @@ body {
   line-height: 1.6;
   word-break: break-word;
   overflow-wrap: anywhere;
+}
+.timeline-entry-body .contract-card + .timeline-raw-markdown,
+.timeline-entry-body .timeline-contract-note + .timeline-contract-note {
+  margin-top: 10px;
 }
 
 .task-detail-output-stream {
