@@ -30,11 +30,19 @@ const EXECUTION_READY_BLOCKERS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /\bdepends?\s+on\b/i, reason: "it explicitly depends on other unfinished work" },
   { pattern: /\bprerequisite\b/i, reason: "it references a prerequisite that may not be satisfied yet" },
   { pattern: /\bwait(?:ing)?\s+for\b/i, reason: "it says the work should wait for another output first" },
-  { pattern: /\bafter\b.+\b(complete|completed|ready|available|exists?)\b/i, reason: "it is phrased as a later-phase task" },
-  { pattern: /\bonce\b.+\b(complete|completed|ready|available|exists?)\b/i, reason: "it is phrased as a later-phase task" },
-  { pattern: /依赖|前置|前提/u, reason: "it explicitly mentions a predecessor dependency" },
-  { pattern: /完成后|就绪后|待.*完成|等待.*完成/u, reason: "it is described as work for a later phase" },
+  { pattern: /依赖于|前置条件|前置依赖|前提条件|前序任务|上游任务/u, reason: "it explicitly mentions a predecessor dependency" },
+  { pattern: /待.*完成|等待.*完成/u, reason: "it is described as work for a later phase" },
 ];
+
+const ENGLISH_LATER_PHASE_CLAUSE_RE = /\b(?:after|once)\b(.+?)\b(complete|completed|ready|available|exists?)\b/i;
+const ENGLISH_LATER_PHASE_DEPENDENCY_RE = /\b(?:task|tasks|service|services|module|modules|phase|phases|api|apis|interface|interfaces|review|qa|design|developer|architect|skeleton|backend|frontend|deliverable|artifact|handoff)\b/i;
+const CHINESE_LATER_PHASE_CLAUSE_RE = /(.+?)(完成后|就绪后)/u;
+const CHINESE_LATER_PHASE_DEPENDENCY_RE = /(?:服务|模块|任务|阶段|接口|骨架|后端|前端|设计|审查|开发|测试|架构|交付物|文档|交接)/u;
+const SERVICE_NAME_RE = /\b[a-z0-9_-]+-service\b/i;
+const SERVICE_NAME_GLOBAL_RE = /\b[a-z0-9_-]+-service\b/gi;
+const ACTIVE_TASK_STATUSES = new Set(["pending", "assigned", "in_progress", "review", "blocked"]);
+const REPO_WIDE_CODE_CHANGE_RE = /(financial-erp-backend\/|all services|all microservices|all backend services|所有服务|所有微服务|全部微服务|统一.*kafka|kafka topic|db\/migration|schema|ddl|api路径|trusted\.packages|pom\.xml|webmvcconfig|安全响应头)/i;
+const DOC_ONLY_SCOPE_RE = /(文档|docs\/|api design|architecture document|设计文档|报告|report)/i;
 
 export function createControllerTools(deps: ControllerToolsDeps) {
   const { config, controllerUrl, getTeamState, sessionKey } = deps;
@@ -61,6 +69,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
       async execute(_id: string, params: Record<string, unknown>) {
         const title = String(params.title ?? "");
         const description = String(params.description ?? "");
+        const normalizedSessionKey = typeof sessionKey === "string" ? sessionKey.trim() : "";
         if (!title) {
           return { content: [{ type: "text" as const, text: "title is required." }] };
         }
@@ -84,6 +93,15 @@ export function createControllerTools(deps: ControllerToolsDeps) {
             }],
           };
         }
+        const overlapBlocker = detectActiveTaskOverlap(title, description, state);
+        if (overlapBlocker) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `Refusing to create task "${title}" because it is not execution-ready: ${overlapBlocker}. Wait for the active task to finish or narrow the new task so it does not edit the same service scope in parallel.`,
+            }],
+          };
+        }
 
         try {
           const res = await fetch(`${baseUrl}/api/v1/tasks`, {
@@ -96,6 +114,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
               assignedRole: params.assignedRole ?? undefined,
               recommendedSkills: Array.isArray(params.recommendedSkills) ? params.recommendedSkills : undefined,
               createdBy: "controller",
+              controllerSessionKey: normalizedSessionKey || undefined,
             }),
           });
 
@@ -145,13 +164,13 @@ export function createControllerTools(deps: ControllerToolsDeps) {
         ),
         createdTasks: Type.Optional(
           Type.Array(
-            Type.Object({
-              title: Type.String({ description: "Title of a task the controller created during this intake" }),
-              assignedRole: Type.Optional(Type.String({ description: "Exact TeamClaw role ID for the created task" })),
-              expectedOutcome: Type.String({ description: "Expected deliverable/result for the created task" }),
-            }),
-          ),
-        ),
+                Type.Object({
+                  title: Type.String({ description: "Title of an execution-ready task this controller run created or deliberately reused instead of duplicating" }),
+                  assignedRole: Type.Optional(Type.String({ description: "Exact TeamClaw role ID for the created task" })),
+                  expectedOutcome: Type.String({ description: "Expected deliverable/result for the created task" }),
+                }),
+              ),
+            ),
         deferredTasks: Type.Optional(
           Type.Array(
             Type.Object({
@@ -372,5 +391,89 @@ function detectExecutionReadyBlocker(description: string): string | null {
     }
   }
 
+  const laterPhaseBlocker = detectLaterPhasePhrase(text);
+  if (laterPhaseBlocker) {
+    return laterPhaseBlocker;
+  }
+
   return null;
+}
+
+function detectLaterPhasePhrase(text: string): string | null {
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (const line of lines) {
+    const englishMatch = line.match(ENGLISH_LATER_PHASE_CLAUSE_RE);
+    if (englishMatch) {
+      const dependencyClause = englishMatch[1] ?? "";
+      if (ENGLISH_LATER_PHASE_DEPENDENCY_RE.test(dependencyClause) || SERVICE_NAME_RE.test(dependencyClause)) {
+        return "it is described as work for a later phase";
+      }
+    }
+
+    const chineseMatch = line.match(CHINESE_LATER_PHASE_CLAUSE_RE);
+    if (chineseMatch) {
+      const dependencyClause = chineseMatch[1] ?? "";
+      if (CHINESE_LATER_PHASE_DEPENDENCY_RE.test(dependencyClause) || SERVICE_NAME_RE.test(dependencyClause)) {
+        return "it is described as work for a later phase";
+      }
+    }
+  }
+
+  return null;
+}
+
+function detectActiveTaskOverlap(title: string, description: string, state: TeamState | null): string | null {
+  if (!state) {
+    return null;
+  }
+  const scopeText = `${title}\n${description}`;
+  const serviceNames = extractServiceNames(scopeText);
+  const repoWideCodeChange = serviceNames.size === 0
+    && REPO_WIDE_CODE_CHANGE_RE.test(scopeText)
+    && !DOC_ONLY_SCOPE_RE.test(scopeText);
+  if (serviceNames.size === 0 && !repoWideCodeChange) {
+    return null;
+  }
+
+  const overlappingTasks = Object.values(state.tasks).filter((task) => {
+    if (!ACTIVE_TASK_STATUSES.has(task.status)) {
+      return false;
+    }
+    const taskScope = `${task.title}\n${task.description}`;
+    const taskServiceNames = extractServiceNames(taskScope);
+    if (serviceNames.size > 0) {
+      return [...serviceNames].some((serviceName) => taskServiceNames.has(serviceName));
+    }
+    if (taskServiceNames.size > 0) {
+      return true;
+    }
+    return REPO_WIDE_CODE_CHANGE_RE.test(taskScope) && !DOC_ONLY_SCOPE_RE.test(taskScope);
+  });
+  if (overlappingTasks.length === 0) {
+    return null;
+  }
+
+  const overlappingServices = new Set<string>();
+  for (const task of overlappingTasks) {
+    for (const serviceName of extractServiceNames(`${task.title}\n${task.description}`)) {
+      overlappingServices.add(serviceName);
+    }
+  }
+  if (overlappingServices.size > 0) {
+    return `it overlaps with active TeamClaw work on ${[...overlappingServices].slice(0, 3).join(", ")}`;
+  }
+  return `it overlaps with active TeamClaw repo-wide code changes (${overlappingTasks[0]?.title ?? "another active task"})`;
+}
+
+function extractServiceNames(text: string): Set<string> {
+  const normalized = String(text || "");
+  return new Set(
+    Array.from(normalized.matchAll(SERVICE_NAME_GLOBAL_RE))
+      .map((match) => String(match[0] || "").trim().toLowerCase())
+      .filter(Boolean),
+  );
 }

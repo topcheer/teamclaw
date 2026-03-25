@@ -6,6 +6,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { createHash } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import type { PluginLogger } from "../../api.js";
 import { generateId } from "../protocol.js";
@@ -28,10 +29,11 @@ import type {
 
 const DEFAULT_CONTAINER_WORKER_PORT = 9527;
 const DEFAULT_CONTAINER_GATEWAY_PORT = 18789;
+const DEFAULT_DOCKER_BUNDLED_TEAMCLAW_PLUGIN_DIR = "/app/extensions/teamclaw";
 const PROVISIONING_RECORD_RETENTION_MS = 6 * 60 * 60 * 1000;
 const PROVISIONING_FAILURE_COOLDOWN_MS = 30_000;
 const PROCESS_TERMINATION_TIMEOUT_MS = 10_000;
-const DOCKER_API_VERSION = "v1.41";
+const DOCKER_API_VERSION = resolveDockerApiVersion();
 
 export type WorkerProvisioningManagerDeps = {
   config: PluginConfig;
@@ -361,10 +363,14 @@ export class WorkerProvisioningManager {
     const workerId = `provisioned-${role}-${generateId()}`;
     const launchToken = `${generateId()}-${generateId()}`;
     const controllerUrl = this.resolveControllerUrl();
-    const workerPort = this.backend.type === "process"
+    const requiresDedicatedHostPorts = requiresDedicatedHostPortsForProvisioner(
+      this.backend.type,
+      this.deps.config,
+    );
+    const workerPort = requiresDedicatedHostPorts
       ? await reserveEphemeralPort()
       : DEFAULT_CONTAINER_WORKER_PORT;
-    const gatewayPort = this.backend.type === "process"
+    const gatewayPort = requiresDedicatedHostPorts
       ? await reserveEphemeralPort()
       : DEFAULT_CONTAINER_GATEWAY_PORT;
     const now = Date.now();
@@ -398,7 +404,7 @@ export class WorkerProvisioningManager {
         workerPort,
         gatewayPort,
         workspaceDir: getConfiguredWorkerWorkspaceDir(workerConfig),
-        env: this.buildForwardedEnv(),
+        env: this.buildForwardedEnv(controllerUrl),
         configJson: `${JSON.stringify(workerConfig, null, 2)}\n`,
       });
 
@@ -593,7 +599,7 @@ export class WorkerProvisioningManager {
     );
   }
 
-  private buildForwardedEnv(): Record<string, string> {
+  private buildForwardedEnv(controllerUrl: string): Record<string, string> {
     const env: Record<string, string> = {
       ...this.deps.config.workerProvisioningExtraEnv,
     };
@@ -603,7 +609,7 @@ export class WorkerProvisioningManager {
         env[name] = value;
       }
     }
-    return env;
+    return appendNoProxyEntries(env, controllerUrl);
   }
 
   private async loadBaseOpenClawConfig(): Promise<Record<string, unknown>> {
@@ -672,6 +678,7 @@ class ProcessProvisioner implements WorkerProvisionerBackend {
     const stateDir = path.join(runtimeHomeDir, ".openclaw");
     const configPath = path.join(stateDir, "openclaw.json");
     await fs.mkdir(stateDir, { recursive: true });
+    await prepareProcessRuntimeExtensions(stateDir);
     await fs.writeFile(configPath, spec.configJson, "utf8");
 
     const gatewayEntrypoint = resolveGatewayEntrypoint();
@@ -979,7 +986,8 @@ class DockerApiClient {
     okStatuses: number[],
   ): Promise<{ status: number; body: string }> {
     const payload = body === undefined ? undefined : JSON.stringify(body);
-    const finalPath = `/${DOCKER_API_VERSION}${requestPath}`;
+    // Prefer the daemon's negotiated default unless the operator pins a version explicitly.
+    const finalPath = DOCKER_API_VERSION ? `/${DOCKER_API_VERSION}${requestPath}` : requestPath;
 
     return await new Promise<{ status: number; body: string }>((resolve, reject) => {
       const transport = this.endpoint.protocol === "https:" ? https : http;
@@ -1025,6 +1033,14 @@ type DockerEndpoint = {
   port?: number;
 };
 
+function resolveDockerApiVersion(): string | null {
+  const configured = process.env.DOCKER_API_VERSION?.trim();
+  if (!configured) {
+    return null;
+  }
+  return configured.startsWith("v") ? configured : `v${configured}`;
+}
+
 function createProvisionerBackend(
   config: PluginConfig,
   logger: PluginLogger,
@@ -1054,6 +1070,7 @@ function buildProvisionedWorkerConfig(
   },
 ): Record<string, unknown> {
   const config = cloneJson(baseConfig);
+  delete config.channels;
   const agents = ensureRecord(config.agents);
   const agentDefaults = ensureRecord(agents.defaults);
   delete agentDefaults.repoRoot;
@@ -1069,10 +1086,14 @@ function buildProvisionedWorkerConfig(
   gateway.mode = "local";
   gateway.bind = "loopback";
   gateway.port = spec.gatewayPort;
+  delete gateway.remote;
   config.gateway = gateway;
 
   const plugins = ensureRecord(config.plugins);
   plugins.enabled = true;
+  if (controllerConfig.workerProvisioningType === "docker" || controllerConfig.workerProvisioningType === "kubernetes") {
+    delete plugins.load;
+  }
   const entries = ensureRecord(plugins.entries);
   const teamclawEntry = ensureRecord(entries.teamclaw);
   teamclawEntry.enabled = true;
@@ -1133,8 +1154,102 @@ async function loadOpenClawConfig(configPath: string): Promise<Record<string, un
   return parseLooseJsonObject(raw, configPath);
 }
 
+async function prepareProcessRuntimeExtensions(stateDir: string): Promise<void> {
+  const runtimeExtensionsDir = path.join(stateDir, "extensions");
+  const controllerExtensionsDir = path.join(path.dirname(resolveDefaultOpenClawConfigPath()), "extensions");
+  if (await pathExists(controllerExtensionsDir)) {
+    await fs.symlink(controllerExtensionsDir, runtimeExtensionsDir, "dir");
+    return;
+  }
+
+  await fs.mkdir(runtimeExtensionsDir, { recursive: true });
+  await fs.symlink(resolveCurrentTeamClawPluginRootDir(), path.join(runtimeExtensionsDir, "teamclaw"), "dir");
+}
+
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function requiresDedicatedHostPortsForProvisioner(
+  provider: WorkerProvisioningType,
+  config: PluginConfig,
+): boolean {
+  if (provider === "process") {
+    return true;
+  }
+  return provider === "docker" && isDockerHostNetwork(config.workerProvisioningDockerNetwork);
+}
+
+function isDockerHostNetwork(networkMode: string): boolean {
+  return networkMode.trim().toLowerCase() === "host";
+}
+
+function extractDockerBindTarget(bind: string): string | null {
+  for (const part of bind.split(":").reverse()) {
+    const trimmed = part.trim();
+    if (trimmed.startsWith("/")) {
+      return trimmed;
+    }
+  }
+  return null;
+}
+
+function appendNoProxyEntries(env: Record<string, string>, controllerUrl: string): Record<string, string> {
+  const requiredEntries = resolveRequiredNoProxyEntries(controllerUrl);
+  if (requiredEntries.length === 0) {
+    return env;
+  }
+
+  const upperBase = env.NO_PROXY ?? process.env.NO_PROXY ?? process.env.no_proxy ?? "";
+  const lowerBase = env.no_proxy ?? process.env.no_proxy ?? env.NO_PROXY ?? process.env.NO_PROXY ?? "";
+
+  env.NO_PROXY = mergeNoProxyEntries(upperBase, requiredEntries);
+  env.no_proxy = mergeNoProxyEntries(lowerBase, requiredEntries);
+  return env;
+}
+
+function resolveRequiredNoProxyEntries(controllerUrl: string): string[] {
+  const required = new Set<string>(["localhost", "127.0.0.1", "::1", "[::1]"]);
+  try {
+    const host = new URL(controllerUrl).hostname.trim();
+    if (host) {
+      required.add(host);
+    }
+  } catch {
+    // Ignore malformed controller URLs; worker registration will fail separately.
+  }
+  return Array.from(required);
+}
+
+function mergeNoProxyEntries(existing: string, requiredEntries: string[]): string {
+  const tokens = new Map<string, string>();
+  for (const entry of existing.split(",")) {
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      continue;
+    }
+    tokens.set(trimmed.toLowerCase(), trimmed);
+  }
+  for (const entry of requiredEntries) {
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      continue;
+    }
+    tokens.set(trimmed.toLowerCase(), trimmed);
+  }
+  return Array.from(tokens.values()).join(",");
+}
+
+async function pathExists(targetPath: string): Promise<boolean> {
+  try {
+    await fs.access(targetPath);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw err;
+  }
 }
 
 function ensureRecord(value: unknown): Record<string, unknown> {
@@ -1181,6 +1296,10 @@ function resolveGatewayEntrypoint(): string {
     throw new Error("Unable to resolve OpenClaw gateway entrypoint");
   }
   return path.resolve(scriptPath);
+}
+
+function resolveCurrentTeamClawPluginRootDir(): string {
+  return path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 }
 
 function attachChildLogs(child: ChildProcess, logger: PluginLogger, prefix: string): void {
@@ -1302,6 +1421,9 @@ function buildContainerBootstrapScript(): string {
 
 function buildDockerBinds(config: PluginConfig): string[] {
   const binds = [...config.workerProvisioningDockerMounts];
+  if (!binds.some((bind) => extractDockerBindTarget(bind) === DEFAULT_DOCKER_BUNDLED_TEAMCLAW_PLUGIN_DIR)) {
+    binds.unshift(`${resolveCurrentTeamClawPluginRootDir()}:${DEFAULT_DOCKER_BUNDLED_TEAMCLAW_PLUGIN_DIR}:ro`);
+  }
   if (config.workerProvisioningDockerWorkspaceVolume && config.workerProvisioningWorkspaceRoot) {
     binds.unshift(`${config.workerProvisioningDockerWorkspaceVolume}:${config.workerProvisioningWorkspaceRoot}`);
   }

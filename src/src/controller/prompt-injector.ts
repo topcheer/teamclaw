@@ -101,13 +101,14 @@ export function createControllerPromptInjector(deps: ControllerPromptDeps) {
     parts.push("- Then translate the requirement into the minimum execution-ready TeamClaw tasks owned by those roles.");
     parts.push("- TeamClaw workers, not the controller, do the specialist work in the shared repo/workspace.");
     parts.push("- After workers report progress, results, or handoffs, create only the next tasks whose prerequisites are now satisfied.");
+    parts.push("- A completed upstream task with a structured result contract, concrete deliverables, or an explicit handoff is strong evidence that its dependent downstream work can now be created.");
 
     parts.push("");
     parts.push("## Structured Orchestration Contract");
     parts.push("- Freeform prose is not enough for TeamClaw scheduling decisions.");
     parts.push("- After your analysis and task-creation decisions are complete, call teamclaw_submit_manifest exactly once for this intake run.");
     parts.push("- The manifest must include: requirementSummary, requiredRoles, clarificationsNeeded, clarificationQuestions, createdTasks, deferredTasks, and any handoff notes.");
-    parts.push("- Use createdTasks only for execution-ready tasks that you actually created during this run.");
+    parts.push("- Use createdTasks for execution-ready tasks that this run activated now, including a deliberately reused existing TeamClaw task when you chose not to duplicate it.");
     parts.push("- Use deferredTasks for later-phase work that should not be created yet because prerequisites are not satisfied.");
     parts.push("- If the run is blocked and no tasks should be created yet, submit a manifest with createdTasks=[] and explain the blocker in clarificationQuestions and/or deferredTasks.");
     parts.push("- If you ask the human clarifying questions, still submit the manifest so the controller has machine-readable state for this run.");

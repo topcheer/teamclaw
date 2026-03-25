@@ -11,10 +11,10 @@ export type WorkerServiceDeps = {
   config: PluginConfig;
   logger: PluginLogger;
   onIdentityEstablished: (identity: WorkerIdentity) => void;
-  taskExecutor?: (taskDescription: string, taskId: string) => Promise<string>;
+  taskExecutor?: (taskDescription: string, assignment: TaskAssignmentPayload) => Promise<string>;
   prepareTaskAssignment?: (assignment: TaskAssignmentPayload) => Promise<void> | void;
   publishTaskAssignment?: (assignment: TaskAssignmentPayload, result: string) => Promise<void> | void;
-  cancelTaskExecution?: (taskId: string) => Promise<boolean> | boolean;
+  cancelTaskExecution?: (taskId: string, sessionKey?: string) => Promise<boolean> | boolean;
   messageQueue?: MessageQueue;
 };
 
@@ -27,6 +27,7 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
   let controllerUrl: string | null = null;
   let workerId: string | null = null;
   let activeTaskId: string | undefined;
+  const activeTaskSessionKeys = new Map<string, string>();
   const cancelledTaskIds = new Set<string>();
 
   const taskExecutor = externalTaskExecutor
@@ -34,10 +35,11 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
         const taskId = assignment.taskId;
         cancelledTaskIds.delete(taskId);
         activeTaskId = taskId;
+        activeTaskSessionKeys.set(taskId, assignment.executionSessionKey || `teamclaw-task-${taskId}`);
         try {
           await deps.prepareTaskAssignment?.(assignment);
           const taskPrompt = [assignment.title.trim(), assignment.description.trim()].filter(Boolean).join("\n\n");
-          const result = await externalTaskExecutor(taskPrompt, taskId);
+          const result = await externalTaskExecutor(taskPrompt, assignment);
           if (cancelledTaskIds.has(taskId)) {
             throw new Error("Task execution cancelled by controller");
           }
@@ -45,6 +47,7 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
           return result;
         } finally {
           activeTaskId = undefined;
+          activeTaskSessionKeys.delete(taskId);
           if (!cancelledTaskIds.has(taskId)) {
             cancelledTaskIds.delete(taskId);
           }
@@ -74,7 +77,7 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
 
     cancelledTaskIds.add(taskId);
     try {
-      const cancelled = await deps.cancelTaskExecution?.(taskId);
+      const cancelled = await deps.cancelTaskExecution?.(taskId, activeTaskSessionKeys.get(taskId));
       return cancelled ?? true;
     } catch (err) {
       logger.warn(`Worker: failed to cancel task ${taskId}: ${err instanceof Error ? err.message : String(err)}`);
@@ -130,9 +133,9 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
       } else {
         controllerUrl = identity.controllerUrl;
         workerId = identity.workerId;
+        onIdentityEstablished(identity);
         // Restart server with worker ID and task executor
         await startServer();
-        onIdentityEstablished(identity);
       }
 
       // Start heartbeat
@@ -142,8 +145,8 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
           if (newIdentity && !controllerUrl) {
             controllerUrl = newIdentity.controllerUrl;
             workerId = newIdentity.workerId;
-            await startServer();
             onIdentityEstablished(newIdentity);
+            await startServer();
           }
           return;
         }

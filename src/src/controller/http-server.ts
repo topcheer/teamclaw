@@ -70,8 +70,13 @@ const MAX_TASK_EXECUTION_EVENTS = 250;
 const MAX_CONTROLLER_RUNS = 40;
 const MAX_RECENT_TASK_CONTEXT = 3;
 const MAX_TASK_CONTEXT_SUMMARY_CHARS = 500;
-const CONTROLLER_INTAKE_TIMEOUT_CAP_MS = 180_000;
 const CONTROLLER_INTAKE_SESSION_PREFIX = "teamclaw-controller-web:";
+const CONTROLLER_INTAKE_AGENT_SESSION_RE = /^agent:[^:]+:(teamclaw-controller-web:[a-zA-Z0-9:_-]{1,120})$/;
+const CONTROLLER_RUN_WAIT_SLICE_MS = 30_000;
+const CONTROLLER_RATE_LIMIT_STALL_PROBE_MS = 5 * 60 * 1000;
+const CONTROLLER_RATE_LIMIT_PROBE_TIMEOUT_MS = 60_000;
+const CONTROLLER_RATE_LIMIT_WAITING_SENTINEL = "TEAMCLAW_STILL_WAITING";
+const controllerIntakeQueue = new Map<string, Promise<void>>();
 
 export function buildControllerIntakeSystemPrompt(
   deps: Pick<ControllerHttpDeps, "config" | "getTeamState">,
@@ -123,6 +128,33 @@ function ensureTaskExecution(task: TaskInfo): TaskExecution {
   task.execution.lastUpdatedAt = task.execution.lastUpdatedAt ?? task.updatedAt;
 
   return task.execution;
+}
+
+function resetTaskForFreshAttempt(task: TaskInfo): void {
+  delete task.startedAt;
+  delete task.completedAt;
+  delete task.result;
+  delete task.error;
+  delete task.resultContract;
+  if (task.execution) {
+    task.execution.status = "pending";
+    delete task.execution.runId;
+    delete task.execution.sessionKey;
+    delete task.execution.startedAt;
+    delete task.execution.endedAt;
+    task.execution.lastUpdatedAt = Date.now();
+  }
+}
+
+function buildTaskExecutionIdentity(taskId: string, workerId: string): {
+  executionSessionKey: string;
+  executionIdempotencyKey: string;
+} {
+  const attemptId = generateId();
+  return {
+    executionSessionKey: `teamclaw-task-${taskId}-${attemptId}`,
+    executionIdempotencyKey: `teamclaw-${taskId}-${workerId}-${attemptId}`,
+  };
 }
 
 function appendTaskExecutionEvent(task: TaskInfo, input: TaskExecutionEventInput): TaskExecutionEvent {
@@ -441,6 +473,29 @@ function extractLastAssistantText(messages: unknown[]): string {
   return JSON.stringify(lastAssistant);
 }
 
+function formatDuration(timeoutMs: number): string {
+  const totalSeconds = Math.ceil(timeoutMs / 1000);
+  if (totalSeconds % 3600 === 0) {
+    const hours = totalSeconds / 3600;
+    return `${hours} hour${hours === 1 ? "" : "s"}`;
+  }
+  if (totalSeconds % 60 === 0) {
+    const minutes = totalSeconds / 60;
+    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+  return `${totalSeconds} second${totalSeconds === 1 ? "" : "s"}`;
+}
+
+function isRateLimitMessage(value: string): boolean {
+  return /(rate[_ ]limit|too many requests|429\b|resource has been exhausted|tokens per day|quota|throttl)/i.test(
+    String(value || ""),
+  );
+}
+
+function isStillWaitingResponse(value: string): boolean {
+  return value.replace(/\s+/g, " ").trim() === CONTROLLER_RATE_LIMIT_WAITING_SENTINEL;
+}
+
 function normalizeControllerIntakeSessionKey(input: unknown): string {
   const fallback = `${CONTROLLER_INTAKE_SESSION_PREFIX}default`;
   if (typeof input !== "string") {
@@ -448,17 +503,142 @@ function normalizeControllerIntakeSessionKey(input: unknown): string {
   }
 
   const trimmed = input.trim();
-  if (!trimmed || !/^[a-zA-Z0-9:_-]{1,120}$/.test(trimmed)) {
+  if (!trimmed) {
     return fallback;
   }
 
-  return trimmed.startsWith(CONTROLLER_INTAKE_SESSION_PREFIX)
-    ? trimmed
-    : `${CONTROLLER_INTAKE_SESSION_PREFIX}${trimmed}`;
+  const runtimeMatch = trimmed.match(CONTROLLER_INTAKE_AGENT_SESSION_RE);
+  if (trimmed.startsWith("agent:") && !runtimeMatch) {
+    return fallback;
+  }
+
+  const logicalKey = runtimeMatch?.[1] ?? trimmed;
+  if (!/^[a-zA-Z0-9:_-]{1,120}$/.test(logicalKey)) {
+    return fallback;
+  }
+
+  return logicalKey.startsWith(CONTROLLER_INTAKE_SESSION_PREFIX)
+    ? logicalKey
+    : `${CONTROLLER_INTAKE_SESSION_PREFIX}${logicalKey}`;
+}
+
+async function withSerializedControllerIntake<T>(
+  sessionKey: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const normalizedSessionKey = normalizeControllerIntakeSessionKey(sessionKey);
+  const previous = controllerIntakeQueue.get(normalizedSessionKey) ?? Promise.resolve();
+  let releaseCurrent!: () => void;
+  const current = new Promise<void>((resolve) => {
+    releaseCurrent = resolve;
+  });
+  controllerIntakeQueue.set(normalizedSessionKey, current);
+  try {
+    await previous;
+    return await fn();
+  } finally {
+    releaseCurrent();
+    if (controllerIntakeQueue.get(normalizedSessionKey) === current) {
+      controllerIntakeQueue.delete(normalizedSessionKey);
+    }
+  }
 }
 
 function collectTaskIds(state: TeamState | null): Set<string> {
   return new Set(Object.keys(state?.tasks ?? {}));
+}
+
+function normalizeControllerTaskMatchText(input: unknown): string {
+  return typeof input === "string" ? input.replace(/\s+/g, " ").trim().toLowerCase() : "";
+}
+
+function taskMatchesManifestCreatedTask(
+  task: TaskInfo,
+  manifestTask: ControllerOrchestrationManifest["createdTasks"][number],
+): boolean {
+  if (normalizeControllerTaskMatchText(task.title) !== normalizeControllerTaskMatchText(manifestTask.title)) {
+    return false;
+  }
+  if (manifestTask.assignedRole && task.assignedRole && manifestTask.assignedRole !== task.assignedRole) {
+    return false;
+  }
+  if (manifestTask.assignedRole && !task.assignedRole) {
+    return false;
+  }
+  return task.createdBy === "controller";
+}
+
+function scoreControllerTaskBindingCandidate(task: TaskInfo): number {
+  switch (task.status) {
+    case "pending":
+      return 6;
+    case "assigned":
+      return 5;
+    case "in_progress":
+      return 4;
+    case "review":
+      return 3;
+    case "blocked":
+      return 2;
+    case "completed":
+      return 1;
+    case "failed":
+    default:
+      return 0;
+  }
+}
+
+function reconcileControllerManifestTaskBindings(
+  sessionKey: string,
+  createdTaskIds: string[],
+  manifest: ControllerOrchestrationManifest | undefined,
+  deps: ControllerHttpDeps,
+): { taskIds: string[]; linkedTaskIds: string[] } {
+  if (!manifest || manifest.createdTasks.length === 0) {
+    return { taskIds: createdTaskIds, linkedTaskIds: [] };
+  }
+
+  const normalizedSessionKey = normalizeControllerIntakeSessionKey(sessionKey);
+  const linkedTaskIds: string[] = [];
+
+  deps.updateTeamState((state) => {
+    const usedTaskIds = new Set(createdTaskIds);
+    for (const manifestTask of manifest.createdTasks) {
+      const existingTaskId = Array.from(usedTaskIds).find((taskId) => {
+        const task = state.tasks[taskId];
+        return !!task && taskMatchesManifestCreatedTask(task, manifestTask);
+      });
+      const matchedTask = existingTaskId
+        ? state.tasks[existingTaskId]
+        : Object.values(state.tasks)
+          .filter((task) => !usedTaskIds.has(task.id))
+          .filter((task) => taskMatchesManifestCreatedTask(task, manifestTask))
+          .sort((left, right) => {
+            const scoreDelta = scoreControllerTaskBindingCandidate(right) - scoreControllerTaskBindingCandidate(left);
+            if (scoreDelta !== 0) {
+              return scoreDelta;
+            }
+            return right.updatedAt - left.updatedAt;
+          })[0];
+
+      if (!matchedTask) {
+        continue;
+      }
+
+      if (matchedTask.controllerSessionKey !== normalizedSessionKey) {
+        matchedTask.controllerSessionKey = normalizedSessionKey;
+      }
+      if (!usedTaskIds.has(matchedTask.id)) {
+        usedTaskIds.add(matchedTask.id);
+        linkedTaskIds.push(matchedTask.id);
+      }
+    }
+  });
+
+  return {
+    taskIds: Array.from(new Set([...createdTaskIds, ...linkedTaskIds])),
+    linkedTaskIds,
+  };
 }
 
 function tagControllerCreatedTasks(
@@ -466,27 +646,75 @@ function tagControllerCreatedTasks(
   sessionKey: string,
   deps: ControllerHttpDeps,
 ): string[] {
+  const normalizedSessionKey = normalizeControllerIntakeSessionKey(sessionKey);
   const taggedTaskIds: string[] = [];
   deps.updateTeamState((state) => {
     for (const task of Object.values(state.tasks)) {
       if (taskIdsBeforeRun.has(task.id)) {
         continue;
       }
-      if (task.createdBy !== "controller" || task.controllerSessionKey) {
+      if (task.createdBy !== "controller") {
         continue;
       }
-      task.controllerSessionKey = sessionKey;
+      if (!task.controllerSessionKey) {
+        task.controllerSessionKey = normalizedSessionKey;
+      }
+      if (normalizeControllerIntakeSessionKey(task.controllerSessionKey) !== normalizedSessionKey) {
+        continue;
+      }
       taggedTaskIds.push(task.id);
     }
   });
   return taggedTaskIds;
 }
 
-function findLatestControllerRunIdForSession(sessionKey: string, state: TeamState | null): string | null {
+function isActiveControllerRun(run: ControllerRunInfo): boolean {
+  return run.status === "pending" || run.status === "running";
+}
+
+function findLatestControllerRunIdForSession(
+  sessionKey: string,
+  state: TeamState | null,
+  options?: { preferActive?: boolean },
+): string | null {
+  const normalizedSessionKey = normalizeControllerIntakeSessionKey(sessionKey);
   const matchingRuns = Object.values(state?.controllerRuns ?? {})
-    .filter((run) => run.sessionKey === sessionKey)
-    .sort((left, right) => right.updatedAt - left.updatedAt);
+    .filter((run) => normalizeControllerIntakeSessionKey(run.sessionKey) === normalizedSessionKey)
+    .sort((left, right) => {
+      if (options?.preferActive) {
+        const leftScore = isActiveControllerRun(left) ? 1 : 0;
+        const rightScore = isActiveControllerRun(right) ? 1 : 0;
+        if (leftScore !== rightScore) {
+          return rightScore - leftScore;
+        }
+      }
+      return right.updatedAt - left.updatedAt;
+    });
   return matchingRuns[0]?.id ?? null;
+}
+
+function resolveControllerWorkflowSessionKey(task: TaskInfo, state: TeamState | null): string | undefined {
+  if (task.controllerSessionKey) {
+    return normalizeControllerIntakeSessionKey(task.controllerSessionKey);
+  }
+  if (!state || task.createdBy !== "controller") {
+    return undefined;
+  }
+
+  const sortedRuns = Object.values(state.controllerRuns)
+    .sort((left, right) => right.updatedAt - left.updatedAt);
+
+  const directRun = sortedRuns.find((run) =>
+    run.sourceTaskId === task.id || run.createdTaskIds.includes(task.id),
+  );
+  if (directRun) {
+    return normalizeControllerIntakeSessionKey(directRun.sessionKey);
+  }
+
+  const manifestRun = sortedRuns.find((run) =>
+    run.manifest?.createdTasks.some((manifestTask) => taskMatchesManifestCreatedTask(task, manifestTask)),
+  );
+  return manifestRun ? normalizeControllerIntakeSessionKey(manifestRun.sessionKey) : undefined;
 }
 
 function buildControllerManifestEventMessage(manifest: ControllerOrchestrationManifest): string {
@@ -704,11 +932,40 @@ function buildControllerFollowUpMessage(task: TaskInfo): string {
   return parts.filter(Boolean).join("\n");
 }
 
+function buildControllerRateLimitProbeMessage(
+  sourceTaskId?: string,
+  sourceTaskTitle?: string,
+): string {
+  const workflowLabel = sourceTaskTitle
+    ? `${sourceTaskTitle}${sourceTaskId ? ` (${sourceTaskId})` : ""}`
+    : (sourceTaskId ? `task ${sourceTaskId}` : "this controller workflow");
+  return [
+    `This is a follow-up check for ${workflowLabel}.`,
+    "The earlier controller run appears to be delayed by upstream model rate limiting.",
+    "Do not restart the workflow from scratch.",
+    "Do not duplicate tasks that already exist, are active, or are completed.",
+    "If the earlier controller follow-up is fully complete now, immediately submit the required structured manifest for that same workflow step and provide the final orchestration reply.",
+    `If the earlier controller follow-up is not complete yet, reply with exactly ${CONTROLLER_RATE_LIMIT_WAITING_SENTINEL}.`,
+  ].join("\n");
+}
+
 async function continueControllerWorkflow(task: TaskInfo, deps: ControllerHttpDeps): Promise<void> {
-  if (task.createdBy !== "controller" || !task.controllerSessionKey) {
+  if (task.createdBy !== "controller") {
     return;
   }
-  await runControllerIntake(buildControllerFollowUpMessage(task), task.controllerSessionKey, deps, {
+  const sessionKey = resolveControllerWorkflowSessionKey(task, deps.getTeamState());
+  if (!sessionKey) {
+    return;
+  }
+  if (task.controllerSessionKey !== sessionKey) {
+    deps.updateTeamState((state) => {
+      const currentTask = state.tasks[task.id];
+      if (currentTask) {
+        currentTask.controllerSessionKey = sessionKey;
+      }
+    });
+  }
+  await runControllerIntake(buildControllerFollowUpMessage(task), sessionKey, deps, {
     source: "task_follow_up",
     sourceTaskId: task.id,
     sourceTaskTitle: task.title,
@@ -716,6 +973,22 @@ async function continueControllerWorkflow(task: TaskInfo, deps: ControllerHttpDe
 }
 
 async function runControllerIntake(
+  message: string,
+  sessionKey: string,
+  deps: ControllerHttpDeps,
+  options?: {
+    source?: ControllerRunSource;
+    sourceTaskId?: string;
+    sourceTaskTitle?: string;
+  },
+): Promise<{ sessionKey: string; runId: string; reply: string; controllerRunId: string }> {
+  const normalizedSessionKey = normalizeControllerIntakeSessionKey(sessionKey);
+  return withSerializedControllerIntake(normalizedSessionKey, () =>
+    runControllerIntakeUnlocked(message, normalizedSessionKey, deps, options),
+  );
+}
+
+async function runControllerIntakeUnlocked(
   message: string,
   sessionKey: string,
   deps: ControllerHttpDeps,
@@ -752,10 +1025,133 @@ async function runControllerIntake(
     message: `Controller intake started (${runResult.runId}).`,
   }, deps);
 
-  const waitResult = await deps.runtime.subagent.waitForRun({
-    runId: runResult.runId,
-    timeoutMs: Math.min(deps.config.taskTimeoutMs, CONTROLLER_INTAKE_TIMEOUT_CAP_MS),
-  });
+  const rateLimitState: {
+    active: boolean;
+    visibleAt?: number;
+    nextProbeAt?: number;
+    probeCount: number;
+  } = {
+    active: false,
+    probeCount: 0,
+  };
+
+  const markRateLimitWaiting = async (): Promise<void> => {
+    if (rateLimitState.active) {
+      return;
+    }
+    const now = Date.now();
+    rateLimitState.active = true;
+    rateLimitState.visibleAt = now;
+    rateLimitState.nextProbeAt = now + CONTROLLER_RATE_LIMIT_STALL_PROBE_MS;
+    recordControllerRunEvent(controllerRun.id, {
+      type: "progress",
+      phase: "model_rate_limit_waiting",
+      source: "controller",
+      status: "running",
+      sessionKey,
+      runId: runResult.runId,
+      message: "Model rate limit reached. OpenClaw is retrying upstream; TeamClaw will keep waiting for the controller workflow to continue.",
+    }, deps);
+  };
+
+  const clearRateLimitWaiting = (): void => {
+    rateLimitState.active = false;
+    rateLimitState.visibleAt = undefined;
+    rateLimitState.nextProbeAt = undefined;
+  };
+
+  const extractSessionAssistantReply = async (): Promise<string> => {
+    const sessionMessages = await deps.runtime.subagent.getSessionMessages({
+      sessionKey,
+      limit: 100,
+    });
+    return extractLastAssistantText(sessionMessages.messages);
+  };
+
+  const probeRateLimitedControllerCompletion = async (): Promise<string | null> => {
+    rateLimitState.probeCount += 1;
+    const now = Date.now();
+    rateLimitState.visibleAt = now;
+    rateLimitState.nextProbeAt = now + CONTROLLER_RATE_LIMIT_STALL_PROBE_MS;
+    recordControllerRunEvent(controllerRun.id, {
+      type: "progress",
+      phase: "model_rate_limit_probe",
+      source: "controller",
+      status: "running",
+      sessionKey,
+      runId: runResult.runId,
+      message: `Model rate limit has delayed controller orchestration for over ${formatDuration(CONTROLLER_RATE_LIMIT_STALL_PROBE_MS)}. Re-checking whether this workflow step has already completed.`,
+    }, deps);
+
+    const probeRun = await deps.runtime.subagent.run({
+      sessionKey,
+      message: buildControllerRateLimitProbeMessage(options?.sourceTaskId, options?.sourceTaskTitle),
+      extraSystemPrompt: buildControllerIntakeSystemPrompt(deps),
+      idempotencyKey: `${runResult.runId}:rate-limit-probe:${rateLimitState.probeCount}`,
+    });
+    const probeWait = await deps.runtime.subagent.waitForRun({
+      runId: probeRun.runId,
+      timeoutMs: CONTROLLER_RATE_LIMIT_PROBE_TIMEOUT_MS,
+    });
+
+    if (probeWait.status !== "ok") {
+      return null;
+    }
+
+    const probeReply = await extractSessionAssistantReply();
+    if (!probeReply || isRateLimitMessage(probeReply) || isStillWaitingResponse(probeReply)) {
+      recordControllerRunEvent(controllerRun.id, {
+        type: "progress",
+        phase: "model_rate_limit_still_waiting",
+        source: "controller",
+        status: "running",
+        sessionKey,
+        runId: runResult.runId,
+        message: "The controller workflow is still waiting on model availability. TeamClaw will continue waiting.",
+      }, deps);
+      return null;
+    }
+
+    clearRateLimitWaiting();
+    return probeReply;
+  };
+
+  let waitResult: Awaited<ReturnType<typeof deps.runtime.subagent.waitForRun>> = { status: "timeout" };
+  let completionOverride: string | null = null;
+  const deadline = Date.now() + deps.config.taskTimeoutMs;
+  while (true) {
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      waitResult = { status: "timeout" };
+      break;
+    }
+
+    if (rateLimitState.active && (rateLimitState.nextProbeAt ?? Number.POSITIVE_INFINITY) <= Date.now()) {
+      completionOverride = await probeRateLimitedControllerCompletion();
+      if (completionOverride) {
+        waitResult = { status: "ok" };
+        break;
+      }
+    }
+
+    const sliceTimeoutMs = Math.max(1_000, Math.min(CONTROLLER_RUN_WAIT_SLICE_MS, remainingMs));
+    waitResult = await deps.runtime.subagent.waitForRun({
+      runId: runResult.runId,
+      timeoutMs: sliceTimeoutMs,
+    });
+
+    if (waitResult.status === "ok") {
+      clearRateLimitWaiting();
+      break;
+    }
+    if (waitResult.status === "error") {
+      if (isRateLimitMessage(waitResult.error || "")) {
+        await markRateLimitWaiting();
+        continue;
+      }
+      break;
+    }
+  }
 
   if (waitResult.status === "timeout") {
     const createdTaskIds = tagControllerCreatedTasks(taskIdsBeforeRun, sessionKey, deps);
@@ -795,11 +1191,7 @@ async function runControllerIntake(
 
   const createdTaskIds = tagControllerCreatedTasks(taskIdsBeforeRun, sessionKey, deps);
 
-  const sessionMessages = await deps.runtime.subagent.getSessionMessages({
-    sessionKey,
-    limit: 100,
-  });
-  const rawReply = extractLastAssistantText(sessionMessages.messages)
+  const rawReply = completionOverride || await extractSessionAssistantReply()
     || "Controller completed the intake run but did not return any text.";
   const recordedManifest = ensureControllerManifest(
     controllerRun.id,
@@ -809,13 +1201,14 @@ async function runControllerIntake(
     createdTaskIds,
     deps,
   );
+  const reconciledTasks = reconcileControllerManifestTaskBindings(sessionKey, createdTaskIds, recordedManifest, deps);
   const latestTeamState = deps.getTeamState();
-  const reply = buildControllerManifestReply(recordedManifest, createdTaskIds, latestTeamState, rawReply);
+  const reply = buildControllerManifestReply(recordedManifest, reconciledTasks.taskIds, latestTeamState, rawReply);
 
   updateControllerRun(controllerRun.id, deps, (run) => {
     run.reply = reply;
     run.error = undefined;
-    run.createdTaskIds = createdTaskIds;
+    run.createdTaskIds = reconciledTasks.taskIds;
     appendControllerRunEvent(run, {
       type: "output",
       phase: "final_reply",
@@ -825,7 +1218,18 @@ async function runControllerIntake(
       runId: runResult.runId,
       message: reply,
     });
-    if (createdTaskIds.length > 0) {
+    if (reconciledTasks.linkedTaskIds.length > 0) {
+      appendControllerRunEvent(run, {
+        type: "lifecycle",
+        phase: "tasks_linked",
+        source: "controller",
+        status: "running",
+        sessionKey,
+        runId: runResult.runId,
+        message: `Controller linked ${reconciledTasks.linkedTaskIds.length} existing task(s) into this workflow: ${reconciledTasks.linkedTaskIds.join(", ")}`,
+      });
+    }
+    if (reconciledTasks.taskIds.length > 0) {
       appendControllerRunEvent(run, {
         type: "lifecycle",
         phase: "tasks_created",
@@ -833,7 +1237,7 @@ async function runControllerIntake(
         status: "running",
         sessionKey,
         runId: runResult.runId,
-        message: `Controller created ${createdTaskIds.length} task(s): ${createdTaskIds.join(", ")}`,
+        message: `Controller activated ${reconciledTasks.taskIds.length} execution-ready task(s): ${reconciledTasks.taskIds.join(", ")}`,
       });
     }
     appendControllerRunEvent(run, {
@@ -1143,8 +1547,11 @@ function applyTaskResult(
     });
 
     if (task.assignedWorkerId && s.workers[task.assignedWorkerId]) {
-      s.workers[task.assignedWorkerId].status = "idle";
-      s.workers[task.assignedWorkerId].currentTaskId = undefined;
+      const assignedWorker = s.workers[task.assignedWorkerId];
+      if (assignedWorker.status !== "offline") {
+        assignedWorker.status = "idle";
+      }
+      assignedWorker.currentTaskId = undefined;
     }
   });
 
@@ -1155,6 +1562,14 @@ function applyTaskResult(
     }
     wsServer.broadcastUpdate({ type: "task:completed", data: serializeTask(updatedTask) });
     logger.info(`Controller: task ${taskId} ${error ? "failed" : "completed"}`);
+    if (error && updatedTask.assignedWorkerId && deps.workerProvisioningManager?.hasManagedWorker(updatedTask.assignedWorkerId)) {
+      void deps.workerProvisioningManager.onWorkerRemoved(
+        updatedTask.assignedWorkerId,
+        `task ${taskId} failed; retiring managed worker before retry`,
+      ).catch((err) => {
+        logger.warn(`Controller: failed to retire managed worker ${updatedTask.assignedWorkerId}: ${String(err)}`);
+      });
+    }
     if (updatedTask.assignedWorkerId) {
       void autoAssignPendingTasks(deps, updatedTask.assignedWorkerId).catch((err) => {
         logger.warn(
@@ -1163,7 +1578,7 @@ function applyTaskResult(
       });
     }
     scheduleProvisioningReconcile(deps, `task-result:${taskId}`);
-    if (!error && updatedTask.createdBy === "controller" && updatedTask.controllerSessionKey) {
+    if (!error && updatedTask.createdBy === "controller") {
       void continueControllerWorkflow(updatedTask, deps).catch((err) => {
         logger.warn(
           `Controller: failed to continue intake workflow after ${taskId}: ${String(err)}`,
@@ -1282,7 +1697,9 @@ function revertTaskAssignment(taskId: string, workerId: string, deps: Controller
 
     const worker = s.workers[workerId];
     if (worker?.currentTaskId === taskId) {
-      worker.status = "idle";
+      if (worker.status !== "offline") {
+        worker.status = "idle";
+      }
       worker.currentTaskId = undefined;
     }
   });
@@ -1369,12 +1786,15 @@ async function dispatchTaskToWorker(
   const repoInfo = buildRepoSyncInfo(repoState, sharedWorkspace);
   const description = buildTaskAssignmentDescription(task, state ?? null, repoInfo);
   const recommendedSkills = resolveRecommendedSkillsForRole(task.assignedRole, task.recommendedSkills ?? []);
+  const executionIdentity = buildTaskExecutionIdentity(task.id, worker.id);
   const assignment: TaskAssignmentPayload = {
     taskId: task.id,
     title: task.title,
     description,
     priority: task.priority,
     recommendedSkills,
+    executionSessionKey: executionIdentity.executionSessionKey,
+    executionIdempotencyKey: executionIdentity.executionIdempotencyKey,
     repo: repoInfo,
   };
 
@@ -1430,6 +1850,7 @@ async function assignTaskToWorker(
     if (options?.assignedRole) {
       task.assignedRole = options.assignedRole;
     }
+    resetTaskForFreshAttempt(task);
     task.updatedAt = Date.now();
 
     targetWorker.status = "busy";
@@ -1708,6 +2129,7 @@ async function handleRequest(
         ) {
           task.status = "pending";
           task.assignedWorkerId = undefined;
+          resetTaskForFreshAttempt(task);
           task.updatedAt = Date.now();
           affectedTaskIds.push(task.id);
         }
@@ -1770,6 +2192,9 @@ async function handleRequest(
     const priority = typeof body.priority === "string" ? body.priority as TaskPriority : "medium";
     const assignedRole = typeof body.assignedRole === "string" ? body.assignedRole as RoleId : undefined;
     const createdBy = typeof body.createdBy === "string" ? body.createdBy : "boss";
+    const controllerSessionKey = createdBy === "controller" && typeof body.controllerSessionKey === "string" && body.controllerSessionKey.trim()
+      ? normalizeControllerIntakeSessionKey(body.controllerSessionKey)
+      : undefined;
     const recommendedSkills = normalizeRecommendedSkills(
       Array.isArray(body.recommendedSkills) ? body.recommendedSkills.map((entry) => String(entry ?? "")) : [],
     );
@@ -1796,6 +2221,7 @@ async function handleRequest(
       assignedRole,
       createdBy,
       recommendedSkills: recommendedSkills.length > 0 ? recommendedSkills : undefined,
+      controllerSessionKey,
       createdAt: now,
       updatedAt: now,
     };
@@ -2022,28 +2448,51 @@ async function handleRequest(
     }
 
     const previousWorkerId = state.tasks[taskId].assignedWorkerId;
+    const avoidPreviousManagedWorker = Boolean(
+      previousWorkerId && deps.workerProvisioningManager?.hasManagedWorker(previousWorkerId),
+    );
 
     updateTeamState((s) => {
-      s.tasks[taskId].status = "pending";
-      s.tasks[taskId].assignedWorkerId = undefined;
-      s.tasks[taskId].assignedRole = targetRole ?? s.tasks[taskId].assignedRole;
-      s.tasks[taskId].lastHandoff = handoffContract;
-      s.tasks[taskId].updatedAt = Date.now();
+      const task = s.tasks[taskId];
+      task.status = "pending";
+      task.assignedWorkerId = undefined;
+      task.assignedRole = targetRole ?? task.assignedRole;
+      task.lastHandoff = handoffContract;
+      resetTaskForFreshAttempt(task);
+      task.updatedAt = Date.now();
 
       // Free old worker
       if (previousWorkerId && s.workers[previousWorkerId]) {
-        s.workers[previousWorkerId].status = "idle";
-        s.workers[previousWorkerId].currentTaskId = undefined;
+        const previousWorker = s.workers[previousWorkerId];
+        if (previousWorker.status !== "offline") {
+          previousWorker.status = "idle";
+        }
+        previousWorker.currentTaskId = undefined;
       }
     });
 
     await cancelTaskExecution(taskId, previousWorkerId, "handoff", deps);
+    if (avoidPreviousManagedWorker && previousWorkerId) {
+      try {
+        await deps.workerProvisioningManager?.onWorkerRemoved(
+          previousWorkerId,
+          `handoff for ${taskId} requested a fresh managed worker`,
+        );
+      } catch (err) {
+        logger.warn(`Controller: failed to retire previous managed worker ${previousWorkerId}: ${String(err)}`);
+      }
+    }
 
     // Try auto-assign to new role
     const newState = getTeamState()!;
-    const worker = taskRouter.routeTask(newState.tasks[taskId], newState.workers);
+    const routingWorkers = avoidPreviousManagedWorker && previousWorkerId
+      ? Object.fromEntries(Object.entries(newState.workers).filter(([workerId]) => workerId !== previousWorkerId))
+      : newState.workers;
+    const worker = taskRouter.routeTask(newState.tasks[taskId], routingWorkers);
     if (worker) {
       await assignTaskToWorker(taskId, worker, deps, { assignedRole: targetRole });
+    } else {
+      scheduleProvisioningReconcile(deps, `handoff:${taskId}`);
     }
 
     const updatedTask = getTeamState()?.tasks[taskId];
@@ -2215,7 +2664,9 @@ async function handleRequest(
       return;
     }
 
-    const runId = findLatestControllerRunIdForSession(sessionKey, deps.getTeamState());
+    const runId = findLatestControllerRunIdForSession(sessionKey, deps.getTeamState(), {
+      preferActive: true,
+    });
     if (!runId) {
       sendError(res, 404, "Controller run not found for session");
       return;
@@ -2466,8 +2917,11 @@ async function handleRequest(
       task.updatedAt = now;
 
       if (assignedWorkerId && s.workers[assignedWorkerId]) {
-        s.workers[assignedWorkerId].status = "idle";
-        s.workers[assignedWorkerId].currentTaskId = undefined;
+        const assignedWorker = s.workers[assignedWorkerId];
+        if (assignedWorker.status !== "offline") {
+          assignedWorker.status = "idle";
+        }
+        assignedWorker.currentTaskId = undefined;
       }
     });
 
@@ -2550,6 +3004,7 @@ async function handleRequest(
       task.status = "pending";
       task.progress = `Clarification answered by ${answeredBy}: ${answer}`;
       task.clarificationRequestId = undefined;
+      resetTaskForFreshAttempt(task);
       task.updatedAt = now;
     });
 

@@ -133,6 +133,8 @@ export type TaskAssignmentPayload = {
   description: string;
   priority?: TaskPriority;
   recommendedSkills?: string[];
+  executionSessionKey?: string;
+  executionIdempotencyKey?: string;
   repo?: RepoSyncInfo;
 };
 

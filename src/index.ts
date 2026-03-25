@@ -1,6 +1,6 @@
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import { parsePluginConfig } from "./src/types.js";
-import type { TaskExecutionEventInput, TeamState, WorkerIdentity } from "./src/types.js";
+import type { TaskAssignmentPayload, TaskExecutionEventInput, TeamState, WorkerIdentity } from "./src/types.js";
 import { buildConfigSchema } from "./src/config.js";
 import { loadTeamState } from "./src/state.js";
 import { createRoleTaskExecutor } from "./src/task-executor.js";
@@ -132,7 +132,8 @@ function registerWorker(api: OpenClawPluginApi, config: ReturnType<typeof parseP
     }
   }
 
-  const getWorkerSessionKey = (taskId: string) => `teamclaw-task-${taskId}`;
+  const getWorkerSessionKey = (assignment: TaskAssignmentPayload) =>
+    assignment.executionSessionKey?.trim() || `teamclaw-task-${assignment.taskId}`;
 
   const taskExecutor = createRoleTaskExecutor({
     runtime: api.runtime,
@@ -140,7 +141,8 @@ function registerWorker(api: OpenClawPluginApi, config: ReturnType<typeof parseP
     role: config.role,
     taskTimeoutMs: config.taskTimeoutMs,
     getSessionKey: getWorkerSessionKey,
-    getIdempotencyKey: (taskId) => `teamclaw-${taskId}`,
+    getIdempotencyKey: (assignment) =>
+      assignment.executionIdempotencyKey?.trim() || `teamclaw-${assignment.taskId}`,
     reportExecutionEvent,
   });
 
@@ -154,6 +156,7 @@ function registerWorker(api: OpenClawPluginApi, config: ReturnType<typeof parseP
         currentWorkerId = identity.workerId;
       },
       prepareTaskAssignment: async (assignment) => {
+        const controllerUrl = currentControllerUrl || config.controllerUrl.trim();
         if (assignment.recommendedSkills?.length) {
           try {
             const skillInstall = await installRecommendedSkills(assignment, logger);
@@ -173,7 +176,7 @@ function registerWorker(api: OpenClawPluginApi, config: ReturnType<typeof parseP
           }
         }
 
-        if (!assignment.repo?.enabled || !currentControllerUrl) {
+        if (!assignment.repo?.enabled || !controllerUrl) {
           return;
         }
 
@@ -186,7 +189,7 @@ function registerWorker(api: OpenClawPluginApi, config: ReturnType<typeof parseP
         });
 
         try {
-          const syncResult = await syncWorkerRepo(config, logger, currentControllerUrl, assignment.repo);
+          const syncResult = await syncWorkerRepo(config, logger, controllerUrl, assignment.repo);
           await reportExecutionEvent(assignment.taskId, {
             type: "lifecycle",
             phase: "repo_sync_completed",
@@ -207,9 +210,11 @@ function registerWorker(api: OpenClawPluginApi, config: ReturnType<typeof parseP
         }
       },
       publishTaskAssignment: async (assignment) => {
-        if (!assignment.repo?.enabled || !currentControllerUrl || !currentWorkerId) {
+        const controllerUrl = currentControllerUrl || config.controllerUrl.trim();
+        if (!assignment.repo?.enabled || !controllerUrl) {
           return;
         }
+        const workerId = currentWorkerId || "unknown-worker";
 
         await reportExecutionEvent(assignment.taskId, {
           type: "lifecycle",
@@ -220,9 +225,9 @@ function registerWorker(api: OpenClawPluginApi, config: ReturnType<typeof parseP
         });
 
         try {
-          const publishResult = await publishWorkerRepo(config, logger, currentControllerUrl, assignment.repo, {
+          const publishResult = await publishWorkerRepo(config, logger, controllerUrl, assignment.repo, {
             taskId: assignment.taskId,
-            workerId: currentWorkerId,
+            workerId,
             role: config.role,
           });
           await reportExecutionEvent(assignment.taskId, {
@@ -245,14 +250,14 @@ function registerWorker(api: OpenClawPluginApi, config: ReturnType<typeof parseP
         }
       },
       taskExecutor,
-      cancelTaskExecution: async (taskId) => {
-        const sessionKey = getWorkerSessionKey(taskId);
+      cancelTaskExecution: async (taskId, sessionKey) => {
+        const resolvedSessionKey = sessionKey || `teamclaw-task-${taskId}`;
         try {
-          await api.runtime.subagent.deleteSession({ sessionKey });
-          logger.info(`Worker: cancelled subagent session ${sessionKey} for task ${taskId}`);
+          await api.runtime.subagent.deleteSession({ sessionKey: resolvedSessionKey });
+          logger.info(`Worker: cancelled subagent session ${resolvedSessionKey} for task ${taskId}`);
           return true;
         } catch (err) {
-          logger.warn(`Worker: failed to cancel session ${sessionKey} for task ${taskId}: ${String(err)}`);
+          logger.warn(`Worker: failed to cancel session ${resolvedSessionKey} for task ${taskId}: ${String(err)}`);
           return false;
         }
       },

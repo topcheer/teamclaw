@@ -9,11 +9,13 @@ import { resolveDefaultOpenClawWorkspaceDir } from "./openclaw-workspace.js";
 const TEAMCLAW_IMPORT_REF_PREFIX = "refs/teamclaw/imports";
 const TEAMCLAW_RUNTIME_EXCLUDES = [
   ".openclaw/",
+  ".clawhub/",
   "AGENTS.md",
   "BOOTSTRAP.md",
   "HEARTBEAT.md",
   "IDENTITY.md",
   "SOUL.md",
+  "skills/",
   "TOOLS.md",
   "USER.md",
 ];
