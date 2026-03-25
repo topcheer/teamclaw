@@ -6,6 +6,7 @@ import {
   normalizeContractStringList,
   normalizeOptionalContractText,
   normalizeTaskHandoffContract,
+  normalizeWorkerProgressContract,
   normalizeWorkerTaskResultContract,
   renderWorkerProgressText,
 } from "../interaction-contracts.js";

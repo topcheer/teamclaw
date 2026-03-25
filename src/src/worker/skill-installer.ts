@@ -7,6 +7,7 @@ import { resolveDefaultOpenClawWorkspaceDir } from "../openclaw-workspace.js";
 import type { TaskAssignmentPayload, TaskExecutionEventInput } from "../types.js";
 
 type SkillCli = "openclaw" | "clawhub";
+const ON_DEMAND_DISCOVERY_SKILLS = new Set(["find-skills"]);
 
 type CommandResult = {
   ok: boolean;
@@ -185,6 +186,18 @@ export async function installRecommendedSkills(
   });
 
   for (const requestedSkill of recommendedSkills) {
+    if (ON_DEMAND_DISCOVERY_SKILLS.has(normalizeKey(requestedSkill))) {
+      skipped.push(requestedSkill);
+      events.push({
+        type: "lifecycle",
+        phase: "skill_install_skipped",
+        source: "worker",
+        status: "running",
+        message: `Skipping automatic install of discovery skill ${requestedSkill}; invoke it on demand inside the task if needed.`,
+      });
+      continue;
+    }
+
     let resolvedSlug = isSkillSlug(requestedSkill) ? requestedSkill : undefined;
     const installedPath = resolvedSlug ? buildInstalledSkillPath(workspaceDir, resolvedSlug) : "";
 

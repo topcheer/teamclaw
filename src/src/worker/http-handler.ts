@@ -62,6 +62,12 @@ export function createWorkerHttpHandler(
         const recommendedSkills = Array.isArray(body.recommendedSkills)
           ? body.recommendedSkills.map((entry) => String(entry ?? ""))
           : undefined;
+        const executionSessionKey = typeof body.executionSessionKey === "string"
+          ? body.executionSessionKey
+          : undefined;
+        const executionIdempotencyKey = typeof body.executionIdempotencyKey === "string"
+          ? body.executionIdempotencyKey
+          : undefined;
         const repo = body.repo && typeof body.repo === "object"
           ? body.repo as TaskAssignmentPayload["repo"]
           : undefined;
@@ -74,13 +80,15 @@ export function createWorkerHttpHandler(
         logger.info(`Worker: received task assignment - ${title} (${taskId})`);
 
         if (taskExecutor && resultReporter) {
-          taskExecutor({
-            taskId,
-            title,
-            description,
-            recommendedSkills,
-            repo,
-          })
+            taskExecutor({
+              taskId,
+              title,
+              description,
+              recommendedSkills,
+              executionSessionKey,
+              executionIdempotencyKey,
+              repo,
+            })
             .then((result) => {
               if (isTaskCancelled?.(taskId)) {
                 logger.info(`Worker: skipping result report for cancelled task ${taskId}`);
