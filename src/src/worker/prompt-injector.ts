@@ -51,6 +51,7 @@ export function createWorkerPromptInjector(
     parts.push("11. Treat file paths from documents, plans, and teammate messages as hints, not guarantees. Verify the real path exists in the current workspace before reading or editing it; if it does not exist, search for the closest real file and note the drift instead of repeatedly calling missing paths.");
     parts.push("12. The workspace may be backed by a TeamClaw-managed git repository. Treat the current checkout as canonical project state; do not delete `.git` or replace the repo with ad-hoc archives.");
     parts.push("13. If the assigned task includes recommended skills, use those exact skill slugs first. Missing skills should be searched/installed before execution when supported by the runtime.");
+    parts.push("14. Important: submit structured collaboration contracts, not only prose. Use teamclaw_submit_result_contract before your final reply, use structured fields on progress/handoff/review/message tools, and use clarification tools instead of hiding questions inside freeform output.");
     parts.push(`Worker ID: ${identity.workerId}`);
     parts.push(`Controller: ${identity.controllerUrl}`);
 

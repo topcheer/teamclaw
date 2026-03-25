@@ -1,11 +1,29 @@
 import { Type } from "@sinclair/typebox";
-import type { PluginConfig, TaskInfo, TeamState } from "../types.js";
+import type {
+  ControllerOrchestrationManifest,
+  PluginConfig,
+  TaskInfo,
+  TeamState,
+} from "../types.js";
 import { buildControllerNoWorkersMessage, hasOnDemandWorkerProvisioning, shouldBlockControllerWithoutWorkers } from "./controller-capacity.js";
+import {
+  normalizeManifestCreatedTasks,
+  normalizeManifestDeferredTasks,
+  normalizeManifestRoleList,
+  normalizeManifestStringList,
+  normalizeOptionalManifestText,
+} from "./orchestration-manifest.js";
+import {
+  ensureTeamMessageContract,
+  normalizeContractRole,
+  normalizeContractStringList,
+} from "../interaction-contracts.js";
 
 export type ControllerToolsDeps = {
   config: PluginConfig;
   controllerUrl: string;
   getTeamState: () => TeamState | null;
+  sessionKey?: string | null;
 };
 
 const EXECUTION_READY_BLOCKERS: Array<{ pattern: RegExp; reason: string }> = [
@@ -19,7 +37,7 @@ const EXECUTION_READY_BLOCKERS: Array<{ pattern: RegExp; reason: string }> = [
 ];
 
 export function createControllerTools(deps: ControllerToolsDeps) {
-  const { config, controllerUrl, getTeamState } = deps;
+  const { config, controllerUrl, getTeamState, sessionKey } = deps;
   const baseUrl = controllerUrl;
 
   return [
@@ -111,6 +129,97 @@ export function createControllerTools(deps: ControllerToolsDeps) {
       },
     },
     {
+      name: "teamclaw_submit_manifest",
+      label: "Submit Controller Manifest",
+      description: "Record the structured orchestration manifest for this intake run after role selection and task creation decisions are complete",
+      parameters: Type.Object({
+        requirementSummary: Type.String({ description: "Brief summary of the requirement the controller is orchestrating" }),
+        requiredRoles: Type.Array(
+          Type.String({
+            description: "Exact TeamClaw role IDs required for this requirement",
+          }),
+        ),
+        clarificationsNeeded: Type.Optional(Type.Boolean({ description: "Whether the controller still needs human clarification" })),
+        clarificationQuestions: Type.Optional(
+          Type.Array(Type.String({ description: "Concrete clarification questions still waiting on the human" })),
+        ),
+        createdTasks: Type.Optional(
+          Type.Array(
+            Type.Object({
+              title: Type.String({ description: "Title of a task the controller created during this intake" }),
+              assignedRole: Type.Optional(Type.String({ description: "Exact TeamClaw role ID for the created task" })),
+              expectedOutcome: Type.String({ description: "Expected deliverable/result for the created task" }),
+            }),
+          ),
+        ),
+        deferredTasks: Type.Optional(
+          Type.Array(
+            Type.Object({
+              title: Type.String({ description: "Title of a task that should wait for later" }),
+              assignedRole: Type.Optional(Type.String({ description: "Exact TeamClaw role ID for the deferred task" })),
+              blockedBy: Type.String({ description: "Why this deferred task cannot be created yet" }),
+              whenReady: Type.String({ description: "Condition that should become true before this deferred task is created" }),
+            }),
+          ),
+        ),
+        handoffPlan: Type.Optional(Type.String({ description: "Brief note about how workers should report progress/handoffs across this flow" })),
+        notes: Type.Optional(Type.String({ description: "Additional orchestration notes for the human/controller log" })),
+      }),
+      async execute(_id: string, params: Record<string, unknown>) {
+        const normalizedSessionKey = typeof sessionKey === "string" ? sessionKey.trim() : "";
+        if (!normalizedSessionKey) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: "Cannot record controller manifest because the current TeamClaw controller session key is missing.",
+            }],
+          };
+        }
+
+        const requirementSummary = String(params.requirementSummary ?? "").trim();
+        if (!requirementSummary) {
+          return { content: [{ type: "text" as const, text: "requirementSummary is required." }] };
+        }
+
+        const manifest: ControllerOrchestrationManifest = {
+          version: "1.0",
+          requirementSummary,
+          requiredRoles: normalizeManifestRoleList(params.requiredRoles),
+          clarificationsNeeded: Boolean(params.clarificationsNeeded),
+          clarificationQuestions: normalizeManifestStringList(params.clarificationQuestions),
+          createdTasks: normalizeManifestCreatedTasks(params.createdTasks),
+          deferredTasks: normalizeManifestDeferredTasks(params.deferredTasks),
+          handoffPlan: normalizeOptionalManifestText(params.handoffPlan),
+          notes: normalizeOptionalManifestText(params.notes),
+        };
+
+        try {
+          const res = await fetch(`${baseUrl}/api/v1/controller/manifest`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionKey: normalizedSessionKey,
+              manifest,
+            }),
+          });
+
+          if (!res.ok) {
+            const err = await res.text();
+            return { content: [{ type: "text" as const, text: `Failed to record controller manifest: ${err}` }] };
+          }
+
+          return {
+            content: [{
+              type: "text" as const,
+              text: `Controller manifest recorded: roles=${manifest.requiredRoles.join(", ") || "none"} created=${manifest.createdTasks.length} deferred=${manifest.deferredTasks.length}`,
+            }],
+          };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+        }
+      },
+    },
+    {
       name: "teamclaw_list_tasks",
       label: "List Team Tasks",
       description: "List all tasks with optional status filter",
@@ -190,6 +299,11 @@ export function createControllerTools(deps: ControllerToolsDeps) {
         content: Type.String({ description: "Message content" }),
         toRole: Type.Optional(Type.String({ description: "Target role for direct message (omit for broadcast)" })),
         taskId: Type.Optional(Type.String({ description: "Related task ID" })),
+        summary: Type.Optional(Type.String({ description: "Short structured summary for this coordination message" })),
+        details: Type.Optional(Type.String({ description: "Optional extra context for the receiving worker(s)" })),
+        requestedAction: Type.Optional(Type.String({ description: "Concrete action expected after reading the message" })),
+        needsResponse: Type.Optional(Type.Boolean({ description: "Whether this message expects a direct response" })),
+        references: Type.Optional(Type.Array(Type.String({ description: "Relevant task IDs, files, or artifacts" }))),
       }),
       async execute(_id: string, params: Record<string, unknown>) {
         const content = String(params.content ?? "");
@@ -198,14 +312,28 @@ export function createControllerTools(deps: ControllerToolsDeps) {
         }
 
         try {
+          const normalizedTargetRole = normalizeContractRole(params.toRole);
           const endpoint = params.toRole
             ? `${baseUrl}/api/v1/messages/direct`
             : `${baseUrl}/api/v1/messages/broadcast`;
+          const contract = ensureTeamMessageContract(null, {
+            type: params.toRole ? "direct" : "broadcast",
+            content,
+            toRole: normalizedTargetRole,
+            taskId: typeof params.taskId === "string" ? params.taskId : undefined,
+            summary: typeof params.summary === "string" ? params.summary : undefined,
+            details: typeof params.details === "string" ? params.details : undefined,
+            requestedAction: typeof params.requestedAction === "string" ? params.requestedAction : undefined,
+            needsResponse: typeof params.needsResponse === "boolean" ? params.needsResponse : undefined,
+            references: normalizeContractStringList(params.references),
+            intent: params.toRole ? undefined : "announcement",
+          });
 
           const body: Record<string, unknown> = {
             from: "controller",
             content,
             taskId: params.taskId ?? null,
+            contract,
           };
           if (params.toRole) body.toRole = params.toRole;
 

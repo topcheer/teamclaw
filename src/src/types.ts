@@ -106,8 +106,11 @@ export type TaskInfo = {
   startedAt?: number;
   completedAt?: number;
   progress?: string;
+  progressContract?: WorkerProgressContract;
   result?: string;
+  resultContract?: WorkerTaskResultContract;
   error?: string;
+  lastHandoff?: TaskHandoffContract;
   clarificationRequestId?: string;
   execution?: TaskExecution;
 };
@@ -135,6 +138,95 @@ export type TaskAssignmentPayload = {
 
 export type ControllerRunSource = "human" | "task_follow_up";
 
+export type WorkerTaskResultOutcome = "completed" | "blocked" | "failed";
+
+export type WorkerTaskResultDeliverable = {
+  kind: "file" | "directory" | "command" | "artifact" | "note";
+  value: string;
+  summary?: string;
+};
+
+export type WorkerTaskResultFollowUp = {
+  type: "review" | "handoff" | "clarification" | "downstream-task";
+  targetRole?: RoleId;
+  reason: string;
+};
+
+export type WorkerTaskResultContract = {
+  version: string;
+  outcome: WorkerTaskResultOutcome;
+  summary: string;
+  deliverables: WorkerTaskResultDeliverable[];
+  keyPoints: string[];
+  blockers: string[];
+  followUps: WorkerTaskResultFollowUp[];
+  questions: string[];
+  notes?: string;
+};
+
+export type WorkerProgressContract = {
+  version: string;
+  summary: string;
+  status: "in_progress" | "review";
+  currentStep?: string;
+  nextStep?: string;
+  blockers: string[];
+};
+
+export type TaskHandoffContract = {
+  version: string;
+  summary: string;
+  reason: string;
+  targetRole?: RoleId;
+  expectedNextStep?: string;
+  artifacts: string[];
+};
+
+export type TeamMessageIntent =
+  | "question"
+  | "announcement"
+  | "handoff"
+  | "review-request"
+  | "review-response"
+  | "update"
+  | "coordination";
+
+export type TeamMessageContract = {
+  version: string;
+  intent: TeamMessageIntent;
+  summary: string;
+  details?: string;
+  requestedAction?: string;
+  requestedRole?: RoleId;
+  needsResponse: boolean;
+  references: string[];
+};
+
+export type ControllerManifestCreatedTask = {
+  title: string;
+  assignedRole?: RoleId;
+  expectedOutcome: string;
+};
+
+export type ControllerManifestDeferredTask = {
+  title: string;
+  assignedRole?: RoleId;
+  blockedBy: string;
+  whenReady: string;
+};
+
+export type ControllerOrchestrationManifest = {
+  version: string;
+  requirementSummary: string;
+  requiredRoles: RoleId[];
+  clarificationsNeeded: boolean;
+  clarificationQuestions: string[];
+  createdTasks: ControllerManifestCreatedTask[];
+  deferredTasks: ControllerManifestDeferredTask[];
+  handoffPlan?: string;
+  notes?: string;
+};
+
 export type ControllerRunInfo = {
   id: string;
   title: string;
@@ -147,6 +239,7 @@ export type ControllerRunInfo = {
   reply?: string;
   error?: string;
   createdTaskIds: string[];
+  manifest?: ControllerOrchestrationManifest;
   status: TaskExecutionStatus;
   createdAt: number;
   updatedAt: number;
@@ -216,6 +309,7 @@ export type TeamMessage = {
   toRole?: RoleId;
   type: "direct" | "broadcast" | "review-request";
   content: string;
+  contract?: TeamMessageContract;
   taskId?: string;
   createdAt: number;
 };

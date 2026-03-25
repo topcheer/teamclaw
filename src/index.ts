@@ -88,6 +88,7 @@ function registerController(api: OpenClawPluginApi, config: ReturnType<typeof pa
       config,
       controllerUrl,
       getTeamState: getControllerTeamState,
+      sessionKey: ctx.sessionKey ?? null,
     });
   });
 }
