@@ -63,7 +63,13 @@
     "install": {
       "npmSpec": "@teamclaws/teamclaw",
       "localPath": "src",
-      "defaultChoice": "npm"
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.3.24"
+    },
+    "compat": {
+      "pluginApi": ">=2026.3.24",
+      "builtWithOpenClawVersion": "2026.3.24",
+      "minGatewayVersion": ">=2026.3.24"
     },
     "release": {
       "publishToNpm": true
