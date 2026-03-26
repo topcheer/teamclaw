@@ -140,11 +140,14 @@ a {
 }
 
 .brand-mark {
-  width: 16px;
-  height: 16px;
-  border-radius: 6px;
-  background: linear-gradient(135deg, var(--primary) 0%, var(--primary-deep) 100%);
-  box-shadow: 0 0 0 7px rgba(14, 165, 233, 0.12);
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: 14px;
+  object-fit: cover;
+  border: 1px solid rgba(125, 211, 252, 0.14);
+  box-shadow: 0 14px 28px rgba(7, 17, 27, 0.14);
+  background: #050b16;
 }
 
 .brand-text {
