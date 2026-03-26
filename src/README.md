@@ -34,6 +34,12 @@ If you only want to install the plugin manually, use:
 openclaw plugins install @teamclaws/teamclaw
 ```
 
+If you want to force the ClawHub package path once the plugin is published there, use:
+
+```bash
+openclaw plugins install clawhub:@teamclaws/teamclaw
+```
+
 Then enable and configure TeamClaw in your `openclaw.json`.
 
 The published TeamClaw runtime image also preinstalls the `clawhub` CLI, so containerized workers can discover and install skills from ClawHub without an extra bootstrap step.
