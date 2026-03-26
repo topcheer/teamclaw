@@ -34,7 +34,7 @@ If you only want to install the plugin manually, use:
 openclaw plugins install @teamclaws/teamclaw
 ```
 
-If you want to force the ClawHub package path once the plugin is published there, use:
+If you want to force the ClawHub package path, use:
 
 ```bash
 openclaw plugins install clawhub:@teamclaws/teamclaw
@@ -54,8 +54,7 @@ For a first-time setup, the safest path is:
 
 ## Documentation
 
-For complete setup and architecture details, see:
-
+- Website: <https://topcheer.github.io/teamclaw/>
 - Installation guide: <https://github.com/topcheer/teamclaw/blob/main/INSTALL.md>
 - Repository overview: <https://github.com/topcheer/teamclaw/blob/main/README.md>
 - Design notes: <https://github.com/topcheer/teamclaw/blob/main/DESIGN.md>
