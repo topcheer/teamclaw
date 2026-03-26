@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TeamClaw — Build with a real virtual software team</title>
+    <meta
+      name="description"
+      content="TeamClaw turns OpenClaw into a real virtual software team with role routing, live task visibility, Git collaboration, and on-demand workers."
+    />
+    <meta name="theme-color" content="#f0f9ff" />
+    <meta property="og:title" content="TeamClaw" />
+    <meta
+      property="og:description"
+      content="A modern OpenClaw plugin for running product, architecture, development, QA, release, and ops work as one coordinated virtual team."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="assets/screenshots/teamclaw-ui-fixed.png" />
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700&family=Poppins:wght@500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <div class="site-shell">
+      <header class="topbar">
+        <div class="container topbar-inner">
+          <a class="brand" href="#top" aria-label="TeamClaw home">
+            <span class="brand-mark" aria-hidden="true"></span>
+            <span class="brand-text">TeamClaw</span>
+          </a>
+          <nav class="nav" aria-label="Primary">
+            <a href="#proof">Proof</a>
+            <a href="#features">Features</a>
+            <a href="#topologies">Topologies</a>
+            <a href="#install">Install</a>
+          </nav>
+          <div class="topbar-actions">
+            <a class="button button-secondary" href="https://github.com/topcheer/teamclaw" target="_blank" rel="noreferrer">GitHub</a>
+          </div>
+        </div>
+      </header>
+
+      <main id="main-content">
+        <section class="hero" id="top">
+          <div class="container hero-grid">
+            <div class="hero-copy">
+              <div class="eyebrow">OpenClaw plugin · real multi-role delivery</div>
+              <h1>From a single prompt to a real software team.</h1>
+              <p class="hero-lead">
+                TeamClaw turns OpenClaw into a coordinated product, architecture, development,
+                QA, release, and operations workflow — with live task routing, Git-backed
+                collaboration, real model execution, and a web UI you can actually watch.
+              </p>
+              <div class="hero-actions">
+                <a class="button button-primary" href="#install">Install TeamClaw</a>
+                <a class="button button-ghost" href="https://github.com/topcheer/teamclaw/releases/tag/v2026.3.26-2" target="_blank" rel="noreferrer">View release v2026.3.26-2</a>
+              </div>
+              <ul class="hero-points" aria-label="Key TeamClaw capabilities">
+                <li>Real screenshots from live TeamClaw runs — not mockups</li>
+                <li>Validated end-to-end across single, distributed, process, and docker topologies</li>
+                <li>Published on GitHub Releases, npm workflow, and ClawHub package catalog</li>
+              </ul>
+            </div>
+            <div class="hero-panel" aria-label="TeamClaw product summary">
+              <div class="hero-panel-glow"></div>
+              <div class="hero-card hero-card-primary">
+                <div class="hero-card-label">Live workflow</div>
+                <strong>Controller + roles + Git + UI</strong>
+                <p>One shared product flow, isolated worker execution, and visible task state.</p>
+              </div>
+              <div class="hero-card-grid">
+                <article class="metric-card">
+                  <span class="metric-value">4</span>
+                  <span class="metric-label">validated topologies</span>
+                </article>
+                <article class="metric-card">
+                  <span class="metric-value">10</span>
+                  <span class="metric-label">available role types</span>
+                </article>
+                <article class="metric-card">
+                  <span class="metric-value">Real</span>
+                  <span class="metric-label">LLM interaction</span>
+                </article>
+                <article class="metric-card">
+                  <span class="metric-value">Live</span>
+                  <span class="metric-label">GitHub + ClawHub release</span>
+                </article>
+              </div>
+              <div class="hero-proof-strip">
+                <span>Architect</span>
+                <span>Developer</span>
+                <span>QA</span>
+                <span>Release</span>
+                <span>DevOps</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section section-tight" id="proof">
+          <div class="container">
+            <div class="section-head section-head-centered">
+              <span class="eyebrow">Real proof</span>
+              <h2>Captured from actual running instances.</h2>
+              <p>
+                These screenshots are from live TeamClaw sessions running against real tasks and
+                real model interaction. No mock dashboard, no placeholder UI.
+              </p>
+            </div>
+            <div class="gallery-shell">
+              <div class="gallery-tabs" role="tablist" aria-label="TeamClaw screenshots">
+                <button class="gallery-tab is-active" role="tab" aria-selected="true" aria-controls="shot-ui" id="tab-ui" data-gallery-target="shot-ui">
+                  <span class="gallery-tab-title">Polished controller UI</span>
+                  <span class="gallery-tab-copy">Live task board and worker state</span>
+                </button>
+                <button class="gallery-tab" role="tab" aria-selected="false" aria-controls="shot-llm" id="tab-llm" data-gallery-target="shot-llm">
+                  <span class="gallery-tab-title">Real LLM execution</span>
+                  <span class="gallery-tab-copy">Architect, developer, and QA flow on a todo API</span>
+                </button>
+                <button class="gallery-tab" role="tab" aria-selected="false" aria-controls="shot-final" id="tab-final" data-gallery-target="shot-final">
+                  <span class="gallery-tab-title">End-to-end completion</span>
+                  <span class="gallery-tab-copy">A completed calc CLI delivery path</span>
+                </button>
+              </div>
+
+              <div class="gallery-stage">
+                <figure class="gallery-frame is-active" id="shot-ui" role="tabpanel" aria-labelledby="tab-ui">
+                  <img
+                    src="assets/screenshots/teamclaw-ui-fixed.png"
+                    alt="TeamClaw controller interface showing live workers, roles, and completed tasks for a real pomo CLI session."
+                    width="1200"
+                    height="870"
+                    loading="eager"
+                  />
+                  <figcaption>
+                    A real TeamClaw controller board showing worker status, role inventory, and a completed multi-step delivery flow.
+                  </figcaption>
+                </figure>
+                <figure class="gallery-frame" id="shot-llm" role="tabpanel" aria-labelledby="tab-llm" hidden>
+                  <img
+                    src="assets/screenshots/teamclaw-real-llm-test.png"
+                    alt="TeamClaw running a real todo REST API task through architect, developer, and QA roles."
+                    width="1200"
+                    height="870"
+                    loading="lazy"
+                  />
+                  <figcaption>
+                    A live TeamClaw session with real model interaction on a todo REST API flow across architecture, implementation, and QA.
+                  </figcaption>
+                </figure>
+                <figure class="gallery-frame" id="shot-final" role="tabpanel" aria-labelledby="tab-final" hidden>
+                  <img
+                    src="assets/screenshots/teamclaw-final-test.png"
+                    alt="TeamClaw task board showing a completed calc CLI architecture, implementation, and QA delivery flow."
+                    width="1200"
+                    height="870"
+                    loading="lazy"
+                  />
+                  <figcaption>
+                    An end-to-end completed delivery path inside TeamClaw, captured from a real calc CLI run.
+                  </figcaption>
+                </figure>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" id="features">
+          <div class="container">
+            <div class="section-head">
+              <span class="eyebrow">Why TeamClaw</span>
+              <h2>Built for teams that want real orchestration, not demos.</h2>
+              <p>
+                TeamClaw is designed for operators who care about actual role handoff, clear task
+                state, and repeatable delivery flows inside OpenClaw.
+              </p>
+            </div>
+            <div class="card-grid card-grid-3">
+              <article class="feature-card">
+                <div class="icon-wrap">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6.75A2.75 2.75 0 0 1 6.75 4h10.5A2.75 2.75 0 0 1 20 6.75v10.5A2.75 2.75 0 0 1 17.25 20H6.75A2.75 2.75 0 0 1 4 17.25z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+                </div>
+                <h3>Live task routing</h3>
+                <p>Controller-managed assignment, worker status, clarification loops, and visible task history in one UI.</p>
+              </article>
+              <article class="feature-card">
+                <div class="icon-wrap">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7.5A2.5 2.5 0 1 1 9.5 10 2.5 2.5 0 0 1 7 7.5Z"/><path d="M14.5 6A2.5 2.5 0 1 1 17 8.5 2.5 2.5 0 0 1 14.5 6Z"/><path d="M6 18.5c.8-2.2 2.4-3.5 4.8-3.5s4 1.3 4.8 3.5"/><path d="M14 18c.5-1.6 1.7-2.5 3.5-2.5 1.1 0 2 .3 2.5.8"/></svg>
+                </div>
+                <h3>Role-based delivery</h3>
+                <p>Run product, architecture, development, QA, release, DevOps, security, and design work as one coordinated chain.</p>
+              </article>
+              <article class="feature-card">
+                <div class="icon-wrap">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 7h12"/><path d="M6 12h8"/><path d="M6 17h5"/><path d="M18 12l3 3-3 3"/></svg>
+                </div>
+                <h3>Git-backed collaboration</h3>
+                <p>Shared workspace handoff, repo sync, and publish flows are part of the product instead of an afterthought.</p>
+              </article>
+              <article class="feature-card">
+                <div class="icon-wrap">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18"/><path d="M3 12h18"/><circle cx="12" cy="12" r="8"/></svg>
+                </div>
+                <h3>Real model execution</h3>
+                <p>No mock model server required. The validated flows were exercised with real OpenClaw model interaction.</p>
+              </article>
+              <article class="feature-card">
+                <div class="icon-wrap">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4l7 4v8l-7 4-7-4V8z"/><path d="M12 12l7-4"/><path d="M12 12v8"/><path d="M12 12L5 8"/></svg>
+                </div>
+                <h3>Flexible deployment</h3>
+                <p>Start with local roles in one OpenClaw instance and scale into distributed, process, docker, or Kubernetes provisioning.</p>
+              </article>
+              <article class="feature-card">
+                <div class="icon-wrap">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>
+                </div>
+                <h3>Shippable release path</h3>
+                <p>GitHub Releases, npm publishing, ClawHub package metadata, and setup skill distribution are already part of the release story.</p>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section class="section section-contrast" id="topologies">
+          <div class="container">
+            <div class="section-head">
+              <span class="eyebrow">Deployment flexibility</span>
+              <h2>Proven where it matters, expandable where you need it.</h2>
+              <p>
+                TeamClaw has been validated end-to-end on the feasible testbed topologies below,
+                with Kubernetes support still available when your environment is ready for it.
+              </p>
+            </div>
+            <div class="topology-grid">
+              <article class="topology-card">
+                <div class="status-pill">Validated</div>
+                <h3>Single instance + localRoles</h3>
+                <p>The fastest way to get value: one OpenClaw instance, many controller-managed local roles.</p>
+              </article>
+              <article class="topology-card">
+                <div class="status-pill">Validated</div>
+                <h3>Distributed workers</h3>
+                <p>Separate role workers across machines while keeping one controller and one routed delivery flow.</p>
+              </article>
+              <article class="topology-card">
+                <div class="status-pill">Validated</div>
+                <h3>Process provisioning</h3>
+                <p>Launch workers on demand as local processes when you need isolation without container overhead.</p>
+              </article>
+              <article class="topology-card">
+                <div class="status-pill">Validated</div>
+                <h3>Docker provisioning</h3>
+                <p>Spin up containerized workers on demand with the published TeamClaw runtime image.</p>
+              </article>
+              <article class="topology-card topology-card-support">
+                <div class="status-pill status-pill-support">Supported</div>
+                <h3>Kubernetes provisioning</h3>
+                <p>TeamClaw ships Kubernetes-aware worker provisioning, Helm deployment support, and persistent workspace options.</p>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="container process-grid">
+            <div>
+              <div class="section-head">
+                <span class="eyebrow">How it works</span>
+                <h2>A clean flow from raw request to shipped output.</h2>
+              </div>
+            </div>
+            <div class="process-list">
+              <article class="process-step">
+                <span class="process-number">01</span>
+                <h3>Intake and clarify</h3>
+                <p>Controller mode turns raw human input into executable work, asks for clarifications when needed, and keeps the queue honest.</p>
+              </article>
+              <article class="process-step">
+                <span class="process-number">02</span>
+                <h3>Route across roles</h3>
+                <p>Architects, developers, QA, release, DevOps, and other roles receive focused tasks without losing context or shared workspace state.</p>
+              </article>
+              <article class="process-step">
+                <span class="process-number">03</span>
+                <h3>Track and ship</h3>
+                <p>Watch progress in the web UI, keep Git state synchronized, and follow the handoff chain until the flow is actually complete.</p>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" id="install">
+          <div class="container">
+            <div class="section-head">
+              <span class="eyebrow">Install</span>
+              <h2>Start with the easy path. Scale when you're ready.</h2>
+              <p>
+                TeamClaw is designed to be approachable for first setup and powerful enough for more serious controller/worker deployments.
+              </p>
+            </div>
+            <div class="install-grid">
+              <article class="install-card">
+                <div class="install-header">
+                  <h3>Guided installer</h3>
+                  <button class="copy-button" type="button" data-copy-target="install-guided">Copy</button>
+                </div>
+                <p>Best for first-time setup and published runtime image defaults.</p>
+                <pre><code id="install-guided">npx -y @teamclaws/teamclaw install</code></pre>
+              </article>
+              <article class="install-card">
+                <div class="install-header">
+                  <h3>Install from npm</h3>
+                  <button class="copy-button" type="button" data-copy-target="install-npm">Copy</button>
+                </div>
+                <p>Manual plugin install if you already know your OpenClaw environment.</p>
+                <pre><code id="install-npm">openclaw plugins install @teamclaws/teamclaw</code></pre>
+              </article>
+              <article class="install-card">
+                <div class="install-header">
+                  <h3>Install from ClawHub</h3>
+                  <button class="copy-button" type="button" data-copy-target="install-clawhub">Copy</button>
+                </div>
+                <p>Use the published ClawHub package path directly in OpenClaw.</p>
+                <pre><code id="install-clawhub">openclaw plugins install clawhub:@teamclaws/teamclaw</code></pre>
+              </article>
+              <article class="install-card install-card-wide">
+                <div class="install-header">
+                  <h3>Starter controller config</h3>
+                  <button class="copy-button" type="button" data-copy-target="install-config">Copy</button>
+                </div>
+                <p>A clean first setup using one controller and local role workers.</p>
+                <pre><code id="install-config">{
+  "mode": "controller",
+  "port": 9527,
+  "teamName": "my-team",
+  "gitEnabled": true,
+  "taskTimeoutMs": 1800000,
+  "localRoles": ["architect", "developer", "qa"]
+}</code></pre>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section class="section section-cta">
+          <div class="container cta-panel">
+            <div>
+              <span class="eyebrow">Ship with confidence</span>
+              <h2>Use TeamClaw when you want orchestration you can actually verify.</h2>
+              <p>
+                The product, the runtime image, the GitHub release, the ClawHub package, and the setup skill are all live.
+              </p>
+            </div>
+            <div class="cta-actions">
+              <a class="button button-primary" href="https://github.com/topcheer/teamclaw" target="_blank" rel="noreferrer">Explore the repo</a>
+              <a class="button button-secondary" href="https://github.com/topcheer/teamclaw/releases/tag/v2026.3.26-2" target="_blank" rel="noreferrer">Read the release notes</a>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <footer class="footer">
+        <div class="container footer-inner">
+          <div>
+            <a class="brand brand-footer" href="#top">
+              <span class="brand-mark" aria-hidden="true"></span>
+              <span class="brand-text">TeamClaw</span>
+            </a>
+            <p class="footer-copy">An OpenClaw plugin for real virtual software team orchestration.</p>
+          </div>
+          <div class="footer-links">
+            <a href="https://github.com/topcheer/teamclaw" target="_blank" rel="noreferrer">GitHub</a>
+            <a href="https://github.com/topcheer/teamclaw/blob/main/INSTALL.md" target="_blank" rel="noreferrer">Install guide</a>
+            <a href="https://github.com/topcheer/teamclaw/releases/tag/v2026.3.26-2" target="_blank" rel="noreferrer">Release</a>
+          </div>
+        </div>
+      </footer>
+    </div>
+
+    <div class="copy-status" aria-live="polite" aria-atomic="true"></div>
+    <script src="app.js"></script>
+  </body>
+</html>
