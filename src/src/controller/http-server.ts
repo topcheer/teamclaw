@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
+import zlib from "node:zlib";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawPluginApi, PluginLogger } from "../../api.js";
 import type {
@@ -3727,6 +3728,7 @@ async function handleRequest(
           headers: {
             ...req.headers,
             host: `127.0.0.1:${preview.targetPort}`,
+            "accept-encoding": "identity",
             "x-forwarded-for": req.socket.remoteAddress ?? "",
             "x-forwarded-host": req.headers.host ?? "",
             "x-forwarded-proto": "http",
@@ -3744,7 +3746,21 @@ async function handleRequest(
             const chunks: Buffer[] = [];
             proxyRes.on("data", (chunk: Buffer) => chunks.push(chunk));
             proxyRes.on("end", () => {
-              const body = Buffer.concat(chunks).toString("utf-8");
+              let raw = Buffer.concat(chunks);
+              // Decompress if the upstream response is compressed (brotli/gzip/deflate).
+              const encoding = (proxyRes.headers["content-encoding"] ?? "").toLowerCase();
+              try {
+                if (encoding === "br") {
+                  raw = zlib.brotliDecompressSync(raw);
+                } else if (encoding === "gzip") {
+                  raw = zlib.gunzipSync(raw);
+                } else if (encoding === "deflate") {
+                  raw = zlib.inflateSync(raw);
+                }
+              } catch {
+                // If decompression fails, use raw bytes as-is.
+              }
+              const body = raw.toString("utf-8");
               // Rewrite absolute-path references (href="/...", src="/...", action="/...")
               // to include the proxy prefix so all navigation stays within the proxy.
               const rewritten = body.replace(
@@ -3755,8 +3771,11 @@ async function handleRequest(
                 `$1='${proxyPathPrefix}/$2'`,
               );
               const resHeaders = { ...proxyRes.headers };
-              resHeaders["content-length"] = Buffer.byteLength(rewritten, "utf-8");
-              res.writeHead(proxyRes.statusCode ?? 502, resHeaders);
+              // We've decoded and rewritten the body — remove upstream encoding headers.
+              delete resHeaders["content-encoding"];
+              delete resHeaders["transfer-encoding"];
+              resHeaders["content-length"] = String(Buffer.byteLength(rewritten, "utf-8"));
+              res.writeHead(proxyRes.statusCode ?? 200, resHeaders);
               res.end(rewritten);
             });
           } else {
