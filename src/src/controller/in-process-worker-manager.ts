@@ -44,6 +44,11 @@ export class InProcessWorkerManager {
     this.deps = deps;
   }
 
+  /** Late-bind the execution event callback (set after controller HTTP server starts). */
+  setReportExecutionEvent(cb: (taskId: string, event: TaskExecutionEventInput) => Promise<void> | void): void {
+    (this.deps as InProcessWorkerManagerDeps).reportExecutionEvent = cb;
+  }
+
   // ── Worker lifecycle ──────────────────────────────────────────────────
 
   /** Ensure a virtual worker exists for `role`. No-op if already present. */

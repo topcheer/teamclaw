@@ -2288,6 +2288,15 @@ function provisionInProcessWorkersForPendingTasks(deps: ControllerHttpDeps): num
 export function createControllerHttpServer(deps: ControllerHttpDeps): http.Server {
   const { logger, wsServer } = deps;
 
+  // Wire execution event reporting into the in-process worker manager so
+  // progress events (tool calls, assistant messages) from worker subagent
+  // sessions are recorded and broadcast to the dashboard UI.
+  if (deps.inProcessWorkerManager) {
+    deps.inProcessWorkerManager.setReportExecutionEvent((taskId, event) => {
+      recordTaskExecutionEvent(taskId, event, deps);
+    });
+  }
+
   const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
     // CORS preflight
     if (req.method === "OPTIONS") {
