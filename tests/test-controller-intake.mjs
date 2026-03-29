@@ -56,7 +56,7 @@ async function runControllerIntakePromptSmoke() {
   );
   assert.match(
     promptInjectorSource,
-    /You are never a substitute worker\./,
+    /Do not personally perform specialist work/,
     "controller prompt injector should explicitly forbid the controller from doing specialist worker work itself",
   );
   assert.match(

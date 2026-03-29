@@ -2569,7 +2569,7 @@ async function handleRequest(
     // Resolve project directory: inherit from parent run, or generate from title
     let projectDir: string | undefined;
     if (controllerSessionKey) {
-      const runId = resolveControllerRunBySessionKey(controllerSessionKey, getTeamState(), { preferActive: true });
+      const runId = findLatestControllerRunIdForSession(controllerSessionKey, getTeamState(), { preferActive: true });
       const parentRun = runId ? getTeamState()?.controllerRuns[runId] : undefined;
       projectDir = parentRun?.projectDir;
     }
