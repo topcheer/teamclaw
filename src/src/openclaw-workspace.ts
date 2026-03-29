@@ -150,6 +150,45 @@ export function resolveTeamClawWorkspaceDir(
   return path.join(resolveDefaultOpenClawWorkspaceDir(env, homedir), "teamclaw");
 }
 
+/**
+ * Resolve the `projects/` root inside the TeamClaw workspace.
+ * Each orchestration run or ad-hoc task gets its own subdirectory here.
+ */
+export function resolveTeamClawProjectsDir(
+  env?: NodeJS.ProcessEnv,
+  homedir?: () => string,
+): string {
+  return path.join(resolveTeamClawWorkspaceDir(env, homedir), "projects");
+}
+
+/**
+ * Derive a filesystem-safe project slug from free-form text.
+ *
+ * 1. Lower-case, replace non-alphanumeric runs with hyphens, trim to ~50 chars.
+ * 2. Append a short random suffix to avoid collisions.
+ *
+ * Example: "Build a payment system with Stripe" → "build-a-payment-system-with-stripe-k3f9m2"
+ */
+export function deriveProjectSlug(text: string): string {
+  const slug = text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 50)
+    .replace(/-+$/, "");
+  const suffix = randomSuffix(6);
+  return slug ? `${slug}-${suffix}` : suffix;
+}
+
+function randomSuffix(length: number): string {
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let result = "";
+  for (let i = 0; i < length; i++) {
+    result += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return result;
+}
+
 export async function ensureOpenClawWorkspaceMemoryDir(logger: PluginLogger): Promise<string> {
   const workspaceDir = resolveTeamClawWorkspaceDir();
   const memoryDir = path.join(workspaceDir, "memory");

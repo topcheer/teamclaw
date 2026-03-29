@@ -78,7 +78,10 @@ export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
     const taskId = assignment.taskId;
     const sessionKey = getSessionKey(assignment);
     const idempotencyKey = getIdempotencyKey?.(assignment);
-    const taskMessage = buildTaskMessage(taskDescription, taskId, roleDef?.label ?? role, { inlineContract: true });
+    const taskMessage = buildTaskMessage(taskDescription, taskId, roleDef?.label ?? role, {
+      inlineContract: true,
+      projectDir: assignment.projectDir,
+    });
     logger.info(`TeamClaw: executing task ${taskId} as ${role} via subagent`);
 
     async function emitExecutionEvent(event: TaskExecutionEventInput): Promise<void> {
@@ -792,7 +795,12 @@ function safeJsonStringify(value: unknown): string {
   }
 }
 
-function buildTaskMessage(taskDescription: string, taskId: string, roleLabel: string, options?: { inlineContract?: boolean }): string {
+function buildTaskMessage(
+  taskDescription: string,
+  taskId: string,
+  roleLabel: string,
+  options?: { inlineContract?: boolean; projectDir?: string },
+): string {
   const rules = [
     "- Deliver exactly the artifact requested by this task.",
     "- Follow the task verb literally: if the task asks for a brief, plan, matrix, review, package, positioning, or design artifact, produce that artifact and stop there.",
@@ -838,16 +846,27 @@ function buildTaskMessage(taskDescription: string, taskId: string, roleLabel: st
     );
   }
 
-  return [
+  const sections = [
     taskDescription,
     "",
     "## Task Context",
     `Reference: ${taskId}`,
     `Assigned Role: ${roleLabel}`,
-    "",
-    "## Execution Rules",
-    ...rules,
-  ].join("\n");
+  ];
+
+  if (options?.projectDir) {
+    sections.push(
+      "",
+      "## Working Directory",
+      `This task's project directory is: \`projects/${options.projectDir}/\``,
+      "All files you create, read, or modify for this task MUST be inside this directory.",
+      "If the directory is empty, create the necessary structure. If it already has files from prior tasks in the same project, build on them.",
+      "Do NOT place files in the workspace root or any other project's directory.",
+    );
+  }
+
+  sections.push("", "## Execution Rules", ...rules);
+  return sections.join("\n");
 }
 
 /**

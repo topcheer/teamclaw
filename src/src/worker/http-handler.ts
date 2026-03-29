@@ -68,6 +68,9 @@ export function createWorkerHttpHandler(
         const executionIdempotencyKey = typeof body.executionIdempotencyKey === "string"
           ? body.executionIdempotencyKey
           : undefined;
+        const projectDir = typeof body.projectDir === "string"
+          ? body.projectDir
+          : undefined;
         const repo = body.repo && typeof body.repo === "object"
           ? body.repo as TaskAssignmentPayload["repo"]
           : undefined;
@@ -85,6 +88,7 @@ export function createWorkerHttpHandler(
               title,
               description,
               recommendedSkills,
+              projectDir,
               executionSessionKey,
               executionIdempotencyKey,
               repo,

@@ -56,7 +56,7 @@ import {
   normalizeWorkerTaskResultContract,
   enrichDeliverablesWithPreviewInference,
 } from "../interaction-contracts.js";
-import { resolveTeamClawWorkspaceDir } from "../openclaw-workspace.js";
+import { resolveTeamClawWorkspaceDir, resolveTeamClawProjectsDir, deriveProjectSlug } from "../openclaw-workspace.js";
 import { normalizeControllerManifest } from "./orchestration-manifest.js";
 
 export type ControllerHttpDeps = {
@@ -374,6 +374,7 @@ function createControllerRun(
   },
 ): ControllerRunInfo {
   const now = Date.now();
+  const projectSlug = deriveProjectSlug(message);
   const run: ControllerRunInfo = {
     id: generateId(),
     title: buildControllerRunTitle(message, options?.source ?? "human", options?.sourceTaskTitle),
@@ -382,6 +383,7 @@ function createControllerRun(
     sourceTaskId: options?.sourceTaskId,
     sourceTaskTitle: options?.sourceTaskTitle,
     request: message,
+    projectDir: projectSlug,
     createdTaskIds: [],
     status: "pending",
     createdAt: now,
@@ -2037,6 +2039,12 @@ async function dispatchTaskToWorker(
     throw new Error(`task ${taskId} not found`);
   }
 
+  // Ensure project directory exists
+  if (task.projectDir) {
+    const projectPath = path.join(resolveTeamClawProjectsDir(), task.projectDir);
+    try { fs.mkdirSync(projectPath, { recursive: true }); } catch { /* best-effort */ }
+  }
+
   const sharedWorkspace = localWorkerManager?.isLocalWorkerId(worker.id)
     || inProcessWorkerManager?.isInProcessWorkerId(worker.id)
     || false;
@@ -2051,6 +2059,7 @@ async function dispatchTaskToWorker(
     description,
     priority: task.priority,
     recommendedSkills,
+    projectDir: task.projectDir,
     executionSessionKey: executionIdentity.executionSessionKey,
     executionIdempotencyKey: executionIdentity.executionIdempotencyKey,
     repo: repoInfo,
@@ -2559,6 +2568,17 @@ async function handleRequest(
     const now = Date.now();
     const repoState = await refreshControllerRepoState(deps);
 
+    // Resolve project directory: inherit from parent run, or generate from title
+    let projectDir: string | undefined;
+    if (controllerSessionKey) {
+      const runId = resolveControllerRunBySessionKey(controllerSessionKey, getTeamState(), { preferActive: true });
+      const parentRun = runId ? getTeamState()?.controllerRuns[runId] : undefined;
+      projectDir = parentRun?.projectDir;
+    }
+    if (!projectDir) {
+      projectDir = deriveProjectSlug(title);
+    }
+
     const task: TaskInfo = {
       id: taskId,
       title,
@@ -2569,6 +2589,7 @@ async function handleRequest(
       createdBy,
       recommendedSkills: recommendedSkills.length > 0 ? recommendedSkills : undefined,
       controllerSessionKey,
+      projectDir,
       createdAt: now,
       updatedAt: now,
     };

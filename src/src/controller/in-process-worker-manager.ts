@@ -1,6 +1,7 @@
 import type { OpenClawPluginApi, PluginLogger } from "../../api.js";
 import { getRole } from "../roles.js";
 import { createRoleTaskExecutor } from "../task-executor.js";
+import { installRecommendedSkills } from "../worker/skill-installer.js";
 import type {
   PluginConfig,
   RoleId,
@@ -218,6 +219,29 @@ export class InProcessWorkerManager {
     const taskId = assignment.taskId;
 
     try {
+      // Skill preflight — same as external workers
+      if (assignment.recommendedSkills?.length) {
+        try {
+          const skillResult = await installRecommendedSkills(assignment, logger);
+          for (const event of skillResult.events) {
+            await this.reportEvent(taskId, event);
+          }
+          if (skillResult.installed.length > 0) {
+            logger.info(`InProcessWorker: installed skills [${skillResult.installed.join(", ")}] for task ${taskId}`);
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.warn(`InProcessWorker: skill preflight failed for task ${taskId}: ${msg}`);
+          await this.reportEvent(taskId, {
+            type: "error",
+            phase: "skills_preflight_failed",
+            source: "worker",
+            status: "running",
+            message: msg,
+          });
+        }
+      }
+
       logger.info(`InProcessWorker: ${workerId} starting task ${taskId}`);
       const execResult = await record.executor(assignment.description, assignment);
       const resultText = execResult.text;
@@ -233,6 +257,15 @@ export class InProcessWorkerManager {
     } finally {
       record.busy = false;
       record.idleSince = Date.now();
+    }
+  }
+
+  private async reportEvent(taskId: string, event: TaskExecutionEventInput): Promise<void> {
+    if (!this.deps.reportExecutionEvent) return;
+    try {
+      await Promise.resolve(this.deps.reportExecutionEvent(taskId, event));
+    } catch {
+      // best-effort
     }
   }
 

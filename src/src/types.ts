@@ -103,6 +103,7 @@ export type TaskInfo = {
   createdBy: string;
   recommendedSkills?: string[];
   controllerSessionKey?: string;
+  projectDir?: string;
   createdAt: number;
   updatedAt: number;
   startedAt?: number;
@@ -135,6 +136,7 @@ export type TaskAssignmentPayload = {
   description: string;
   priority?: TaskPriority;
   recommendedSkills?: string[];
+  projectDir?: string;
   executionSessionKey?: string;
   executionIdempotencyKey?: string;
   repo?: RepoSyncInfo;
@@ -269,6 +271,7 @@ export type ControllerRunInfo = {
   request: string;
   reply?: string;
   error?: string;
+  projectDir?: string;
   createdTaskIds: string[];
   manifest?: ControllerOrchestrationManifest;
   status: TaskExecutionStatus;
