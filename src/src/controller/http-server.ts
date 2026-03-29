@@ -56,7 +56,7 @@ import {
   normalizeWorkerTaskResultContract,
   enrichDeliverablesWithPreviewInference,
 } from "../interaction-contracts.js";
-import { resolveTeamClawWorkspaceDir, resolveTeamClawProjectsDir, deriveProjectSlug } from "../openclaw-workspace.js";
+import { resolveTeamClawWorkspaceDir, resolveTeamClawProjectsDir, resolveDefaultOpenClawWorkspaceDir, deriveProjectSlug } from "../openclaw-workspace.js";
 import { normalizeControllerManifest } from "./orchestration-manifest.js";
 
 export type ControllerHttpDeps = {
@@ -1634,8 +1634,10 @@ function enrichWithFilesystemHtmlScan(
   }
 
   let workspaceDir: string;
+  let openclawWorkspaceDir: string;
   try {
     workspaceDir = resolveTeamClawWorkspaceDir();
+    openclawWorkspaceDir = resolveDefaultOpenClawWorkspaceDir();
   } catch {
     return null;
   }
@@ -1671,9 +1673,11 @@ function enrichWithFilesystemHtmlScan(
     return null;
   }
 
-  // Prefer top-level HTML directories: pick the first HTML file's directory
+  // Use OpenClaw workspace root as base for relative paths (worker paths and
+  // preview manager both resolve relative to the OpenClaw workspace, not the
+  // TeamClaw subdirectory).
   const candidate = htmlCandidates[0];
-  const relativeDir = path.relative(workspaceDir, candidate.dirPath) || ".";
+  const relativeDir = path.relative(openclawWorkspaceDir, candidate.dirPath) || ".";
   const normalizedDir = relativeDir.replace(/\\/gu, "/");
 
   // Avoid adding a duplicate if a directory deliverable for this path already exists
