@@ -65,7 +65,7 @@ export class InProcessWorkerManager {
       taskTimeoutMs: this.deps.config.taskTimeoutMs,
       getSessionKey: (a) => a.executionSessionKey || `teamclaw-task-${a.taskId}`,
       getIdempotencyKey: (a) => a.executionIdempotencyKey,
-      reportExecutionEvent: this.deps.reportExecutionEvent,
+      reportExecutionEvent: (...args) => this.deps.reportExecutionEvent?.(...args),
     });
 
     this.workers.set(workerId, { workerId, role, executor, busy: false, idleSince: Date.now() });
