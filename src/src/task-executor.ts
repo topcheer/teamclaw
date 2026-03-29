@@ -820,6 +820,65 @@ function buildTaskMessage(
     `- When naming a role, use exact TeamClaw role IDs: ${TEAMCLAW_ROLE_IDS_TEXT}.`,
   ];
 
+  // Verification checklist — workers must verify before submitting results
+  const verificationRules = [
+    "",
+    "## Verification Before Completion",
+    "You MUST verify your work actually functions before submitting the result contract. A human team lead will review your deliverables — incomplete or broken work reflects poorly on the team.",
+    "",
+    "**For code / applications:**",
+    "- Run the code or start the server and confirm it works (no syntax errors, no crashes on startup).",
+    "- If you wrote tests, run them and confirm they pass.",
+    "- For web applications: start the dev server, verify it responds on the expected port. Include the startup command in your result.",
+    "- For CLI tools: run the tool with example arguments and include the sample output in your result.",
+    "- For libraries/modules: write and run a quick smoke test to prove the exports work.",
+    "",
+    "**For documents / designs:**",
+    "- Re-read the document end-to-end and fix any incomplete sections or placeholders.",
+    "- Ensure the document directly answers the original requirement — don't leave TODOs.",
+    "- If the document references diagrams or external resources, verify the references are correct.",
+    "",
+    "**For all deliverables:**",
+    "- List every file you created or modified in the result contract deliverables array.",
+    "- If something didn't work as expected, report it honestly in blockers rather than hiding it.",
+  ];
+  rules.push(...verificationRules);
+
+  // Deliverable metadata guidance — enables preview system and user presentation
+  const deliverableMetadataRules = [
+    "",
+    "## Deliverable Metadata (Critical for Preview System)",
+    "TeamClaw can auto-launch web applications and expose preview URLs. For this to work, you MUST provide accurate metadata in your result contract deliverables:",
+    "",
+    "**Web applications (frontend, full-stack, APIs with UI):**",
+    "```json",
+    '{',
+    '  "kind": "directory",',
+    '  "value": "teamclaw/projects/<project>/",',
+    '  "summary": "Express REST API with React frontend",',
+    '  "artifactType": "web-app",',
+    '  "previewCommand": "npm run dev -- --port {PORT}",',
+    '  "previewCwd": "teamclaw/projects/<project>/",',
+    '  "previewReadyPath": "/"',
+    '}',
+    "```",
+    "- `previewCommand` MUST use `{PORT}` placeholder — the preview system injects the actual port.",
+    "- `previewCwd` is relative to the workspace root.",
+    "- Common commands: `npm run dev -- --port {PORT}`, `python3 -m http.server {PORT}`, `PORT={PORT} go run .`",
+    "",
+    "**Static HTML sites (no build step):**",
+    "- Set `artifactType: \"web-app\"` and leave `previewCommand` empty — the system auto-serves static files.",
+    "",
+    "**CLI tools / scripts:**",
+    "- Use `kind: \"file\"`, include sample invocation and output in `summary`.",
+    '- Example summary: "Run with: python3 rename_images.py --directory ./photos --execute"',
+    "",
+    "**Design documents / reports:**",
+    "- Use `kind: \"file\"` with `artifactType: \"document\"`.",
+    "- Include the key decisions or structure overview in `summary`.",
+  ];
+  rules.push(...deliverableMetadataRules);
+
   if (options?.inlineContract) {
     rules.push(
       "- IMPORTANT: At the very end of your reply, you MUST include a structured result contract as a fenced JSON block. This is how TeamClaw understands your result — without it, your work cannot be routed to the next step. Use this exact format:",

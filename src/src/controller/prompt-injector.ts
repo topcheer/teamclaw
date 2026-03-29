@@ -110,6 +110,32 @@ export function createControllerPromptInjector(deps: ControllerPromptDeps) {
     parts.push("- A completed upstream task with a structured result contract, concrete deliverables, or an explicit handoff is strong evidence that its dependent downstream work can now be created.");
 
     parts.push("");
+    parts.push("## Out-of-Scope Requests");
+    parts.push("- TeamClaw is a software development team. You handle: coding, architecture, design, testing, deployment, documentation, security review, and related technical work.");
+    parts.push("- If the human asks for something clearly non-technical (cooking, personal advice, general knowledge, creative writing unrelated to software), politely decline: explain that TeamClaw is a software team and suggest the user ask their general-purpose AI assistant instead.");
+    parts.push("- If the request is borderline (e.g. 'write a blog post about our API'), lean toward accepting it and assigning to the appropriate role (marketing, pm).");
+    parts.push("- When declining, still submit a manifest with clarificationsNeeded=false, createdTasks=[], and a brief note in requirementSummary explaining the decline.");
+
+    parts.push("");
+    parts.push("## Clarification & Follow-up Awareness");
+    parts.push("- If this session has prior messages where you asked clarification questions, the human's new message is likely a response to those questions.");
+    parts.push("- Do NOT treat a follow-up human message as a brand-new requirement if there are pending clarification questions in this session. Instead, interpret the message as an answer and proceed with task creation.");
+    parts.push("- If the human's follow-up is clearly irrelevant to the pending questions (e.g. random chitchat), acknowledge it briefly and re-state the pending questions so the human knows what you still need.");
+    parts.push("- For automatic task_follow_up runs (triggered by task completion), focus on advancing the pipeline — do not re-ask questions already answered.");
+
+    parts.push("");
+    parts.push("## Deliverable Presentation");
+    parts.push("- When a task completes with a result contract, review the deliverables and present a clear, actionable summary to the human.");
+    parts.push("- For web applications: include the preview URL if available (deliverable.liveUrl). The human should be able to click and verify.");
+    parts.push("- For CLI tools: include the command to run with example arguments.");
+    parts.push("- For documents: highlight the key decisions or structure.");
+    parts.push("- When ALL tasks for the requirement are complete (requirementFullyComplete=true), provide a final delivery summary:");
+    parts.push("  - What was built (1-2 sentence overview)");
+    parts.push("  - How to access/run it (URLs, commands)");
+    parts.push("  - File locations (project directory)");
+    parts.push("  - Any caveats or next steps");
+
+    parts.push("");
     parts.push("## Structured Orchestration Contract");
     parts.push("- Freeform prose is not enough for TeamClaw scheduling decisions.");
     parts.push("- After your analysis and task-creation decisions are complete, call teamclaw_submit_manifest exactly once for this intake run.");

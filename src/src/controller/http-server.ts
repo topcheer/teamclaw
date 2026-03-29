@@ -920,7 +920,7 @@ function ensureControllerManifest(
   return manifest;
 }
 
-function buildControllerFollowUpMessage(task: TaskInfo): string {
+function buildControllerFollowUpMessage(task: TaskInfo, state: TeamState | null): string {
   const parts = [
     `A controller-created TeamClaw task has ${task.status === "failed" ? "failed" : "completed"}.`,
     `Task ID: ${task.id}`,
@@ -942,6 +942,50 @@ function buildControllerFollowUpMessage(task: TaskInfo): string {
     parts.push("", "## Task Error", task.error);
   }
 
+  // Include preview URLs so the controller can present them to the human
+  if (task.resultContract?.deliverables) {
+    const liveDeliverables = task.resultContract.deliverables.filter((d) => d.liveUrl);
+    if (liveDeliverables.length > 0) {
+      parts.push("", "## Live Previews");
+      for (const d of liveDeliverables) {
+        parts.push(`- ${d.summary || d.value}: ${d.liveUrl}`);
+      }
+    }
+  }
+
+  // Inject prior manifest context (deferred tasks, clarification questions) so the
+  // controller knows the original plan and can advance it
+  if (state) {
+    const sessionKey = task.controllerSessionKey;
+    if (sessionKey) {
+      const priorRuns = Object.values(state.controllerRuns)
+        .filter((run) => normalizeControllerIntakeSessionKey(run.sessionKey) === normalizeControllerIntakeSessionKey(sessionKey) && run.manifest)
+        .sort((a, b) => b.updatedAt - a.updatedAt);
+
+      // Collect deferred tasks from the latest manifest that had them
+      const latestWithDeferred = priorRuns.find((run) => run.manifest!.deferredTasks && run.manifest!.deferredTasks.length > 0);
+      if (latestWithDeferred?.manifest?.deferredTasks) {
+        parts.push("", "## Prior Orchestration Plan (Deferred Tasks)");
+        parts.push("These tasks were identified in the original plan but deferred until prerequisites were met:");
+        for (const dt of latestWithDeferred.manifest.deferredTasks) {
+          const blockedBy = dt.blockedBy ? ` [blocked by: ${dt.blockedBy}]` : "";
+          parts.push(`- ${dt.title} (${dt.assignedRole || "any"})${blockedBy}`);
+        }
+      }
+
+      // Collect unanswered clarification questions from prior runs
+      const priorQuestions = priorRuns
+        .flatMap((run) => run.manifest?.clarificationQuestions ?? [])
+        .filter(Boolean);
+      if (priorQuestions.length > 0) {
+        parts.push("", "## Prior Clarification Questions (from earlier runs)");
+        for (const q of priorQuestions.slice(0, 5)) {
+          parts.push(`- ${q}`);
+        }
+      }
+    }
+  }
+
   parts.push(
     "",
     "## Controller Follow-up",
@@ -949,7 +993,8 @@ function buildControllerFollowUpMessage(task: TaskInfo): string {
     "Review the current TeamClaw state before acting.",
     "Create only the next execution-ready task(s) whose prerequisites are now satisfied.",
     "Do not duplicate tasks that already exist, are active, or are already completed.",
-    "If all planned phases are complete and no follow-ups remain, set requirementFullyComplete=true in the manifest.",
+    "If this task produced a web application with a live preview URL, include it in your reply so the human can verify the result.",
+    "If all planned phases are complete and no follow-ups remain, set requirementFullyComplete=true in the manifest and provide a final delivery summary.",
     "If no additional task should be created yet, reply briefly and stop.",
   );
 
@@ -989,7 +1034,7 @@ async function continueControllerWorkflow(task: TaskInfo, deps: ControllerHttpDe
       }
     });
   }
-  await runControllerIntake(buildControllerFollowUpMessage(task), sessionKey, deps, {
+  await runControllerIntake(buildControllerFollowUpMessage(task, deps.getTeamState()), sessionKey, deps, {
     source: "task_follow_up",
     sourceTaskId: task.id,
     sourceTaskTitle: task.title,
