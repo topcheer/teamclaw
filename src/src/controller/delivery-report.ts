@@ -260,8 +260,9 @@ const STATUS_EMOJI: Record<string, string> = {
   blocked: "🚫",
 };
 
-export function renderReportHtml(report: DeliveryReport, controllerBaseUrl?: string): string {
-  const baseUrl = controllerBaseUrl ?? "";
+export function renderReportHtml(report: DeliveryReport, _controllerBaseUrl?: string): string {
+  // Always use origin-relative paths so links work regardless of proxy / gateway
+  const baseUrl = "";
   const statusEmoji = STATUS_EMOJI[report.status] ?? "❓";
   const statusLabel =
     report.status === "completed"

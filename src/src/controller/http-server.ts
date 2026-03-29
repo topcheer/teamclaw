@@ -3866,8 +3866,7 @@ async function handleRequest(
     if (accept.includes("application/json")) {
       sendJson(res, 200, { report });
     } else {
-      const baseUrl = `${req.headers["x-forwarded-proto"] ?? "http"}://${req.headers.host ?? "localhost"}`;
-      const html = renderReportHtml(report, baseUrl);
+      const html = renderReportHtml(report);
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Content-Length": Buffer.byteLength(html, "utf-8") });
       res.end(html);
     }
