@@ -186,7 +186,13 @@ function resolvePreviewInfo(
   const previewId = `preview-${taskId}-${deliverableIndex}`;
   const exact = (state.previews ?? {})[previewId];
   if (exact) {
-    if (exact.status === "healthy") return { url: exact.liveUrl };
+    if (exact.status === "healthy") {
+      // For REST APIs, point iframe to the API docs page instead of root
+      const url = deliverable.artifactType === "rest-api" && exact.previewReadyPath && exact.previewReadyPath !== "/"
+        ? exact.liveUrl.replace(/\/$/, "") + exact.previewReadyPath
+        : exact.liveUrl;
+      return { url };
+    }
     if (exact.status === "failed") return { error: exact.lastError ?? "Preview failed" };
     if (exact.status === "stopped") return { error: "Preview stopped" };
     // launching/starting — still pending
@@ -195,7 +201,12 @@ function resolvePreviewInfo(
   // Fallback: find any healthy preview for this task
   const previews = Object.values(state.previews ?? {});
   const match = previews.find((p) => p.taskId === taskId && p.status === "healthy");
-  if (match) return { url: match.liveUrl };
+  if (match) {
+    const url = deliverable.artifactType === "rest-api" && match.previewReadyPath && match.previewReadyPath !== "/"
+      ? match.liveUrl.replace(/\/$/, "") + match.previewReadyPath
+      : match.liveUrl;
+    return { url };
+  }
   // Check for any failed preview for this task
   const failed = previews.find((p) => p.taskId === taskId && p.status === "failed");
   if (failed) return { error: failed.lastError ?? "Preview failed" };
@@ -323,21 +334,26 @@ export function renderReportHtml(report: DeliveryReport): string {
   const deliverablesHtml = report.deliverables
     .map((d) => {
       const kindIcon =
-        d.artifactType === "web-app" || d.artifactType === "static-site"
-          ? "🌐"
-          : d.artifactType === "document"
-            ? "📝"
-            : d.kind === "directory"
-              ? "📁"
-              : d.kind === "command"
-                ? "💻"
-                : isImagePath(d.path)
-                  ? "🖼️"
-                  : "📄";
+        d.artifactType === "rest-api"
+          ? "🔌"
+          : d.artifactType === "web-app" || d.artifactType === "static-site"
+            ? "🌐"
+            : d.artifactType === "document"
+              ? "📝"
+              : d.kind === "directory"
+                ? "📁"
+                : d.kind === "command"
+                  ? "💻"
+                  : isImagePath(d.path)
+                    ? "🖼️"
+                    : "📄";
       let previewHtml = "";
       if (d.previewUrl) {
+        const previewLabel = d.artifactType === "rest-api"
+          ? "📖 Open API Documentation"
+          : "🔗 Open Live Preview";
         previewHtml = `<div class="deliverable-preview">
-            <a href="${escapeHtml(d.previewUrl)}" target="_blank" class="preview-link">🔗 Open Live Preview</a>
+            <a href="${escapeHtml(d.previewUrl)}" target="_blank" class="preview-link">${previewLabel}</a>
             <iframe src="${escapeHtml(d.previewUrl)}" class="preview-iframe" loading="lazy" sandbox="allow-scripts allow-same-origin allow-forms"></iframe>
           </div>`;
       } else if (d.previewError) {

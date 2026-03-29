@@ -150,7 +150,7 @@ export type WorkerTaskResultDeliverable = {
   kind: "file" | "directory" | "command" | "artifact" | "note";
   value: string;
   summary?: string;
-  artifactType?: "web-app" | "static-site" | "binary" | "document";
+  artifactType?: "web-app" | "static-site" | "rest-api" | "binary" | "document";
   previewCommand?: string;
   previewCwd?: string;
   previewReadyPath?: string;

@@ -211,7 +211,7 @@ export class PreviewManager {
   }
 
   private static isPreviewableDeliverable(d: WorkerTaskResultDeliverable): boolean {
-    return d.artifactType === "web-app" || d.artifactType === "static-site";
+    return d.artifactType === "web-app" || d.artifactType === "static-site" || d.artifactType === "rest-api";
   }
 
   async restorePreviewsOnStartup(): Promise<void> {
@@ -265,7 +265,7 @@ export class PreviewManager {
     const specs: DynamicPreviewSpec[] = [];
 
     for (const [deliverableIndex, deliverable] of contract.deliverables.entries()) {
-      if (deliverable.artifactType !== "web-app" && deliverable.artifactType !== "static-site") {
+      if (deliverable.artifactType !== "web-app" && deliverable.artifactType !== "static-site" && deliverable.artifactType !== "rest-api") {
         continue;
       }
       const rawCommand = normalizeOptionalText(deliverable.previewCommand) ?? GENERIC_SERVE_COMMAND;
