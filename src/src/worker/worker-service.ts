@@ -7,11 +7,13 @@ import { MessageQueue } from "./message-queue.js";
 import { createWorkerHttpHandler } from "./http-handler.js";
 import { ensureOpenClawWorkspaceMemoryDir } from "../openclaw-workspace.js";
 
+export type TaskExecutorResultLike = string | { text: string; contract?: Record<string, unknown> };
+
 export type WorkerServiceDeps = {
   config: PluginConfig;
   logger: PluginLogger;
   onIdentityEstablished: (identity: WorkerIdentity) => void;
-  taskExecutor?: (taskDescription: string, assignment: TaskAssignmentPayload) => Promise<string>;
+  taskExecutor?: (taskDescription: string, assignment: TaskAssignmentPayload) => Promise<TaskExecutorResultLike>;
   prepareTaskAssignment?: (assignment: TaskAssignmentPayload) => Promise<void> | void;
   publishTaskAssignment?: (assignment: TaskAssignmentPayload, result: string) => Promise<void> | void;
   cancelTaskExecution?: (taskId: string, sessionKey?: string) => Promise<boolean> | boolean;
@@ -31,7 +33,7 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
   const cancelledTaskIds = new Set<string>();
 
   const taskExecutor = externalTaskExecutor
-    ? async (assignment: TaskAssignmentPayload): Promise<string> => {
+    ? async (assignment: TaskAssignmentPayload): Promise<{ text: string; contract?: Record<string, unknown> }> => {
         const taskId = assignment.taskId;
         cancelledTaskIds.delete(taskId);
         activeTaskId = taskId;
@@ -39,11 +41,12 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
         try {
           await deps.prepareTaskAssignment?.(assignment);
           const taskPrompt = [assignment.title.trim(), assignment.description.trim()].filter(Boolean).join("\n\n");
-          const result = await externalTaskExecutor(taskPrompt, assignment);
+          const raw = await externalTaskExecutor(taskPrompt, assignment);
           if (cancelledTaskIds.has(taskId)) {
             throw new Error("Task execution cancelled by controller");
           }
-          await deps.publishTaskAssignment?.(assignment, result);
+          const result = typeof raw === "string" ? { text: raw } : raw;
+          await deps.publishTaskAssignment?.(assignment, result.text);
           return result;
         } finally {
           activeTaskId = undefined;
@@ -55,16 +58,20 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
       }
     : undefined;
 
-  function reportTaskResult(taskId: string, result: string, error: string | null): void {
+  function reportTaskResult(taskId: string, result: string, error: string | null, contract?: Record<string, unknown>): void {
     if (cancelledTaskIds.has(taskId)) {
       logger.info(`Worker: suppressing result report for cancelled task ${taskId}`);
       return;
     }
     if (!controllerUrl) return;
+    const body: Record<string, unknown> = { result, error, workerId };
+    if (contract) {
+      body.resultContract = contract;
+    }
     fetch(`${controllerUrl}/api/v1/tasks/${taskId}/result`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ result, error, workerId }),
+      body: JSON.stringify(body),
     }).catch((err) => {
       logger.error(`Worker: failed to report task result: ${String(err)}`);
     });

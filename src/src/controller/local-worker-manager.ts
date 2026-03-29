@@ -19,7 +19,7 @@ import {
   resolveDefaultOpenClawConfigPath,
   resolveDefaultOpenClawStateDir,
   resolveDefaultTeamClawRuntimeRootDir,
-  resolveDefaultOpenClawWorkspaceDir,
+  resolveTeamClawWorkspaceDir,
 } from "../openclaw-workspace.js";
 
 const LOCAL_WORKER_RESTART_DELAY_MS = 1_000;
@@ -38,7 +38,7 @@ type ManagedLocalWorkerRecord = {
 };
 
 export class LocalWorkerManager {
-  private readonly controllerUrl: string;
+  private controllerUrl: string;
   private readonly managedWorkers = new Map<string, ManagedLocalWorkerRecord>();
   private workerBaseDir: string | null = null;
   private stoppingAll = false;
@@ -66,6 +66,15 @@ export class LocalWorkerManager {
 
   hasLocalWorkers(): boolean {
     return this.managedWorkers.size > 0;
+  }
+
+  workerCount(): number {
+    return this.managedWorkers.size;
+  }
+
+  /** Update the controller URL after the HTTP server binds its actual port. */
+  setControllerUrl(url: string): void {
+    this.controllerUrl = url;
   }
 
   isLocalWorker(_worker: Pick<WorkerInfo, "id" | "url" | "transport">): boolean {
@@ -132,7 +141,7 @@ export class LocalWorkerManager {
     );
 
     const sourceStateDir = resolveDefaultOpenClawStateDir();
-    const sourceWorkspaceDir = resolveDefaultOpenClawWorkspaceDir();
+    const sourceWorkspaceDir = resolveTeamClawWorkspaceDir();
     const sourceConfigPath = resolveDefaultOpenClawConfigPath();
     const baseConfig = await loadOpenClawConfig(sourceConfigPath);
 
@@ -215,6 +224,7 @@ export class LocalWorkerManager {
     record.stateDir = path.join(record.homeDir, ".openclaw");
 
     await copyStateDir(sourceStateDir, record.stateDir);
+    await symlinkSharedStateDirs(sourceStateDir, record.stateDir);
     await linkSharedWorkspace(record.stateDir, sourceWorkspaceDir);
     await clearCopiedWorkerIdentity(record.stateDir);
     await this.writeWorkerConfig(record, baseConfig);
@@ -365,9 +375,31 @@ async function linkSharedWorkspace(targetStateDir: string, sourceWorkspaceDir: s
   }
 }
 
+async function symlinkSharedStateDirs(sourceStateDir: string, targetStateDir: string): Promise<void> {
+  for (const dirName of SYMLINK_STATE_DIRS) {
+    const sourcePath = path.join(sourceStateDir, dirName);
+    const targetPath = path.join(targetStateDir, dirName);
+    try {
+      await fs.stat(sourcePath);
+    } catch {
+      continue; // Source doesn't exist; skip.
+    }
+    await fs.rm(targetPath, { recursive: true, force: true });
+    try {
+      await fs.symlink(sourcePath, targetPath, "dir");
+    } catch {
+      // Best-effort; worker will still function if extensions are found via other means.
+    }
+  }
+}
+
 async function clearCopiedWorkerIdentity(targetStateDir: string): Promise<void> {
   await fs.rm(path.join(targetStateDir, "plugins", "teamclaw", "worker-identity.json"), { force: true });
 }
+
+// Directories that are large and can be safely shared (read-only or irrelevant for workers).
+const SYMLINK_STATE_DIRS = ["extensions", "browser"];
+const SKIP_STATE_DIRS = ["logs", "qqbot", "media", "cron"];
 
 function shouldCopyStatePath(sourcePath: string, sourceStateDir: string): boolean {
   const relativePath = path.relative(sourceStateDir, sourcePath);
@@ -376,10 +408,16 @@ function shouldCopyStatePath(sourcePath: string, sourceStateDir: string): boolea
   }
 
   const normalizedPath = relativePath.split(path.sep).join("/");
+  const topSegment = normalizedPath.split("/")[0];
+
   if (normalizedPath === "workspace" || normalizedPath.startsWith("workspace/")) {
     return false;
   }
   if (normalizedPath === "plugins/teamclaw/worker-identity.json") {
+    return false;
+  }
+  // Skip dirs that will be symlinked or are not needed per-worker.
+  if (SYMLINK_STATE_DIRS.includes(topSegment) || SKIP_STATE_DIRS.includes(topSegment)) {
     return false;
   }
   return true;

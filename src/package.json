@@ -36,6 +36,7 @@
     "cli.mjs",
     "index.ts",
     "openclaw.plugin.json",
+    "skills/",
     "src/",
     "tsconfig.json"
   ],

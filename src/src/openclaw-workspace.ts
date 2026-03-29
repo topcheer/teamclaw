@@ -12,6 +12,8 @@ This workspace is shared by TeamClaw controller and workers.
 Rules:
 - Treat task-provided file paths as hints; verify they exist before reading or editing.
 - Use the shared \`memory/\` directory for lightweight notes when useful.
+- Check \`memory/patterns.md\` for previously discovered codebase patterns before starting work.
+- Check for \`.teamclaw-notes.md\` files in directories you work on for prior context.
 - Report meaningful progress during longer tasks.
 - If requirements or environment details are missing and work cannot continue safely, request clarification instead of guessing.
 `;
@@ -29,6 +31,13 @@ If the project files you expect are missing:
 const DEFAULT_HEARTBEAT_MD = `# HEARTBEAT.md
 
 # Keep this file empty (or with only comments) to skip heartbeat API calls.
+`;
+
+const DEFAULT_PATTERNS_MD = `# Codebase Patterns
+
+Reusable patterns discovered by TeamClaw workers during task execution.
+This file is automatically maintained — new patterns are appended as workers complete tasks.
+Read this file before starting work to benefit from previously discovered knowledge.
 `;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -129,8 +138,20 @@ export function resolveDefaultTeamClawRuntimeRootDir(
   return path.join(path.dirname(resolveDefaultOpenClawWorkspaceDir(env, homedir)), "teamclaw-runtimes");
 }
 
+/**
+ * TeamClaw-specific workspace directory — a `teamclaw/` subdirectory inside the
+ * OpenClaw workspace.  All TeamClaw controller and worker activity is scoped here
+ * so that it doesn't pollute or get polluted by other workspace content.
+ */
+export function resolveTeamClawWorkspaceDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): string {
+  return path.join(resolveDefaultOpenClawWorkspaceDir(env, homedir), "teamclaw");
+}
+
 export async function ensureOpenClawWorkspaceMemoryDir(logger: PluginLogger): Promise<string> {
-  const workspaceDir = resolveDefaultOpenClawWorkspaceDir();
+  const workspaceDir = resolveTeamClawWorkspaceDir();
   const memoryDir = path.join(workspaceDir, "memory");
   try {
     await fs.mkdir(workspaceDir, { recursive: true });
@@ -138,6 +159,7 @@ export async function ensureOpenClawWorkspaceMemoryDir(logger: PluginLogger): Pr
     await ensureFileIfMissing(path.join(workspaceDir, "AGENTS.md"), DEFAULT_AGENTS_MD);
     await ensureFileIfMissing(path.join(workspaceDir, "BOOTSTRAP.md"), DEFAULT_BOOTSTRAP_MD);
     await ensureFileIfMissing(path.join(workspaceDir, "HEARTBEAT.md"), DEFAULT_HEARTBEAT_MD);
+    await ensureFileIfMissing(path.join(memoryDir, "patterns.md"), DEFAULT_PATTERNS_MD);
   } catch (err) {
     logger.warn(
       `TeamClaw: failed to ensure OpenClaw workspace memory dir at ${memoryDir}: ${

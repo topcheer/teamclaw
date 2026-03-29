@@ -101,5 +101,6 @@ export function normalizeControllerManifest(raw: unknown): ControllerOrchestrati
     deferredTasks: normalizeManifestDeferredTasks(input.deferredTasks),
     handoffPlan: normalizeOptionalManifestText(input.handoffPlan),
     notes: normalizeOptionalManifestText(input.notes),
+    requirementFullyComplete: Boolean(input.requirementFullyComplete),
   };
 }

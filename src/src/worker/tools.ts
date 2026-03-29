@@ -274,10 +274,15 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
               kind: Type.String({ description: "Deliverable kind: file, directory, command, artifact, or note" }),
               value: Type.String({ description: "Deliverable identifier, path, or note" }),
               summary: Type.Optional(Type.String({ description: "Optional short note about this deliverable" })),
+              artifactType: Type.Optional(Type.String({ description: "Artifact type: web-app, static-site, binary, or document" })),
+              previewCommand: Type.Optional(Type.String({ description: "Command to start a live preview server (for web-app artifacts)" })),
+              previewCwd: Type.Optional(Type.String({ description: "Working directory for the preview command" })),
+              previewReadyPath: Type.Optional(Type.String({ description: "Path to poll for health (default /)" })),
             }),
           ),
         ),
         keyPoints: Type.Optional(Type.Array(Type.String({ description: "Important decisions, findings, or implementation notes" }))),
+        discoveredPatterns: Type.Optional(Type.Array(Type.String({ description: "Reusable codebase patterns discovered during this task (e.g. 'This codebase uses X for Y', 'Always update Z when changing W'). These are consolidated into workspace memory for future tasks." }))),
         blockers: Type.Optional(Type.Array(Type.String({ description: "Any unresolved blockers or risks" }))),
         followUps: Type.Optional(
           Type.Array(
@@ -308,6 +313,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
           summary: params.summary,
           deliverables: params.deliverables,
           keyPoints: params.keyPoints,
+          discoveredPatterns: params.discoveredPatterns,
           blockers: params.blockers,
           followUps: params.followUps,
           questions: params.questions,

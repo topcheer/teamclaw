@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginLogger } from "../../api.js";
 import { normalizeRecommendedSkills } from "../roles.js";
-import { resolveDefaultOpenClawWorkspaceDir } from "../openclaw-workspace.js";
+import { resolveTeamClawWorkspaceDir } from "../openclaw-workspace.js";
 import type { TaskAssignmentPayload, TaskExecutionEventInput } from "../types.js";
 
 type SkillCli = "openclaw" | "clawhub";
@@ -146,7 +146,7 @@ export async function installRecommendedSkills(
   logger: PluginLogger,
 ): Promise<SkillInstallResult> {
   const recommendedSkills = normalizeRecommendedSkills(assignment.recommendedSkills ?? []);
-  const workspaceDir = resolveDefaultOpenClawWorkspaceDir();
+  const workspaceDir = resolveTeamClawWorkspaceDir();
   const events: TaskExecutionEventInput[] = [];
   const installed: string[] = [];
   const skipped: string[] = [];

@@ -1,0 +1,49 @@
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "zai/glm-5-turbo"
+      },
+      "compaction": {
+        "mode": "safeguard"
+      },
+      "maxConcurrent": 4,
+      "subagents": {
+        "maxConcurrent": 8
+      }
+    }
+  },
+  "messages": {
+    "ackReactionScope": "group-mentions"
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "gateway": {
+    "auth": {
+      "mode": "token",
+      "token": "5a3a6d8d5337a7fe1e1993bd4f5893b3346dad2b5038d494"
+    }
+  },
+  "meta": {
+    "lastTouchedVersion": "2026.3.26",
+    "lastTouchedAt": "2026-03-27T10:43:41.494Z"
+  },
+  "plugins": {
+    "enabled": true,
+    "entries": {
+      "teamclaw": {
+        "enabled": true,
+        "config": {
+          "mode": "worker",
+          "role": "qa",
+          "controllerUrl": "http://tc-controller:9527",
+          "teamName": "calc-project"
+        }
+      }
+    }
+  }
+}

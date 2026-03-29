@@ -1,0 +1,16 @@
+{
+  "entries": {
+    "/home/node/.openclaw/openclaw.json": {
+      "lastKnownGood": {
+        "hash": "e28aa73b19af953d342d00db5b9eb8d791ea45052c99731cc6aa93053c3d4448",
+        "bytes": 1208,
+        "mtimeMs": 1774582844389.0962,
+        "ctimeMs": 1774582844389.401,
+        "hasMeta": false,
+        "gatewayMode": "local",
+        "observedAt": "2026-03-27T03:43:08.618Z"
+      },
+      "lastObservedSuspiciousSignature": "74b39126c641a2ebc0228d1135842f06ec37ad2734b3ccf938c17bc31474d490:gateway-mode-missing-vs-last-good"
+    }
+  }
+}

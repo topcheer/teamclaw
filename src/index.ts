@@ -10,6 +10,7 @@ import { createWorkerTools } from "./src/worker/tools.js";
 import { MessageQueue } from "./src/worker/message-queue.js";
 import { createControllerService } from "./src/controller/controller-service.js";
 import { LocalWorkerManager } from "./src/controller/local-worker-manager.js";
+import { InProcessWorkerManager } from "./src/controller/in-process-worker-manager.js";
 import { createControllerPromptInjector } from "./src/controller/prompt-injector.js";
 import { createControllerTools } from "./src/controller/controller-tools.js";
 import { publishWorkerRepo, syncWorkerRepo } from "./src/git-collaboration.js";
@@ -34,12 +35,26 @@ export default definePluginEntry({
 
 function registerController(api: OpenClawPluginApi, config: ReturnType<typeof parsePluginConfig>) {
   const logger = api.logger;
-  const localWorkerManager = new LocalWorkerManager({
-    config,
-    logger,
-    runtime: api.runtime,
-  });
+  let localWorkerManager: LocalWorkerManager | undefined;
+  let inProcessWorkerManager: InProcessWorkerManager | undefined;
+
+  if (config.processModel === "multi") {
+    localWorkerManager = new LocalWorkerManager({
+      config,
+      logger,
+      runtime: api.runtime,
+    });
+  } else {
+    // single-process: virtual workers as subagent sessions
+    inProcessWorkerManager = new InProcessWorkerManager({
+      config,
+      logger,
+      runtime: api.runtime,
+    });
+  }
+
   let getControllerTeamState = (): TeamState | null => null;
+  let controllerUrl = `http://127.0.0.1:${config.port}`;
 
   // Service (starts HTTP server + mDNS + WebSocket)
   api.registerService(createControllerService({
@@ -47,22 +62,29 @@ function registerController(api: OpenClawPluginApi, config: ReturnType<typeof pa
     logger,
     runtime: api.runtime,
     localWorkerManager,
+    inProcessWorkerManager,
     onTeamStateAvailable: (getter) => {
       getControllerTeamState = getter;
+    },
+    onActualPort: (port) => {
+      controllerUrl = `http://127.0.0.1:${port}`;
+      localWorkerManager?.setControllerUrl(controllerUrl);
     },
   }));
 
   // Prompt injection
   api.on("before_prompt_build", async (_event: unknown, ctx: { sessionKey?: string | null }) => {
-    const localIdentity = localWorkerManager.getIdentityForSession(ctx.sessionKey);
-    const localMessageQueue = localWorkerManager.getMessageQueueForSession(ctx.sessionKey);
-    if (localIdentity && localMessageQueue) {
-      const injector = createWorkerPromptInjector(
-        { ...config, role: localIdentity.role },
-        () => localIdentity,
-        localMessageQueue,
-      );
-      return injector() ?? {};
+    if (localWorkerManager) {
+      const localIdentity = localWorkerManager.getIdentityForSession(ctx.sessionKey);
+      const localMessageQueue = localWorkerManager.getMessageQueueForSession(ctx.sessionKey);
+      if (localIdentity && localMessageQueue) {
+        const injector = createWorkerPromptInjector(
+          { ...config, role: localIdentity.role },
+          () => localIdentity,
+          localMessageQueue,
+        );
+        return injector() ?? {};
+      }
     }
 
     const state = getControllerTeamState() ?? await loadTeamState(config.teamName);
@@ -74,14 +96,15 @@ function registerController(api: OpenClawPluginApi, config: ReturnType<typeof pa
   });
 
   // Tools - register all controller tools via factory returning an array
-  const controllerUrl = `http://localhost:${config.port}`;
   api.registerTool((ctx: { sessionKey?: string | null }) => {
-    const localIdentity = localWorkerManager.getIdentityForSession(ctx.sessionKey);
-    if (localIdentity) {
-      return createWorkerTools({
-        config: { ...config, role: localIdentity.role },
-        getIdentity: () => localIdentity,
-      });
+    if (localWorkerManager) {
+      const localIdentity = localWorkerManager.getIdentityForSession(ctx.sessionKey);
+      if (localIdentity) {
+        return createWorkerTools({
+          config: { ...config, role: localIdentity.role },
+          getIdentity: () => localIdentity,
+        });
+      }
     }
 
     return createControllerTools({

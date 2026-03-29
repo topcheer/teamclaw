@@ -15,6 +15,7 @@ import {
   resolveDefaultTeamClawRuntimeRootDir,
 } from "../openclaw-workspace.js";
 import { ROLES } from "../roles.js";
+import { inferTaskRole } from "./role-inference.js";
 import type {
   PluginConfig,
   ProvisionedWorkerRecord,
@@ -40,6 +41,8 @@ export type WorkerProvisioningManagerDeps = {
   logger: PluginLogger;
   getTeamState: () => TeamState | null;
   updateTeamState: (updater: (state: TeamState) => void) => TeamState;
+  /** Actual HTTP port once the controller server has bound (may differ from config.port). */
+  actualControllerPort?: number;
 };
 
 type LaunchSpec = {
@@ -68,7 +71,7 @@ interface WorkerProvisionerBackend {
 }
 
 export class WorkerProvisioningManager {
-  private readonly deps: WorkerProvisioningManagerDeps;
+  private deps: WorkerProvisioningManagerDeps;
   private readonly backend: WorkerProvisionerBackend | null;
   private baseConfigPromise: Promise<Record<string, unknown>> | null = null;
   private reconcilePromise: Promise<void> | null = null;
@@ -78,6 +81,11 @@ export class WorkerProvisioningManager {
   constructor(deps: WorkerProvisioningManagerDeps) {
     this.deps = deps;
     this.backend = createProvisionerBackend(deps.config, deps.logger);
+  }
+
+  /** Update the actual controller port after the HTTP server binds. */
+  setActualPort(port: number): void {
+    this.deps = { ...this.deps, actualControllerPort: port };
   }
 
   isEnabled(): boolean {
@@ -539,29 +547,7 @@ export class WorkerProvisioningManager {
   }
 
   private inferTaskRole(task: TaskInfo): RoleId | null {
-    if (task.assignedRole) {
-      return task.assignedRole;
-    }
-
-    const text = `${task.title} ${task.description}`.toLowerCase();
-    let bestRole: RoleId | null = null;
-    let bestScore = 0;
-
-    for (const role of ROLES) {
-      const roleTokens = [
-        role.id,
-        role.label,
-        ...role.capabilities,
-      ].flatMap((entry) => entry.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length > 2));
-      const uniqueTokens = [...new Set(roleTokens)];
-      const score = uniqueTokens.reduce((count, token) => count + (text.includes(token) ? 1 : 0), 0);
-      if (score > bestScore) {
-        bestScore = score;
-        bestRole = role.id;
-      }
-    }
-
-    return bestScore > 0 ? bestRole : null;
+    return inferTaskRole(task);
   }
 
   private computeRoleDemand(state: TeamState, role: RoleId): number {
@@ -592,7 +578,8 @@ export class WorkerProvisioningManager {
       return this.deps.config.workerProvisioningControllerUrl;
     }
     if (this.backend?.type === "process") {
-      return `http://127.0.0.1:${this.deps.config.port}`;
+      const port = this.deps.actualControllerPort ?? this.deps.config.port;
+      return `http://127.0.0.1:${port}`;
     }
     throw new Error(
       `workerProvisioningControllerUrl is required when workerProvisioningType=${this.backend?.type}`,
@@ -794,6 +781,7 @@ class DockerProvisioner implements WorkerProvisionerBackend {
         Image: this.config.workerProvisioningImage,
         Cmd: ["sh", "-lc", script],
         Env: Object.entries(env).map(([key, value]) => `${key}=${value}`),
+        User: "root",
         Labels: {
           "teamclaw.managed": "true",
           "teamclaw.team": this.config.teamName,
@@ -1084,7 +1072,13 @@ function buildProvisionedWorkerConfig(
 
   const gateway = ensureRecord(config.gateway);
   gateway.mode = "local";
-  gateway.bind = "loopback";
+  // Workers running inside Docker/K8s containers must bind on all
+  // interfaces so the controller (in a sibling container) can reach them.
+  gateway.bind =
+    controllerConfig.workerProvisioningType === "docker" ||
+    controllerConfig.workerProvisioningType === "kubernetes"
+      ? "lan"
+      : "loopback";
   gateway.port = spec.gatewayPort;
   delete gateway.remote;
   config.gateway = gateway;
@@ -1299,7 +1293,7 @@ function resolveGatewayEntrypoint(): string {
 }
 
 function resolveCurrentTeamClawPluginRootDir(): string {
-  return path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
+  return process.env.TEAMCLAW_BAKED_IN === "true" ? "" : path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
 }
 
 function attachChildLogs(child: ChildProcess, logger: PluginLogger, prefix: string): void {
@@ -1422,7 +1416,8 @@ function buildContainerBootstrapScript(): string {
 function buildDockerBinds(config: PluginConfig): string[] {
   const binds = [...config.workerProvisioningDockerMounts];
   if (!binds.some((bind) => extractDockerBindTarget(bind) === DEFAULT_DOCKER_BUNDLED_TEAMCLAW_PLUGIN_DIR)) {
-    binds.unshift(`${resolveCurrentTeamClawPluginRootDir()}:${DEFAULT_DOCKER_BUNDLED_TEAMCLAW_PLUGIN_DIR}:ro`);
+    const _pd = resolveCurrentTeamClawPluginRootDir();
+    if (_pd) binds.unshift(`${_pd}:${DEFAULT_DOCKER_BUNDLED_TEAMCLAW_PLUGIN_DIR}:ro`);
   }
   if (config.workerProvisioningDockerWorkspaceVolume && config.workerProvisioningWorkspaceRoot) {
     binds.unshift(`${config.workerProvisioningDockerWorkspaceVolume}:${config.workerProvisioningWorkspaceRoot}`);

@@ -72,11 +72,17 @@ function buildConfigSchema() {
         localRoles: {
           type: "array" as const,
           default: [],
-          description: "Controller-local roles executed in this same OpenClaw instance",
+          description: "(Deprecated) Use processModel instead. Static local roles for backward compatibility.",
           items: {
             type: "string" as const,
             enum: ROLE_IDS,
           },
+        },
+        processModel: {
+          type: "string" as const,
+          enum: ["single", "multi"],
+          default: "single",
+          description: "Worker execution model: 'single' runs workers in-process as subagent sessions, 'multi' spawns separate gateway processes",
         },
         workerProvisioningType: {
           type: "string" as const,
@@ -232,8 +238,12 @@ function buildConfigSchema() {
         help: "Author email for TeamClaw-managed workspace commits",
       },
       localRoles: {
-        label: "Local Roles",
-        help: "Controller mode only: run these roles as local virtual workers inside the same OpenClaw instance",
+        label: "Local Roles (Deprecated)",
+        help: "Use Process Model instead",
+      },
+      processModel: {
+        label: "Process Model",
+        help: "'single' runs workers in the same process; 'multi' spawns separate gateway processes",
       },
       workerProvisioningType: {
         label: "On-demand Worker Provider",

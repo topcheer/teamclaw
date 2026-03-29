@@ -19,7 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 OPENCLAW_DIR="${PROJECT_ROOT}/openclaw"
 COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.test.yml"
-IMAGE_NAME="openclaw:teamclaw-test"
+IMAGE_NAME="registry.iot2.win/openclaw:teamclaw-test"
 SKIP_BUILD=false
 KEEP_CONTAINERS=false
 TOPOLOGY="distributed"
@@ -148,6 +148,16 @@ prepare_distributed_configs() {
   TEAMCLAW_DEV_CONFIG_DIR="${TEAMCLAW_DISTRIBUTED_CONFIG_DIR}/worker-dev"
   TEAMCLAW_QA_CONFIG_DIR="${TEAMCLAW_DISTRIBUTED_CONFIG_DIR}/worker-qa"
   TEAMCLAW_ARCH_CONFIG_DIR="${TEAMCLAW_DISTRIBUTED_CONFIG_DIR}/worker-arch"
+
+  # Strip worker-provisioning fields from controller config for distributed topology
+  # (S3 uses standalone compose containers, not managed provisioning)
+  node -e "
+const fs = require('fs');
+const cfg = JSON.parse(fs.readFileSync('${TEAMCLAW_CONTROLLER_CONFIG_DIR}/openclaw.json', 'utf8'));
+const tc = (cfg.plugins?.entries?.teamclaw?.config) ?? {};
+Object.keys(tc).filter(k => k.startsWith('workerProvisioning')).forEach(k => delete tc[k]);
+fs.writeFileSync('${TEAMCLAW_CONTROLLER_CONFIG_DIR}/openclaw.json', JSON.stringify(cfg, null, 2) + '\n');
+"
 }
 
 prepare_runtime_build_context() {
@@ -245,6 +255,7 @@ PY
 
 docker_compose() {
   OPENCLAW_PLATFORM="$OPENCLAW_PLATFORM" \
+    TEST_ENV_FILE="${SCRIPT_DIR}/.env" \
     TEAMCLAW_SINGLE_CONFIG_DIR="$TEAMCLAW_SINGLE_CONFIG_DIR" \
     TEAMCLAW_CONTROLLER_CONFIG_DIR="$TEAMCLAW_CONTROLLER_CONFIG_DIR" \
     TEAMCLAW_DEV_CONFIG_DIR="$TEAMCLAW_DEV_CONFIG_DIR" \
@@ -296,6 +307,17 @@ cleanup() {
     else
       echo "  compose override preserved at: ${COMPOSE_OVERRIDE_FILE}"
     fi
+  fi
+  # Kill any stray openclaw processes left on the controller port
+  # (e.g. orphaned openclaw-gateway from S1/S2 process provisioner).
+  # Only target openclaw processes to avoid killing Docker daemon.
+  if command -v lsof &>/dev/null; then
+    for pid in $(lsof -i :"${HOST_CONTROLLER_PORT}" -t 2>/dev/null); do
+      cmd=$(ps -p "$pid" -o command= 2>/dev/null || echo "")
+      case "$cmd" in
+        *openclaw*) kill -9 "$pid" 2>/dev/null || true ;;
+      esac
+    done
   fi
   exit $exit_code
 }
@@ -387,6 +409,26 @@ fi
 # Ensure clean state
 docker_compose --progress=quiet down -v 2>/dev/null || true
 
+# Kill any stray openclaw processes occupying the controller port
+# (e.g. orphaned openclaw-gateway from S1/S2 process provisioner).
+# IMPORTANT: Only kill processes whose command line contains "openclaw"
+# to avoid killing OrbStack Docker daemon or other unrelated processes.
+if command -v lsof &>/dev/null; then
+  for pid in $(lsof -i :"${HOST_CONTROLLER_PORT}" -t 2>/dev/null); do
+    cmd=$(ps -p "$pid" -o command= 2>/dev/null || echo "")
+    case "$cmd" in
+      *openclaw*)
+        echo -e "  ${YELLOW}WARNING: Killing stray openclaw process PID ${pid} occupying port ${HOST_CONTROLLER_PORT}${NC}"
+        kill "$pid" 2>/dev/null || true
+        ;;
+      *)
+        echo -e "  ${YELLOW}WARNING: Port ${HOST_CONTROLLER_PORT} occupied by non-openclaw process PID ${pid} (${cmd:0:60}); skipping${NC}"
+        ;;
+    esac
+  done
+  sleep 1
+fi
+
 OPENCLAW_IMAGE="$IMAGE_NAME" docker_compose up -d
 
 echo -e "${GREEN}  Containers started.${NC}"
@@ -427,11 +469,29 @@ docker_compose --progress=quiet ps 2>/dev/null || docker ps --filter "name=tc-" 
 # Step 5: Run API tests
 # ============================================================
 echo ""
-echo -e "${BOLD}[5/5]${NC} Running API tests..."
+echo -e "${BOLD}[5/6]${NC} Running API tests..."
 echo ""
 
 bash "${SCRIPT_DIR}/test-api.sh" "${BASE_URL}" "${TOPOLOGY}"
 TEST_EXIT=$?
+
+# ============================================================
+# Step 6: Run E2E delivery test (LLM-powered)
+# ============================================================
+echo ""
+echo -e "${BOLD}[6/6]${NC} Running E2E delivery test..."
+echo ""
+
+REQUIREMENT_FILE="${SCRIPT_DIR}/requirements/s3-edu-platform.md"
+if [ -f "${SCRIPT_DIR}/test-e2e-delivery.sh" ] && [ -f "$REQUIREMENT_FILE" ]; then
+  bash "${SCRIPT_DIR}/test-e2e-delivery.sh" "${BASE_URL}" "$REQUIREMENT_FILE" "${TOPOLOGY}" 900
+  E2E_EXIT=$?
+else
+  echo -e "${YELLOW}SKIP: test-e2e-delivery.sh or requirement file not found${NC}"
+  E2E_EXIT=0
+fi
+
+TEST_EXIT=$((TEST_EXIT | E2E_EXIT))
 
 echo ""
 if [ $TEST_EXIT -eq 0 ]; then

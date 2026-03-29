@@ -25,6 +25,7 @@ import type {
   WorkerProgressContract,
   WorkerInfo,
   WorkerTaskResultContract,
+  WorkerTaskResultDeliverable,
 } from "../types.js";
 import {
   parseJsonBody,
@@ -37,11 +38,14 @@ import { listWorkspaceTree, readWorkspaceFile, readWorkspaceRawFile } from "../w
 import { ROLES, normalizeRecommendedSkills, resolveRecommendedSkillsForRole } from "../roles.js";
 import { buildRepoSyncInfo, ensureControllerGitRepo, exportControllerGitBundle, importControllerGitBundle } from "../git-collaboration.js";
 import type { LocalWorkerManager } from "./local-worker-manager.js";
+import type { InProcessWorkerManager } from "./in-process-worker-manager.js";
 import { TaskRouter } from "./task-router.js";
 import { MessageRouter } from "./message-router.js";
 import { TeamWebSocketServer } from "./websocket.js";
 import type { WorkerProvisioningManager } from "./worker-provisioning.js";
+import type { PreviewManager } from "./preview-manager.js";
 import { createControllerPromptInjector } from "./prompt-injector.js";
+import { inferTaskRole, FALLBACK_ROLE } from "./role-inference.js";
 import { buildControllerNoWorkersMessage, shouldBlockControllerWithoutWorkers } from "./controller-capacity.js";
 import {
   backfillWorkerProgressContract,
@@ -50,7 +54,9 @@ import {
   normalizeTaskHandoffContract,
   normalizeWorkerProgressContract,
   normalizeWorkerTaskResultContract,
+  enrichDeliverablesWithPreviewInference,
 } from "../interaction-contracts.js";
+import { resolveTeamClawWorkspaceDir } from "../openclaw-workspace.js";
 import { normalizeControllerManifest } from "./orchestration-manifest.js";
 
 export type ControllerHttpDeps = {
@@ -63,7 +69,9 @@ export type ControllerHttpDeps = {
   messageRouter: MessageRouter;
   wsServer: TeamWebSocketServer;
   localWorkerManager?: LocalWorkerManager;
+  inProcessWorkerManager?: InProcessWorkerManager;
   workerProvisioningManager?: WorkerProvisioningManager | null;
+  previewManager?: PreviewManager;
 };
 
 const MAX_TASK_EXECUTION_EVENTS = 250;
@@ -76,6 +84,9 @@ const CONTROLLER_RUN_WAIT_SLICE_MS = 30_000;
 const CONTROLLER_RATE_LIMIT_STALL_PROBE_MS = 5 * 60 * 1000;
 const CONTROLLER_RATE_LIMIT_PROBE_TIMEOUT_MS = 60_000;
 const CONTROLLER_RATE_LIMIT_WAITING_SENTINEL = "TEAMCLAW_STILL_WAITING";
+const CONTROLLER_INTAKE_MAX_RETRIES = 2;
+const CONTROLLER_INTAKE_RETRY_DELAY_MS = 3_000;
+const CONTROLLER_INTAKE_RETRYABLE_ERROR_PATTERN = /(500|502|503|server error|internal error|overloaded|unavailable)/i;
 const controllerIntakeQueue = new Map<string, Promise<void>>();
 
 export function buildControllerIntakeSystemPrompt(
@@ -727,6 +738,9 @@ function buildControllerManifestEventMessage(manifest: ControllerOrchestrationMa
   if (manifest.clarificationsNeeded) {
     parts.push(`clarifications=${manifest.clarificationQuestions.length}`);
   }
+  if (manifest.requirementFullyComplete) {
+    parts.push("requirementFullyComplete=true");
+  }
   return parts.join(" ");
 }
 
@@ -848,6 +862,15 @@ function buildBackfilledControllerManifest(
   for (const roleId of inferManifestRolesFromText(rawReply)) {
     inferredRoles.add(roleId);
   }
+  for (const roleId of inferManifestRolesFromText(request)) {
+    inferredRoles.add(roleId);
+  }
+  // When no roles could be inferred at all (model didn't call the tool and didn't
+  // mention any role names), fall back to "developer" as the most general purpose role
+  // so that the intake run still has usable machine-readable state.
+  if (inferredRoles.size === 0) {
+    inferredRoles.add("developer");
+  }
   const clarificationQuestions = inferClarificationQuestionsFromReply(rawReply);
   return {
     version: "1.0",
@@ -926,6 +949,7 @@ function buildControllerFollowUpMessage(task: TaskInfo): string {
     "Review the current TeamClaw state before acting.",
     "Create only the next execution-ready task(s) whose prerequisites are now satisfied.",
     "Do not duplicate tasks that already exist, are active, or are already completed.",
+    "If all planned phases are complete and no follow-ups remain, set requirementFullyComplete=true in the manifest.",
     "If no additional task should be created yet, reply briefly and stop.",
   );
 
@@ -983,9 +1007,32 @@ async function runControllerIntake(
   },
 ): Promise<{ sessionKey: string; runId: string; reply: string; controllerRunId: string }> {
   const normalizedSessionKey = normalizeControllerIntakeSessionKey(sessionKey);
-  return withSerializedControllerIntake(normalizedSessionKey, () =>
-    runControllerIntakeUnlocked(message, normalizedSessionKey, deps, options),
-  );
+  return withSerializedControllerIntake(normalizedSessionKey, async () => {
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt <= CONTROLLER_INTAKE_MAX_RETRIES; attempt++) {
+      try {
+        return await runControllerIntakeUnlocked(message, normalizedSessionKey, deps, options);
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        const errorText = lastError.message;
+        // Only retry on transient server errors (500/502/503), not on client errors,
+        // timeouts, or other failures that retrying won't fix.
+        if (
+          attempt === CONTROLLER_INTAKE_MAX_RETRIES
+          || !CONTROLLER_INTAKE_RETRYABLE_ERROR_PATTERN.test(errorText)
+          || errorText.includes("timed out")
+        ) {
+          throw lastError;
+        }
+        // Record a visible retry event so the human can see what happened.
+        deps.logger.warn(
+          `Controller: intake attempt ${attempt + 1} failed with transient error: ${errorText.slice(0, 200)}. Retrying in ${CONTROLLER_INTAKE_RETRY_DELAY_MS * (attempt + 1) / 1000}s...`,
+        );
+        await new Promise<void>((resolve) => setTimeout(resolve, CONTROLLER_INTAKE_RETRY_DELAY_MS * (attempt + 1)));
+      }
+    }
+    throw lastError!;
+  });
 }
 
 async function runControllerIntakeUnlocked(
@@ -1329,6 +1376,10 @@ function buildTaskAssignmentDescription(task: TaskInfo, state: TeamState | null,
   if (recommendedSkillsContext) {
     parts.push("", recommendedSkillsContext);
   }
+  const patternsContext = buildConsolidatedPatternsContext();
+  if (patternsContext) {
+    parts.push("", patternsContext);
+  }
   const recentContext = buildRecentCompletedTaskContext(task, state);
   if (recentContext) {
     parts.push("", recentContext);
@@ -1465,7 +1516,9 @@ async function cancelTaskExecution(
   }
 
   let cancelled = false;
-  if (deps.localWorkerManager?.isLocalWorkerId(workerId)) {
+  if (deps.inProcessWorkerManager?.isInProcessWorkerId(workerId)) {
+    cancelled = await deps.inProcessWorkerManager.cancelTask(workerId, taskId);
+  } else if (deps.localWorkerManager?.isLocalWorkerId(workerId)) {
     cancelled = await deps.localWorkerManager.cancelTaskExecution(workerId, taskId);
   } else {
     try {
@@ -1518,6 +1571,98 @@ function workspaceRequestErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : "Workspace request failed";
 }
 
+/**
+ * Strategy 4: When text-based enrichment found no HTML file references,
+ * scan the workspace filesystem for HTML files and create a web-app deliverable.
+ * This handles workers that return abstract summaries without mentioning specific paths.
+ */
+function enrichWithFilesystemHtmlScan(
+  contract: WorkerTaskResultContract,
+): WorkerTaskResultContract | null {
+  const existingWebApp = contract.deliverables.find((d) => d.artifactType === "web-app");
+  if (existingWebApp) {
+    const cwd = existingWebApp.previewCwd?.trim();
+    if (cwd && cwd !== "." && cwd !== "./") {
+      return null;
+    }
+    // Fall through — existing web-app has root previewCwd, try to improve it
+  }
+
+  let workspaceDir: string;
+  try {
+    workspaceDir = resolveTeamClawWorkspaceDir();
+  } catch {
+    return null;
+  }
+
+  // Recursively scan the workspace for HTML files (up to 3 levels deep)
+  const MAX_DEPTH = 3;
+  const htmlCandidates: { dirPath: string; filename: string }[] = [];
+
+  function scanDir(dir: string, depth: number) {
+    if (depth > MAX_DEPTH) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === ".git") continue;
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        scanDir(fullPath, depth + 1);
+      } else if (entry.isFile() && (entry.name.endsWith(".html") || entry.name.endsWith(".htm"))) {
+        if (!entry.name.includes(".config.") && !entry.name.includes(".test.") && !entry.name.includes(".spec.")) {
+          htmlCandidates.push({ dirPath: dir, filename: entry.name });
+        }
+      }
+    }
+  }
+
+  scanDir(workspaceDir, 0);
+
+  if (htmlCandidates.length === 0) {
+    return null;
+  }
+
+  // Prefer top-level HTML directories: pick the first HTML file's directory
+  const candidate = htmlCandidates[0];
+  const relativeDir = path.relative(workspaceDir, candidate.dirPath) || ".";
+  const normalizedDir = relativeDir.replace(/\\/gu, "/");
+
+  // Avoid adding a duplicate if a directory deliverable for this path already exists
+  const existingDir = contract.deliverables.find(
+    (d) => d.kind === "directory" && d.value.replace(/\\/gu, "/").replace(/\/$/u, "") === normalizedDir,
+  );
+  if (existingDir && existingDir.artifactType === "web-app" && existingWebApp?.previewCwd?.trim() !== ".") {
+    // Existing web-app already has a specific, non-root directory — leave it alone.
+    return null;
+  }
+
+  const newDeliverable: WorkerTaskResultDeliverable = {
+    kind: "directory",
+    value: normalizedDir,
+    summary: `Web application at ${normalizedDir}`,
+    artifactType: "web-app",
+    previewCommand: "npx -y serve -l {PORT}",
+    previewCwd: normalizedDir,
+    previewReadyPath: "/",
+  };
+
+  const newDeliverables = [...contract.deliverables];
+  if (existingDir) {
+    // Update existing directory deliverable with web-app fields
+    const idx = newDeliverables.indexOf(existingDir);
+    // Always take the filesystem scan's directory path, which is more specific
+    newDeliverables[idx] = { ...existingDir, ...newDeliverable };
+  } else {
+    newDeliverables.push(newDeliverable);
+  }
+
+  return { ...contract, deliverables: newDeliverables };
+}
+
 function applyTaskResult(
   taskId: string,
   result: string,
@@ -1536,6 +1681,17 @@ function applyTaskResult(
     task.error = error;
     task.completedAt = Date.now();
     task.updatedAt = Date.now();
+    // Re-enrich deliverables now that the full result text is available.
+    if (!error && task.resultContract) {
+      let enriched = enrichDeliverablesWithPreviewInference(task.resultContract, result);
+      if (!enriched) {
+        // Text-based enrichment failed — scan the workspace filesystem for HTML files.
+        enriched = enrichWithFilesystemHtmlScan(task.resultContract);
+      }
+      if (enriched) {
+        task.resultContract = enriched;
+      }
+    }
     completionEvent = appendTaskExecutionEvent(task, {
       type: error ? "error" : "lifecycle",
       phase: error ? "result_failed" : "result_completed",
@@ -1602,10 +1758,35 @@ function ensureTaskResultContract(
     return undefined;
   }
   if (currentTask.resultContract) {
+    // Worker submitted a structured contract — but it may be missing preview
+    // fields (artifactType, previewCommand, etc.). Enrich deliverables
+    // so the PreviewManager can auto-launch previews.
+    let enriched = enrichDeliverablesWithPreviewInference(currentTask.resultContract, result);
+    if (!enriched) {
+      // Text-based enrichment failed — scan the workspace filesystem for HTML files.
+      enriched = enrichWithFilesystemHtmlScan(currentTask.resultContract);
+    }
+    if (enriched) {
+      deps.updateTeamState((teamState) => {
+        const task = teamState.tasks[taskId];
+        if (task) {
+          task.resultContract = enriched;
+          task.updatedAt = Date.now();
+        }
+      });
+      return enriched;
+    }
     return currentTask.resultContract;
   }
 
-  const contract = backfillWorkerTaskResultContract(currentTask, result, error);
+  let contract = backfillWorkerTaskResultContract(currentTask, result, error);
+  if (!error) {
+    const enriched = enrichDeliverablesWithPreviewInference(contract, result)
+      ?? enrichWithFilesystemHtmlScan(contract);
+    if (enriched) {
+      contract = enriched;
+    }
+  }
   deps.updateTeamState((teamState) => {
     const task = teamState.tasks[taskId];
     if (!task || task.resultContract) {
@@ -1670,7 +1851,76 @@ function buildResultContractSection(task: TaskInfo): string {
   if (contract.notes) {
     lines.push(`Notes: ${contract.notes}`);
   }
+  if (contract.discoveredPatterns && contract.discoveredPatterns.length > 0) {
+    lines.push("Discovered patterns:");
+    for (const pattern of contract.discoveredPatterns) {
+      lines.push(`- ${pattern}`);
+    }
+  }
   return lines.join("\n");
+}
+
+const MAX_PATTERNS_FILE_BYTES = 64 * 1024;
+
+function consolidateDiscoveredPatterns(
+  contract: WorkerTaskResultContract,
+  taskId: string,
+  role: string | undefined,
+  logger: PluginLogger,
+): void {
+  const patterns = contract.discoveredPatterns;
+  if (!patterns || patterns.length === 0) {
+    return;
+  }
+  try {
+    const workspaceDir = resolveTeamClawWorkspaceDir();
+    const patternsFile = path.join(workspaceDir, "memory", "patterns.md");
+    fs.mkdirSync(path.join(workspaceDir, "memory"), { recursive: true });
+
+    let currentSize = 0;
+    try {
+      currentSize = fs.statSync(patternsFile).size;
+    } catch {
+      // File doesn't exist yet; will be created by append.
+    }
+    if (currentSize > MAX_PATTERNS_FILE_BYTES) {
+      logger.info(`Controller: patterns.md already ${currentSize} bytes, skipping consolidation for ${taskId}`);
+      return;
+    }
+
+    const roleLabel = role ?? "unknown";
+    const timestamp = new Date().toISOString().slice(0, 10);
+    const section = [
+      "",
+      `## ${timestamp} — ${taskId} (${roleLabel})`,
+      ...patterns.map((p) => `- ${p}`),
+    ].join("\n") + "\n";
+
+    fs.appendFileSync(patternsFile, section, "utf8");
+    logger.info(`Controller: consolidated ${patterns.length} pattern(s) from ${taskId} into patterns.md`);
+  } catch (err) {
+    logger.warn(`Controller: failed to consolidate patterns for ${taskId}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+function buildConsolidatedPatternsContext(): string {
+  try {
+    const workspaceDir = resolveTeamClawWorkspaceDir();
+    const patternsFile = path.join(workspaceDir, "memory", "patterns.md");
+    const content = fs.readFileSync(patternsFile, "utf8").trim();
+    // Only inject if there are actual patterns (more than just the header)
+    const lines = content.split("\n").filter((l: string) => l.startsWith("- "));
+    if (lines.length === 0) {
+      return "";
+    }
+    return [
+      "## Discovered Codebase Patterns",
+      "Previous workers discovered these reusable patterns. Apply them where relevant:",
+      ...lines,
+    ].join("\n");
+  } catch {
+    return "";
+  }
 }
 
 function revertTaskAssignment(taskId: string, workerId: string, deps: ControllerHttpDeps): TaskInfo | undefined {
@@ -1723,7 +1973,13 @@ async function deliverMessageToWorker(
   message: TeamMessage,
   deps: ControllerHttpDeps,
 ): Promise<void> {
-  const { localWorkerManager } = deps;
+  const { localWorkerManager, inProcessWorkerManager } = deps;
+
+  // In-process workers don't have external HTTP — messages are no-ops for now
+  if (inProcessWorkerManager?.isInProcessWorkerId(worker.id)) {
+    deps.logger.info(`Controller: message to in-process worker ${worker.id} (queued internally)`);
+    return;
+  }
 
   if (localWorkerManager?.isLocalWorkerId(worker.id)) {
     const queued = await localWorkerManager.queueMessage(worker.id, message);
@@ -1774,14 +2030,16 @@ async function dispatchTaskToWorker(
   worker: WorkerInfo,
   deps: ControllerHttpDeps,
 ): Promise<void> {
-  const { getTeamState, localWorkerManager } = deps;
+  const { getTeamState, localWorkerManager, inProcessWorkerManager } = deps;
   const state = getTeamState();
   const task = state?.tasks[taskId];
   if (!task) {
     throw new Error(`task ${taskId} not found`);
   }
 
-  const sharedWorkspace = localWorkerManager?.isLocalWorkerId(worker.id) ?? false;
+  const sharedWorkspace = localWorkerManager?.isLocalWorkerId(worker.id)
+    || inProcessWorkerManager?.isInProcessWorkerId(worker.id)
+    || false;
   const repoState = await refreshControllerRepoState(deps);
   const repoInfo = buildRepoSyncInfo(repoState, sharedWorkspace);
   const description = buildTaskAssignmentDescription(task, state ?? null, repoInfo);
@@ -1797,6 +2055,15 @@ async function dispatchTaskToWorker(
     executionIdempotencyKey: executionIdentity.executionIdempotencyKey,
     repo: repoInfo,
   };
+
+  // In-process workers: dispatch via direct function call
+  if (inProcessWorkerManager?.isInProcessWorkerId(worker.id)) {
+    const accepted = await inProcessWorkerManager.dispatchTask(worker.id, assignment);
+    if (accepted) {
+      return;
+    }
+    deps.logger.warn(`Controller: in-process dispatch unavailable for ${worker.id}, falling back to worker URL`);
+  }
 
   if (localWorkerManager?.isLocalWorkerId(worker.id)) {
     const accepted = await localWorkerManager.dispatchTask(worker.id, assignment);
@@ -1893,7 +2160,7 @@ async function autoAssignPendingTasks(
   deps: ControllerHttpDeps,
   preferredWorkerId?: string,
 ): Promise<TaskInfo[]> {
-  const { getTeamState, taskRouter, wsServer, logger } = deps;
+  const { getTeamState, updateTeamState, taskRouter, wsServer, logger, inProcessWorkerManager } = deps;
   const attemptedPairs = new Set<string>();
   const assignedTasks: TaskInfo[] = [];
 
@@ -1909,6 +2176,13 @@ async function autoAssignPendingTasks(
       .find(({ task, worker }) => !attemptedPairs.has(`${task.id}:${worker.id}`));
 
     if (!nextAssignment) {
+      // No idle worker matched — try on-demand provisioning for in-process mode.
+      if (inProcessWorkerManager && !preferredWorkerId) {
+        const provisioned = provisionInProcessWorkersForPendingTasks(deps);
+        if (provisioned > 0) {
+          continue; // re-check assignments with the newly provisioned workers
+        }
+      }
       break;
     }
 
@@ -1933,6 +2207,75 @@ async function autoAssignPendingTasks(
     : "auto-assign");
 
   return assignedTasks;
+}
+
+/**
+ * On-demand in-process worker provisioning.  Scans pending tasks, infers the
+ * needed role, and creates a virtual worker if none exists for that role.
+ * Returns the number of workers newly provisioned.
+ */
+function provisionInProcessWorkersForPendingTasks(deps: ControllerHttpDeps): number {
+  const { getTeamState, updateTeamState, inProcessWorkerManager, logger } = deps;
+  if (!inProcessWorkerManager) {
+    return 0;
+  }
+
+  const state = getTeamState();
+  if (!state) {
+    return 0;
+  }
+
+  const pendingTasks = Object.values(state.tasks).filter(
+    (t) => t.status === "pending" && !t.assignedWorkerId,
+  );
+  if (pendingTasks.length === 0) {
+    return 0;
+  }
+
+  // Collect roles that already have at least one non-offline worker.
+  const coveredRoles = new Set(
+    Object.values(state.workers)
+      .filter((w) => w.status !== "offline")
+      .map((w) => w.role),
+  );
+
+  let provisioned = 0;
+  const rolesProvisionedThisPass = new Set<RoleId>();
+
+  for (const task of pendingTasks) {
+    const role = inferTaskRole(task) ?? FALLBACK_ROLE;
+
+    if (rolesProvisionedThisPass.has(role)) {
+      continue; // already provisioned this role in the current pass
+    }
+
+    // Check if an idle worker already exists for this role.
+    if (inProcessWorkerManager.getIdleWorkerForRole(role)) {
+      continue;
+    }
+
+    // Check maxPerRole cap — do not exceed it for in-process workers either.
+    const activeForRole = Object.values(state.workers).filter(
+      (w) => w.role === role && w.status !== "offline",
+    ).length;
+    const maxPerRole = deps.config.workerProvisioningMaxPerRole || 1;
+    if (activeForRole >= maxPerRole) {
+      continue;
+    }
+
+    inProcessWorkerManager.ensureWorker(role);
+    rolesProvisionedThisPass.add(role);
+    provisioned++;
+    logger.info(`Controller: on-demand provisioned in-process worker for role "${role}" (triggered by task ${task.id})`);
+  }
+
+  if (provisioned > 0) {
+    // Sync newly created workers into TeamState.
+    inProcessWorkerManager.syncState(state);
+    updateTeamState(() => {}); // persist
+  }
+
+  return provisioned;
 }
 
 export function createControllerHttpServer(deps: ControllerHttpDeps): http.Server {
@@ -2104,6 +2447,10 @@ async function handleRequest(
     const workerId = pathname.split("/").pop()!;
     if (deps.localWorkerManager?.isLocalWorkerId(workerId)) {
       sendError(res, 400, "Local workers are managed by controller config");
+      return;
+    }
+    if (deps.inProcessWorkerManager?.isInProcessWorkerId(workerId)) {
+      sendError(res, 400, "In-process workers are managed by controller config");
       return;
     }
 
@@ -2538,6 +2885,16 @@ async function handleRequest(
       }
       task.resultContract = contract;
       task.updatedAt = Date.now();
+      // Enrich deliverables with preview inference so PreviewManager can auto-launch.
+      // Workers typically don't include artifactType/previewCommand in their contracts.
+      const existingResult = task.result ?? "";
+      let enriched = enrichDeliverablesWithPreviewInference(contract, existingResult);
+      if (!enriched) {
+        enriched = enrichWithFilesystemHtmlScan(contract);
+      }
+      if (enriched) {
+        task.resultContract = enriched;
+      }
     });
     recordTaskExecutionEvent(taskId, {
       type: "output",
@@ -2548,6 +2905,7 @@ async function handleRequest(
       workerId,
       role: currentTask.assignedRole,
     }, deps);
+    consolidateDiscoveredPatterns(contract, taskId, currentTask.assignedRole, logger);
     sendJson(res, 201, { task: serializeTask(state.tasks[taskId]) });
     return;
   }
@@ -2593,6 +2951,11 @@ async function handleRequest(
 
     const updatedTask = applyTaskResult(taskId, result, error, deps);
     ensureTaskResultContract(taskId, result, error, deps);
+    if (!error) {
+      deps.previewManager?.syncTaskPreviews(taskId).catch((err) => {
+        logger.warn(`Controller: failed to sync previews for ${taskId}: ${String(err)}`);
+      });
+    }
     if (!workerId || workerId !== previousWorkerId) {
       await cancelTaskExecution(taskId, previousWorkerId, "manual result submission", deps);
     }
@@ -2644,6 +3007,14 @@ async function handleRequest(
       return;
     }
 
+    // When a result contract is backfilled, the task is effectively complete —
+    // trigger preview sync so that any web-app deliverables get previewed.
+    if (recorded.event?.phase === "result_contract_backfilled") {
+      deps.previewManager?.syncTaskPreviews(taskId).catch((err) => {
+        logger.warn(`Controller: failed to sync previews for ${taskId}: ${String(err)}`);
+      });
+    }
+
     sendJson(res, 201, {
       task: serializeTask(recorded.task),
       execution: buildTaskExecutionSummary(recorded.task.execution),
@@ -2687,6 +3058,18 @@ async function handleRequest(
     if (!updatedRun) {
       sendError(res, 404, "Controller run not found");
       return;
+    }
+
+    if (manifest.requirementFullyComplete) {
+      logger.info(`Controller: requirement fully complete for session ${sessionKey} (run ${runId})`);
+      wsServer.broadcastUpdate({
+        type: "requirement:complete",
+        data: {
+          runId,
+          sessionKey,
+          requirementSummary: manifest.requirementSummary,
+        },
+      });
     }
 
     sendJson(res, 201, {
@@ -3189,6 +3572,7 @@ async function handleRequest(
         controllerRuns: [],
         messages: [],
         clarifications: [],
+        previews: [],
         repo: null,
         pendingClarificationCount: 0,
       });
@@ -3205,6 +3589,7 @@ async function handleRequest(
         .map((run) => serializeControllerRun(run)),
       messages: state.messages,
       clarifications,
+      previews: Object.values(state.previews ?? {}),
       repo: state.repo ?? null,
       taskCount: Object.keys(state.tasks).length,
       workerCount: Object.keys(state.workers).length,
@@ -3217,6 +3602,83 @@ async function handleRequest(
   if (req.method === "GET" && pathname === "/api/v1/roles") {
     sendJson(res, 200, { roles: ROLES });
     return;
+  }
+
+  // /api/v1/previews/:id/* — proxy to preview subprocess
+  if (req.method === "GET" || req.method === "HEAD" || req.method === "POST" || req.method === "PUT" || req.method === "DELETE") {
+    const previewPrefix = "/api/v1/previews/";
+    if (pathname.startsWith(previewPrefix)) {
+      const remaining = pathname.slice(previewPrefix.length);
+      const slashIdx = remaining.indexOf("/");
+      const previewId = slashIdx >= 0 ? remaining.slice(0, slashIdx) : remaining;
+      const subPath = slashIdx >= 0 ? remaining.slice(slashIdx) : "/";
+
+      const state = deps.getTeamState();
+      const preview = state?.previews?.[previewId];
+      if (!preview || preview.status !== "healthy") {
+        const status = preview?.status ?? "unknown";
+        const errMsg = preview?.lastError;
+        sendJson(res, 503, { error: "Preview not available", previewId, status, lastError: errMsg ?? undefined });
+        return;
+      }
+
+      const proxyPathPrefix = `/api/v1/previews/${encodeURIComponent(previewId)}`;
+      const proxyReq = http.request(
+        {
+          hostname: "127.0.0.1",
+          port: preview.targetPort,
+          path: subPath + (requestUrl.search || ""),
+          method: req.method,
+          headers: {
+            ...req.headers,
+            host: `127.0.0.1:${preview.targetPort}`,
+            "x-forwarded-for": req.socket.remoteAddress ?? "",
+            "x-forwarded-host": req.headers.host ?? "",
+            "x-forwarded-proto": "http",
+          },
+        },
+        (proxyRes: http.IncomingMessage) => {
+          const contentType = (proxyRes.headers["content-type"] ?? "").toLowerCase();
+          if (proxyRes.statusCode !== 200 && proxyRes.statusCode !== 201 && proxyRes.statusCode !== 301 && proxyRes.statusCode !== 302 && proxyRes.statusCode !== 304) {
+            res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
+            proxyRes.pipe(res);
+            return;
+          }
+
+          if (contentType.includes("text/html")) {
+            const chunks: Buffer[] = [];
+            proxyRes.on("data", (chunk: Buffer) => chunks.push(chunk));
+            proxyRes.on("end", () => {
+              const body = Buffer.concat(chunks).toString("utf-8");
+              // Rewrite absolute-path references (href="/...", src="/...", action="/...")
+              // to include the proxy prefix so all navigation stays within the proxy.
+              const rewritten = body.replace(
+                /\b(href|src|action)\s*=\s*"\/([^"]*)"/g,
+                `$1="${proxyPathPrefix}/$2"`,
+              ).replace(
+                /\b(href|src|action)\s*=\s*'\/([^']*)'/g,
+                `$1='${proxyPathPrefix}/$2'`,
+              );
+              const resHeaders = { ...proxyRes.headers };
+              resHeaders["content-length"] = Buffer.byteLength(rewritten, "utf-8");
+              res.writeHead(proxyRes.statusCode ?? 502, resHeaders);
+              res.end(rewritten);
+            });
+          } else {
+            res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
+            proxyRes.pipe(res);
+          }
+        },
+      );
+      proxyReq.on("error", (err: Error) => {
+        deps.logger.warn(`Controller: preview proxy error for ${previewId}: ${String(err)}`);
+        if (!res.headersSent) {
+          sendJson(res, 502, { error: "Preview proxy error", previewId, message: String(err) });
+        }
+      });
+      req.pipe(proxyReq);
+      return;
+    }
   }
 
   // GET /api/v1/health

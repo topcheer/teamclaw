@@ -23,6 +23,8 @@ export type GitSyncMode = "shared" | "bundle" | "remote";
 
 export type WorkerProvisioningType = "none" | "process" | "docker" | "kubernetes";
 
+export type ProcessModel = "single" | "multi";
+
 export type ProvisionedWorkerStatus =
   | "launching"
   | "registered"
@@ -82,7 +84,7 @@ export type WorkerInfo = {
   role: RoleId;
   label: string;
   status: WorkerStatus;
-  transport?: "http" | "local";
+  transport?: "http" | "local" | "in-process";
   url: string;
   lastHeartbeat: number;
   capabilities: string[];
@@ -146,6 +148,29 @@ export type WorkerTaskResultDeliverable = {
   kind: "file" | "directory" | "command" | "artifact" | "note";
   value: string;
   summary?: string;
+  artifactType?: "web-app" | "static-site" | "binary" | "document";
+  previewCommand?: string;
+  previewCwd?: string;
+  previewReadyPath?: string;
+  liveUrl?: string;
+};
+
+export type DynamicPreviewRecord = {
+  id: string;
+  taskId: string;
+  deliverableIndex: number;
+  deliverableValue: string;
+  targetPort: number;
+  previewCommand: string;
+  previewCwd: string;
+  previewReadyPath: string;
+  liveUrl: string;
+  status: "launching" | "starting" | "healthy" | "stopped" | "failed";
+  pid?: number;
+  createdAt: number;
+  updatedAt: number;
+  lastHealthCheckAt?: number;
+  lastError?: string;
 };
 
 export type WorkerTaskResultFollowUp = {
@@ -164,6 +189,8 @@ export type WorkerTaskResultContract = {
   followUps: WorkerTaskResultFollowUp[];
   questions: string[];
   notes?: string;
+  /** Reusable codebase patterns discovered during this task (consolidated into workspace memory). */
+  discoveredPatterns?: string[];
 };
 
 export type WorkerProgressContract = {
@@ -227,6 +254,8 @@ export type ControllerOrchestrationManifest = {
   deferredTasks: ControllerManifestDeferredTask[];
   handoffPlan?: string;
   notes?: string;
+  /** Controller signals that the entire human requirement is fully satisfied — no more tasks or follow-ups needed. */
+  requirementFullyComplete?: boolean;
 };
 
 export type ControllerRunInfo = {
@@ -343,6 +372,8 @@ export type PluginConfig = {
   controllerUrl: string;
   teamName: string;
   heartbeatIntervalMs: number;
+  processModel: ProcessModel;
+  /** @deprecated Use processModel instead. Kept for backward compatibility. */
   localRoles: RoleId[];
   taskTimeoutMs: number;
   gitEnabled: boolean;
@@ -388,6 +419,7 @@ export type TeamState = {
   clarifications: Record<string, ClarificationRequest>;
   repo?: GitRepoState;
   provisioning?: TeamProvisioningState;
+  previews?: Record<string, DynamicPreviewRecord>;
   createdAt: number;
   updatedAt: number;
 };
@@ -442,6 +474,14 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
 
   const localRoles = parseRoleList(raw.localRoles);
 
+  // processModel: "single" runs workers in-process, "multi" spawns child processes.
+  // Backward compat: if localRoles is set but processModel is not, default to "multi".
+  const rawProcessModel = typeof raw.processModel === "string" ? raw.processModel : "";
+  const processModel: ProcessModel =
+    rawProcessModel === "single" || rawProcessModel === "multi"
+      ? rawProcessModel
+      : localRoles.length > 0 ? "multi" : "single";
+
   const taskTimeoutMs = typeof raw.taskTimeoutMs === "number" && raw.taskTimeoutMs >= 1000
     ? raw.taskTimeoutMs
     : 1_800_000;
@@ -464,7 +504,13 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
     ? raw.gitAuthorEmail.trim()
     : "teamclaw@local";
 
-  const workerProvisioningType = parseProvisioningType(raw.workerProvisioningType);
+  const rawWorkerProvisioningType = parseProvisioningType(raw.workerProvisioningType);
+  // When processModel is "multi" and no explicit provisioning type was configured,
+  // auto-enable the "process" provisioner for on-demand local process spawning.
+  const workerProvisioningType: WorkerProvisioningType =
+    rawWorkerProvisioningType === "none" && processModel === "multi" && !raw.workerProvisioningType
+      ? "process"
+      : rawWorkerProvisioningType;
   const workerProvisioningControllerUrl = typeof raw.workerProvisioningControllerUrl === "string"
     ? raw.workerProvisioningControllerUrl.trim()
     : "";
@@ -530,6 +576,7 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
     controllerUrl,
     teamName,
     heartbeatIntervalMs,
+    processModel,
     localRoles,
     taskTimeoutMs,
     gitEnabled,

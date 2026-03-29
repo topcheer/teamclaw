@@ -1,25 +1,14 @@
 {
-  "agent:main:main": {
-    "sessionId": "d49c456f-b8a0-4898-b196-cd8c13202a58",
-    "updatedAt": 1774148473300,
-    "systemSent": true,
-    "abortedLastRun": false,
-    "chatType": "direct",
-    "deliveryContext": {
-      "to": "heartbeat"
-    },
-    "lastTo": "heartbeat",
-    "origin": {
-      "label": "heartbeat",
-      "provider": "heartbeat",
-      "from": "heartbeat",
-      "to": "heartbeat"
-    },
-    "sessionFile": "/home/node/.openclaw/agents/main/sessions/d49c456f-b8a0-4898-b196-cd8c13202a58.jsonl",
-    "compactionCount": 0,
+  "agent:main:teamclaw-controller-web:default": {
+    "sessionId": "b5930240-485b-4783-a28d-48259110a227",
+    "updatedAt": 1774641352848,
     "skillsSnapshot": {
-      "prompt": "\n\nThe following skills provide specialized instructions for specific tasks.\nUse the read tool to load a skill's file when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>healthcheck</name>\n    <description>Host security hardening and risk-tolerance configuration for OpenClaw deployments. Use when a user asks for security audits, firewall/SSH/update hardening, risk posture, exposure review, OpenClaw cron scheduling for periodic checks, or version status checks on a machine running OpenClaw (laptop, workstation, Pi, VPS).</description>\n    <location>/app/skills/healthcheck/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>node-connect</name>\n    <description>Diagnose OpenClaw node connection and pairing failures for Android, iOS, and macOS companion apps. Use when QR/setup code/manual connect fails, local Wi-Fi works but VPS/tailnet does not, or errors mention pairing required, unauthorized, bootstrap token invalid or expired, gateway.bind, gateway.remote.url, Tailscale, or plugins.entries.device-pair.config.publicUrl.</description>\n    <location>/app/skills/node-connect/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>skill-creator</name>\n    <description>Create, edit, improve, or audit AgentSkills. Use when creating a new skill from scratch or when asked to improve, review, audit, tidy up, or clean up an existing skill or SKILL.md file. Also use when editing or restructuring a skill directory (moving files to references/ or scripts/, removing stale content, validating against the AgentSkills spec). Triggers on phrases like &quot;create a skill&quot;, &quot;author a skill&quot;, &quot;tidy up a skill&quot;, &quot;improve this skill&quot;, &quot;review the skill&quot;, &quot;clean up the skill&quot;, &quot;audit the skill&quot;.</description>\n    <location>/app/skills/skill-creator/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>weather</name>\n    <description>Get current weather and forecasts via wttr.in or Open-Meteo. Use when: user asks about weather, temperature, or forecasts for any location. NOT for: historical weather data, severe weather alerts, or detailed meteorological analysis. No API key needed.</description>\n    <location>/app/skills/weather/SKILL.md</location>\n  </skill>\n</available_skills>",
+      "prompt": "\n\nThe following skills provide specialized instructions for specific tasks.\nUse the read tool to load a skill's file when the task matches its description.\nWhen a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n<available_skills>\n  <skill>\n    <name>clawhub</name>\n    <description>Use the ClawHub CLI to search, install, update, and publish agent skills from clawhub.com. Use when you need to fetch new skills on the fly, sync installed skills to latest or a specific version, or publish new/updated skill folders with the npm-installed clawhub CLI.</description>\n    <location>/app/skills/clawhub/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>healthcheck</name>\n    <description>Host security hardening and risk-tolerance configuration for OpenClaw deployments. Use when a user asks for security audits, firewall/SSH/update hardening, risk posture, exposure review, OpenClaw cron scheduling for periodic checks, or version status checks on a machine running OpenClaw (laptop, workstation, Pi, VPS).</description>\n    <location>/app/skills/healthcheck/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>node-connect</name>\n    <description>Diagnose OpenClaw node connection and pairing failures for Android, iOS, and macOS companion apps. Use when QR/setup code/manual connect fails, local Wi-Fi works but VPS/tailnet does not, or errors mention pairing required, unauthorized, bootstrap token invalid or expired, gateway.bind, gateway.remote.url, Tailscale, or plugins.entries.device-pair.config.publicUrl.</description>\n    <location>/app/skills/node-connect/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>skill-creator</name>\n    <description>Create, edit, improve, or audit AgentSkills. Use when creating a new skill from scratch or when asked to improve, review, audit, tidy up, or clean up an existing skill or SKILL.md file. Also use when editing or restructuring a skill directory (moving files to references/ or scripts/, removing stale content, validating against the AgentSkills spec). Triggers on phrases like &quot;create a skill&quot;, &quot;author a skill&quot;, &quot;tidy up a skill&quot;, &quot;improve this skill&quot;, &quot;review the skill&quot;, &quot;clean up the skill&quot;, &quot;audit the skill&quot;.</description>\n    <location>/app/skills/skill-creator/SKILL.md</location>\n  </skill>\n  <skill>\n    <name>weather</name>\n    <description>Get current weather and forecasts via wttr.in or Open-Meteo. Use when: user asks about weather, temperature, or forecasts for any location. NOT for: historical weather data, severe weather alerts, or detailed meteorological analysis. No API key needed.</description>\n    <location>/app/skills/weather/SKILL.md</location>\n  </skill>\n</available_skills>",
       "skills": [
+        {
+          "name": "clawhub",
+          "requiredEnv": []
+        },
         {
           "name": "healthcheck"
         },
@@ -36,11 +25,31 @@
       ],
       "resolvedSkills": [
         {
+          "name": "clawhub",
+          "description": "Use the ClawHub CLI to search, install, update, and publish agent skills from clawhub.com. Use when you need to fetch new skills on the fly, sync installed skills to latest or a specific version, or publish new/updated skill folders with the npm-installed clawhub CLI.",
+          "filePath": "/app/skills/clawhub/SKILL.md",
+          "baseDir": "/app/skills/clawhub",
+          "sourceInfo": {
+            "path": "/app/skills/clawhub/SKILL.md",
+            "source": "openclaw-bundled",
+            "scope": "temporary",
+            "origin": "top-level",
+            "baseDir": "/app/skills/clawhub"
+          },
+          "disableModelInvocation": false
+        },
+        {
           "name": "healthcheck",
           "description": "Host security hardening and risk-tolerance configuration for OpenClaw deployments. Use when a user asks for security audits, firewall/SSH/update hardening, risk posture, exposure review, OpenClaw cron scheduling for periodic checks, or version status checks on a machine running OpenClaw (laptop, workstation, Pi, VPS).",
           "filePath": "/app/skills/healthcheck/SKILL.md",
           "baseDir": "/app/skills/healthcheck",
-          "source": "openclaw-bundled",
+          "sourceInfo": {
+            "path": "/app/skills/healthcheck/SKILL.md",
+            "source": "openclaw-bundled",
+            "scope": "temporary",
+            "origin": "top-level",
+            "baseDir": "/app/skills/healthcheck"
+          },
           "disableModelInvocation": false
         },
         {
@@ -48,7 +57,13 @@
           "description": "Diagnose OpenClaw node connection and pairing failures for Android, iOS, and macOS companion apps. Use when QR/setup code/manual connect fails, local Wi-Fi works but VPS/tailnet does not, or errors mention pairing required, unauthorized, bootstrap token invalid or expired, gateway.bind, gateway.remote.url, Tailscale, or plugins.entries.device-pair.config.publicUrl.",
           "filePath": "/app/skills/node-connect/SKILL.md",
           "baseDir": "/app/skills/node-connect",
-          "source": "openclaw-bundled",
+          "sourceInfo": {
+            "path": "/app/skills/node-connect/SKILL.md",
+            "source": "openclaw-bundled",
+            "scope": "temporary",
+            "origin": "top-level",
+            "baseDir": "/app/skills/node-connect"
+          },
           "disableModelInvocation": false
         },
         {
@@ -56,7 +71,13 @@
           "description": "Create, edit, improve, or audit AgentSkills. Use when creating a new skill from scratch or when asked to improve, review, audit, tidy up, or clean up an existing skill or SKILL.md file. Also use when editing or restructuring a skill directory (moving files to references/ or scripts/, removing stale content, validating against the AgentSkills spec). Triggers on phrases like \"create a skill\", \"author a skill\", \"tidy up a skill\", \"improve this skill\", \"review the skill\", \"clean up the skill\", \"audit the skill\".",
           "filePath": "/app/skills/skill-creator/SKILL.md",
           "baseDir": "/app/skills/skill-creator",
-          "source": "openclaw-bundled",
+          "sourceInfo": {
+            "path": "/app/skills/skill-creator/SKILL.md",
+            "source": "openclaw-bundled",
+            "scope": "temporary",
+            "origin": "top-level",
+            "baseDir": "/app/skills/skill-creator"
+          },
           "disableModelInvocation": false
         },
         {
@@ -64,24 +85,30 @@
           "description": "Get current weather and forecasts via wttr.in or Open-Meteo. Use when: user asks about weather, temperature, or forecasts for any location. NOT for: historical weather data, severe weather alerts, or detailed meteorological analysis. No API key needed.",
           "filePath": "/app/skills/weather/SKILL.md",
           "baseDir": "/app/skills/weather",
-          "source": "openclaw-bundled",
+          "sourceInfo": {
+            "path": "/app/skills/weather/SKILL.md",
+            "source": "openclaw-bundled",
+            "scope": "temporary",
+            "origin": "top-level",
+            "baseDir": "/app/skills/weather"
+          },
           "disableModelInvocation": false
         }
       ],
       "version": 0
     },
-    "status": "done",
-    "startedAt": 1774148466198,
-    "endedAt": 1774148473272,
-    "runtimeMs": 7074,
+    "sessionFile": "/home/node/.openclaw/agents/main/sessions/b5930240-485b-4783-a28d-48259110a227.jsonl",
+    "status": "failed",
+    "startedAt": 1774641347077,
+    "abortedLastRun": false,
+    "contextTokens": 200000,
     "modelProvider": "zai",
     "model": "glm-5-turbo",
-    "contextTokens": 128000,
     "systemPromptReport": {
       "source": "run",
-      "generatedAt": 1774148466143,
-      "sessionId": "d49c456f-b8a0-4898-b196-cd8c13202a58",
-      "sessionKey": "agent:main:main",
+      "generatedAt": 1774641352796,
+      "sessionId": "b5930240-485b-4783-a28d-48259110a227",
+      "sessionKey": "agent:main:teamclaw-controller-web:default",
       "provider": "zai",
       "model": "glm-5-turbo",
       "workspaceDir": "/home/node/.openclaw/workspace",
@@ -99,17 +126,17 @@
         "sandboxed": false
       },
       "systemPrompt": {
-        "chars": 26847,
-        "projectContextChars": 13613,
-        "nonProjectContextChars": 13234
+        "chars": 24985,
+        "projectContextChars": 4485,
+        "nonProjectContextChars": 20500
       },
       "injectedWorkspaceFiles": [
         {
           "name": "AGENTS.md",
           "path": "/home/node/.openclaw/workspace/AGENTS.md",
           "missing": false,
-          "rawChars": 7809,
-          "injectedChars": 7809,
+          "rawChars": 0,
+          "injectedChars": 0,
           "truncated": false
         },
         {
@@ -148,22 +175,26 @@
           "name": "HEARTBEAT.md",
           "path": "/home/node/.openclaw/workspace/HEARTBEAT.md",
           "missing": false,
-          "rawChars": 192,
-          "injectedChars": 192,
+          "rawChars": 91,
+          "injectedChars": 91,
           "truncated": false
         },
         {
           "name": "BOOTSTRAP.md",
           "path": "/home/node/.openclaw/workspace/BOOTSTRAP.md",
           "missing": false,
-          "rawChars": 1450,
-          "injectedChars": 1450,
+          "rawChars": 277,
+          "injectedChars": 277,
           "truncated": false
         }
       ],
       "skills": {
-        "promptChars": 2445,
+        "promptChars": 2845,
         "entries": [
+          {
+            "name": "clawhub",
+            "blockChars": 397
+          },
           {
             "name": "healthcheck",
             "blockChars": 456
@@ -183,26 +214,26 @@
         ]
       },
       "tools": {
-        "listChars": 2282,
-        "schemaChars": 17318,
+        "listChars": 2691,
+        "schemaChars": 22063,
         "entries": [
           {
             "name": "read",
             "summaryChars": 298,
-            "schemaChars": 392,
-            "propertiesCount": 4
+            "schemaChars": 574,
+            "propertiesCount": 6
           },
           {
             "name": "edit",
-            "summaryChars": 129,
-            "schemaChars": 591,
-            "propertiesCount": 6
+            "summaryChars": 511,
+            "schemaChars": 2470,
+            "propertiesCount": 13
           },
           {
             "name": "write",
             "summaryChars": 127,
-            "schemaChars": 313,
-            "propertiesCount": 3
+            "schemaChars": 497,
+            "propertiesCount": 5
           },
           {
             "name": "exec",
@@ -217,12 +248,6 @@
             "propertiesCount": 12
           },
           {
-            "name": "browser",
-            "summaryChars": 1066,
-            "schemaChars": 2799,
-            "propertiesCount": 48
-          },
-          {
             "name": "canvas",
             "summaryChars": 106,
             "schemaChars": 661,
@@ -231,8 +256,8 @@
           {
             "name": "message",
             "summaryChars": 89,
-            "schemaChars": 5374,
-            "propertiesCount": 103
+            "schemaChars": 5509,
+            "propertiesCount": 104
           },
           {
             "name": "tts",
@@ -290,15 +315,27 @@
           },
           {
             "name": "web_search",
-            "summaryChars": 175,
-            "schemaChars": 1084,
-            "propertiesCount": 9
+            "summaryChars": 93,
+            "schemaChars": 446,
+            "propertiesCount": 4
           },
           {
             "name": "web_fetch",
             "summaryChars": 129,
             "schemaChars": 374,
             "propertiesCount": 3
+          },
+          {
+            "name": "image",
+            "summaryChars": 201,
+            "schemaChars": 342,
+            "propertiesCount": 6
+          },
+          {
+            "name": "browser",
+            "summaryChars": 1066,
+            "schemaChars": 2799,
+            "propertiesCount": 48
           },
           {
             "name": "memory_search",
@@ -314,14 +351,20 @@
           },
           {
             "name": "teamclaw_create_task",
-            "summaryChars": 38,
-            "schemaChars": 371,
-            "propertiesCount": 4
+            "summaryChars": 170,
+            "schemaChars": 740,
+            "propertiesCount": 5
+          },
+          {
+            "name": "teamclaw_submit_manifest",
+            "summaryChars": 126,
+            "schemaChars": 1777,
+            "propertiesCount": 8
           },
           {
             "name": "teamclaw_list_tasks",
             "summaryChars": 42,
-            "schemaChars": 151,
+            "schemaChars": 160,
             "propertiesCount": 1
           },
           {
@@ -332,19 +375,14 @@
           },
           {
             "name": "teamclaw_send_message",
-            "summaryChars": 50,
-            "schemaChars": 269,
-            "propertiesCount": 3
+            "summaryChars": 114,
+            "schemaChars": 775,
+            "propertiesCount": 8
           }
         ]
       }
     },
-    "inputTokens": 7289,
-    "outputTokens": 249,
-    "cacheRead": 6284,
-    "cacheWrite": 0,
-    "estimatedCostUsd": 0.0008166400000000001,
-    "totalTokens": 13573,
-    "totalTokensFresh": true
+    "endedAt": 1774641347156,
+    "runtimeMs": 79
   }
 }

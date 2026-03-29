@@ -191,6 +191,7 @@ if (!manifest) {
       name: TEAMCLAW_MANIFEST_NAME,
       description: TEAMCLAW_MANIFEST_DESCRIPTION,
       version: pkg.version,
+      skills: ["./skills"],
       uiHints: expectedConfigSchema.uiHints,
       configSchema: expectedConfigSchema.jsonSchema,
     };

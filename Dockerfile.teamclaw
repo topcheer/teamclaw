@@ -1,0 +1,55 @@
+# TeamClaw custom OpenClaw image
+# Based on official ghcr.io/openclaw/openclaw:latest
+# Adds the teamclaw extension and its runtime dependencies.
+#
+# Build: docker build -f Dockerfile.teamclaw -t registry.iot2.win/openclaw:teamclaw-test .
+# Push:  docker push registry.iot2.win/openclaw:teamclaw-test
+#
+# Multi-arch: docker buildx build --platform linux/amd64 -f Dockerfile.teamclaw \
+#             -t registry.iot2.win/openclaw:teamclaw-test --push .
+
+ARG BASE_IMAGE=ghcr.io/openclaw/openclaw:latest
+FROM ${BASE_IMAGE}
+
+USER root
+
+# Install teamclaw runtime dependencies without disrupting existing node_modules.
+RUN mkdir -p /tmp/deps && cd /tmp/deps && \
+    npm init -y --silent 2>/dev/null && \
+    npm install --save @sinclair/typebox@0.34.48 bonjour-service@1.3.0 2>/dev/null && \
+    find node_modules -mindepth 1 -maxdepth 1 -type d | while read pkg; do \
+      pkg="${pkg#node_modules/}"; \
+      if [ ! -d "/app/node_modules/$pkg" ]; then \
+        mkdir -p "$(dirname /app/node_modules/$pkg)" && \
+        cp -r "node_modules/$pkg" "/app/node_modules/$pkg"; \
+      fi; \
+    done && \
+    rm -rf /tmp/deps
+
+USER node
+
+# Copy teamclaw extension source for jiti runtime compilation.
+COPY src/package.json /app/extensions/teamclaw/package.json
+COPY src/openclaw.plugin.json /app/extensions/teamclaw/openclaw.plugin.json
+COPY src/api.ts /app/extensions/teamclaw/api.ts
+COPY src/index.ts /app/extensions/teamclaw/index.ts
+COPY src/cli.mjs /app/extensions/teamclaw/cli.mjs
+COPY src/tsconfig.json /app/extensions/teamclaw/tsconfig.json
+COPY src/src/ /app/extensions/teamclaw/src/
+COPY src/README.md /app/extensions/teamclaw/README.md
+
+# ---------------------------------------------------------------
+# Build-time patch for container deployment:
+# When the plugin is baked into the image, the auto-bind in
+# buildDockerBinds() uses a container-internal path that the Docker
+# daemon on the host cannot resolve.
+#
+# The patch script makes:
+# 1. resolveCurrentTeamClawPluginRootDir() returns "" when
+#    TEAMCLAW_BAKED_IN=true
+# 2. buildDockerBinds() guards against empty pluginDir
+# ---------------------------------------------------------------
+COPY tests/patch-baked-in.cjs /tmp/patch-baked-in.cjs
+USER root
+RUN node /tmp/patch-baked-in.cjs && rm /tmp/patch-baked-in.cjs
+USER node

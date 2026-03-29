@@ -1,0 +1,43 @@
+{
+  "agents": {
+    "defaults": {
+      "model": { "primary": "zai/glm-5-turbo" }
+    }
+  },
+  "commands": { "native": "auto", "nativeSkills": "auto", "restart": true, "ownerDisplay": "raw" },
+  "gateway": {
+    "auth": { "mode": "token", "token": "47989963b032656bbfe24aee1f459531402cbd90a34fc83d" }
+  },
+  "plugins": {
+    "enabled": true,
+    "entries": {
+      "teamclaw": {
+        "enabled": true,
+        "config": {
+          "mode": "controller",
+          "port": 9527,
+          "teamName": "calc-project",
+          "gitEnabled": true,
+          "heartbeatIntervalMs": 10000,
+          "taskTimeoutMs": 600000,
+          "workerProvisioningType": "docker",
+          "workerProvisioningControllerUrl": "http://tc-s4-controller:9527",
+          "workerProvisioningRoles": ["developer", "qa", "architect"],
+          "workerProvisioningMinPerRole": 1,
+          "workerProvisioningMaxPerRole": 1,
+          "workerProvisioningIdleTtlMs": 300000,
+          "workerProvisioningStartupTimeoutMs": 120000,
+          "workerProvisioningImage": "registry.iot2.win/openclaw:teamclaw-test",
+          "workerProvisioningDockerNetwork": "teamclaw-s4-net",
+          "workerProvisioningPassEnv": ["ZAI_API_KEY"],
+          "workerProvisioningExtraEnv": {
+            "OPENCLAW_BUNDLED_PLUGINS_DIR": "/app/extensions",
+            "TEAMCLAW_BAKED_IN": "true"
+          },
+          "workerProvisioningDockerMounts": []
+        }
+      }
+    }
+  },
+  "meta": { "lastTouchedVersion": "2026.3.26-2", "lastTouchedAt": "2026-03-28T06:00:00.000Z" }
+}

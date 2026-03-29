@@ -149,6 +149,12 @@ export function createControllerPromptInjector(deps: ControllerPromptDeps) {
     parts.push("- Use the controller itself for requirement analysis; use the PM role only for PM-owned deliverables after intake is clear.");
     parts.push(`- Use exact TeamClaw role IDs only: ${TEAMCLAW_ROLE_IDS_TEXT}.`);
 
+    parts.push("");
+    parts.push("## Controller Follow-up Completion Signal");
+    parts.push("- When a follow-up run determines that ALL tasks for the original requirement are completed, all deferred tasks have been created and completed, and no further follow-ups are needed, set requirementFullyComplete=true in the manifest.");
+    parts.push("- This signals to the human and the system that the entire requirement lifecycle is finished.");
+    parts.push("- Do not set requirementFullyComplete until you have verified that every planned phase is done and no open questions remain.");
+
     return {
       prependSystemContext: parts.join("\n"),
     };

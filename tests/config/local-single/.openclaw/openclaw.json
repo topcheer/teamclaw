@@ -1,0 +1,46 @@
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "zai/glm-5-turbo"
+      }
+    }
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "gateway": {
+    "auth": {
+      "mode": "token",
+      "token": "47989963b032656bbfe24aee1f459531402cbd90a34fc83d"
+    }
+  },
+  "plugins": {
+    "enabled": true,
+    "entries": {
+      "teamclaw": {
+        "enabled": true,
+        "config": {
+          "mode": "controller",
+          "port": 9527,
+          "teamName": "calc-project",
+          "gitEnabled": false,
+          "heartbeatIntervalMs": 5000,
+          "taskTimeoutMs": 300000,
+          "localRoles": [
+            "developer",
+            "qa",
+            "architect"
+          ]
+        }
+      }
+    }
+  },
+  "meta": {
+    "lastTouchedVersion": "2026.3.26-2",
+    "lastTouchedAt": "2026-03-28T05:20:50.535397Z"
+  }
+}

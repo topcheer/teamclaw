@@ -1,0 +1,16 @@
+{
+  "entries": {
+    "/home/node/.openclaw/teamclaw-runtimes/provisioned-workers/session-j4fzoE/qa-gvwnNU/.openclaw/openclaw.json": {
+      "lastKnownGood": {
+        "hash": "cb4aab1141bdc0de6b5791ed4bd7b3cfeff47cc709d31d8a4e67cf7bcc1787cf",
+        "bytes": 2144,
+        "mtimeMs": 1774676736773.7559,
+        "ctimeMs": 1774676736773.7559,
+        "hasMeta": true,
+        "gatewayMode": "local",
+        "observedAt": "2026-03-28T05:45:39.598Z"
+      },
+      "lastObservedSuspiciousSignature": null
+    }
+  }
+}

@@ -52,6 +52,11 @@ type AssistantTurnSnapshot = {
   backgroundPending: boolean;
 };
 
+export type TaskExecutorResult = {
+  text: string;
+  contract?: Record<string, unknown>;
+};
+
 export type RoleTaskExecutorDeps = {
   runtime: OpenClawPluginApi["runtime"];
   logger: PluginLogger;
@@ -69,11 +74,11 @@ export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
     ? roleDef.systemPrompt
     : `You are a ${role} in a virtual software team. Complete the assigned task.`;
 
-  return async (taskDescription: string, assignment: TaskAssignmentPayload): Promise<string> => {
+  return async (taskDescription: string, assignment: TaskAssignmentPayload): Promise<TaskExecutorResult> => {
     const taskId = assignment.taskId;
     const sessionKey = getSessionKey(assignment);
     const idempotencyKey = getIdempotencyKey?.(assignment);
-    const taskMessage = buildTaskMessage(taskDescription, taskId, roleDef?.label ?? role);
+    const taskMessage = buildTaskMessage(taskDescription, taskId, roleDef?.label ?? role, { inlineContract: true });
     logger.info(`TeamClaw: executing task ${taskId} as ${role} via subagent`);
 
     async function emitExecutionEvent(event: TaskExecutionEventInput): Promise<void> {
@@ -459,19 +464,26 @@ export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
           if (rateLimitState.active) {
             clearRateLimitWaiting();
           }
-          const result = assistantTurn.text;
-          if (result && normalizeComparableText(result) !== normalizeComparableText(progressSnapshot.lastAssistantMessage)) {
+          const rawResult = assistantTurn.text;
+          if (rawResult && normalizeComparableText(rawResult) !== normalizeComparableText(progressSnapshot.lastAssistantMessage)) {
             await emitExecutionEvent({
               type: "output",
               phase: "final_output",
               source: "subagent",
-              message: result,
+              message: rawResult,
             });
           }
 
           clearBackgroundWorkWaiting();
+
+          // Extract inline result contract if present
+          const extracted = extractInlineResultContract(rawResult);
+          if (extracted) {
+            logger.info(`TeamClaw: task ${taskId} — extracted inline result contract from ${role}`);
+            return { text: extracted.cleanedText || rawResult, contract: extracted.contract };
+          }
           logger.info(`TeamClaw: task ${taskId} completed successfully as ${role}`);
-          return result;
+          return { text: rawResult };
         }
         clearBackgroundWorkWaiting();
       }
@@ -780,15 +792,8 @@ function safeJsonStringify(value: unknown): string {
   }
 }
 
-function buildTaskMessage(taskDescription: string, taskId: string, roleLabel: string): string {
-  return [
-    taskDescription,
-    "",
-    "## Task Context",
-    `Reference: ${taskId}`,
-    `Assigned Role: ${roleLabel}`,
-    "",
-    "## Execution Rules",
+function buildTaskMessage(taskDescription: string, taskId: string, roleLabel: string, options?: { inlineContract?: boolean }): string {
+  const rules = [
     "- Deliver exactly the artifact requested by this task.",
     "- Follow the task verb literally: if the task asks for a brief, plan, matrix, review, package, positioning, or design artifact, produce that artifact and stop there.",
     "- Do NOT scaffold code, project structure, configs, or files unless the task explicitly asks for implementation work.",
@@ -801,12 +806,82 @@ function buildTaskMessage(taskDescription: string, taskId: string, roleLabel: st
     "- Do NOT mark the task completed or failed via progress tools. Return the final deliverable (or raise an error) and let TeamClaw close the task.",
     "- If critical information is missing and you cannot proceed safely, request clarification and wait instead of guessing.",
     "- If more work is needed, mention it briefly in your result or use a handoff/review tool on this same task.",
-    "- Before your final reply, submit a structured worker result contract with teamclaw_submit_result_contract so TeamClaw can route the next step without parsing prose.",
     `- Do NOT use sessions_yield or end your turn while background work, coding agents, or process sessions are still running; if the task is not complete yet, reply with exactly ${RATE_LIMIT_WAITING_SENTINEL}.`,
     "- Never return 'running in background' as the final result for a TeamClaw task. If you spawn a helper session, keep monitoring it and only return after you have the actual deliverable.",
     "- Use structured fields on progress, review, handoff, and messaging tools whenever coordination is needed.",
     `- When naming a role, use exact TeamClaw role IDs: ${TEAMCLAW_ROLE_IDS_TEXT}.`,
+  ];
+
+  if (options?.inlineContract) {
+    rules.push(
+      "- IMPORTANT: At the very end of your reply, you MUST include a structured result contract as a fenced JSON block. This is how TeamClaw understands your result — without it, your work cannot be routed to the next step. Use this exact format:",
+      "",
+      "```teamclaw-result-contract",
+      JSON.stringify({
+        outcome: "completed|failed|blocked",
+        summary: "One-sentence summary of what was accomplished",
+        deliverables: [{ kind: "file|directory|command|artifact|note", value: "path or description", summary: "optional note" }],
+        keyPoints: ["Important decisions or findings"],
+        blockers: ["Any unresolved blockers (empty array if none)"],
+        followUps: [{ type: "review|handoff|clarification|downstream-task", targetRole: "role-id", reason: "why" }],
+        questions: ["Open questions (empty array if none)"],
+        discoveredPatterns: ["Reusable codebase patterns found during this task"],
+        notes: "Optional extra delivery notes",
+      }, null, 2),
+      "```",
+      "",
+      "  Replace the placeholder values with real data from your work. The `outcome`, `summary`, and `deliverables` fields are required. Use `[]` for empty arrays. The fenced block MUST use the `teamclaw-result-contract` language tag.",
+    );
+  } else {
+    rules.push(
+      "- Before your final reply, submit a structured worker result contract with teamclaw_submit_result_contract so TeamClaw can route the next step without parsing prose.",
+    );
+  }
+
+  return [
+    taskDescription,
+    "",
+    "## Task Context",
+    `Reference: ${taskId}`,
+    `Assigned Role: ${roleLabel}`,
+    "",
+    "## Execution Rules",
+    ...rules,
   ].join("\n");
+}
+
+/**
+ * Extract an inline result contract from a fenced ```teamclaw-result-contract block.
+ * Returns the parsed contract and the text with the block removed, or null if
+ * no valid contract is found.
+ */
+export function extractInlineResultContract(text: string): {
+  contract: Record<string, unknown>;
+  cleanedText: string;
+} | null {
+  // Match ```teamclaw-result-contract ... ``` blocks (greedy last match)
+  const pattern = /```teamclaw-result-contract\s*\n([\s\S]*?)```/g;
+  let lastMatch: RegExpExecArray | null = null;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    lastMatch = match;
+  }
+  if (!lastMatch) {
+    return null;
+  }
+  const jsonStr = lastMatch[1]!.trim();
+  try {
+    const parsed = JSON.parse(jsonStr);
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    // Remove the contract block from the text for a clean result
+    const cleanedText = text.slice(0, lastMatch.index).trimEnd()
+      + text.slice(lastMatch.index + lastMatch[0].length).trimStart();
+    return { contract: parsed, cleanedText: cleanedText.trim() };
+  } catch {
+    return null;
+  }
 }
 
 function buildRateLimitProbeMessage(taskId: string, roleLabel: string): string {

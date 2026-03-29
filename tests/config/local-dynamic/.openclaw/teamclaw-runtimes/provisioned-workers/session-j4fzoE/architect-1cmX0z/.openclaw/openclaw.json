@@ -1,0 +1,71 @@
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "zai/glm-5-turbo"
+      }
+    }
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "gateway": {
+    "auth": {
+      "mode": "token",
+      "token": "47989963b032656bbfe24aee1f459531402cbd90a34fc83d"
+    },
+    "mode": "local",
+    "bind": "loopback",
+    "port": 34887
+  },
+  "plugins": {
+    "enabled": true,
+    "entries": {
+      "teamclaw": {
+        "enabled": true,
+        "config": {
+          "mode": "worker",
+          "port": 44255,
+          "teamName": "calc-project",
+          "gitEnabled": false,
+          "heartbeatIntervalMs": 5000,
+          "taskTimeoutMs": 300000,
+          "workerProvisioningType": "none",
+          "workerProvisioningRoles": [],
+          "workerProvisioningMinPerRole": 0,
+          "workerProvisioningMaxPerRole": 1,
+          "workerProvisioningIdleTtlMs": 300000,
+          "workerProvisioningStartupTimeoutMs": 120000,
+          "role": "architect",
+          "controllerUrl": "http://127.0.0.1:9527",
+          "gitRemoteUrl": "",
+          "gitDefaultBranch": "main",
+          "gitAuthorName": "TeamClaw",
+          "gitAuthorEmail": "teamclaw@local",
+          "localRoles": [],
+          "workerProvisioningControllerUrl": "",
+          "workerProvisioningImage": "",
+          "workerProvisioningPassEnv": [],
+          "workerProvisioningExtraEnv": {},
+          "workerProvisioningDockerNetwork": "",
+          "workerProvisioningDockerMounts": [],
+          "workerProvisioningWorkspaceRoot": "",
+          "workerProvisioningDockerWorkspaceVolume": "",
+          "workerProvisioningKubernetesNamespace": "default",
+          "workerProvisioningKubernetesContext": "",
+          "workerProvisioningKubernetesServiceAccount": "",
+          "workerProvisioningKubernetesWorkspacePersistentVolumeClaim": "",
+          "workerProvisioningKubernetesLabels": {},
+          "workerProvisioningKubernetesAnnotations": {}
+        }
+      }
+    }
+  },
+  "meta": {
+    "lastTouchedVersion": "2026.3.26-2",
+    "lastTouchedAt": "2026-03-28T06:00:00.000Z"
+  }
+}

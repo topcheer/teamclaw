@@ -171,7 +171,7 @@ async function runControllerIntakePromptSmoke() {
   );
   assert.match(
     httpServerSource,
-    /return withSerializedControllerIntake\(normalizedSessionKey,\s*\(\)\s*=>\s*runControllerIntakeUnlocked\(/,
+    /return withSerializedControllerIntake\(normalizedSessionKey,\s*async\s*\(\)\s*=>\s*\{/,
     "controller intake should serialize same-session follow-up runs before starting a new subagent execution",
   );
   assert.match(
@@ -301,7 +301,7 @@ async function runControllerIntakePromptSmoke() {
   );
   assert.match(
     workerProvisioningSource,
-    /`\$\{resolveCurrentTeamClawPluginRootDir\(\)\}:\$\{DEFAULT_DOCKER_BUNDLED_TEAMCLAW_PLUGIN_DIR\}:ro`/,
+    /if \(_pd\) binds\.unshift\(`\$\{_pd\}:\$\{DEFAULT_DOCKER_BUNDLED_TEAMCLAW_PLUGIN_DIR\}:ro`\)/,
     "docker provisioning should bind the current TeamClaw plugin into the container bundled-plugin path so managed workers run the same plugin code as the controller host",
   );
   assert.match(

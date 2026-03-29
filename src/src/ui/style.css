@@ -700,6 +700,24 @@ body {
   color: var(--text-secondary);
 }
 
+.deliverable-live-link {
+  display: inline-block;
+  padding: 1px 8px;
+  margin-left: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  text-decoration: none;
+  vertical-align: middle;
+}
+
+.deliverable-live-link:hover {
+  background: var(--accent);
+  color: var(--bg-primary);
+}
+
 .messages-feed {
   display: flex;
   flex-direction: column;

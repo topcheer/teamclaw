@@ -1,0 +1,16 @@
+{
+  "entries": {
+    "/home/node/.openclaw/teamclaw-runtimes/provisioned-workers/session-j4fzoE/developer-E8BDLn/.openclaw/openclaw.json": {
+      "lastKnownGood": {
+        "hash": "3e91a8f1886cf35235ab9ebd3d533227bafa7b483d75fc12a1c042148edeb97f",
+        "bytes": 2151,
+        "mtimeMs": 1774676736758.3308,
+        "ctimeMs": 1774676736758.3308,
+        "hasMeta": true,
+        "gatewayMode": "local",
+        "observedAt": "2026-03-28T05:45:39.614Z"
+      },
+      "lastObservedSuspiciousSignature": null
+    }
+  }
+}

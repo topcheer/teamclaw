@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TeamClaw Preview Blog</title>
+  <style>
+    :root { --primary: #3b82f6; --bg: #0f172a; --surface: #1e293b; --text: #e2e8f0; --accent: #f59e0b; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+    header { background: var(--surface); border-bottom: 2px solid var(--primary); padding: 1.5rem 2rem; display: flex; align-items: center; justify-content: space-between; }
+    header h1 { font-size: 1.5rem; background: linear-gradient(135deg, var(--primary), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    header .badge { background: var(--primary); color: #fff; padding: 0.25rem 0.75rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 600; }
+    main { max-width: 48rem; margin: 2rem auto; padding: 0 1.5rem; }
+    article { background: var(--surface); border-radius: 0.75rem; padding: 1.5rem; margin-bottom: 1.5rem; border: 1px solid #334155; transition: border-color 0.2s; }
+    article:hover { border-color: var(--primary); }
+    article h2 { font-size: 1.25rem; margin-bottom: 0.5rem; color: #fff; }
+    article time { font-size: 0.8rem; color: var(--accent); }
+    article p { margin-top: 0.75rem; color: #94a3b8; }
+    .hero { text-align: center; padding: 3rem 0 2rem; }
+    .hero h2 { font-size: 2rem; margin-bottom: 0.5rem; }
+    .hero p { color: #64748b; }
+    footer { text-align: center; padding: 2rem; color: #475569; font-size: 0.85rem; }
+    .preview-badge { position: fixed; bottom: 1rem; right: 1rem; background: #16a34a; color: #fff; padding: 0.5rem 1rem; border-radius: 0.5rem; font-size: 0.8rem; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 100; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>TeamClaw Blog</h1>
+    <span class="badge">Live Preview</span>
+  </header>
+  <main>
+    <div class="hero">
+      <h2>Welcome to TeamClaw Preview</h2>
+      <p>This blog was built by a TeamClaw developer worker and served via PreviewManager.</p>
+    </div>
+    <article>
+      <time>2026-03-27</time>
+      <h2>Introducing PreviewManager</h2>
+      <p>Dynamic web application previews are now available! When a worker submits a deliverable with artifactType "web-app", the controller automatically launches a preview server and makes it accessible through the proxy endpoint.</p>
+    </article>
+    <article>
+      <time>2026-03-27</time>
+      <h2>How It Works</h2>
+      <p>The worker includes previewCommand and previewCwd in the result contract. PreviewManager spawns a child process, polls health checks, and routes traffic from /api/v1/previews/{id}/ to the running server.</p>
+    </article>
+    <article>
+      <time>2026-03-27</time>
+      <h2>Testing End-to-End</h2>
+      <p>If you can see this page in your browser, the complete pipeline is working: worker result contract &rarr; normalizeResultDeliverables &rarr; applyTaskResult &rarr; syncTaskPreviews &rarr; child process launch &rarr; health check &rarr; HTTP proxy.</p>
+    </article>
+  </main>
+  <footer>
+    Powered by TeamClaw PreviewManager &bull; Generated at <span id="timestamp"></span>
+  </footer>
+  <div class="preview-badge">Preview Active</div>
+  <script>document.getElementById('timestamp').textContent = new Date().toISOString();</script>
+</body>
+</html>

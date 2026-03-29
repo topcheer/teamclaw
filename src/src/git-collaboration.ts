@@ -4,9 +4,11 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import type { PluginLogger } from "../api.js";
 import type { GitRepoState, PluginConfig, RepoSyncInfo } from "./types.js";
-import { resolveDefaultOpenClawWorkspaceDir } from "./openclaw-workspace.js";
+import { resolveTeamClawWorkspaceDir } from "./openclaw-workspace.js";
 
 const TEAMCLAW_IMPORT_REF_PREFIX = "refs/teamclaw/imports";
+const BUNDLE_IMPORT_MAX_RETRIES = 3;
+const BUNDLE_IMPORT_RETRY_DELAY_MS = 2_000;
 const TEAMCLAW_RUNTIME_EXCLUDES = [
   ".openclaw/",
   ".clawhub/",
@@ -51,7 +53,7 @@ export async function ensureControllerGitRepo(
   config: PluginConfig,
   logger: PluginLogger,
 ): Promise<GitRepoState | null> {
-  const workspaceDir = resolveDefaultOpenClawWorkspaceDir();
+  const workspaceDir = resolveTeamClawWorkspaceDir();
   return await withRepoLock(workspaceDir, async () => ensureControllerGitRepoUnlocked(config, logger, workspaceDir));
 }
 
@@ -135,7 +137,7 @@ export async function exportControllerGitBundle(
   config: PluginConfig,
   logger: PluginLogger,
 ): Promise<{ repo: GitRepoState; data: Buffer; filename: string }> {
-  const workspaceDir = resolveDefaultOpenClawWorkspaceDir();
+  const workspaceDir = resolveTeamClawWorkspaceDir();
   return await withRepoLock(workspaceDir, async () => {
     const repo = await ensureControllerGitRepoUnlocked(config, logger, workspaceDir);
     if (!repo?.enabled) {
@@ -170,7 +172,7 @@ export async function importControllerGitBundle(
     workerId?: string;
   } = {},
 ): Promise<RepoImportResult> {
-  const workspaceDir = resolveDefaultOpenClawWorkspaceDir();
+  const workspaceDir = resolveTeamClawWorkspaceDir();
   return await withRepoLock(workspaceDir, async () => {
     const repo = await ensureControllerGitRepoUnlocked(config, logger, workspaceDir);
     if (!repo?.enabled) {
@@ -178,14 +180,21 @@ export async function importControllerGitBundle(
     }
 
     const refreshedBeforeImport = await readGitRepoState(config, repo.remoteReady);
+    let hadStashed = false;
     if (refreshedBeforeImport.dirty) {
-      return {
-        merged: false,
-        fastForwarded: false,
-        alreadyUpToDate: false,
-        repo: refreshedBeforeImport,
-        message: "Controller workspace has uncommitted changes; refusing bundle import until the shared repo is clean.",
-      };
+      logger.info("Controller workspace has uncommitted changes; stashing before bundle import");
+      const stashResult = await tryGit(["stash", "--include-untracked"], { cwd: workspaceDir });
+      if (stashResult.exitCode === 0) {
+        hadStashed = true;
+      } else {
+        return {
+          merged: false,
+          fastForwarded: false,
+          alreadyUpToDate: false,
+          repo: refreshedBeforeImport,
+          message: "Controller workspace has uncommitted changes that cannot be stashed; refusing bundle import.",
+        };
+      }
     }
 
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "teamclaw-import-"));
@@ -215,15 +224,21 @@ export async function importControllerGitBundle(
         fastForwarded = false;
         const mergeResult = await tryGit(["merge", "--no-edit", importRef], { cwd: workspaceDir });
         if (mergeResult.exitCode !== 0) {
+          // Both ff-only and regular merge failed — worker history diverged from controller.
+          // Fall back to "theirs" strategy to preserve worker changes (the agent just finished work).
           await abortMergeIfNeeded(workspaceDir);
-          const currentRepo = await readGitRepoState(config, repo.remoteReady);
-          return {
-            merged: false,
-            fastForwarded: false,
-            alreadyUpToDate: false,
-            repo: currentRepo,
-            message: `Failed to merge worker bundle for task ${meta.taskId ?? "unknown"}: ${formatCommandError("git merge", mergeResult)}`,
-          };
+          const theirsResult = await tryGit(["merge", "--no-edit", "-X", "theirs", importRef], { cwd: workspaceDir });
+          if (theirsResult.exitCode !== 0) {
+            await abortMergeIfNeeded(workspaceDir);
+            const currentRepo = await readGitRepoState(config, repo.remoteReady);
+            return {
+              merged: false,
+              fastForwarded: false,
+              alreadyUpToDate: false,
+              repo: currentRepo,
+              message: `Failed to merge worker bundle for task ${meta.taskId ?? "unknown"} even with theirs strategy: ${formatCommandError("git merge", theirsResult)}`,
+            };
+          }
         }
       }
 
@@ -238,6 +253,12 @@ export async function importControllerGitBundle(
           : `Imported worker bundle from ${meta.workerId ?? "worker"} with a merge commit.`,
       };
     } finally {
+      if (hadStashed) {
+        const popResult = await tryGit(["stash", "pop"], { cwd: workspaceDir });
+        if (popResult.exitCode !== 0) {
+          logger.warn(`Failed to restore stashed changes after bundle import: ${popResult.stderr?.trim() || "unknown error"}`);
+        }
+      }
       await tryGit(["update-ref", "-d", importRef], { cwd: workspaceDir });
       await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {
         // best-effort temp cleanup
@@ -252,7 +273,7 @@ export async function syncWorkerRepo(
   controllerUrl: string,
   repoInfo: RepoSyncInfo,
 ): Promise<RepoSyncResult> {
-  const workspaceDir = resolveDefaultOpenClawWorkspaceDir();
+  const workspaceDir = resolveTeamClawWorkspaceDir();
   return await withRepoLock(workspaceDir, async () => syncWorkerRepoUnlocked(config, logger, controllerUrl, repoInfo, workspaceDir));
 }
 
@@ -300,7 +321,16 @@ async function syncWorkerRepoUnlocked(
     await checkoutTrackingBranch(workspaceDir, repoInfo.defaultBranch, `refs/remotes/origin/${repoInfo.defaultBranch}`);
     const mergeResult = await tryGit(["merge", "--ff-only", `refs/remotes/origin/${repoInfo.defaultBranch}`], { cwd: workspaceDir });
     if (mergeResult.exitCode !== 0) {
-      throw new Error(`Failed to fast-forward worker checkout from origin/${repoInfo.defaultBranch}: ${formatCommandError("git merge", mergeResult)}`);
+      // Worker has local commits that diverge from origin — fall back to merge.
+      const regularMerge = await tryGit(["merge", "--no-edit", `refs/remotes/origin/${repoInfo.defaultBranch}`], { cwd: workspaceDir });
+      if (regularMerge.exitCode !== 0) {
+        await abortMergeIfNeeded(workspaceDir);
+        const theirsMerge = await tryGit(["merge", "--no-edit", "-X", "theirs", `refs/remotes/origin/${repoInfo.defaultBranch}`], { cwd: workspaceDir });
+        if (theirsMerge.exitCode !== 0) {
+          await abortMergeIfNeeded(workspaceDir);
+          throw new Error(`Failed to fast-forward worker checkout from origin/${repoInfo.defaultBranch}: ${formatCommandError("git merge", mergeResult)}`);
+        }
+      }
     }
   } else {
     if (!repoInfo.bundleUrl) {
@@ -321,7 +351,16 @@ async function syncWorkerRepoUnlocked(
       await checkoutTrackingBranch(workspaceDir, repoInfo.defaultBranch, `refs/remotes/teamclaw/${repoInfo.defaultBranch}`);
       const mergeResult = await tryGit(["merge", "--ff-only", `refs/remotes/teamclaw/${repoInfo.defaultBranch}`], { cwd: workspaceDir });
       if (mergeResult.exitCode !== 0) {
-        throw new Error(`Failed to fast-forward worker checkout from the controller bundle: ${formatCommandError("git merge", mergeResult)}`);
+        // Worker has local commits that diverge from controller — fall back to merge.
+        const regularMerge = await tryGit(["merge", "--no-edit", `refs/remotes/teamclaw/${repoInfo.defaultBranch}`], { cwd: workspaceDir });
+        if (regularMerge.exitCode !== 0) {
+          await abortMergeIfNeeded(workspaceDir);
+          const theirsMerge = await tryGit(["merge", "--no-edit", "-X", "theirs", `refs/remotes/teamclaw/${repoInfo.defaultBranch}`], { cwd: workspaceDir });
+          if (theirsMerge.exitCode !== 0) {
+            await abortMergeIfNeeded(workspaceDir);
+            throw new Error(`Failed to fast-forward worker checkout from the controller bundle: ${formatCommandError("git merge", mergeResult)}`);
+          }
+        }
       }
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {
@@ -348,7 +387,7 @@ export async function publishWorkerRepo(
     role?: string;
   },
 ): Promise<RepoPublishResult> {
-  const workspaceDir = resolveDefaultOpenClawWorkspaceDir();
+  const workspaceDir = resolveTeamClawWorkspaceDir();
   return await withRepoLock(workspaceDir, async () => publishWorkerRepoUnlocked(config, logger, controllerUrl, repoInfo, meta, workspaceDir));
 }
 
@@ -421,32 +460,51 @@ async function publishWorkerRepoUnlocked(
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "teamclaw-worker-publish-"));
   const bundlePath = path.join(tempDir, "worker.bundle");
   try {
-    await runGit(["bundle", "create", bundlePath, repoInfo.defaultBranch], { cwd: workspaceDir });
-    const bundle = await fs.readFile(bundlePath);
-    const importUrl = new URL(resolveApiUrl(repoInfo.importUrl, controllerUrl));
-    importUrl.searchParams.set("taskId", meta.taskId);
-    importUrl.searchParams.set("workerId", meta.workerId);
-    if (meta.role) {
-      importUrl.searchParams.set("role", meta.role);
+    for (let attempt = 0; attempt <= BUNDLE_IMPORT_MAX_RETRIES; attempt++) {
+      if (attempt > 0) {
+        // Before retry, rebase local worker commits onto the latest controller state
+        // so the next bundle is based on the current controller HEAD.
+        await new Promise<void>((resolve) => setTimeout(resolve, BUNDLE_IMPORT_RETRY_DELAY_MS * attempt));
+        await tryRebaseWorkerOntoController(workspaceDir, repoInfo, controllerUrl, config, logger);
+      }
+
+      await runGit(["bundle", "create", bundlePath, repoInfo.defaultBranch], { cwd: workspaceDir });
+      const bundle = await fs.readFile(bundlePath);
+      const importUrl = new URL(resolveApiUrl(repoInfo.importUrl, controllerUrl));
+      importUrl.searchParams.set("taskId", meta.taskId);
+      importUrl.searchParams.set("workerId", meta.workerId);
+      if (meta.role) {
+        importUrl.searchParams.set("role", meta.role);
+      }
+
+      const res = await fetch(importUrl.toString(), {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: bundle,
+      });
+
+      if (res.ok) {
+        const payload = await res.json() as { repo?: GitRepoState; message?: string };
+        return {
+          repo: payload.repo ?? await readGitRepoState(config, false),
+          published: true,
+          message: payload.message ?? `Imported bundle for task ${meta.taskId}.`,
+        };
+      }
+
+      // Only retry on 409 Conflict — other errors are not worth retrying.
+      if (res.status !== 409 || attempt === BUNDLE_IMPORT_MAX_RETRIES) {
+        const text = await res.text();
+        throw new Error(`Bundle import failed with status ${res.status}: ${text}`);
+      }
+
+      logger.warn(
+        `Worker: bundle import for task ${meta.taskId} returned 409 (attempt ${attempt + 1}/${BUNDLE_IMPORT_MAX_RETRIES}); rebasing onto controller HEAD and retrying.`,
+      );
     }
 
-    const res = await fetch(importUrl.toString(), {
-      method: "POST",
-      headers: { "Content-Type": "application/octet-stream" },
-      body: bundle,
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Bundle import failed with status ${res.status}: ${text}`);
-    }
-
-    const payload = await res.json() as { repo?: GitRepoState; message?: string };
-    return {
-      repo: payload.repo ?? await readGitRepoState(config, false),
-      published: true,
-      message: payload.message ?? `Imported bundle for task ${meta.taskId}.`,
-    };
+    // Should not reach here, but satisfy TypeScript.
+    throw new Error("Bundle import failed after all retries");
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {
       // best-effort temp cleanup
@@ -458,7 +516,7 @@ export async function readGitRepoState(
   config: PluginConfig,
   remoteReady: boolean,
 ): Promise<GitRepoState> {
-  const workspaceDir = resolveDefaultOpenClawWorkspaceDir();
+  const workspaceDir = resolveTeamClawWorkspaceDir();
   const headCommit = await revParseOrEmpty(workspaceDir, "HEAD");
   const headSummary = headCommit
     ? (await runGit(["log", "-1", "--pretty=%s"], { cwd: workspaceDir })).stdout.trim() || undefined
@@ -597,6 +655,77 @@ async function currentBranchName(workspaceDir: string): Promise<string> {
 
 async function abortMergeIfNeeded(workspaceDir: string): Promise<void> {
   await tryGit(["merge", "--abort"], { cwd: workspaceDir });
+}
+
+/**
+ * Fetch the latest controller bundle and rebase local commits on top.
+ * Used as a recovery step when a bundle import fails with 409 Conflict.
+ */
+async function tryRebaseWorkerOntoController(
+  workspaceDir: string,
+  repoInfo: RepoSyncInfo,
+  controllerUrl: string,
+  config: PluginConfig,
+  logger: PluginLogger,
+): Promise<void> {
+  try {
+    if (repoInfo.mode === "shared") {
+      return;
+    }
+
+    // Build the bundle URL based on mode
+    const bundleUrlSuffix = repoInfo.mode === "remote" ? repoInfo.remoteUrl : repoInfo.bundleUrl;
+    if (!bundleUrlSuffix) {
+      return;
+    }
+
+    if (repoInfo.mode === "remote") {
+      // Remote mode: fetch from origin and rebase
+      await runGit(["fetch", "origin", repoInfo.defaultBranch], { cwd: workspaceDir });
+      const remoteRef = `refs/remotes/origin/${repoInfo.defaultBranch}`;
+      if (!await revParseOrEmpty(workspaceDir, remoteRef)) {
+        return;
+      }
+      const rebaseResult = await tryGit(["rebase", remoteRef], { cwd: workspaceDir });
+      if (rebaseResult.exitCode !== 0) {
+        await tryGit(["rebase", "--abort"], { cwd: workspaceDir });
+        // Fall back to merge if rebase fails
+        const mergeResult = await tryGit(["merge", "--no-edit", "-X", "theirs", remoteRef], { cwd: workspaceDir });
+        if (mergeResult.exitCode !== 0) {
+          await abortMergeIfNeeded(workspaceDir);
+          logger.warn("Worker: failed to rebase or merge onto controller state; will retry bundle as-is.");
+        }
+      }
+    } else {
+      // Bundle mode: download controller bundle, fetch it, and rebase
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "teamclaw-worker-rebase-"));
+      const tempBundlePath = path.join(tempDir, "controller.bundle");
+      try {
+        const res = await fetch(resolveApiUrl(bundleUrlSuffix, controllerUrl));
+        if (!res.ok) {
+          logger.warn(`Worker: failed to download controller bundle for rebase (status ${res.status}); will retry as-is.`);
+          return;
+        }
+        const buffer = Buffer.from(await res.arrayBuffer());
+        await fs.writeFile(tempBundlePath, buffer);
+        const remoteBranch = `refs/remotes/teamclaw/${repoInfo.defaultBranch}`;
+        await runGit(["fetch", tempBundlePath, `refs/heads/${repoInfo.defaultBranch}:${remoteBranch}`], { cwd: workspaceDir });
+        const rebaseResult = await tryGit(["rebase", remoteBranch], { cwd: workspaceDir });
+        if (rebaseResult.exitCode !== 0) {
+          await tryGit(["rebase", "--abort"], { cwd: workspaceDir });
+          const mergeResult = await tryGit(["merge", "--no-edit", "-X", "theirs", remoteBranch], { cwd: workspaceDir });
+          if (mergeResult.exitCode !== 0) {
+            await abortMergeIfNeeded(workspaceDir);
+            logger.warn("Worker: failed to rebase or merge onto controller state; will retry bundle as-is.");
+          }
+        }
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      }
+    }
+  } catch (err) {
+    logger.warn(`Worker: rebase onto controller failed: ${err instanceof Error ? err.message : String(err)}; will retry bundle as-is.`);
+  }
 }
 
 async function pathExists(filePath: string): Promise<boolean> {

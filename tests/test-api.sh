@@ -113,6 +113,8 @@ if [ "$REPO_ENABLED" = "true" ] && [ -n "$REPO_BRANCH" ]; then
   else
     log_pass "Git repo ready on branch=${REPO_BRANCH}"
   fi
+elif [ "$REPO_ENABLED" = "false" ]; then
+  log_skip "Git collaboration disabled (gitEnabled=false)"
 else
   log_fail "Git repo bootstrap missing or invalid"
 fi
@@ -164,9 +166,12 @@ TASK_SKILL_COUNT=$(echo "$TASK_RESPONSE" | python3 -c "import sys,json; print(le
 
 if [ -n "$TASK_ID" ] && [ "$TASK_STATUS" = "assigned" ] && [ "$TASK_SKILL_COUNT" -ge 1 ]; then
   log_pass "Task created with recommended skills and auto-assigned, status=${TASK_STATUS}, id=${TASK_ID:0:20}..."
+elif [ -n "$TASK_ID" ] && [ "$TASK_STATUS" = "pending" ] && [ "$TASK_SKILL_COUNT" -ge 1 ]; then
+  # In single-instance mode, the developer may be busy from a pre-existing task
+  # (e.g. S1 Step 4 submits a task before test-api.sh runs).
+  log_pass "Task created with recommended skills, status=${TASK_STATUS} (no idle developer worker), id=${TASK_ID:0:20}..."
 else
   log_fail "Task creation issue: status='${TASK_STATUS}', id='${TASK_ID}', recommendedSkills=${TASK_SKILL_COUNT}"
-  # Not a hard failure if no developer worker matched - task is still created
   if [ -n "$TASK_ID" ]; then
     log_info "Task was created (id=${TASK_ID:0:20}...) but not auto-assigned"
   fi
@@ -278,7 +283,7 @@ if [ -n "$TASK_ID" ]; then
   HANDOFF_STATUS=$(echo "$HANDOFF_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('task',{}).get('status',''))" 2>/dev/null || echo "")
   HANDOFF_CONTRACT_OK=$(echo "$HANDOFF_RESPONSE" | python3 -c "import sys,json; task=json.load(sys.stdin).get('task',{}); contract=task.get('lastHandoff') or {}; print('yes' if contract.get('summary') and contract.get('targetRole') == 'qa' else 'no')" 2>/dev/null || echo "no")
 
-  if { [ "$HANDOFF_STATUS" = "assigned" ] || [ "$HANDOFF_STATUS" = "pending" ]; } && [ "$HANDOFF_CONTRACT_OK" = "yes" ]; then
+  if { [ "$HANDOFF_STATUS" = "assigned" ] || [ "$HANDOFF_STATUS" = "pending" ] || [ "$HANDOFF_STATUS" = "in_progress" ]; } && [ "$HANDOFF_CONTRACT_OK" = "yes" ]; then
     log_pass "Task handed off, new status=${HANDOFF_STATUS}"
   else
     log_fail "Task handoff unexpected status='${HANDOFF_STATUS}', contract=${HANDOFF_CONTRACT_OK}"

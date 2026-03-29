@@ -399,7 +399,11 @@
       sections: [
         renderContractSection("Deliverables", renderContractList(deliverables, function (item) {
           const prefix = escapeHtml(item.kind || "artifact") + ": " + escapeHtml(item.value || "");
-          return prefix + (item.summary ? ' <span class="contract-inline-note">— ' + escapeHtml(item.summary) + "</span>" : "");
+          var liveLink = "";
+          if (item.artifactType === "web-app" && item.liveUrl) {
+            liveLink = ' <a class="deliverable-live-link" href="' + escapeHtml(item.liveUrl) + '" target="_blank" rel="noopener">Live Preview</a>';
+          }
+          return prefix + (item.summary ? ' <span class="contract-inline-note">— ' + escapeHtml(item.summary) + "</span>" : "") + liveLink;
         })),
         renderContractSection("Key Points", renderContractList(contract.keyPoints, function (item) {
           return renderMarkdownInline(item);

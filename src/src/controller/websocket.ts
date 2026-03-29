@@ -12,7 +12,8 @@ export type WsEvent =
   | { type: "task:execution"; data: unknown }
   | { type: "message:new"; data: unknown }
   | { type: "clarification:requested"; data: unknown }
-  | { type: "clarification:answered"; data: unknown };
+  | { type: "clarification:answered"; data: unknown }
+  | { type: "requirement:complete"; data: unknown };
 
 export class TeamWebSocketServer {
   private wss: WebSocketServer | null = null;

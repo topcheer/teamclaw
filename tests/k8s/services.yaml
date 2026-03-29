@@ -1,0 +1,31 @@
+# S5 Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: teamclaw
+  namespace: teamclaw
+spec:
+  type: NodePort
+  selector:
+    app: teamclaw
+    scenario: s5
+  ports:
+    - port: 9527
+      targetPort: 9527
+      nodePort: 30027
+---
+# S6 Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: teamclaw-controller
+  namespace: teamclaw
+spec:
+  type: NodePort
+  selector:
+    app: teamclaw
+    scenario: s6
+  ports:
+    - port: 9527
+      targetPort: 9527
+      nodePort: 30028

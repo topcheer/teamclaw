@@ -4,8 +4,8 @@ import type { TaskAssignmentPayload, TeamMessage } from "../types.js";
 import { parseJsonBody, sendJson, sendError } from "../protocol.js";
 import { MessageQueue } from "./message-queue.js";
 
-export type TaskExecutor = (assignment: TaskAssignmentPayload) => Promise<string>;
-export type ResultReporter = (taskId: string, result: string, error: string | null) => void;
+export type TaskExecutor = (assignment: TaskAssignmentPayload) => Promise<string | { text: string; contract?: Record<string, unknown> }>;
+export type ResultReporter = (taskId: string, result: string, error: string | null, contract?: Record<string, unknown>) => void;
 export type TaskCanceller = (taskId: string) => Promise<boolean> | boolean;
 export type TaskCancelChecker = (taskId: string) => boolean;
 
@@ -89,12 +89,13 @@ export function createWorkerHttpHandler(
               executionIdempotencyKey,
               repo,
             })
-            .then((result) => {
+            .then((raw) => {
               if (isTaskCancelled?.(taskId)) {
                 logger.info(`Worker: skipping result report for cancelled task ${taskId}`);
                 return;
               }
-              resultReporter(taskId, result, null);
+              const result = typeof raw === "string" ? { text: raw } : raw;
+              resultReporter(taskId, result.text, null, result.contract);
             })
             .catch((err) => {
               if (isTaskCancelled?.(taskId)) {

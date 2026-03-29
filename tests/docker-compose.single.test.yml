@@ -1,6 +1,6 @@
 services:
   teamclaw-single:
-    image: ${OPENCLAW_IMAGE:-openclaw:teamclaw-test}
+    image: ${OPENCLAW_IMAGE:-registry.iot2.win/openclaw:teamclaw-test}
     platform: ${OPENCLAW_PLATFORM:-linux/amd64}
     container_name: tc-single
     environment:

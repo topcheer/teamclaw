@@ -183,6 +183,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
         ),
         handoffPlan: Type.Optional(Type.String({ description: "Brief note about how workers should report progress/handoffs across this flow" })),
         notes: Type.Optional(Type.String({ description: "Additional orchestration notes for the human/controller log" })),
+        requirementFullyComplete: Type.Optional(Type.Boolean({ description: "Set to true when the entire human requirement is fully satisfied — all tasks completed, no deferred tasks remaining, no follow-ups needed" })),
       }),
       async execute(_id: string, params: Record<string, unknown>) {
         const normalizedSessionKey = typeof sessionKey === "string" ? sessionKey.trim() : "";
@@ -210,6 +211,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
           deferredTasks: normalizeManifestDeferredTasks(params.deferredTasks),
           handoffPlan: normalizeOptionalManifestText(params.handoffPlan),
           notes: normalizeOptionalManifestText(params.notes),
+          requirementFullyComplete: Boolean(params.requirementFullyComplete),
         };
 
         try {
@@ -230,7 +232,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
           return {
             content: [{
               type: "text" as const,
-              text: `Controller manifest recorded: roles=${manifest.requiredRoles.join(", ") || "none"} created=${manifest.createdTasks.length} deferred=${manifest.deferredTasks.length}`,
+              text: `Controller manifest recorded: roles=${manifest.requiredRoles.join(", ") || "none"} created=${manifest.createdTasks.length} deferred=${manifest.deferredTasks.length}${manifest.requirementFullyComplete ? " requirementFullyComplete=true" : ""}`,
             }],
           };
         } catch (err) {

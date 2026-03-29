@@ -1,0 +1,61 @@
+{
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "zai/glm-5-turbo"
+      }
+    }
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "gateway": {
+    "auth": {
+      "mode": "token",
+      "token": "47989963b032656bbfe24aee1f459531402cbd90a34fc83d"
+    }
+  },
+  "plugins": {
+    "enabled": true,
+    "entries": {
+      "teamclaw": {
+        "enabled": true,
+        "config": {
+          "mode": "controller",
+          "port": 9527,
+          "teamName": "calc-project",
+          "gitEnabled": true,
+          "heartbeatIntervalMs": 10000,
+          "taskTimeoutMs": 1800000,
+          "workerProvisioningType": "docker",
+          "workerProvisioningControllerUrl": "http://tc-controller:9527",
+          "workerProvisioningRoles": [
+            "developer",
+            "qa",
+            "architect"
+          ],
+          "workerProvisioningMinPerRole": 1,
+          "workerProvisioningMaxPerRole": 1,
+          "workerProvisioningIdleTtlMs": 300000,
+          "workerProvisioningStartupTimeoutMs": 120000,
+          "workerProvisioningImage": "registry.iot2.win/openclaw:teamclaw-test",
+          "workerProvisioningDockerNetwork": "teamclaw-test-net",
+          "workerProvisioningPassEnv": [
+            "ZAI_API_KEY"
+          ],
+          "workerProvisioningDockerMounts": [
+            "/Users/zhanju/ggai/teamclaw/src:/app/extensions/teamclaw:ro",
+            "/Users/zhanju/ggai/teamclaw/tests/config/controller/workspace:/home/node/.openclaw/workspace"
+          ]
+        }
+      }
+    }
+  },
+  "meta": {
+    "lastTouchedVersion": "2026.3.24",
+    "lastTouchedAt": "2026-03-27T05:13:38.356Z"
+  }
+}

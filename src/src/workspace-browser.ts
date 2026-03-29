@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveDefaultOpenClawWorkspaceDir } from "./openclaw-workspace.js";
+import { resolveTeamClawWorkspaceDir } from "./openclaw-workspace.js";
 
 const MAX_PREVIEW_BYTES = 256 * 1024;
 const MAX_TREE_DEPTH = 8;
@@ -147,7 +147,7 @@ export function buildWorkspaceRawUrl(relativePath: string): string {
 }
 
 async function ensureWorkspaceDir(): Promise<string> {
-  const workspaceDir = resolveDefaultOpenClawWorkspaceDir();
+  const workspaceDir = resolveTeamClawWorkspaceDir();
   await fs.mkdir(workspaceDir, { recursive: true });
   return workspaceDir;
 }

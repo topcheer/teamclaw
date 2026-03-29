@@ -223,6 +223,7 @@ export function normalizeWorkerTaskResultContract(raw: unknown): WorkerTaskResul
     followUps: normalizeResultFollowUps(input.followUps),
     questions: normalizeContractStringList(input.questions),
     notes: normalizeOptionalContractText(input.notes),
+    discoveredPatterns: normalizeContractStringList(input.discoveredPatterns),
   };
 }
 
@@ -315,7 +316,12 @@ function normalizeResultDeliverables(raw: unknown): WorkerTaskResultDeliverable[
         : "note";
       const value = typeof entry.value === "string" ? entry.value.trim() : "";
       const summary = normalizeOptionalContractText(entry.summary);
-      return value ? { kind, value, summary } : null;
+      const artifactType = typeof entry.artifactType === "string" ? entry.artifactType as WorkerTaskResultDeliverable["artifactType"] : undefined;
+      const previewCommand = normalizeOptionalContractText(entry.previewCommand);
+      const previewCwd = normalizeOptionalContractText(entry.previewCwd);
+      const previewReadyPath = normalizeOptionalContractText(entry.previewReadyPath);
+      const liveUrl = normalizeOptionalContractText(entry.liveUrl);
+      return value ? { kind, value, summary, artifactType, previewCommand, previewCwd, previewReadyPath, liveUrl } : null;
     })
     .filter((entry): entry is WorkerTaskResultDeliverable => !!entry);
 }
@@ -426,6 +432,30 @@ function extractQuestionOrBulletLines(text: string, maxItems: number, matcher?: 
   return Array.from(new Set(lines.map((line) => summarizeContractText(line, 220)))).slice(0, maxItems);
 }
 
+const WEB_HTML_FILENAMES = new Set(["index.html", "app.html", "main.html", "home.html"]);
+
+/**
+ * Default preview command used when the worker does not provide one.
+ * This is a minimal static file server — the worker (LLM) is responsible
+ * for providing the real, framework-appropriate command via previewCommand
+ * in its result contract.
+ */
+function inferPreviewCommand(_cwd: string, _resultText: string, _filePaths: string[]): string {
+  return "npx -y serve -l {PORT}";
+}
+
+function isWebHtmlPath(filePath: string): boolean {
+  const segments = filePath.replace(/\\/gu, "/").split("/");
+  const filename = segments[segments.length - 1] ?? "";
+  if (!filename.toLowerCase().endsWith(".html") && !filename.toLowerCase().endsWith(".htm")) {
+    return false;
+  }
+  if (filename.startsWith(".") || filename.includes(".config.") || filename.includes(".test.") || filename.includes(".spec.")) {
+    return false;
+  }
+  return true;
+}
+
 function inferResultDeliverables(result: string, error?: string): WorkerTaskResultDeliverable[] {
   if (error) {
     return [{
@@ -436,10 +466,31 @@ function inferResultDeliverables(result: string, error?: string): WorkerTaskResu
   }
 
   const deliverables: WorkerTaskResultDeliverable[] = [];
-  const pathMatches = Array.from(result.matchAll(/(?:^|[\s:(])([A-Za-z0-9_./-]+\.[A-Za-z0-9_-]+)/g))
+  let webAppInferred = false;
+  const pathMatches = Array.from(result.matchAll(/(?:^|[\s:(`])([A-Za-z0-9_./-]+\.[A-Za-z0-9_-]+)/g))
     .map((match) => match[1])
     .filter(Boolean);
-  for (const filePath of Array.from(new Set(pathMatches)).slice(0, 5)) {
+  const uniquePaths = Array.from(new Set(pathMatches)).slice(0, 5);
+  for (const filePath of uniquePaths) {
+    if (!webAppInferred && isWebHtmlPath(filePath)) {
+      const segments = filePath.replace(/\\/gu, "/").split("/");
+      const filename = segments[segments.length - 1] ?? "";
+      const dirname = segments.length > 1 ? segments.slice(0, -1).join("/") : ".";
+      const isTopLevelHtml = WEB_HTML_FILENAMES.has(filename);
+      if (isTopLevelHtml || filename.toLowerCase().endsWith(".html")) {
+        webAppInferred = true;
+        deliverables.push({
+          kind: "directory",
+          value: dirname,
+          summary: `Web application at ${dirname}`,
+          artifactType: "web-app",
+          previewCommand: inferPreviewCommand(dirname, result, uniquePaths),
+          previewCwd: dirname,
+          previewReadyPath: "/",
+        });
+        continue;
+      }
+    }
     deliverables.push({
       kind: "file",
       value: filePath,
@@ -456,4 +507,129 @@ function inferResultDeliverables(result: string, error?: string): WorkerTaskResu
     value: summarizeContractText(result, 300),
     summary: "Backfilled from the worker's final reply.",
   }];
+}
+
+/**
+ * Enrich existing deliverables with preview fields (artifactType, previewCommand, etc.)
+ * by inferring from the raw result text.
+ *
+ * This function only enriches when the worker did NOT already provide these fields.
+ * When the worker (LLM) submits a proper result contract with previewCommand and
+ * artifactType, we trust it completely — it knows its own code better than we do.
+ *
+ * Returns the contract with enriched deliverables if any enrichment happened, or null
+ * if no enrichment was needed.
+ */
+export function enrichDeliverablesWithPreviewInference(
+  contract: WorkerTaskResultContract,
+  resultText: string,
+): WorkerTaskResultContract | null {
+  const { deliverables } = contract;
+  const existingWebApp = deliverables.find((d) => d.artifactType === "web-app");
+  if (existingWebApp) {
+    // Worker already provided a web-app with a real previewCommand — trust it.
+    if (existingWebApp.previewCommand?.trim()) {
+      return null;
+    }
+    // Worker declared web-app but no command — try to provide a fallback command.
+    const cwd = existingWebApp.previewCwd?.trim();
+    if (cwd && cwd !== "." && cwd !== "./") {
+      // Has a real cwd but no command — provide generic static serve fallback
+      existingWebApp.previewCommand = inferPreviewCommand(cwd, resultText, deliverables.map((d) => d.value ?? ""));
+      return { ...contract, deliverables };
+    }
+  }
+
+  // Strategy 1: Extract file paths from result text to detect HTML files
+  const allSources = [resultText, ...deliverables.map((d) => d.summary ?? "")];
+  const pathMatches = Array.from(
+    allSources.join("\n").matchAll(/(?:^|[\s:(,`])([A-Za-z0-9_./-]+\.[A-Za-z0-9_-]+)/g),
+  )
+    .map((match) => match[1])
+    .filter(Boolean);
+
+  for (const filePath of Array.from(new Set(pathMatches)).slice(0, 5)) {
+    if (isWebHtmlPath(filePath)) {
+      const segments = filePath.replace(/\\/gu, "/").split("/");
+      const filename = segments[segments.length - 1] ?? "";
+      const dirname = segments.length > 1 ? segments.slice(0, -1).join("/") : ".";
+      if (!filename.toLowerCase().endsWith(".html") && !filename.toLowerCase().endsWith(".htm")) {
+        continue;
+      }
+      const allDeliverablePaths = deliverables.map((d) => d.value ?? "");
+      const matchingIndex = deliverables.findIndex((d) =>
+        d.kind === "directory"
+          && filePath.replace(/\\/gu, "/").startsWith(
+            d.value?.replace(/\\/gu, "/").replace(/\/$/u, ""),
+          ),
+      );
+      if (matchingIndex >= 0) {
+        deliverables[matchingIndex] = {
+          ...deliverables[matchingIndex],
+          artifactType: "web-app",
+          previewCommand: inferPreviewCommand(dirname, resultText, allDeliverablePaths),
+          previewCwd: dirname,
+          previewReadyPath: "/",
+          summary: deliverables[matchingIndex].summary || `Web application at ${dirname}`,
+        };
+      } else {
+        deliverables.push({
+          kind: "directory",
+          value: dirname,
+          summary: `Web application at ${dirname}`,
+          artifactType: "web-app",
+          previewCommand: inferPreviewCommand(dirname, resultText, allDeliverablePaths),
+          previewCwd: dirname,
+          previewReadyPath: "/",
+        });
+      }
+      return { ...contract, deliverables };
+    }
+  }
+
+  // Strategy 2: If result text mentions HTML/web/blog/site keywords and there's a
+  // directory deliverable without artifactType, infer web-app from the directory itself.
+  const webKeywords = /\b(html|web\s*app|web\s*site|blog|index\.html|app\.html|homepage)\b/i;
+  const hasWebKeywords = webKeywords.test(resultText) || deliverables.some((d) => webKeywords.test(d.summary ?? ""));
+
+  if (hasWebKeywords) {
+    const dirDeliverable = deliverables.find(
+      (d) => d.kind === "directory" && !d.artifactType && d.value,
+    );
+    if (dirDeliverable) {
+      const cwd = dirDeliverable.value.replace(/\/$/u, "");
+      const allDeliverablePaths = deliverables.map((d) => d.value ?? "");
+      deliverables[deliverables.indexOf(dirDeliverable)] = {
+        ...dirDeliverable,
+        artifactType: "web-app",
+        previewCommand: inferPreviewCommand(cwd, resultText, allDeliverablePaths),
+        previewCwd: cwd,
+        previewReadyPath: "/",
+        summary: dirDeliverable.summary || `Web application at ${cwd}`,
+      };
+      return { ...contract, deliverables };
+    }
+  }
+
+  // Strategy 3: Extract directory paths that contain HTML files from result text
+  // (e.g. "blog/index.html" → directory "blog"). This handles cases where deliverables
+  // are all "note" type but result text references HTML files in directories.
+  const dirHtmlPattern = /([A-Za-z0-9_.-]+\/)[A-Za-z0-9_.-]+\.html\b/g;
+  const dirMatches = Array.from(resultText.matchAll(dirHtmlPattern)).map((m) => m[1].replace(/\/$/u, ""));
+  const uniqueDirs = Array.from(new Set(dirMatches));
+  if (uniqueDirs.length > 0 && hasWebKeywords) {
+    const dirname = uniqueDirs[0];
+    deliverables.push({
+      kind: "directory",
+      value: dirname,
+      summary: `Web application at ${dirname}`,
+      artifactType: "web-app",
+      previewCommand: inferPreviewCommand(dirname, resultText, [dirname]),
+      previewCwd: dirname,
+      previewReadyPath: "/",
+    });
+    return { ...contract, deliverables };
+  }
+
+  return null;
 }
