@@ -892,7 +892,54 @@
           refreshTaskDetail(true);
         }
         break;
+      case "report:ready":
+        handleReportReady(event.data || {});
+        break;
     }
+  }
+
+  function handleReportReady(data) {
+    const reportUrl = data.reportUrl;
+    const projectName = data.projectName || "Project";
+    const status = data.status || "completed";
+    const icon = status === "completed" ? "✅" : status === "partial" ? "⚠️" : "❌";
+
+    // Create toast notification
+    let container = document.getElementById("toast-container");
+    if (!container) {
+      container = document.createElement("div");
+      container.id = "toast-container";
+      container.style.cssText = "position:fixed;top:16px;right:16px;z-index:10000;display:flex;flex-direction:column;gap:8px;";
+      document.body.appendChild(container);
+    }
+
+    const toast = document.createElement("div");
+    toast.style.cssText = "background:#1a365d;color:#fff;padding:14px 20px;border-radius:10px;"
+      + "box-shadow:0 8px 24px rgba(0,0,0,.2);font-size:14px;max-width:380px;"
+      + "animation:slideIn .3s ease;cursor:pointer;display:flex;flex-direction:column;gap:6px;";
+    toast.innerHTML = '<div style="font-weight:600;">' + icon + " Delivery Report Ready</div>"
+      + '<div style="opacity:.85;font-size:13px;">' + escapeHtmlInline(projectName) + " — " + status + "</div>"
+      + '<div style="font-size:12px;opacity:.7;">Click to open report</div>';
+    toast.onclick = function () {
+      if (reportUrl) window.open(reportUrl, "_blank");
+      toast.remove();
+    };
+
+    container.appendChild(toast);
+    setTimeout(function () { toast.style.opacity = "0"; toast.style.transition = "opacity .5s"; }, 8000);
+    setTimeout(function () { toast.remove(); }, 8500);
+
+    // Add animation keyframes if not already present
+    if (!document.getElementById("toast-anim-style")) {
+      const style = document.createElement("style");
+      style.id = "toast-anim-style";
+      style.textContent = "@keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }";
+      document.head.appendChild(style);
+    }
+  }
+
+  function escapeHtmlInline(str) {
+    return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   }
 
   async function refreshAll() {
