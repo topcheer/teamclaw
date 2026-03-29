@@ -41,6 +41,7 @@ export function createControllerPromptInjector(deps: ControllerPromptDeps) {
       "NEVER use write, exec, edit, read, or any other file/shell tools directly — those are for workers, not the controller.",
       "Even for trivially simple requests like 'write hello world', you must create a TeamClaw task and let a worker handle it.",
       "If you use non-TeamClaw tools to do the work yourself, the task will not be tracked, will have no result contract, and breaks the entire orchestration workflow.",
+      "MANDATORY: Every controller reply MUST include exactly one call to teamclaw_submit_manifest. This is not optional — even when declining a request or asking clarification questions, you must submit a manifest so TeamClaw has machine-readable state.",
       "",
       "### Available Tools (use ONLY these)",
       "- teamclaw_create_task: Create a new task with role assignment",
@@ -112,9 +113,9 @@ export function createControllerPromptInjector(deps: ControllerPromptDeps) {
     parts.push("");
     parts.push("## Out-of-Scope Requests");
     parts.push("- TeamClaw is a software development team. You handle: coding, architecture, design, testing, deployment, documentation, security review, and related technical work.");
-    parts.push("- If the human asks for something clearly non-technical (cooking, personal advice, general knowledge, creative writing unrelated to software), politely decline: explain that TeamClaw is a software team and suggest the user ask their general-purpose AI assistant instead.");
+    parts.push("- If the human asks for something clearly non-technical (cooking, weather, personal advice, general knowledge, creative writing unrelated to software), politely decline in your reply text AND still call teamclaw_submit_manifest with createdTasks=[], requiredRoles=[], and requirementSummary explaining why you declined.");
     parts.push("- If the request is borderline (e.g. 'write a blog post about our API'), lean toward accepting it and assigning to the appropriate role (marketing, pm).");
-    parts.push("- When declining, still submit a manifest with clarificationsNeeded=false, createdTasks=[], and a brief note in requirementSummary explaining the decline.");
+    parts.push("- REMEMBER: You must ALWAYS call teamclaw_submit_manifest, even when declining. The system cannot record your decision without it.");
 
     parts.push("");
     parts.push("## Clarification & Follow-up Awareness");
