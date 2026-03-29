@@ -1,13 +1,17 @@
 import type { PluginConfig, TeamState } from "../types.js";
 
 export function hasOnDemandWorkerProvisioning(
-  config: Pick<PluginConfig, "workerProvisioningType">,
+  config: Pick<PluginConfig, "workerProvisioningType" | "processModel">,
 ): boolean {
+  // Single-process mode uses InProcessWorkerManager for on-demand provisioning
+  if (config.processModel === "single") {
+    return true;
+  }
   return config.workerProvisioningType !== "none";
 }
 
 export function shouldBlockControllerWithoutWorkers(
-  config: Pick<PluginConfig, "workerProvisioningType">,
+  config: Pick<PluginConfig, "workerProvisioningType" | "processModel">,
   state: TeamState | null,
 ): boolean {
   return !!state && Object.keys(state.workers).length === 0 && !hasOnDemandWorkerProvisioning(config);
