@@ -33,6 +33,7 @@ export type DeliveryReportDeliverable = {
   summary: string;
   artifactType?: string;
   previewUrl?: string;
+  previewError?: string;
 };
 
 export type DeliveryReport = {
@@ -128,14 +129,16 @@ export function generateDeliveryReport(
   const deliverables: DeliveryReportDeliverable[] = [];
   for (const task of tasks) {
     if (!task.resultContract?.deliverables) continue;
-    for (const d of task.resultContract.deliverables) {
+    for (const [di, d] of task.resultContract.deliverables.entries()) {
+      const preview = resolvePreviewInfo(d, task.id, di, state);
       deliverables.push({
         taskId: task.id,
         kind: d.kind,
         path: d.value,
         summary: d.summary ?? "",
         artifactType: d.artifactType,
-        previewUrl: resolvePreviewUrl(d, task.id, state),
+        previewUrl: preview.url,
+        previewError: preview.error,
       });
     }
   }
@@ -172,16 +175,31 @@ export function generateDeliveryReport(
   };
 }
 
-function resolvePreviewUrl(
+function resolvePreviewInfo(
   deliverable: WorkerTaskResultDeliverable,
   taskId: string,
+  deliverableIndex: number,
   state: TeamState,
-): string | undefined {
-  if (deliverable.liveUrl) return deliverable.liveUrl;
-  // Find a healthy preview for this task
+): { url?: string; error?: string } {
+  if (deliverable.liveUrl) return { url: deliverable.liveUrl };
+  // Find preview record for this specific deliverable
+  const previewId = `preview-${taskId}-${deliverableIndex}`;
+  const exact = (state.previews ?? {})[previewId];
+  if (exact) {
+    if (exact.status === "healthy") return { url: exact.liveUrl };
+    if (exact.status === "failed") return { error: exact.lastError ?? "Preview failed" };
+    if (exact.status === "stopped") return { error: "Preview stopped" };
+    // launching/starting — still pending
+    return { error: "Preview is still starting…" };
+  }
+  // Fallback: find any healthy preview for this task
   const previews = Object.values(state.previews ?? {});
   const match = previews.find((p) => p.taskId === taskId && p.status === "healthy");
-  return match?.liveUrl;
+  if (match) return { url: match.liveUrl };
+  // Check for any failed preview for this task
+  const failed = previews.find((p) => p.taskId === taskId && p.status === "failed");
+  if (failed) return { error: failed.lastError ?? "Preview failed" };
+  return {};
 }
 
 // ── Session completion detection ─────────────────────────────────────
@@ -238,6 +256,13 @@ function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".bmp"]);
+
+function isImagePath(filePath: string): boolean {
+  const ext = filePath.slice(filePath.lastIndexOf(".")).toLowerCase();
+  return IMAGE_EXTENSIONS.has(ext);
+}
+
 function formatDuration(ms: number): string {
   if (ms < 1000) return "<1s";
   const totalSec = Math.floor(ms / 1000);
@@ -260,9 +285,7 @@ const STATUS_EMOJI: Record<string, string> = {
   blocked: "🚫",
 };
 
-export function renderReportHtml(report: DeliveryReport, _controllerBaseUrl?: string): string {
-  // Always use origin-relative paths so links work regardless of proxy / gateway
-  const baseUrl = "";
+export function renderReportHtml(report: DeliveryReport): string {
   const statusEmoji = STATUS_EMOJI[report.status] ?? "❓";
   const statusLabel =
     report.status === "completed"
@@ -302,17 +325,31 @@ export function renderReportHtml(report: DeliveryReport, _controllerBaseUrl?: st
       const kindIcon =
         d.artifactType === "web-app" || d.artifactType === "static-site"
           ? "🌐"
-          : d.kind === "directory"
-            ? "📁"
-            : d.kind === "command"
-              ? "💻"
-              : "📄";
-      const previewHtml = d.previewUrl
-        ? `<div class="deliverable-preview">
-            <a href="${baseUrl}${escapeHtml(d.previewUrl)}" target="_blank" class="preview-link">🔗 Open Live Preview</a>
-            <iframe src="${baseUrl}${escapeHtml(d.previewUrl)}" class="preview-iframe" loading="lazy" sandbox="allow-scripts allow-same-origin allow-forms"></iframe>
-          </div>`
-        : "";
+          : d.artifactType === "document"
+            ? "📝"
+            : d.kind === "directory"
+              ? "📁"
+              : d.kind === "command"
+                ? "💻"
+                : isImagePath(d.path)
+                  ? "🖼️"
+                  : "📄";
+      let previewHtml = "";
+      if (d.previewUrl) {
+        previewHtml = `<div class="deliverable-preview">
+            <a href="${escapeHtml(d.previewUrl)}" target="_blank" class="preview-link">🔗 Open Live Preview</a>
+            <iframe src="${escapeHtml(d.previewUrl)}" class="preview-iframe" loading="lazy" sandbox="allow-scripts allow-same-origin allow-forms"></iframe>
+          </div>`;
+      } else if (d.previewError) {
+        previewHtml = `<div class="preview-error">⚠️ ${escapeHtml(d.previewError)}</div>`;
+      } else if (d.kind === "command") {
+        previewHtml = `<div class="deliverable-run-hint">💡 Run: <code>${escapeHtml(d.path)}</code></div>`;
+      } else if (d.artifactType === "document") {
+        previewHtml = `<div class="deliverable-doc-hint">📖 Document — view in workspace at <code>${escapeHtml(d.path)}</code></div>`;
+      } else if (isImagePath(d.path)) {
+        // Serve image via workspace file endpoint if available
+        previewHtml = `<div class="deliverable-image-hint">🖼️ Image file — open from workspace</div>`;
+      }
       return `
       <div class="deliverable-card">
         <div class="deliverable-header">
@@ -429,6 +466,28 @@ export function renderReportHtml(report: DeliveryReport, _controllerBaseUrl?: st
   .preview-iframe {
     width: 100%; height: 400px; border: 1px solid var(--border);
     border-radius: 6px; background: #fff;
+  }
+  .preview-error {
+    margin-top: 8px; padding: 10px 14px; background: #fff5f5; border: 1px solid #fed7d7;
+    border-radius: 6px; font-size: .85rem; color: var(--danger);
+  }
+  .deliverable-run-hint {
+    margin-top: 8px; padding: 8px 12px; background: #ebf8ff; border: 1px solid #bee3f8;
+    border-radius: 6px; font-size: .85rem; color: #2a4365;
+  }
+  .deliverable-run-hint code {
+    background: #e2e8f0; padding: 1px 6px; border-radius: 4px; font-size: .82rem;
+  }
+  .deliverable-doc-hint {
+    margin-top: 8px; padding: 8px 12px; background: #f0fff4; border: 1px solid #c6f6d5;
+    border-radius: 6px; font-size: .85rem; color: #22543d;
+  }
+  .deliverable-doc-hint code, .deliverable-image-hint code {
+    background: #e2e8f0; padding: 1px 6px; border-radius: 4px; font-size: .82rem;
+  }
+  .deliverable-image-hint {
+    margin-top: 8px; padding: 8px 12px; background: #faf5ff; border: 1px solid #e9d8fd;
+    border-radius: 6px; font-size: .85rem; color: #44337a;
   }
 
   .footer {

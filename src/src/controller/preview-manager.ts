@@ -125,8 +125,55 @@ function resolveWorkspaceDirectory(rootDir: string, relativePath: string): strin
 export class PreviewManager {
   private readonly processes = new Map<string, ChildProcess>();
   private readonly stoppingPreviewIds = new Set<string>();
+  private healthMonitorTimer: ReturnType<typeof setInterval> | null = null;
+
+  private static readonly HEALTH_MONITOR_INTERVAL_MS = 30_000; // check every 30s
 
   constructor(private readonly deps: PreviewManagerDeps) {}
+
+  /** Start periodic health monitoring for all healthy previews. */
+  startHealthMonitor(): void {
+    if (this.healthMonitorTimer) return;
+    this.healthMonitorTimer = setInterval(() => {
+      void this.runHealthChecks();
+    }, PreviewManager.HEALTH_MONITOR_INTERVAL_MS);
+    this.healthMonitorTimer.unref?.();
+  }
+
+  stopHealthMonitor(): void {
+    if (this.healthMonitorTimer) {
+      clearInterval(this.healthMonitorTimer);
+      this.healthMonitorTimer = null;
+    }
+  }
+
+  /** Re-check all "healthy" previews; mark failed if process gone or not responding. */
+  private async runHealthChecks(): Promise<void> {
+    const state = this.deps.getTeamState();
+    if (!state) return;
+    const healthyPreviews = Object.values(state.previews ?? {}).filter(
+      (p) => p.status === "healthy",
+    );
+    for (const preview of healthyPreviews) {
+      // Check if process is still alive
+      const proc = this.processes.get(preview.id);
+      if (!proc) {
+        this.markPreviewFailed(preview.id, "Preview process is no longer running.");
+        continue;
+      }
+      // Check if still responding to HTTP
+      const healthy = await this.checkPreviewHealth(preview);
+      if (!healthy) {
+        this.deps.logger.warn(`Controller: preview ${preview.id} failed periodic health check`);
+        this.markPreviewFailed(preview.id, "Preview stopped responding to health checks.");
+      } else {
+        this.deps.updateTeamState((s) => {
+          const p = s.previews?.[preview.id];
+          if (p) p.lastHealthCheckAt = Date.now();
+        });
+      }
+    }
+  }
 
   async syncTaskPreviews(taskId: string): Promise<void> {
     const state = this.deps.getTeamState();
@@ -151,6 +198,7 @@ export class PreviewManager {
     for (const spec of specs) {
       await this.ensurePreview(spec);
     }
+    if (specs.length > 0) this.startHealthMonitor();
   }
 
   async stopTaskPreviews(taskId: string, reason: string): Promise<void> {
@@ -162,6 +210,10 @@ export class PreviewManager {
     }
   }
 
+  private static isPreviewableDeliverable(d: WorkerTaskResultDeliverable): boolean {
+    return d.artifactType === "web-app" || d.artifactType === "static-site";
+  }
+
   async restorePreviewsOnStartup(): Promise<void> {
     const state = this.deps.getTeamState();
     if (!state) {
@@ -169,13 +221,15 @@ export class PreviewManager {
       return;
     }
     const completedTasks = Object.values(state.tasks).filter((t) => t.status === "completed" && t.resultContract);
-    const tasksWithPreviews = completedTasks.filter((t) => t.resultContract!.deliverables.some((d) => d.previewCommand));
+    const tasksWithPreviews = completedTasks.filter((t) =>
+      t.resultContract!.deliverables.some((d) => PreviewManager.isPreviewableDeliverable(d)),
+    );
     this.deps.logger.info(`PreviewManager: restorePreviewsOnStartup: ${tasksWithPreviews.length} tasks with previews out of ${completedTasks.length} completed`);
 
     for (const preview of Object.values(state.previews ?? {})) {
       const task = state.tasks[preview.taskId];
       const deliverable = task?.resultContract?.deliverables?.[preview.deliverableIndex];
-      if (!task || task.status !== "completed" || !normalizeOptionalText(deliverable?.previewCommand)) {
+      if (!task || task.status !== "completed" || !deliverable || !PreviewManager.isPreviewableDeliverable(deliverable)) {
         await this.removePreview(preview.id, "preview can no longer be restored from task state");
       }
     }
@@ -183,7 +237,7 @@ export class PreviewManager {
       if (task.status !== "completed" || !task.resultContract) {
         continue;
       }
-      if (!task.resultContract.deliverables.some((deliverable) => normalizeOptionalText(deliverable.previewCommand))) {
+      if (!task.resultContract.deliverables.some((d) => PreviewManager.isPreviewableDeliverable(d))) {
         continue;
       }
       try {
@@ -192,9 +246,11 @@ export class PreviewManager {
         this.deps.logger.warn(`Controller: failed to restore preview(s) for ${task.id}: ${String(err)}`);
       }
     }
+    this.startHealthMonitor();
   }
 
   async stopAll(reason = "controller shutdown"): Promise<void> {
+    this.stopHealthMonitor();
     const previewIds = Array.from(new Set([
       ...this.processes.keys(),
       ...Object.keys(this.deps.getTeamState()?.previews ?? {}),
@@ -209,12 +265,15 @@ export class PreviewManager {
     const specs: DynamicPreviewSpec[] = [];
 
     for (const [deliverableIndex, deliverable] of contract.deliverables.entries()) {
-      if (deliverable.artifactType !== "web-app") {
+      if (deliverable.artifactType !== "web-app" && deliverable.artifactType !== "static-site") {
         continue;
       }
-      const rawCommand = normalizeOptionalText(deliverable.previewCommand);
+      const rawCommand = normalizeOptionalText(deliverable.previewCommand) ?? GENERIC_SERVE_COMMAND;
       const previewCwd = normalizePreviewCwd(deliverable);
-      if (!rawCommand || !previewCwd) {
+      if (!previewCwd) {
+        this.deps.logger.warn(
+          `Controller: skipping preview for task ${taskId} deliverable[${deliverableIndex}] — cannot resolve previewCwd from value "${deliverable.value}"`,
+        );
         continue;
       }
 
