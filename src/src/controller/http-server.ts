@@ -48,6 +48,7 @@ import type { PreviewManager } from "./preview-manager.js";
 import { createControllerPromptInjector } from "./prompt-injector.js";
 import { inferTaskRole, FALLBACK_ROLE } from "./role-inference.js";
 import { buildControllerNoWorkersMessage, shouldBlockControllerWithoutWorkers } from "./controller-capacity.js";
+import { generateDeliveryReport, isSessionComplete, renderReportHtml, type DeliveryReport } from "./delivery-report.js";
 import {
   backfillWorkerProgressContract,
   backfillWorkerTaskResultContract,
@@ -1019,6 +1020,45 @@ function buildControllerRateLimitProbeMessage(
   ].join("\n");
 }
 
+async function checkAndGenerateReport(task: TaskInfo, deps: ControllerHttpDeps): Promise<void> {
+  const sessionKey = task.controllerSessionKey;
+  if (!sessionKey) return;
+
+  const state = deps.getTeamState();
+  if (!state) return;
+
+  if (!isSessionComplete(sessionKey, state, normalizeControllerIntakeSessionKey)) return;
+
+  const report = generateDeliveryReport(sessionKey, state, normalizeControllerIntakeSessionKey);
+  if (!report) return;
+
+  // Check if we already generated a report for this session
+  const existingReport = state.reports?.[report.id];
+  if (existingReport) return;
+
+  // Store a lightweight record in state (full report is generated on demand from live state)
+  deps.updateTeamState((s) => {
+    if (!s.reports) s.reports = {};
+    s.reports[report.id] = {
+      id: report.id,
+      sessionKey: report.sessionKey,
+      generatedAt: report.generatedAt,
+      projectName: report.projectName,
+      status: report.status,
+      taskCount: report.taskCount,
+      deliverableCount: report.deliverables.length,
+      previewCount: report.deliverables.filter((d) => d.previewUrl).length,
+    };
+  });
+
+  const reportUrl = `/api/v1/reports/${encodeURIComponent(sessionKey)}`;
+  deps.wsServer.broadcastUpdate({
+    type: "report:ready",
+    data: { sessionKey, reportUrl, projectName: report.projectName, status: report.status },
+  });
+  deps.logger.info(`Controller: delivery report generated for session ${sessionKey}: ${reportUrl}`);
+}
+
 async function continueControllerWorkflow(task: TaskInfo, deps: ControllerHttpDeps): Promise<void> {
   if (task.createdBy !== "controller") {
     return;
@@ -1789,7 +1829,13 @@ function applyTaskResult(
         logger.warn(
           `Controller: failed to continue intake workflow after ${taskId}: ${String(err)}`,
         );
+      }).finally(() => {
+        // After the follow-up run completes (or if there was none), check session completion.
+        void checkAndGenerateReport(updatedTask, deps).catch(() => {});
       });
+    } else if (updatedTask.controllerSessionKey) {
+      // Non-controller tasks or failed tasks — still check session completion.
+      void checkAndGenerateReport(updatedTask, deps).catch(() => {});
     }
   }
 
@@ -3793,6 +3839,39 @@ async function handleRequest(
       req.pipe(proxyReq);
       return;
     }
+  }
+
+  // GET /api/v1/reports — list all delivery reports
+  if (req.method === "GET" && pathname === "/api/v1/reports") {
+    const state = deps.getTeamState();
+    const reports = Object.values(state?.reports ?? {}).sort((a, b) => b.generatedAt - a.generatedAt);
+    sendJson(res, 200, { reports });
+    return;
+  }
+
+  // GET /api/v1/reports/:sessionKey — serve delivery report page
+  if (req.method === "GET" && pathname.startsWith("/api/v1/reports/")) {
+    const sessionKey = decodeURIComponent(pathname.slice("/api/v1/reports/".length));
+    const state = deps.getTeamState();
+    if (!state) {
+      sendError(res, 503, "Team state not loaded");
+      return;
+    }
+    const report = generateDeliveryReport(sessionKey, state, normalizeControllerIntakeSessionKey);
+    if (!report) {
+      sendError(res, 404, "No report found for this session");
+      return;
+    }
+    const accept = (req.headers["accept"] ?? "").toLowerCase();
+    if (accept.includes("application/json")) {
+      sendJson(res, 200, { report });
+    } else {
+      const baseUrl = `${req.headers["x-forwarded-proto"] ?? "http"}://${req.headers.host ?? "localhost"}`;
+      const html = renderReportHtml(report, baseUrl);
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Content-Length": Buffer.byteLength(html, "utf-8") });
+      res.end(html);
+    }
+    return;
   }
 
   // GET /api/v1/health

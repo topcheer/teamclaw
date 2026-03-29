@@ -425,8 +425,20 @@ export type TeamState = {
   repo?: GitRepoState;
   provisioning?: TeamProvisioningState;
   previews?: Record<string, DynamicPreviewRecord>;
+  reports?: Record<string, DeliveryReportRecord>;
   createdAt: number;
   updatedAt: number;
+};
+
+export type DeliveryReportRecord = {
+  id: string;
+  sessionKey: string;
+  generatedAt: number;
+  projectName: string;
+  status: "completed" | "partial" | "failed";
+  taskCount: number;
+  deliverableCount: number;
+  previewCount: number;
 };
 
 export type DiscoveryResult = {
