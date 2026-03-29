@@ -856,6 +856,8 @@ function buildTaskMessage(
     "",
     "**For all deliverables:**",
     "- List every file you created or modified in the result contract deliverables array.",
+    "- CRITICAL: Only include deliverables from YOUR current task's project directory. NEVER reference files from other projects in the workspace.",
+    "- If you see files from other projects in the workspace, ignore them completely — they belong to different tasks.",
     "- If something didn't work as expected, report it honestly in blockers rather than hiding it.",
     "- The human will see your verification output, so be thorough — this is your quality gate.",
   ];

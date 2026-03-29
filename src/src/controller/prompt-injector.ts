@@ -1,6 +1,9 @@
 import type { PluginConfig, TeamState } from "../types.js";
 import { ROLES } from "../roles.js";
 import { hasOnDemandWorkerProvisioning, shouldBlockControllerWithoutWorkers } from "./controller-capacity.js";
+import { resolveTeamClawWorkspaceDir } from "../workspace-browser.js";
+import fs from "node:fs";
+import path from "node:path";
 
 const TEAMCLAW_ROLE_IDS_TEXT = [
   "pm",
@@ -102,6 +105,26 @@ export function createControllerPromptInjector(deps: ControllerPromptDeps) {
       parts.push(`- ${role.icon} ${role.label}: ${role.description}.${skillLine}`);
     }
 
+    // List existing projects so the controller can distinguish new vs. existing
+    parts.push("");
+    parts.push("### Existing Projects in Workspace");
+    const existingProjects = listExistingProjects(state);
+    if (existingProjects.length === 0) {
+      parts.push("- No existing projects yet.");
+    } else {
+      for (const proj of existingProjects) {
+        parts.push(`- 📂 ${proj.dir}: ${proj.summary}`);
+      }
+    }
+
+    parts.push("");
+    parts.push("## New vs. Existing Project Detection");
+    parts.push("- Before creating tasks, determine if the user's request relates to an existing project listed above.");
+    parts.push("- If the request mentions a technology, feature, or project name that matches an existing project, treat it as an enhancement/bugfix for that project — reuse the same projectDir.");
+    parts.push("- If the request is clearly a new, unrelated requirement, create a fresh projectDir with a new projectName.");
+    parts.push("- When enhancing an existing project, include context about what already exists so the worker can extend rather than rebuild.");
+    parts.push("- NEVER let a worker's deliverables reference files from a different project. Each task's deliverables must be scoped to its own projectDir.");
+
     parts.push("");
     parts.push("## Controller Workflow");
     parts.push("- First determine which TeamClaw roles are needed for the human requirement.");
@@ -194,4 +217,44 @@ export function createControllerPromptInjector(deps: ControllerPromptDeps) {
       prependSystemContext: parts.join("\n"),
     };
   };
+}
+
+type ExistingProjectInfo = { dir: string; summary: string };
+
+function listExistingProjects(state: TeamState | null): ExistingProjectInfo[] {
+  const projects: ExistingProjectInfo[] = [];
+
+  // Gather from completed tasks with projectDir
+  const seenDirs = new Set<string>();
+  if (state) {
+    for (const task of Object.values(state.tasks)) {
+      if (task.projectDir && !seenDirs.has(task.projectDir)) {
+        seenDirs.add(task.projectDir);
+        const summary = task.resultContract?.summary ?? task.title;
+        projects.push({ dir: task.projectDir, summary });
+      }
+    }
+  }
+
+  // Also scan the filesystem for project directories not tracked in state
+  try {
+    const workspaceDir = resolveTeamClawWorkspaceDir();
+    const projectsRoot = path.join(workspaceDir, "projects");
+    if (fs.existsSync(projectsRoot)) {
+      const entries = fs.readdirSync(projectsRoot, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory() && !entry.name.startsWith(".")) {
+          const fullDir = `projects/${entry.name}`;
+          if (!seenDirs.has(entry.name) && !seenDirs.has(fullDir)) {
+            seenDirs.add(fullDir);
+            projects.push({ dir: fullDir, summary: "(discovered on filesystem)" });
+          }
+        }
+      }
+    }
+  } catch {
+    // Workspace not available — skip filesystem scan
+  }
+
+  return projects.slice(0, 20);
 }

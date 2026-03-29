@@ -1416,8 +1416,15 @@ function buildRecentCompletedTaskContext(task: TaskInfo, state: TeamState | null
     return "";
   }
 
+  // Only include tasks from the same session/project to avoid cross-project contamination.
+  // Tasks sharing the same controllerSessionKey belong to the same user requirement.
+  const sameSession = task.controllerSessionKey
+    ? (candidate: TaskInfo) => candidate.controllerSessionKey === task.controllerSessionKey
+    : () => true; // If no session key, fall back to all completed tasks (legacy behavior)
+
   const recentCompletedTasks = Object.values(state.tasks)
     .filter((candidate) => candidate.id !== task.id && candidate.status === "completed")
+    .filter(sameSession)
     .filter((candidate) => (candidate.completedAt ?? candidate.updatedAt) <= task.createdAt)
     .sort((a, b) => (b.completedAt ?? b.updatedAt) - (a.completedAt ?? a.updatedAt))
     .slice(0, MAX_RECENT_TASK_CONTEXT)
@@ -1658,12 +1665,40 @@ function workspaceRequestErrorMessage(err: unknown): string {
 }
 
 /**
+ * Filter deliverables that don't belong to the current task's project directory.
+ * This prevents cross-project contamination when the model references stale files
+ * from previous sessions visible in the shared workspace.
+ */
+function filterStaleDeliverables(
+  contract: WorkerTaskResultContract,
+  taskProjectDir: string | undefined,
+): WorkerTaskResultContract {
+  if (!taskProjectDir) return contract;
+  // Normalize: "projects/foo-bar/" → "projects/foo-bar"
+  const normalizedDir = taskProjectDir.replace(/\/$/u, "");
+  const filtered = contract.deliverables.filter((d) => {
+    const val = (d.value ?? "").replace(/\/$/u, "");
+    if (!val) return true; // keep notes/commands without paths
+    if (d.kind === "note" || d.kind === "command") return true;
+    // Accept deliverables whose path contains the projectDir or is rooted in teamclaw/projects/{projectDir}
+    if (val.includes(normalizedDir)) return true;
+    // Accept relative paths that look like project-internal (no slashes or relative)
+    if (!val.includes("/") || val.startsWith("./")) return true;
+    // Reject paths from other project directories
+    return false;
+  });
+  if (filtered.length === contract.deliverables.length) return contract;
+  return { ...contract, deliverables: filtered };
+}
+
+/**
  * Strategy 4: When text-based enrichment found no HTML file references,
  * scan the workspace filesystem for HTML files and create a web-app deliverable.
  * This handles workers that return abstract summaries without mentioning specific paths.
  */
 function enrichWithFilesystemHtmlScan(
   contract: WorkerTaskResultContract,
+  taskProjectDir?: string,
 ): WorkerTaskResultContract | null {
   const existingWebApp = contract.deliverables.find((d) => d.artifactType === "web-app");
   if (existingWebApp) {
@@ -1708,7 +1743,15 @@ function enrichWithFilesystemHtmlScan(
     }
   }
 
-  scanDir(workspaceDir, 0);
+  // Scope scan to the task's project directory when available to avoid
+  // picking up stale HTML from unrelated projects.
+  const scanRoot = taskProjectDir
+    ? path.join(workspaceDir, taskProjectDir)
+    : workspaceDir;
+  if (taskProjectDir && !fs.existsSync(scanRoot)) {
+    return null;
+  }
+  scanDir(scanRoot, 0);
 
   if (htmlCandidates.length === 0) {
     return null;
@@ -1773,10 +1816,12 @@ function applyTaskResult(
     task.updatedAt = Date.now();
     // Re-enrich deliverables now that the full result text is available.
     if (!error && task.resultContract) {
+      // Filter out stale deliverables from other projects first
+      task.resultContract = filterStaleDeliverables(task.resultContract, task.projectDir);
       let enriched = enrichDeliverablesWithPreviewInference(task.resultContract, result);
       if (!enriched) {
         // Text-based enrichment failed — scan the workspace filesystem for HTML files.
-        enriched = enrichWithFilesystemHtmlScan(task.resultContract);
+        enriched = enrichWithFilesystemHtmlScan(task.resultContract, task.projectDir);
       }
       if (enriched) {
         task.resultContract = enriched;
@@ -1860,7 +1905,7 @@ function ensureTaskResultContract(
     let enriched = enrichDeliverablesWithPreviewInference(currentTask.resultContract, result);
     if (!enriched) {
       // Text-based enrichment failed — scan the workspace filesystem for HTML files.
-      enriched = enrichWithFilesystemHtmlScan(currentTask.resultContract);
+      enriched = enrichWithFilesystemHtmlScan(currentTask.resultContract, currentTask.projectDir);
     }
     if (enriched) {
       deps.updateTeamState((teamState) => {
@@ -1878,7 +1923,7 @@ function ensureTaskResultContract(
   let contract = backfillWorkerTaskResultContract(currentTask, result, error);
   if (!error) {
     const enriched = enrichDeliverablesWithPreviewInference(contract, result)
-      ?? enrichWithFilesystemHtmlScan(contract);
+      ?? enrichWithFilesystemHtmlScan(contract, currentTask.projectDir);
     if (enriched) {
       contract = enriched;
     }
@@ -3007,14 +3052,14 @@ async function handleRequest(
       if (!task) {
         return;
       }
-      task.resultContract = contract;
+      task.resultContract = filterStaleDeliverables(contract, task.projectDir);
       task.updatedAt = Date.now();
       // Enrich deliverables with preview inference so PreviewManager can auto-launch.
       // Workers typically don't include artifactType/previewCommand in their contracts.
       const existingResult = task.result ?? "";
-      let enriched = enrichDeliverablesWithPreviewInference(contract, existingResult);
+      let enriched = enrichDeliverablesWithPreviewInference(task.resultContract, existingResult);
       if (!enriched) {
-        enriched = enrichWithFilesystemHtmlScan(contract);
+        enriched = enrichWithFilesystemHtmlScan(contract, task.projectDir);
       }
       if (enriched) {
         task.resultContract = enriched;
