@@ -152,6 +152,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
       label: "Submit Controller Manifest",
       description: "Record the structured orchestration manifest for this intake run after role selection and task creation decisions are complete",
       parameters: Type.Object({
+        projectName: Type.Optional(Type.String({ description: "Short, lowercase, kebab-case project name for the workspace directory (e.g. 'todo-rest-api', 'stripe-payment-integration'). 2-5 words max, no random suffixes." })),
         requirementSummary: Type.String({ description: "Brief summary of the requirement the controller is orchestrating" }),
         requiredRoles: Type.Array(
           Type.String({
@@ -203,6 +204,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
 
         const manifest: ControllerOrchestrationManifest = {
           version: "1.0",
+          projectName: normalizeOptionalManifestText(params.projectName) || undefined,
           requirementSummary,
           requiredRoles: normalizeManifestRoleList(params.requiredRoles),
           clarificationsNeeded: Boolean(params.clarificationsNeeded),

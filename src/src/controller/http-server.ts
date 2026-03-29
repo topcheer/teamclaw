@@ -374,7 +374,6 @@ function createControllerRun(
   },
 ): ControllerRunInfo {
   const now = Date.now();
-  const projectSlug = deriveProjectSlug(message);
   const run: ControllerRunInfo = {
     id: generateId(),
     title: buildControllerRunTitle(message, options?.source ?? "human", options?.sourceTaskTitle),
@@ -383,7 +382,6 @@ function createControllerRun(
     sourceTaskId: options?.sourceTaskId,
     sourceTaskTitle: options?.sourceTaskTitle,
     request: message,
-    projectDir: projectSlug,
     createdTaskIds: [],
     status: "pending",
     createdAt: now,
@@ -3066,6 +3064,24 @@ async function handleRequest(
 
     const updatedRun = updateControllerRun(runId, deps, (run) => {
       run.manifest = manifest;
+
+      // Derive projectDir from LLM-provided projectName (or fallback to requirementSummary)
+      if (manifest.projectName || manifest.requirementSummary) {
+        const slug = deriveProjectSlug(manifest.projectName || manifest.requirementSummary);
+        run.projectDir = slug;
+
+        // Backfill projectDir onto all tasks created by this run (overrides title-derived fallback)
+        const state = deps.getTeamState();
+        if (state) {
+          for (const taskId of run.createdTaskIds) {
+            const task = state.tasks[taskId];
+            if (task) {
+              task.projectDir = slug;
+            }
+          }
+        }
+      }
+
       appendControllerRunEvent(run, {
         type: "output",
         phase: "manifest_recorded",

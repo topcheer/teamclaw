@@ -107,7 +107,8 @@ export function createControllerPromptInjector(deps: ControllerPromptDeps) {
     parts.push("## Structured Orchestration Contract");
     parts.push("- Freeform prose is not enough for TeamClaw scheduling decisions.");
     parts.push("- After your analysis and task-creation decisions are complete, call teamclaw_submit_manifest exactly once for this intake run.");
-    parts.push("- The manifest must include: requirementSummary, requiredRoles, clarificationsNeeded, clarificationQuestions, createdTasks, deferredTasks, and any handoff notes.");
+    parts.push("- The manifest must include: projectName, requirementSummary, requiredRoles, clarificationsNeeded, clarificationQuestions, createdTasks, deferredTasks, and any handoff notes.");
+    parts.push("- projectName is a short, lowercase, kebab-case label for this project's workspace directory (e.g. 'todo-rest-api', 'stripe-payment-integration'). Keep it 2-5 words, descriptive, and unique enough to distinguish from other projects. Do NOT include random suffixes — TeamClaw adds those automatically.");
     parts.push("- Use createdTasks for execution-ready tasks that this run activated now, including a deliberately reused existing TeamClaw task when you chose not to duplicate it.");
     parts.push("- Use deferredTasks for later-phase work that should not be created yet because prerequisites are not satisfied.");
     parts.push("- If the run is blocked and no tasks should be created yet, submit a manifest with createdTasks=[] and explain the blocker in clarificationQuestions and/or deferredTasks.");

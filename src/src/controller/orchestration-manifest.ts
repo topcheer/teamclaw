@@ -93,6 +93,7 @@ export function normalizeControllerManifest(raw: unknown): ControllerOrchestrati
   }
   return {
     version: typeof input.version === "string" && input.version.trim() ? input.version.trim() : "1.0",
+    projectName: typeof input.projectName === "string" && input.projectName.trim() ? input.projectName.trim() : undefined,
     requirementSummary,
     requiredRoles: normalizeManifestRoleList(input.requiredRoles),
     clarificationsNeeded: Boolean(input.clarificationsNeeded),

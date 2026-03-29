@@ -248,6 +248,8 @@ export type ControllerManifestDeferredTask = {
 
 export type ControllerOrchestrationManifest = {
   version: string;
+  /** Short, filesystem-safe project name chosen by the controller (e.g. "todo-rest-api", "stripe-payment-integration"). */
+  projectName?: string;
   requirementSummary: string;
   requiredRoles: RoleId[];
   clarificationsNeeded: boolean;
