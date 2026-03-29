@@ -858,7 +858,7 @@ function buildTaskMessage(
     sections.push(
       "",
       "## Working Directory",
-      `This task's project directory is: \`projects/${options.projectDir}/\``,
+      `This task's project directory is: \`teamclaw/projects/${options.projectDir}/\``,
       "All files you create, read, or modify for this task MUST be inside this directory.",
       "If the directory is empty, create the necessary structure. If it already has files from prior tasks in the same project, build on them.",
       "Do NOT place files in the workspace root or any other project's directory.",
