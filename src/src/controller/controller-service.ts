@@ -245,6 +245,7 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
 
       // Single-process: in-process workers are now provisioned on-demand
       // when tasks arrive.  Sync any pre-existing workers into state.
+      // (Orphaned tasks were already reset to pending by the earlier cleanup block.)
       if (inProcessWorkerManager) {
         if (inProcessWorkerManager.syncState(teamState!)) {
           await saveTeamState(teamState!);

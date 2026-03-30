@@ -2548,6 +2548,24 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
   // Attach WebSocket
   wsServer.attach(server);
 
+  // Startup reconciliation: after a restart, in-process workers are gone but
+  // persisted tasks may still be pending.  Schedule auto-assign after a short
+  // delay so the server is fully up before we start provisioning workers.
+  if (deps.inProcessWorkerManager) {
+    setTimeout(() => {
+      const state = deps.getTeamState();
+      const pendingCount = state
+        ? Object.values(state.tasks).filter((t) => t.status === "pending" && !t.assignedWorkerId).length
+        : 0;
+      if (pendingCount > 0) {
+        logger.info(`Controller: startup reconciliation — ${pendingCount} orphaned pending tasks, triggering auto-assign`);
+        void autoAssignPendingTasks(deps).catch((err) => {
+          logger.warn(`Controller: startup auto-assign failed: ${String(err)}`);
+        });
+      }
+    }, 2000);
+  }
+
   return server;
 }
 
