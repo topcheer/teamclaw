@@ -31,6 +31,7 @@
 
     <div class="content">
       <div class="tabs">
+        <button class="tab" data-tab="planning">Planning <span id="planning-tab-count" class="tab-badge">0</span></button>
         <button class="tab active" data-tab="tasks">Tasks</button>
         <button class="tab" data-tab="workspace">Workspace</button>
         <button class="tab" data-tab="clarifications">Clarifications <span id="clarifications-tab-count" class="tab-badge">0</span></button>
@@ -39,6 +40,42 @@
       </div>
 
       <div class="tab-content">
+        <!-- Planning Tab -->
+        <div id="tab-planning" class="tab-panel">
+          <div class="planning-container">
+            <aside class="planning-sessions">
+              <div class="planning-sessions-header">Sessions</div>
+              <div id="planning-session-list" class="planning-session-list">
+                <div class="empty-state">No planning sessions yet</div>
+              </div>
+            </aside>
+            <div class="planning-main">
+              <div id="planning-empty" class="planning-empty-state">
+                <div class="planning-empty-icon">🤝</div>
+                <h3>Team Planning</h3>
+                <p>Submit a requirement via the command bar below. Complex projects (3+ roles) will trigger a team kickoff meeting where each role assesses the requirement collaboratively.</p>
+              </div>
+              <div id="planning-split" class="planning-split" style="display:none">
+                <section class="planning-pane planning-pane-left">
+                  <div class="planning-pane-header">
+                    <span class="planning-pane-icon">📝</span>
+                    <span class="planning-pane-title">Requirement</span>
+                  </div>
+                  <div id="planning-requirement" class="planning-pane-body markdown-body"></div>
+                </section>
+                <div class="planning-divider"></div>
+                <section class="planning-pane planning-pane-right">
+                  <div class="planning-pane-header">
+                    <span class="planning-pane-icon">🤝</span>
+                    <span class="planning-pane-title">Team Kickoff Meeting</span>
+                  </div>
+                  <div id="planning-kickoff" class="planning-pane-body"></div>
+                </section>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Tasks Tab -->
         <div id="tab-tasks" class="tab-panel active">
           <div class="task-filters">

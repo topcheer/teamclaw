@@ -632,6 +632,219 @@
     );
   }
 
+  // ── Planning Tab ───────────────────────────────────────────────────────
+  var selectedPlanningRunId = null;
+
+  function renderPlanningTab(runs) {
+    var sessionList = $("#planning-session-list");
+    var badge = $("#planning-tab-count");
+    if (!sessionList) return;
+
+    // Only show runs that have a kickoff plan
+    var planningRuns = (runs || [])
+      .filter(function (r) { return r.manifest && r.manifest.kickoffPlan && r.manifest.kickoffPlan.assessments && r.manifest.kickoffPlan.assessments.length > 0; })
+      .sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
+
+    if (badge) {
+      badge.textContent = String(planningRuns.length);
+      badge.style.display = planningRuns.length > 0 ? "" : "none";
+    }
+
+    if (planningRuns.length === 0) {
+      sessionList.innerHTML = '<div class="empty-state">No planning sessions yet</div>';
+      showPlanningEmpty();
+      return;
+    }
+
+    // Auto-select first if nothing selected or selection is gone
+    if (!selectedPlanningRunId || !planningRuns.some(function (r) { return r.id === selectedPlanningRunId; })) {
+      selectedPlanningRunId = planningRuns[0].id;
+    }
+
+    sessionList.innerHTML = planningRuns.map(function (run) {
+      var manifest = run.manifest || {};
+      var kp = manifest.kickoffPlan || {};
+      var assessments = kp.assessments || [];
+      var needed = assessments.filter(function (a) { return a.needed; }).length;
+      var roles = (manifest.requiredRoles || []).length;
+      var isActive = run.id === selectedPlanningRunId;
+      var title = manifest.requirementSummary || run.title || "Untitled";
+      if (title.length > 60) title = title.slice(0, 57) + "…";
+
+      return (
+        '<button type="button" class="planning-session-btn' + (isActive ? " active" : "") + '" data-planning-run="' + escapeHtml(run.id) + '">' +
+        '  <div class="planning-session-title">' + escapeHtml(title) + "</div>" +
+        '  <div class="planning-session-meta">' + roles + " roles · " + needed + " confirmed · " + escapeHtml(formatTime(run.updatedAt) || "") + "</div>" +
+        "</button>"
+      );
+    }).join("");
+
+    // Render selected run
+    renderPlanningDetail(planningRuns.find(function (r) { return r.id === selectedPlanningRunId; }));
+  }
+
+  function showPlanningEmpty() {
+    var empty = $("#planning-empty");
+    var split = $("#planning-split");
+    if (empty) empty.style.display = "";
+    if (split) split.style.display = "none";
+  }
+
+  function renderPlanningDetail(run) {
+    var empty = $("#planning-empty");
+    var split = $("#planning-split");
+    var reqEl = $("#planning-requirement");
+    var kickoffEl = $("#planning-kickoff");
+
+    if (!run || !run.manifest || !run.manifest.kickoffPlan) {
+      showPlanningEmpty();
+      return;
+    }
+
+    if (empty) empty.style.display = "none";
+    if (split) split.style.display = "";
+
+    // Left pane: requirement + manifest summary
+    if (reqEl) {
+      var manifest = run.manifest;
+      var reqLines = [];
+      reqLines.push('<h3>' + escapeHtml(manifest.requirementSummary || run.title || "") + '</h3>');
+      reqLines.push('<div class="planning-req-original">' + renderMarkdownContent(run.request || "") + '</div>');
+
+      // Manifest details
+      if (manifest.requiredRoles && manifest.requiredRoles.length) {
+        reqLines.push('<div class="planning-req-section"><div class="planning-req-label">Required Roles</div>');
+        reqLines.push('<div class="kickoff-deps">' + manifest.requiredRoles.map(function (r) {
+          var icon = ROLE_ICONS[r] || "👤";
+          return '<span class="kickoff-dep-chip">' + icon + " " + escapeHtml(r) + "</span>";
+        }).join("") + "</div></div>");
+      }
+
+      var created = Array.isArray(manifest.createdTasks) ? manifest.createdTasks : [];
+      var deferred = Array.isArray(manifest.deferredTasks) ? manifest.deferredTasks : [];
+      if (created.length) {
+        reqLines.push('<div class="planning-req-section"><div class="planning-req-label">Planned Tasks (' + created.length + ')</div>');
+        reqLines.push('<ul class="planning-task-list">');
+        created.forEach(function (t) {
+          var roleLabel = t.assignedRole ? ' <span class="planning-role-tag">' + escapeHtml(t.assignedRole) + "</span>" : "";
+          reqLines.push("<li>" + escapeHtml(t.title || "Task") + roleLabel + "</li>");
+        });
+        reqLines.push("</ul></div>");
+      }
+      if (deferred.length) {
+        reqLines.push('<div class="planning-req-section"><div class="planning-req-label">Deferred Tasks (' + deferred.length + ')</div>');
+        reqLines.push('<ul class="planning-task-list planning-deferred">');
+        deferred.forEach(function (t) {
+          var roleLabel = t.assignedRole ? ' <span class="planning-role-tag">' + escapeHtml(t.assignedRole) + "</span>" : "";
+          reqLines.push("<li>" + escapeHtml(t.title || "Task") + roleLabel + "</li>");
+        });
+        reqLines.push("</ul></div>");
+      }
+      if (manifest.handoffPlan) {
+        reqLines.push('<div class="planning-req-section"><div class="planning-req-label">Handoff Plan</div>');
+        reqLines.push('<div class="planning-req-body markdown-body">' + renderMarkdownContent(manifest.handoffPlan) + "</div></div>");
+      }
+
+      reqEl.innerHTML = reqLines.join("");
+    }
+
+    // Right pane: kickoff meeting
+    if (kickoffEl) {
+      kickoffEl.innerHTML = renderKickoffContent(run.manifest.kickoffPlan);
+    }
+  }
+
+  function renderKickoffContent(kp) {
+    if (!kp || !Array.isArray(kp.assessments) || kp.assessments.length === 0) {
+      return '<div class="empty-state">No kickoff data</div>';
+    }
+
+    var assessments = kp.assessments;
+    var html = [];
+
+    // Stats bar
+    var needed = assessments.filter(function (a) { return a.needed; }).length;
+    var dismissed = assessments.length - needed;
+    html.push(
+      '<div class="kickoff-stats-bar">' +
+      '  <div class="kickoff-stat"><span class="kickoff-stat-num">' + assessments.length + '</span><span class="kickoff-stat-label">Assessed</span></div>' +
+      '  <div class="kickoff-stat kickoff-stat-ok"><span class="kickoff-stat-num">' + needed + '</span><span class="kickoff-stat-label">Confirmed</span></div>' +
+      (dismissed > 0 ? '  <div class="kickoff-stat kickoff-stat-dim"><span class="kickoff-stat-num">' + dismissed + '</span><span class="kickoff-stat-label">Dismissed</span></div>' : "") +
+      "</div>"
+    );
+
+    // Role cards
+    assessments.forEach(function (a) {
+      var icon = ROLE_ICONS[a.role] || "👤";
+      var statusCls = a.needed ? "kickoff-role-needed" : "kickoff-role-dismissed";
+      var statusLabel = a.needed ? "Confirmed" : "Not Needed";
+
+      var sections = [];
+
+      if (a.scope) {
+        sections.push(
+          '<div class="kickoff-role-scope"><div class="markdown-body">' + renderMarkdownContent(a.scope) + "</div></div>"
+        );
+      }
+
+      if (Array.isArray(a.suggestedTasks) && a.suggestedTasks.length > 0) {
+        sections.push(
+          '<details class="kickoff-collapsible" open>' +
+          '  <summary class="kickoff-detail-label">📋 Suggested Tasks (' + a.suggestedTasks.length + ")</summary>" +
+          '  <ul class="kickoff-detail-list">' +
+             a.suggestedTasks.map(function (t) { return "<li>" + escapeHtml(t) + "</li>"; }).join("") +
+          "  </ul>" +
+          "</details>"
+        );
+      }
+
+      if (Array.isArray(a.risks) && a.risks.length > 0) {
+        sections.push(
+          '<details class="kickoff-collapsible">' +
+          '  <summary class="kickoff-detail-label">⚠️ Risks (' + a.risks.length + ")</summary>" +
+          '  <ul class="kickoff-detail-list kickoff-risks">' +
+             a.risks.map(function (r) { return "<li>" + escapeHtml(r) + "</li>"; }).join("") +
+          "  </ul>" +
+          "</details>"
+        );
+      }
+
+      if (Array.isArray(a.dependencies) && a.dependencies.length > 0) {
+        sections.push(
+          '<details class="kickoff-collapsible">' +
+          '  <summary class="kickoff-detail-label">🔗 Dependencies (' + a.dependencies.length + ")</summary>" +
+          '  <div class="kickoff-deps">' +
+             a.dependencies.map(function (d) { return '<span class="kickoff-dep-chip">' + escapeHtml(d) + "</span>"; }).join("") +
+          "  </div>" +
+          "</details>"
+        );
+      }
+
+      html.push(
+        '<div class="kickoff-role-card ' + statusCls + '">' +
+        '  <div class="kickoff-role-header">' +
+        '    <span class="kickoff-role-icon">' + icon + "</span>" +
+        '    <span class="kickoff-role-name">' + escapeHtml(a.role) + "</span>" +
+        '    <span class="kickoff-role-badge ' + statusCls + '">' + statusLabel + "</span>" +
+        "  </div>" +
+        sections.join("") +
+        "</div>"
+      );
+    });
+
+    // Summary
+    if (kp.summary) {
+      html.push(
+        '<div class="kickoff-summary">' +
+        '  <div class="kickoff-summary-label">Discussion Summary</div>' +
+        '  <div class="kickoff-summary-body markdown-body">' + renderMarkdownContent(kp.summary) + "</div>" +
+        "</div>"
+      );
+    }
+
+    return html.join("");
+  }
+
   function buildMessageDisplayContent(message) {
     const content = normalizeTextValue(message && message.content);
     const contract = message && message.contract ? message.contract : null;
@@ -1071,6 +1284,7 @@
 
       renderWorkers(teamState.workers);
       renderTasks(teamState.tasks);
+      renderPlanningTab(teamState.controllerRuns);
       renderControllerRuns(teamState.controllerRuns);
       renderClarifications(teamState.clarifications);
       renderMessages(teamState.messages);
@@ -1917,6 +2131,20 @@
       const taskId = button && button.dataset ? button.dataset.openTaskId : "";
       if (taskId) {
         openTaskDetail(taskId);
+      }
+    });
+  }
+
+  // Planning session sub-tab click handler
+  var planningSessionList = $("#planning-session-list");
+  if (planningSessionList) {
+    planningSessionList.addEventListener("click", function (event) {
+      var target = event.target instanceof Element ? event.target : null;
+      var btn = target ? target.closest("[data-planning-run]") : null;
+      var runId = btn && btn.dataset ? btn.dataset.planningRun : "";
+      if (runId && runId !== selectedPlanningRunId) {
+        selectedPlanningRunId = runId;
+        renderPlanningTab(teamState.controllerRuns);
       }
     });
   }
