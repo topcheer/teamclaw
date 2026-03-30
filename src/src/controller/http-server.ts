@@ -800,6 +800,35 @@ function buildControllerManifestReply(
     }
   }
 
+  // ── Team Kickoff Meeting Results ──────────────────────────────────────
+  if (manifest.kickoffPlan?.assessments?.length) {
+    const kp = manifest.kickoffPlan;
+    lines.push("", "## Team Kickoff Meeting");
+    lines.push(`${kp.assessments.length} roles participated in the planning discussion:`);
+    lines.push("");
+    for (const a of kp.assessments) {
+      const needed = a.needed ? "✅ confirmed needed" : "❌ not needed";
+      lines.push(`**${a.role}** — ${needed}`);
+      if (a.scope) {
+        lines.push(`  Scope: ${a.scope.length > 200 ? a.scope.slice(0, 200).trimEnd() + "…" : a.scope}`);
+      }
+      if (a.suggestedTasks?.length) {
+        lines.push(`  Suggested tasks: ${a.suggestedTasks.slice(0, 3).join("; ")}${a.suggestedTasks.length > 3 ? ` (+${a.suggestedTasks.length - 3} more)` : ""}`);
+      }
+      if (a.risks?.length) {
+        lines.push(`  Risks: ${a.risks.slice(0, 2).join("; ")}${a.risks.length > 2 ? ` (+${a.risks.length - 2} more)` : ""}`);
+      }
+      if (a.dependencies?.length) {
+        lines.push(`  Dependencies: ${a.dependencies.join(", ")}`);
+      }
+      lines.push("");
+    }
+    if (kp.summary) {
+      lines.push("### Discussion Summary");
+      lines.push(kp.summary);
+    }
+  }
+
   if (manifest.handoffPlan) {
     lines.push("", `Handoff plan: ${manifest.handoffPlan}`);
   }
