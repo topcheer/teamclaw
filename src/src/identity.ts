@@ -90,17 +90,17 @@ export class IdentityManager {
     const roleDef = getRole(this.config.role);
     const workerId = requestedWorkerId ?? generateId();
     const controllerHost = new URL(controllerUrl).hostname;
-    // When running inside a container (Docker/K8s), the controller hostname is a
-    // container/service name, not "localhost".  In that case the worker must
-    // advertise its *own* container hostname so that the controller (which
-    // lives in the same Docker network) can reach it via Docker DNS.
-    // os.hostname() returns the container ID or the name assigned by Docker,
-    // both of which resolve correctly inside the same network.
+    // Prefer explicit override (set by provisioner for Docker/K8s workers),
+    // then detected IP (works for bridge-network containers and real hosts),
+    // then os.hostname() as last resort.
     const advertisedHost =
-      !controllerHost || controllerHost === "localhost" || controllerHost === "127.0.0.1"
-        ? getLocalIp(controllerHost)
-        : os.hostname();
-    const workerUrl = `http://${advertisedHost}:${this.config.port}`;
+      process.env.TEAMCLAW_ADVERTISE_HOST?.trim() ||
+      getLocalIp(controllerHost) ||
+      os.hostname();
+    const advertisedPort = process.env.TEAMCLAW_ADVERTISE_PORT?.trim()
+      ? Number(process.env.TEAMCLAW_ADVERTISE_PORT.trim())
+      : this.config.port;
+    const workerUrl = `http://${advertisedHost}:${advertisedPort}`;
 
     const registration = createRegistrationRequest(
       workerId,

@@ -344,7 +344,8 @@ async function syncWorkerRepoUnlocked(
         const theirsMerge = await tryGit(["merge", "--no-edit", "-X", "theirs", `refs/remotes/origin/${repoInfo.defaultBranch}`], { cwd: workspaceDir });
         if (theirsMerge.exitCode !== 0) {
           await abortMergeIfNeeded(workspaceDir);
-          throw new Error(`Failed to fast-forward worker checkout from origin/${repoInfo.defaultBranch}: ${formatCommandError("git merge", mergeResult)}`);
+          logger.info("Worker repo has unrelated history; resetting to remote branch");
+          await runGit(["reset", "--hard", `refs/remotes/origin/${repoInfo.defaultBranch}`], { cwd: workspaceDir });
         }
       }
     }
@@ -374,7 +375,12 @@ async function syncWorkerRepoUnlocked(
           const theirsMerge = await tryGit(["merge", "--no-edit", "-X", "theirs", `refs/remotes/teamclaw/${repoInfo.defaultBranch}`], { cwd: workspaceDir });
           if (theirsMerge.exitCode !== 0) {
             await abortMergeIfNeeded(workspaceDir);
-            throw new Error(`Failed to fast-forward worker checkout from the controller bundle: ${formatCommandError("git merge", mergeResult)}`);
+            // Final fallback: worker history is completely unrelated (e.g. fresh
+            // container with auto-committed workspace files).  Adopt the
+            // controller's branch wholesale — this is safe because the
+            // controller is the source of truth for repo state.
+            logger.info("Worker repo has unrelated history; resetting to controller branch");
+            await runGit(["reset", "--hard", `refs/remotes/teamclaw/${repoInfo.defaultBranch}`], { cwd: workspaceDir });
           }
         }
       }

@@ -53,6 +53,7 @@ type LaunchSpec = {
   controllerUrl: string;
   workerPort: number;
   gatewayPort: number;
+  publishedHostPort?: number;
   workspaceDir?: string;
   env: Record<string, string>;
   configJson: string;
@@ -388,6 +389,12 @@ export class WorkerProvisioningManager {
     const gatewayPort = requiresDedicatedHostPorts
       ? await reserveEphemeralPort()
       : DEFAULT_CONTAINER_GATEWAY_PORT;
+    // Docker bridge networks need a host port to publish so the controller
+    // (running on the host) can reach the worker container.
+    const needsPublishedPort =
+      this.backend.type === "docker" &&
+      !isDockerHostNetwork(this.deps.config.workerProvisioningDockerNetwork);
+    const publishedHostPort = needsPublishedPort ? await reserveEphemeralPort() : undefined;
     const now = Date.now();
 
     this.deps.updateTeamState((state) => {
@@ -418,6 +425,7 @@ export class WorkerProvisioningManager {
         controllerUrl,
         workerPort,
         gatewayPort,
+        publishedHostPort,
         workspaceDir: getConfiguredWorkerWorkspaceDir(workerConfig),
         env: this.buildForwardedEnv(controllerUrl),
         configJson: `${JSON.stringify(workerConfig, null, 2)}\n`,
@@ -767,7 +775,7 @@ class DockerProvisioner implements WorkerProvisionerBackend {
     }
 
     const instanceName = buildManagedInstanceName(this.config.teamName, spec.role, spec.workerId);
-    const env = {
+    const env: Record<string, string> = {
       ...spec.env,
       HOME: "/home/node",
       OPENCLAW_HOME: "/home/node",
@@ -780,26 +788,48 @@ class DockerProvisioner implements WorkerProvisionerBackend {
       ...(spec.workspaceDir ? { TEAMCLAW_WORKSPACE_DIR: spec.workspaceDir } : {}),
     };
 
-    const script = buildContainerBootstrapScript();
+    // On bridge networks the controller (on the host) can't reach container IPs
+    // directly.  Publish the worker port to a host port and tell the worker to
+    // advertise `localhost:<hostPort>` so the controller can call back.
+    const usePortPublishing = spec.publishedHostPort !== undefined;
+    if (usePortPublishing) {
+      env.TEAMCLAW_ADVERTISE_HOST = "localhost";
+      env.TEAMCLAW_ADVERTISE_PORT = String(spec.publishedHostPort);
+    }
+
+    const hostConfig: Record<string, unknown> = {
+      Binds: buildDockerBinds(this.config),
+      NetworkMode: this.config.workerProvisioningDockerNetwork || undefined,
+    };
+
+    if (usePortPublishing) {
+      hostConfig.PortBindings = {
+        [`${spec.workerPort}/tcp`]: [{ HostPort: String(spec.publishedHostPort) }],
+      };
+    }
+
+    const containerConfig: Record<string, unknown> = {
+      Image: this.config.workerProvisioningImage,
+      Cmd: ["sh", "-lc", buildContainerBootstrapScript()],
+      Env: Object.entries(env).map(([key, value]) => `${key}=${value}`),
+      User: "root",
+      Labels: {
+        "teamclaw.managed": "true",
+        "teamclaw.team": this.config.teamName,
+        "teamclaw.role": spec.role,
+        "teamclaw.worker_id": spec.workerId,
+      },
+      HostConfig: hostConfig,
+    };
+
+    if (usePortPublishing) {
+      containerConfig.ExposedPorts = { [`${spec.workerPort}/tcp`]: {} };
+    }
+
     const response = await this.client.requestJson<{ Id?: string }>(
       "POST",
       `/containers/create?name=${encodeURIComponent(instanceName)}`,
-      {
-        Image: this.config.workerProvisioningImage,
-        Cmd: ["sh", "-lc", script],
-        Env: Object.entries(env).map(([key, value]) => `${key}=${value}`),
-        User: "root",
-        Labels: {
-          "teamclaw.managed": "true",
-          "teamclaw.team": this.config.teamName,
-          "teamclaw.role": spec.role,
-          "teamclaw.worker_id": spec.workerId,
-        },
-        HostConfig: {
-          Binds: buildDockerBinds(this.config),
-          NetworkMode: this.config.workerProvisioningDockerNetwork || undefined,
-        },
-      },
+      containerConfig,
       [201],
     );
 
