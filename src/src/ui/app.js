@@ -520,6 +520,118 @@
     });
   }
 
+  var ROLE_ICONS = {
+    architect: "🏗️",
+    developer: "💻",
+    designer: "🎨",
+    "security-engineer": "🔒",
+    qa: "🧪",
+    devops: "⚙️",
+    "tech-lead": "👨‍💻",
+    "data-engineer": "📊",
+    "ml-engineer": "🤖",
+    "infra-engineer": "🖧",
+    "dba": "🗄️",
+  };
+
+  function renderKickoffMeetingPanel(kickoffPlan) {
+    if (!kickoffPlan || !Array.isArray(kickoffPlan.assessments) || kickoffPlan.assessments.length === 0) {
+      return "";
+    }
+    var assessments = kickoffPlan.assessments;
+    var needed = assessments.filter(function (a) { return a.needed; }).length;
+    var notNeeded = assessments.length - needed;
+
+    var header =
+      '<div class="kickoff-panel-header">' +
+      '  <div class="kickoff-panel-icon">🤝</div>' +
+      '  <div class="kickoff-panel-heading">' +
+      '    <h4>Team Kickoff Meeting</h4>' +
+      '    <div class="kickoff-panel-meta">' +
+           assessments.length + " roles assessed · " +
+           needed + " confirmed" +
+           (notNeeded > 0 ? " · " + notNeeded + " dismissed" : "") +
+      "    </div>" +
+      "  </div>" +
+      "</div>";
+
+    var roleCards = assessments.map(function (a) {
+      var icon = ROLE_ICONS[a.role] || "👤";
+      var statusCls = a.needed ? "kickoff-role-needed" : "kickoff-role-dismissed";
+      var statusLabel = a.needed ? "Confirmed" : "Not Needed";
+
+      var scopeHtml = a.scope
+        ? '<div class="kickoff-role-scope">' + renderMarkdownContent(a.scope) + "</div>"
+        : "";
+
+      var tasksHtml = "";
+      if (Array.isArray(a.suggestedTasks) && a.suggestedTasks.length > 0) {
+        tasksHtml =
+          '<div class="kickoff-role-detail">' +
+          '  <div class="kickoff-detail-label">📋 Suggested Tasks</div>' +
+          '  <ul class="kickoff-detail-list">' +
+             a.suggestedTasks.map(function (t) { return "<li>" + escapeHtml(t) + "</li>"; }).join("") +
+          "  </ul>" +
+          "</div>";
+      }
+
+      var risksHtml = "";
+      if (Array.isArray(a.risks) && a.risks.length > 0) {
+        risksHtml =
+          '<div class="kickoff-role-detail">' +
+          '  <div class="kickoff-detail-label">⚠️ Risks</div>' +
+          '  <ul class="kickoff-detail-list kickoff-risks">' +
+             a.risks.map(function (r) { return "<li>" + escapeHtml(r) + "</li>"; }).join("") +
+          "  </ul>" +
+          "</div>";
+      }
+
+      var depsHtml = "";
+      if (Array.isArray(a.dependencies) && a.dependencies.length > 0) {
+        depsHtml =
+          '<div class="kickoff-role-detail">' +
+          '  <div class="kickoff-detail-label">🔗 Dependencies</div>' +
+          '  <div class="kickoff-deps">' +
+             a.dependencies.map(function (d) { return '<span class="kickoff-dep-chip">' + escapeHtml(d) + "</span>"; }).join("") +
+          "  </div>" +
+          "</div>";
+      }
+
+      return (
+        '<div class="kickoff-role-card ' + statusCls + '">' +
+        '  <div class="kickoff-role-header">' +
+        '    <span class="kickoff-role-icon">' + icon + "</span>" +
+        '    <span class="kickoff-role-name">' + escapeHtml(a.role) + "</span>" +
+        '    <span class="kickoff-role-badge ' + statusCls + '">' + statusLabel + "</span>" +
+        "  </div>" +
+        scopeHtml +
+        tasksHtml +
+        risksHtml +
+        depsHtml +
+        "</div>"
+      );
+    }).join("");
+
+    var summaryHtml = "";
+    if (kickoffPlan.summary) {
+      summaryHtml =
+        '<div class="kickoff-summary">' +
+        '  <div class="kickoff-summary-label">Discussion Summary</div>' +
+        '  <div class="kickoff-summary-body markdown-body">' + renderMarkdownContent(kickoffPlan.summary) + "</div>" +
+        "</div>";
+    }
+
+    return (
+      '<div class="controller-run-section">' +
+      '  <div class="kickoff-panel">' +
+      header +
+      '    <div class="kickoff-role-grid">' + roleCards + "</div>" +
+      summaryHtml +
+      "  </div>" +
+      "</div>"
+    );
+  }
+
   function buildMessageDisplayContent(message) {
     const content = normalizeTextValue(message && message.content);
     const contract = message && message.contract ? message.contract : null;
@@ -1089,6 +1201,9 @@
       const manifestBlock = run.manifest
         ? '<div class="controller-run-section"><div class="controller-run-section-title">Manifest</div>' + renderControllerManifestCard(run.manifest) + "</div>"
         : "";
+      const kickoffBlock = run.manifest && run.manifest.kickoffPlan
+        ? renderKickoffMeetingPanel(run.manifest.kickoffPlan)
+        : "";
       const replyBlock = run.reply
         ? '<div class="controller-run-section"><div class="controller-run-section-title">Reply</div><div class="markdown-body">' + renderMarkdownContent(run.reply) + "</div></div>"
         : "";
@@ -1122,6 +1237,7 @@
         "  </div>" +
         '  <div class="controller-run-section"><div class="controller-run-section-title">Request</div><div class="markdown-body">' + renderMarkdownContent(run.request || "") + "</div></div>" +
         manifestBlock +
+        kickoffBlock +
         replyBlock +
         errorBlock +
         (createdTaskButtons

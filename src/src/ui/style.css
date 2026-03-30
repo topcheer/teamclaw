@@ -571,6 +571,173 @@ body {
   font-size: 13px;
 }
 
+/* ── Kickoff Meeting Panel ────────────────────────────────────────────── */
+.kickoff-panel {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-left: 3px solid #a78bfa;
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.kickoff-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.kickoff-panel-icon {
+  font-size: 24px;
+  line-height: 1;
+}
+
+.kickoff-panel-heading h4 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.kickoff-panel-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.kickoff-role-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+
+.kickoff-role-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: border-color 0.15s;
+}
+
+.kickoff-role-card:hover {
+  border-color: #a78bfa;
+}
+
+.kickoff-role-card.kickoff-role-dismissed {
+  opacity: 0.55;
+}
+
+.kickoff-role-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kickoff-role-icon {
+  font-size: 18px;
+  line-height: 1;
+}
+
+.kickoff-role-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  flex: 1;
+}
+
+.kickoff-role-badge {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 999px;
+  letter-spacing: 0.02em;
+}
+
+.kickoff-role-badge.kickoff-role-needed {
+  background: #14532d;
+  color: var(--success);
+}
+
+.kickoff-role-badge.kickoff-role-dismissed {
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+}
+
+.kickoff-role-scope {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.kickoff-role-scope .markdown-body {
+  font-size: 13px;
+}
+
+.kickoff-role-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.kickoff-detail-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.kickoff-detail-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.kickoff-detail-list.kickoff-risks li {
+  color: var(--warning);
+}
+
+.kickoff-deps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.kickoff-dep-chip {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+
+.kickoff-summary {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+.kickoff-summary-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
+}
+
+.kickoff-summary-body {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
 .contract-card {
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
