@@ -175,6 +175,10 @@ export function generateDeliveryReport(
   };
 }
 
+function isPreviewableArtifactType(d: WorkerTaskResultDeliverable): boolean {
+  return d.artifactType === "web-app" || d.artifactType === "static-site" || d.artifactType === "rest-api";
+}
+
 function resolvePreviewInfo(
   deliverable: WorkerTaskResultDeliverable,
   taskId: string,
@@ -182,12 +186,16 @@ function resolvePreviewInfo(
   state: TeamState,
 ): { url?: string; error?: string } {
   if (deliverable.liveUrl) return { url: deliverable.liveUrl };
+
+  // Non-previewable deliverables (plain files, notes, commands) should never
+  // show preview errors — they don't have previews to fail.
+  if (!isPreviewableArtifactType(deliverable)) return {};
+
   // Find preview record for this specific deliverable
   const previewId = `preview-${taskId}-${deliverableIndex}`;
   const exact = (state.previews ?? {})[previewId];
   if (exact) {
     if (exact.status === "healthy") {
-      // For REST APIs, point iframe to the API docs page instead of root
       const url = deliverable.artifactType === "rest-api" && exact.previewReadyPath && exact.previewReadyPath !== "/"
         ? exact.liveUrl.replace(/\/$/, "") + exact.previewReadyPath
         : exact.liveUrl;
@@ -195,7 +203,6 @@ function resolvePreviewInfo(
     }
     if (exact.status === "failed") return { error: exact.lastError ?? "Preview failed" };
     if (exact.status === "stopped") return { error: "Preview stopped" };
-    // launching/starting — still pending
     return { error: "Preview is still starting…" };
   }
   // Fallback: find any healthy preview for this task
@@ -207,7 +214,6 @@ function resolvePreviewInfo(
       : match.liveUrl;
     return { url };
   }
-  // Check for any failed preview for this task
   const failed = previews.find((p) => p.taskId === taskId && p.status === "failed");
   if (failed) return { error: failed.lastError ?? "Preview failed" };
   return {};

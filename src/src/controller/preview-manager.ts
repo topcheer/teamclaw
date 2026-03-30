@@ -30,9 +30,7 @@ async function resolveSmartPreviewCommand(cwd: string, existingCommand: string):
     const entries = await fs.readdir(cwd, { withFileTypes: true });
     const filenames = entries.filter((e) => e.isFile()).map((e) => e.name);
 
-    // Only detect package.json with a dev/start script — let the framework's
-    // own dev server handle everything. The worker should provide the command
-    // but this is a reasonable fallback for Node.js projects.
+    // Node.js — detect package.json with dev/start script
     if (filenames.includes("package.json")) {
       const pkgRaw = await fs.readFile(path.join(cwd, "package.json"), "utf-8").catch(() => "");
       if (pkgRaw) {
@@ -48,6 +46,60 @@ async function resolveSmartPreviewCommand(cwd: string, existingCommand: string):
           // ignore parse errors
         }
       }
+    }
+
+    // Python — detect requirements.txt or pyproject.toml and pick the right runner
+    if (filenames.includes("requirements.txt") || filenames.includes("pyproject.toml")) {
+      // Prefer venv python if available (workers typically create a venv)
+      const dirnames = entries.filter((e) => e.isDirectory()).map((e) => e.name);
+      const venvDir = dirnames.find((d) => d === "venv" || d === ".venv" || d === "env");
+      const pythonBin = venvDir ? `${venvDir}/bin/python` : "python";
+
+      // Check for a main.py that imports FastAPI/Flask
+      const mainPy = filenames.includes("main.py")
+        ? await fs.readFile(path.join(cwd, "main.py"), "utf-8").catch(() => "")
+        : filenames.includes("app.py")
+          ? await fs.readFile(path.join(cwd, "app.py"), "utf-8").catch(() => "")
+          : "";
+      if (mainPy) {
+        const entryFile = filenames.includes("main.py") ? "main" : "app";
+        if (/from\s+fastapi\b|import\s+fastapi/i.test(mainPy)) {
+          const appMatch = mainPy.match(/(\w+)\s*=\s*FastAPI\s*\(/);
+          const appVar = appMatch?.[1] ?? "app";
+          return `${pythonBin} -m uvicorn ${entryFile}:${appVar} --host 0.0.0.0 --port {PORT}`;
+        }
+        if (/from\s+flask\b|import\s+flask/i.test(mainPy)) {
+          return `${pythonBin} -m flask --app ${entryFile} run --host 0.0.0.0 --port {PORT}`;
+        }
+      }
+      // Generic Python with manage.py (Django)
+      if (filenames.includes("manage.py")) {
+        return `${pythonBin} manage.py runserver 0.0.0.0:{PORT}`;
+      }
+    }
+
+    // Java — detect pom.xml (Maven / Spring Boot)
+    if (filenames.includes("pom.xml")) {
+      const pomRaw = await fs.readFile(path.join(cwd, "pom.xml"), "utf-8").catch(() => "");
+      if (pomRaw.includes("spring-boot")) {
+        return "mvn spring-boot:run -Dspring-boot.run.arguments=--server.port={PORT}";
+      }
+      // Gradle wrapper
+    }
+    if (filenames.includes("build.gradle") || filenames.includes("build.gradle.kts")) {
+      return "./gradlew bootRun --args='--server.port={PORT}'";
+    }
+
+    // Go — detect go.mod
+    if (filenames.includes("go.mod")) {
+      if (filenames.includes("main.go")) {
+        return "go run . --port {PORT}";
+      }
+    }
+
+    // Rust — detect Cargo.toml
+    if (filenames.includes("Cargo.toml")) {
+      return "cargo run -- --port {PORT}";
     }
   } catch {
     // cwd may not exist yet or be unreadable
@@ -368,13 +420,60 @@ export class PreviewManager {
       return;
     }
 
-    const resolvedCommand = record.previewCommand
+    // Sanitize preview command: strip redundant `cd <path> &&` prefix since cwd is already set
+    let sanitizedCommand = record.previewCommand;
+    sanitizedCommand = sanitizedCommand.replace(/^\s*cd\s+\S+\s*&&\s*/u, "");
+    // Strip `source .../activate &&` and `venv setup &&` — we handle venv via PATH below
+    sanitizedCommand = sanitizedCommand.replace(/\bsource\s+\S*activate\s*&&\s*/gu, "");
+    sanitizedCommand = sanitizedCommand.replace(/\bpython3?\s+-m\s+venv\s+\S+\s*&&\s*/gu, "");
+    sanitizedCommand = sanitizedCommand.replace(/\bpip\s+install\s+[^&]+&&\s*/gu, "");
+
+    const resolvedCommand = sanitizedCommand
       .replace(/\{PORT\}/gu, String(record.targetPort));
+
+    // Auto-detect Python venv and prepend to PATH
+    const extraEnv: Record<string, string> = {};
+    const venvNames = ["venv", ".venv", "env"];
+    for (const vn of venvNames) {
+      const venvBin = path.join(cwd, vn, "bin");
+      try {
+        await fs.access(path.join(venvBin, "python"), fs.constants.X_OK);
+        extraEnv.PATH = `${venvBin}:${process.env.PATH ?? ""}`;
+        extraEnv.VIRTUAL_ENV = path.join(cwd, vn);
+        this.deps.logger.info(`Controller: using Python venv at ${venvBin} for preview ${record.id}`);
+        break;
+      } catch {
+        // no venv here
+      }
+    }
+
+    // Pre-install Python dependencies if requirements.txt exists and venv is available
+    if (extraEnv.VIRTUAL_ENV) {
+      const reqPath = path.join(cwd, "requirements.txt");
+      try {
+        await fs.access(reqPath, fs.constants.R_OK);
+        const pipBin = path.join(extraEnv.VIRTUAL_ENV, "bin", "pip");
+        const pipInstall = spawnManagedCommandProcess({
+          command: `${pipBin} install -q -r requirements.txt`,
+          cwd,
+          env: { ...process.env, ...extraEnv },
+        });
+        await new Promise<void>((resolve) => {
+          pipInstall.on("exit", () => resolve());
+          pipInstall.on("error", () => resolve());
+          setTimeout(() => resolve(), 60_000);
+        });
+      } catch {
+        // no requirements.txt or pip failed — proceed anyway
+      }
+    }
+
     const child = spawnManagedCommandProcess({
       command: resolvedCommand,
       cwd,
       env: {
         ...process.env,
+        ...extraEnv,
         HOST: "0.0.0.0",
         PORT: String(record.targetPort),
         TEAMCLAW_PREVIEW_BASE_PATH: record.liveUrl.replace(/\/$/u, ""),
