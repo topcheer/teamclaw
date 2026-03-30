@@ -109,6 +109,7 @@ controller:
   args:
     - |
       set -eu
+      cp /tmp/config/openclaw.json /home/node/.openclaw/openclaw.json
       exec node dist/index.js gateway --allow-unconfigured
 
 resources: {}

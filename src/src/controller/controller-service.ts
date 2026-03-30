@@ -147,13 +147,14 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
       messageRouter = new MessageRouter(logger);
       wsServer = new TeamWebSocketServer(logger);
 
-      // When running inside a Docker container, use config.port and bind to
-      // 0.0.0.0 so that Docker port mapping and healthchecks work correctly.
-      // When running locally (host machine), try config.port first; fall back
-      // to a dynamic port only when binding fails (e.g. port already in use).
-      const isInDocker = fs.existsSync("/.dockerenv");
+      // When running inside a container (Docker or K8s), bind to 0.0.0.0
+      // so that port mapping, service networking, and health probes work.
+      // When running locally (host machine), bind to 127.0.0.1 for safety.
+      const isContainer = fs.existsSync("/.dockerenv") ||
+        fs.existsSync("/run/.containerenv") ||
+        process.env.KUBERNETES_SERVICE_HOST !== undefined;
       const listenPort = config.port;
-      const listenHost = isInDocker ? "0.0.0.0" : "127.0.0.1";
+      const listenHost = isContainer ? "0.0.0.0" : "127.0.0.1";
 
       const server = createControllerHttpServer({
         config,
