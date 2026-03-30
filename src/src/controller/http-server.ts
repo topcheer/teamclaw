@@ -2186,6 +2186,7 @@ async function dispatchTaskToWorker(
 
   const sharedWorkspace = localWorkerManager?.isLocalWorkerId(worker.id)
     || inProcessWorkerManager?.isInProcessWorkerId(worker.id)
+    || deps.workerProvisioningManager?.isSharedWorkspaceWorker(worker.id)
     || false;
   const repoState = await refreshControllerRepoState(deps);
   const repoInfo = buildRepoSyncInfo(repoState, sharedWorkspace);

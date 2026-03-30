@@ -306,7 +306,23 @@ async function syncWorkerRepoUnlocked(
 
   const localRepo = await readGitRepoState(config, false);
   if (localRepo.dirty) {
-    throw new Error("Worker workspace has uncommitted changes; refusing repo sync until the checkout is clean");
+    // Auto-commit leftover changes (e.g. from a prior failed task) instead of
+    // blocking sync.  This mirrors publishWorkerRepoUnlocked's auto-commit and
+    // the controller's stash logic in importControllerGitBundle.
+    logger.info("Worker workspace has uncommitted changes; auto-committing before sync");
+    await runGit(["add", "-A"], { cwd: workspaceDir });
+    const commitResult = await tryGit(
+      ["commit", "-m", "chore(teamclaw): auto-commit uncommitted changes before sync"],
+      { cwd: workspaceDir },
+    );
+    if (commitResult.exitCode !== 0) {
+      // Commit can fail on a repo with no HEAD yet — fall back to stash
+      const stashResult = await tryGit(["stash", "--include-untracked"], { cwd: workspaceDir });
+      if (stashResult.exitCode !== 0) {
+        throw new Error("Worker workspace has uncommitted changes that cannot be committed or stashed");
+      }
+      logger.info("Stashed uncommitted changes (no HEAD commit yet)");
+    }
   }
 
   if (repoInfo.mode === "remote") {

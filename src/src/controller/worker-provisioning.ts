@@ -12,6 +12,7 @@ import type { PluginLogger } from "../../api.js";
 import { generateId } from "../protocol.js";
 import {
   resolveDefaultOpenClawConfigPath,
+  resolveDefaultOpenClawWorkspaceDir,
   resolveDefaultTeamClawRuntimeRootDir,
 } from "../openclaw-workspace.js";
 import { ROLES } from "../roles.js";
@@ -94,6 +95,12 @@ export class WorkerProvisioningManager {
 
   hasManagedWorker(workerId: string): boolean {
     return Boolean(this.deps.getTeamState()?.provisioning?.workers?.[workerId]);
+  }
+
+  /** Returns true when the worker was provisioned as a local process (shared filesystem). */
+  isSharedWorkspaceWorker(workerId: string): boolean {
+    const record = this.deps.getTeamState()?.provisioning?.workers?.[workerId];
+    return Boolean(record && record.provider === "process");
   }
 
   syncState(state: TeamState): boolean {
@@ -1431,6 +1438,13 @@ function buildProvisionedWorkspaceDir(
   role: RoleId,
   workerId: string,
 ): string {
+  // Process-type workers run on the same host — share the controller's workspace
+  // so that file artifacts (previews, deliverables) are immediately visible to
+  // the controller without requiring git sync or file transfer.
+  if (provider === "process") {
+    return resolveDefaultOpenClawWorkspaceDir();
+  }
+
   if (
     (provider !== "docker" && provider !== "kubernetes") ||
     !config.workerProvisioningWorkspaceRoot
