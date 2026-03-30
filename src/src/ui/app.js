@@ -874,6 +874,14 @@
     return null;
   }
 
+  /** Merge lazy-loaded children into the workspace tree data model. */
+  function mergeWorkspaceSubtree(dirPath, entries) {
+    var dirNode = findWorkspaceNodeByPath(workspaceTree, dirPath);
+    if (dirNode && dirNode.type === "directory") {
+      dirNode.children = entries;
+    }
+  }
+
   function findDefaultWorkspacePath(nodes) {
     const preferredNames = ["README.md", "SPEC.md", "index.html"];
     const queue = [].concat(nodes || []);
@@ -992,7 +1000,7 @@
         // Default: md/html show preview, everything else shows source
         selectedWorkspaceView = isWorkspacePreviewAvailable(selectedWorkspaceFile) ? "preview" : "source";
       }
-      renderWorkspaceTree(workspaceTree);
+      updateWorkspaceTreeSelection();
       renderWorkspaceFile();
     } catch (err) {
       console.error("Failed to load workspace file:", err);
@@ -1016,7 +1024,36 @@
       return;
     }
 
+    // Capture currently expanded directories before re-render
+    var expandedDirs = new Set();
+    var toggles = container.querySelectorAll(".workspace-tree-dir-toggle");
+    for (var i = 0; i < toggles.length; i++) {
+      var toggle = toggles[i];
+      var li = toggle.closest(".workspace-tree-folder");
+      var children = li ? li.querySelector(".workspace-tree-children") : null;
+      if (children && children.style.display !== "none") {
+        expandedDirs.add(toggle.dataset.dirPath);
+      }
+    }
+
     container.innerHTML = renderWorkspaceTreeNodes(nodes);
+
+    // Restore expanded directories
+    if (expandedDirs.size > 0) {
+      var newToggles = container.querySelectorAll(".workspace-tree-dir-toggle");
+      for (var j = 0; j < newToggles.length; j++) {
+        var t = newToggles[j];
+        if (expandedDirs.has(t.dataset.dirPath)) {
+          var parentLi = t.closest(".workspace-tree-folder");
+          var childrenDiv = parentLi ? parentLi.querySelector(".workspace-tree-children") : null;
+          if (childrenDiv) {
+            childrenDiv.style.display = "";
+            var arrow = t.querySelector(".workspace-tree-arrow");
+            if (arrow) arrow.textContent = "▾";
+          }
+        }
+      }
+    }
   }
 
   function renderWorkspaceTreeNodes(nodes) {
@@ -1051,6 +1088,18 @@
         "</li>"
       );
     }).join("") + "</ul>";
+  }
+
+  /** Update only the selected highlight in the tree without re-rendering (preserves expand state). */
+  function updateWorkspaceTreeSelection() {
+    var container = $("#workspace-tree");
+    if (!container) return;
+    var buttons = container.querySelectorAll(".workspace-tree-file");
+    for (var i = 0; i < buttons.length; i++) {
+      var btn = buttons[i];
+      var isSelected = btn.dataset.workspacePath === selectedWorkspacePath;
+      btn.classList.toggle("is-selected", isSelected);
+    }
   }
 
   function renderWorkspaceFile() {
@@ -1563,7 +1612,6 @@
 
     renderTaskDetailOverview(task);
     renderTaskDetailTimeline(task);
-    renderTaskDetailOutput(task);
     syncTaskDetailTab();
   }
 
@@ -1733,52 +1781,11 @@
     }
   }
 
-  function renderTaskDetailOutput(task) {
-    const container = $("#task-detail-output");
-    if (!container) return;
-
-    if (!task) {
-      container.innerHTML = '<div class="task-detail-empty">No task selected.</div>';
-      return;
-    }
-
-    const outputEvents = (getSelectedTaskExecution().events || []).filter(function (event) {
-      return ["output", "progress", "error"].indexOf(event.type) !== -1;
-    });
-
-    if (outputEvents.length === 0) {
-      container.innerHTML = '<div class="task-detail-empty">No live output captured yet.</div>';
-      return;
-    }
-
-    container.innerHTML = '<div class="task-detail-output-stream">' +
-      outputEvents.map(function (event) {
-        const label = event.stream || humanizeStatus(event.type || "output");
-        const meta = [formatTime(event.createdAt), event.source || null, event.workerId || event.role || null]
-          .filter(Boolean)
-          .join(" • ");
-        const stateClass = event.type === "error" ? " is-error" : "";
-        return (
-          '<article class="task-output-entry' + stateClass + '">' +
-          '  <div class="task-output-header">' +
-          '    <div class="task-output-label">' + escapeHtml(label) + "</div>" +
-          (meta ? '<div class="task-output-meta">' + escapeHtml(meta) + "</div>" : "") +
-          "  </div>" +
-          '  <div class="task-output-body markdown-body">' + renderMarkdownContent(event.message) + "</div>" +
-          "</article>"
-        );
-      }).join("") +
-      "</div>";
-    if (followTaskOutput) {
-      container.scrollTop = container.scrollHeight;
-    }
-  }
-
   function syncTaskDetailTab() {
     $$(".task-detail-tab").forEach(function (tab) {
       tab.classList.toggle("active", tab.dataset.taskDetailTab === selectedTaskDetailTab);
     });
-    ["overview", "timeline", "output"].forEach(function (name) {
+    ["overview", "timeline"].forEach(function (name) {
       const panel = $("#task-detail-" + name);
       if (panel) {
         panel.classList.toggle("active", name === selectedTaskDetailTab);
@@ -2002,6 +2009,7 @@
             childrenContainer.innerHTML = '<div class="workspace-tree-loading">Loading…</div>';
             apiGet("/workspace/subtree?path=" + encodeURIComponent(dirPath)).then(function (data) {
               var entries = data.entries || [];
+              mergeWorkspaceSubtree(dirPath, entries);
               if (entries.length === 0) {
                 childrenContainer.innerHTML = '<div class="workspace-tree-empty">(empty)</div>';
               } else {
