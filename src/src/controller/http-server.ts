@@ -2473,41 +2473,32 @@ function provisionInProcessWorkersForPendingTasks(deps: ControllerHttpDeps): num
     return 0;
   }
 
-  // Collect roles that already have at least one non-offline worker.
-  const coveredRoles = new Set(
-    Object.values(state.workers)
-      .filter((w) => w.status !== "offline")
-      .map((w) => w.role),
-  );
+  const maxPerRole = deps.config.workerProvisioningMaxPerRole || 3;
 
-  let provisioned = 0;
-  const rolesProvisionedThisPass = new Set<RoleId>();
-
+  // Count pending tasks per role to determine demand
+  const demandByRole = new Map<RoleId, number>();
   for (const task of pendingTasks) {
     const role = inferTaskRole(task) ?? FALLBACK_ROLE;
+    demandByRole.set(role, (demandByRole.get(role) ?? 0) + 1);
+  }
 
-    if (rolesProvisionedThisPass.has(role)) {
-      continue; // already provisioned this role in the current pass
+  let provisioned = 0;
+
+  for (const [role, demand] of demandByRole) {
+    // How many workers already exist for this role?
+    const activeForRole = inProcessWorkerManager.countWorkersForRole(role);
+    // How many idle workers are available?
+    const idleAvailable = inProcessWorkerManager.getIdleWorkerForRole(role) ? 1 : 0;
+
+    // Need enough workers to handle demand, capped at maxPerRole
+    const needed = Math.min(demand, maxPerRole) - activeForRole;
+
+    for (let i = 0; i < needed; i++) {
+      if (inProcessWorkerManager.countWorkersForRole(role) >= maxPerRole) break;
+      inProcessWorkerManager.ensureWorker(role);
+      provisioned++;
+      logger.info(`Controller: on-demand provisioned in-process worker for role "${role}" (${inProcessWorkerManager.countWorkersForRole(role)}/${maxPerRole}, triggered by ${demand} pending tasks)`);
     }
-
-    // Check if an idle worker already exists for this role.
-    if (inProcessWorkerManager.getIdleWorkerForRole(role)) {
-      continue;
-    }
-
-    // Check maxPerRole cap — do not exceed it for in-process workers either.
-    const activeForRole = Object.values(state.workers).filter(
-      (w) => w.role === role && w.status !== "offline",
-    ).length;
-    const maxPerRole = deps.config.workerProvisioningMaxPerRole || 1;
-    if (activeForRole >= maxPerRole) {
-      continue;
-    }
-
-    inProcessWorkerManager.ensureWorker(role);
-    rolesProvisionedThisPass.add(role);
-    provisioned++;
-    logger.info(`Controller: on-demand provisioned in-process worker for role "${role}" (triggered by task ${task.id})`);
   }
 
   if (provisioned > 0) {

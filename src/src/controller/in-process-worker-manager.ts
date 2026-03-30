@@ -33,12 +33,13 @@ export type InProcessWorkerManagerDeps = {
  * Manages virtual workers that execute tasks in the same process as the
  * controller via `runtime.subagent.run()`.  Used when `processModel: "single"`.
  *
- * Unlike LocalWorkerManager (which spawns child gateway processes), this
- * manager runs everything in the controller's own event loop.
+ * Supports multiple workers per role for parallel task execution. Each worker
+ * gets a unique ID (`inprocess-{role}-{n}`) and runs its own subagent session.
  */
 export class InProcessWorkerManager {
   private readonly workers = new Map<string, InProcessWorkerRecord>();
   private readonly deps: InProcessWorkerManagerDeps;
+  private readonly roleCounters = new Map<string, number>();
 
   constructor(deps: InProcessWorkerManagerDeps) {
     this.deps = deps;
@@ -51,12 +52,23 @@ export class InProcessWorkerManager {
 
   // ── Worker lifecycle ──────────────────────────────────────────────────
 
-  /** Ensure a virtual worker exists for `role`. No-op if already present. */
+  /**
+   * Ensure a virtual worker exists for `role`.
+   * If all existing workers for this role are busy, creates a new one.
+   * Returns the worker ID.
+   */
   ensureWorker(role: RoleId): string {
-    const workerId = getInProcessWorkerId(role);
-    if (this.workers.has(workerId)) {
-      return workerId;
+    // First try to find an existing idle worker for this role
+    for (const record of this.workers.values()) {
+      if (record.role === role && !record.busy) {
+        return record.workerId;
+      }
     }
+
+    // All existing workers for this role are busy (or none exist) — create a new one
+    const counter = (this.roleCounters.get(role) ?? 0) + 1;
+    this.roleCounters.set(role, counter);
+    const workerId = `${INPROCESS_WORKER_PREFIX}${role}-${counter}`;
 
     const executor = createRoleTaskExecutor({
       runtime: this.deps.runtime,
@@ -69,14 +81,23 @@ export class InProcessWorkerManager {
     });
 
     this.workers.set(workerId, { workerId, role, executor, busy: false, idleSince: Date.now() });
-    this.deps.logger.info(`InProcessWorker: created virtual worker ${workerId} (role=${role})`);
+    this.deps.logger.info(`InProcessWorker: created virtual worker ${workerId} (role=${role}, instance #${counter})`);
     return workerId;
   }
 
-  /** Remove a virtual worker. */
-  removeWorker(role: RoleId): void {
-    const workerId = getInProcessWorkerId(role);
+  /** Remove a virtual worker by ID. */
+  removeWorkerById(workerId: string): void {
     this.workers.delete(workerId);
+  }
+
+  /** Remove a virtual worker (backward compat — removes first idle for role). */
+  removeWorker(role: RoleId): void {
+    for (const [id, record] of this.workers) {
+      if (record.role === role && !record.busy) {
+        this.workers.delete(id);
+        return;
+      }
+    }
   }
 
   /** Register all managed workers into TeamState. Also removes stale in-process entries. */
@@ -101,9 +122,6 @@ export class InProcessWorkerManager {
         };
         changed = true;
       } else {
-        // Keep heartbeat fresh and status in sync.
-        // In-process workers managed by this class are always alive —
-        // override any stale "offline" status from previous runs.
         existing.lastHeartbeat = now;
         existing.transport = "in-process";
         const desiredStatus = record.busy ? "busy" : "idle";
@@ -140,12 +158,21 @@ export class InProcessWorkerManager {
   }
 
   getIdleWorkerForRole(role: RoleId): string | null {
-    const workerId = getInProcessWorkerId(role);
-    const record = this.workers.get(workerId);
-    if (record && !record.busy) {
-      return workerId;
+    for (const record of this.workers.values()) {
+      if (record.role === role && !record.busy) {
+        return record.workerId;
+      }
     }
     return null;
+  }
+
+  /** Count active (non-reaped) workers for a role. */
+  countWorkersForRole(role: RoleId): number {
+    let count = 0;
+    for (const record of this.workers.values()) {
+      if (record.role === role) count++;
+    }
+    return count;
   }
 
   /**
@@ -321,6 +348,10 @@ export class InProcessWorkerManager {
   }
 }
 
+/**
+ * @deprecated Use InProcessWorkerManager.ensureWorker() for new workers.
+ * Kept for backward compat — returns `inprocess-{role}` (legacy single-worker format).
+ */
 export function getInProcessWorkerId(role: RoleId): string {
   return `${INPROCESS_WORKER_PREFIX}${role}`;
 }

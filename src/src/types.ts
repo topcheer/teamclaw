@@ -560,7 +560,7 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
     : 0;
   const rawProvisioningMaxPerRole = typeof raw.workerProvisioningMaxPerRole === "number" && raw.workerProvisioningMaxPerRole >= 1
     ? Math.floor(raw.workerProvisioningMaxPerRole)
-    : 1;
+    : 3;
   const workerProvisioningMaxPerRole = Math.max(rawProvisioningMaxPerRole, workerProvisioningMinPerRole);
   const workerProvisioningIdleTtlMs = typeof raw.workerProvisioningIdleTtlMs === "number" && raw.workerProvisioningIdleTtlMs >= 1000
     ? raw.workerProvisioningIdleTtlMs

@@ -111,7 +111,7 @@ function buildConfigSchema() {
         },
         workerProvisioningMaxPerRole: {
           type: "number" as const,
-          default: 1,
+          default: 3,
           description: "Maximum on-demand workers to launch per role",
         },
         workerProvisioningIdleTtlMs: {
