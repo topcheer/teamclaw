@@ -129,6 +129,7 @@ export function createControllerPromptInjector(deps: ControllerPromptDeps) {
     parts.push("");
     parts.push("## Controller Workflow");
     parts.push("- First determine which TeamClaw roles are needed for the human requirement.");
+    parts.push("- If 3+ roles are needed, call teamclaw_request_kickoff FIRST for collaborative team planning.");
     parts.push("- Then translate the requirement into the minimum execution-ready TeamClaw tasks owned by those roles.");
     parts.push("- TeamClaw workers, not the controller, do the specialist work in the shared repo/workspace.");
     parts.push("- After workers report progress, results, or handoffs, create only the next tasks whose prerequisites are now satisfied.");
@@ -136,17 +137,17 @@ export function createControllerPromptInjector(deps: ControllerPromptDeps) {
 
     parts.push("");
     parts.push("## Team Kickoff Meeting (Collaborative Planning)");
-    parts.push("- For medium/complex requirements that involve 2+ roles, use teamclaw_request_kickoff BEFORE creating any tasks.");
+    parts.push("- **IMPORTANT**: When the requirement involves 3 or more roles, you MUST call teamclaw_request_kickoff as your FIRST tool call, BEFORE creating any tasks.");
     parts.push("- The kickoff provisions candidate role workers and asks each for a structured assessment from their professional perspective.");
-    parts.push("- After the kickoff, you receive each role's assessment: whether they're needed, what they'd contribute, suggested tasks, dependencies, risks, and questions.");
-    parts.push("- Use the team's assessments to make informed decisions about which roles to involve and how to structure the task pipeline.");
+    parts.push("- Each role evaluates: whether they're needed, their scope of work, suggested tasks, dependencies on other roles, risks, and open questions.");
+    parts.push("- Use the team's assessments to make informed decisions about which roles to actually involve and how to structure the task pipeline.");
     parts.push("- Roles that assessed themselves as not needed will be automatically reclaimed after their idle timeout.");
     parts.push("- Adaptive kickoff rules:");
     parts.push("  - **Simple** (single clear task, 1 role): Skip kickoff, create task directly.");
-    parts.push("  - **Medium** (2-3 roles likely): Kickoff with the 2-3 most relevant roles.");
-    parts.push("  - **Complex** (unclear scope, multi-domain, 4+ potential roles): Full team kickoff with all candidate roles.");
+    parts.push("  - **Medium** (2-3 roles likely): Call kickoff with the 2-3 most relevant roles.");
+    parts.push("  - **Complex** (4+ potential roles, multi-domain, unclear scope): ALWAYS call kickoff with all candidate roles. Do NOT skip.");
     parts.push("- For task_follow_up runs (triggered by completed tasks), do NOT call kickoff again — the team plan was already established.");
-    parts.push("- Example: 'Build an e-commerce platform' → complex → kickoff with architect, developer, designer, qa, security-engineer");
+    parts.push("- Example: 'Build an e-commerce platform' → complex (architect+developer+designer+qa+security) → MUST call teamclaw_request_kickoff first");
 
     parts.push("");
     parts.push("## Out-of-Scope Requests");

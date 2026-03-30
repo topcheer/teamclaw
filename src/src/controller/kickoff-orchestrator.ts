@@ -25,7 +25,7 @@ import { getRole, ROLES } from "../roles.js";
 const WORKER_PROVISION_TIMEOUT_MS = 90_000;
 
 /** Maximum time to wait for a single worker's kickoff assessment. */
-const ASSESSMENT_TIMEOUT_MS = 60_000;
+const ASSESSMENT_TIMEOUT_MS = 120_000;
 
 /** Poll interval when waiting for workers to appear in state. */
 const WORKER_POLL_INTERVAL_MS = 2_000;

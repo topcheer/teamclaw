@@ -166,6 +166,8 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
       const listenPort = config.port;
       const listenHost = isContainer ? "0.0.0.0" : "127.0.0.1";
 
+      let serviceKickoffHandler: KickoffHandler | undefined;
+
       const server = createControllerHttpServer({
         config,
         logger,
@@ -179,6 +181,7 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
         inProcessWorkerManager,
         workerProvisioningManager,
         previewManager,
+        getKickoffHandler: () => serviceKickoffHandler,
       });
 
       const PORT_RETRY_STEP = 10;
@@ -283,6 +286,7 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
         );
         return { assessments: result.plan.assessments, summary: result.summary };
       };
+      serviceKickoffHandler = kickoffHandler;
       deps.onKickoffHandlerAvailable?.(kickoffHandler);
 
       logger.info(`Controller: starting preview restoration...`);
@@ -427,7 +431,8 @@ async function requestKickoffAssessment(
     const runResult = await deps.runtime.subagent.run({
       sessionKey,
       message: prompt,
-      systemPrompt,
+      extraSystemPrompt: systemPrompt,
+      idempotencyKey: `kickoff-assess-${role}-${Date.now()}`,
     });
 
     const waitResult = await deps.runtime.subagent.waitForRun({
@@ -436,12 +441,13 @@ async function requestKickoffAssessment(
     });
 
     if (waitResult.status !== "ok") {
-      throw new Error(`Assessment timed out or failed for ${role}`);
+      throw new Error(`Assessment timed out or failed for ${role} (status=${waitResult.status})`);
     }
 
     // Extract the response text
-    const messages = await deps.runtime.subagent.getSessionMessages({ sessionKey });
-    const lastAssistant = [...(messages ?? [])].reverse().find(
+    const sessionMessages = await deps.runtime.subagent.getSessionMessages({ sessionKey });
+    const messages = Array.isArray(sessionMessages?.messages) ? sessionMessages.messages : [];
+    const lastAssistant = [...messages].reverse().find(
       (m: unknown) => (m as Record<string, unknown>).role === "assistant",
     );
     const responseText = extractTextFromMessage(lastAssistant);

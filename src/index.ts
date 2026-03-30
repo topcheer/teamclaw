@@ -73,6 +73,7 @@ function registerController(api: OpenClawPluginApi, config: ReturnType<typeof pa
     },
     onKickoffHandlerAvailable: (handler) => {
       kickoffHandler = handler;
+      logger.info("TeamClaw: kickoff handler registered successfully");
     },
   }));
 
@@ -116,7 +117,7 @@ function registerController(api: OpenClawPluginApi, config: ReturnType<typeof pa
       controllerUrl,
       getTeamState: getControllerTeamState,
       sessionKey: ctx.sessionKey ?? null,
-      kickoffHandler,
+      getKickoffHandler: () => kickoffHandler,
     });
   });
 }

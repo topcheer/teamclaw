@@ -26,8 +26,8 @@ export type ControllerToolsDeps = {
   controllerUrl: string;
   getTeamState: () => TeamState | null;
   sessionKey?: string | null;
-  /** Handler for kickoff meeting requests. Injected by the controller service. */
-  kickoffHandler?: (candidateRoles: RoleId[], complexity: "simple" | "medium" | "complex", requirement: string) => Promise<{ assessments: KickoffAssessment[]; summary: string }>;
+  /** Handler for kickoff meeting requests. Use a getter for late-binding (service may start after tool registration). */
+  getKickoffHandler?: () => ((candidateRoles: RoleId[], complexity: "simple" | "medium" | "complex", requirement: string) => Promise<{ assessments: KickoffAssessment[]; summary: string }>) | undefined;
 };
 
 const EXECUTION_READY_BLOCKERS: Array<{ pattern: RegExp; reason: string }> = [
@@ -74,7 +74,8 @@ export function createControllerTools(deps: ControllerToolsDeps) {
         ], { description: "Project complexity: simple (skip kickoff, 1-2 roles), medium (partial kickoff, 2-3 roles), complex (full team kickoff, 4+ roles)" }),
       }),
       async execute(_id: string, params: Record<string, unknown>) {
-        if (!deps.kickoffHandler) {
+        const kickoffHandler = deps.getKickoffHandler?.();
+        if (!kickoffHandler) {
           return {
             content: [{
               type: "text" as const,
@@ -102,7 +103,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
           : "medium";
 
         try {
-          const result = await deps.kickoffHandler(candidateRoles, complexity, requirement);
+          const result = await kickoffHandler(candidateRoles, complexity, requirement);
           return {
             content: [{
               type: "text" as const,

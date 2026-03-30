@@ -60,6 +60,7 @@ import {
 } from "../interaction-contracts.js";
 import { resolveTeamClawWorkspaceDir, resolveTeamClawProjectsDir, resolveDefaultOpenClawWorkspaceDir, deriveProjectSlug } from "../openclaw-workspace.js";
 import { normalizeControllerManifest } from "./orchestration-manifest.js";
+import type { KickoffHandler } from "./controller-service.js";
 
 export type ControllerHttpDeps = {
   config: PluginConfig;
@@ -74,6 +75,8 @@ export type ControllerHttpDeps = {
   inProcessWorkerManager?: InProcessWorkerManager;
   workerProvisioningManager?: WorkerProvisioningManager | null;
   previewManager?: PreviewManager;
+  /** Late-bound kickoff handler for automatic team kickoff on complex projects. */
+  getKickoffHandler?: () => KickoffHandler | undefined;
 };
 
 const MAX_TASK_EXECUTION_EVENTS = 250;
@@ -1335,6 +1338,75 @@ async function runControllerIntakeUnlocked(
     deps,
   );
   const reconciledTasks = reconcileControllerManifestTaskBindings(sessionKey, createdTaskIds, recordedManifest, deps);
+
+  // ── Automatic Team Kickoff ────────────────────────────────────────────
+  // For complex projects (3+ roles), automatically run a kickoff meeting
+  // so every candidate role can assess the requirement collaboratively.
+  // This happens AFTER the initial LLM pass so we know which roles are
+  // needed, but we store the assessments for visibility and future
+  // refinement passes.
+  const AUTO_KICKOFF_ROLE_THRESHOLD = 3;
+  const isFollowUp = options?.source === "task_follow_up";
+  const kickoffHandler = deps.getKickoffHandler?.();
+  if (
+    !isFollowUp
+    && kickoffHandler
+    && recordedManifest.requiredRoles.length >= AUTO_KICKOFF_ROLE_THRESHOLD
+    && !recordedManifest.clarificationsNeeded
+  ) {
+    deps.logger.info(
+      `Controller: auto-kickoff triggered for ${recordedManifest.requiredRoles.length} roles: ${recordedManifest.requiredRoles.join(", ")}`,
+    );
+    recordControllerRunEvent(controllerRun.id, {
+      type: "lifecycle",
+      phase: "kickoff_started",
+      source: "controller",
+      status: "running",
+      sessionKey,
+      message: `Auto-kickoff: provisioning ${recordedManifest.requiredRoles.length} candidate roles for team assessment.`,
+    }, deps);
+    try {
+      const kickoffResult = await kickoffHandler(
+        recordedManifest.requiredRoles as RoleId[],
+        recordedManifest.requiredRoles.length >= 5 ? "complex" : "medium",
+        message,
+      );
+      // Store kickoff assessments on the manifest for UI/API visibility
+      recordedManifest.kickoffPlan = {
+        assessments: kickoffResult.assessments,
+        summary: kickoffResult.summary,
+        triggeredAt: Date.now(),
+      };
+      updateControllerRun(controllerRun.id, deps, (run) => {
+        if (run.manifest) {
+          run.manifest.kickoffPlan = recordedManifest.kickoffPlan;
+        }
+        appendControllerRunEvent(run, {
+          type: "lifecycle",
+          phase: "kickoff_completed",
+          source: "controller",
+          status: "running",
+          sessionKey,
+          message: `Team kickoff completed: ${kickoffResult.assessments.length} assessments collected. ${kickoffResult.summary.slice(0, 200)}`,
+        });
+      });
+      deps.logger.info(
+        `Controller: auto-kickoff completed with ${kickoffResult.assessments.length} assessments`,
+      );
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      deps.logger.warn(`Controller: auto-kickoff failed: ${errMsg}`);
+      recordControllerRunEvent(controllerRun.id, {
+        type: "lifecycle",
+        phase: "kickoff_failed",
+        source: "controller",
+        status: "running",
+        sessionKey,
+        message: `Auto-kickoff failed: ${errMsg}. Proceeding with controller-only planning.`,
+      }, deps);
+    }
+  }
+
   const latestTeamState = deps.getTeamState();
   const reply = buildControllerManifestReply(recordedManifest, reconciledTasks.taskIds, latestTeamState, rawReply);
 
