@@ -2312,6 +2312,8 @@ async function autoAssignPendingTasks(
   const { getTeamState, updateTeamState, taskRouter, wsServer, logger, inProcessWorkerManager } = deps;
   const attemptedPairs = new Set<string>();
   const assignedTasks: TaskInfo[] = [];
+  let provisionRetries = 0;
+  const MAX_PROVISION_RETRIES = 5;
 
   while (true) {
     const state = getTeamState();
@@ -2326,10 +2328,18 @@ async function autoAssignPendingTasks(
 
     if (!nextAssignment) {
       // No idle worker matched — try on-demand provisioning for in-process mode.
+      // IMPORTANT: Do NOT loop back immediately after provisioning.  A tight
+      // `continue` here would spin the event loop at 100% CPU, flood the log,
+      // and starve all other I/O (health checks, intake responses).
+      // Instead, provision then yield via a short async delay so the event loop
+      // can process worker initialization before we retry.
       if (inProcessWorkerManager && !preferredWorkerId) {
         const provisioned = provisionInProcessWorkersForPendingTasks(deps);
-        if (provisioned > 0) {
-          continue; // re-check assignments with the newly provisioned workers
+        if (provisioned > 0 && provisionRetries < MAX_PROVISION_RETRIES) {
+          provisionRetries++;
+          // Yield to the event loop, then retry to pick up the new workers.
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          continue;
         }
       }
       break;
