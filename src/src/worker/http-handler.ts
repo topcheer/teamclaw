@@ -8,6 +8,7 @@ export type TaskExecutor = (assignment: TaskAssignmentPayload) => Promise<string
 export type ResultReporter = (taskId: string, result: string, error: string | null, contract?: Record<string, unknown>) => void;
 export type TaskCanceller = (taskId: string) => Promise<boolean> | boolean;
 export type TaskCancelChecker = (taskId: string) => boolean;
+export type KickoffAssessor = (requirement: string, role: string) => Promise<Record<string, unknown>>;
 
 export function createWorkerHttpHandler(
   config: { role: string; port: number },
@@ -18,6 +19,7 @@ export function createWorkerHttpHandler(
   resultReporter?: ResultReporter,
   cancelTaskExecution?: TaskCanceller,
   isTaskCancelled?: TaskCancelChecker,
+  kickoffAssessor?: KickoffAssessor,
 ) {
   return async (req: IncomingMessage, res: ServerResponse) => {
     // CORS preflight
@@ -141,6 +143,35 @@ export function createWorkerHttpHandler(
         messageQueue.push(message);
         logger.info(`Worker: received message from ${message.from ?? "unknown"}: ${message.content.slice(0, 50)}`);
         sendJson(res, 201, { status: "queued" });
+        return;
+      }
+
+      // POST /api/v1/kickoff/assess
+      if (req.method === "POST" && pathname === "/api/v1/kickoff/assess") {
+        if (!kickoffAssessor) {
+          sendError(res, 501, "Kickoff assessment is not supported by this worker");
+          return;
+        }
+
+        const body = await parseJsonBody(req);
+        const requirement = typeof body.requirement === "string" ? body.requirement : "";
+        const role = typeof body.role === "string" ? body.role : config.role;
+
+        if (!requirement) {
+          sendError(res, 400, "requirement is required");
+          return;
+        }
+
+        logger.info(`Worker: received kickoff assessment request for role ${role}`);
+
+        try {
+          const assessment = await kickoffAssessor(requirement, role);
+          sendJson(res, 200, { assessment });
+        } catch (err) {
+          const errorMsg = err instanceof Error ? err.message : String(err);
+          logger.error(`Worker: kickoff assessment failed: ${errorMsg}`);
+          sendError(res, 500, `Assessment failed: ${errorMsg}`);
+        }
         return;
       }
 

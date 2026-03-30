@@ -2,7 +2,7 @@ import type { OpenClawPluginApi, OpenClawPluginService, OpenClawPluginServiceCon
 import os from "node:os";
 import fs from "node:fs";
 import { exec } from "node:child_process";
-import type { PluginConfig, TeamState } from "../types.js";
+import type { KickoffAssessment, PluginConfig, RoleId, TeamState } from "../types.js";
 import { loadTeamState, saveTeamState } from "../state.js";
 import { MDnsAdvertiser } from "../discovery.js";
 import { WORKER_TIMEOUT_MS } from "../protocol.js";
@@ -16,6 +16,14 @@ import { ensureOpenClawWorkspaceMemoryDir } from "../openclaw-workspace.js";
 import { ensureControllerGitRepo } from "../git-collaboration.js";
 import { WorkerProvisioningManager } from "./worker-provisioning.js";
 import { PreviewManager } from "./preview-manager.js";
+import { runKickoffMeeting, buildKickoffAssessmentPrompt, ASSESSMENT_TIMEOUT_MS } from "./kickoff-orchestrator.js";
+import { getRole } from "../roles.js";
+
+export type KickoffHandler = (
+  candidateRoles: RoleId[],
+  complexity: "simple" | "medium" | "complex",
+  requirement: string,
+) => Promise<{ assessments: KickoffAssessment[]; summary: string }>;
 
 export type ControllerServiceDeps = {
   config: PluginConfig;
@@ -26,6 +34,8 @@ export type ControllerServiceDeps = {
   onTeamStateAvailable?: (getter: () => TeamState | null) => void;
   /** Called once the HTTP server has bound to an actual port. */
   onActualPort?: (port: number) => void;
+  /** Called once the kickoff handler is ready. */
+  onKickoffHandlerAvailable?: (handler: KickoffHandler) => void;
 };
 
 function getPreferredLanUiUrl(port: number): string | null {
@@ -243,6 +253,38 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
         void workerProvisioningManager.requestReconcile("controller startup");
       }
 
+      // ── Kickoff handler ───────────────────────────────────────────────
+      const kickoffHandler: KickoffHandler = async (candidateRoles, complexity, requirement) => {
+        const result = await runKickoffMeeting(
+          { requirement, candidateRoles, complexity },
+          {
+            logger,
+            getTeamState: () => teamState,
+            ensureRoleProvisioned: async (role) => {
+              if (inProcessWorkerManager) {
+                inProcessWorkerManager.ensureWorker(role);
+                inProcessWorkerManager.syncState(teamState!);
+                return;
+              }
+              if (workerProvisioningManager?.isEnabled()) {
+                await workerProvisioningManager.requestReconcile(`kickoff-provision-${role}`);
+                return;
+              }
+              // For local workers, trigger a reconcile which will provision as needed
+              if (localWorkerManager) {
+                // Local workers are statically provisioned; nothing to do
+                return;
+              }
+            },
+            requestWorkerAssessment: async (worker, req) => {
+              return await requestKickoffAssessment(worker, req, deps, inProcessWorkerManager, actualPort);
+            },
+          },
+        );
+        return { assessments: result.plan.assessments, summary: result.summary };
+      };
+      deps.onKickoffHandlerAvailable?.(kickoffHandler);
+
       logger.info(`Controller: starting preview restoration...`);
       void previewManager.restorePreviewsOnStartup().then(() => {
         logger.info(`Controller: preview restoration completed`);
@@ -358,4 +400,127 @@ function openBrowser(url: string, logger: PluginLogger): void {
       logger.warn(`Controller: failed to open browser: ${err.message}`);
     }
   });
+}
+
+/**
+ * Request a kickoff assessment from a worker.
+ *
+ * For in-process workers: runs a lightweight subagent session.
+ * For external workers (HTTP): POSTs to the worker's kickoff endpoint.
+ */
+async function requestKickoffAssessment(
+  worker: import("../types.js").WorkerInfo,
+  requirement: string,
+  deps: ControllerServiceDeps,
+  inProcessWorkerManager: InProcessWorkerManager | undefined,
+  controllerPort: number,
+): Promise<import("../types.js").KickoffAssessment> {
+  const role = worker.role;
+  const prompt = buildKickoffAssessmentPrompt(role, requirement);
+
+  if (worker.transport === "in-process" && inProcessWorkerManager) {
+    // Run a lightweight subagent session for assessment
+    const roleDef = getRole(role);
+    const systemPrompt = roleDef?.systemPrompt ?? `You are a ${role} in a virtual software team.`;
+    const sessionKey = `teamclaw-kickoff-${role}-${Date.now()}`;
+
+    const runResult = await deps.runtime.subagent.run({
+      sessionKey,
+      message: prompt,
+      systemPrompt,
+    });
+
+    const waitResult = await deps.runtime.subagent.waitForRun({
+      runId: runResult.runId,
+      timeoutMs: ASSESSMENT_TIMEOUT_MS,
+    });
+
+    if (waitResult.status !== "ok") {
+      throw new Error(`Assessment timed out or failed for ${role}`);
+    }
+
+    // Extract the response text
+    const messages = await deps.runtime.subagent.getSessionMessages({ sessionKey });
+    const lastAssistant = [...(messages ?? [])].reverse().find(
+      (m: unknown) => (m as Record<string, unknown>).role === "assistant",
+    );
+    const responseText = extractTextFromMessage(lastAssistant);
+    return parseAssessmentResponse(role, responseText);
+  }
+
+  // External worker — POST to kickoff assess endpoint
+  if (!worker.url) {
+    throw new Error(`Worker ${worker.id} has no URL for kickoff assessment`);
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), ASSESSMENT_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(`${worker.url}/api/v1/kickoff/assess`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requirement, role }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      throw new Error(`Worker ${worker.id} returned ${res.status} for kickoff assessment`);
+    }
+
+    const data = await res.json() as { assessment: import("../types.js").KickoffAssessment };
+    return data.assessment;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function extractTextFromMessage(message: unknown): string {
+  if (!message) return "";
+  const msg = message as Record<string, unknown>;
+  if (typeof msg.content === "string") return msg.content;
+  if (Array.isArray(msg.content)) {
+    return msg.content
+      .map((block: unknown) => {
+        const b = block as Record<string, unknown>;
+        if (b.type === "text" && typeof b.text === "string") return b.text;
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  return "";
+}
+
+function parseAssessmentResponse(role: import("../types.js").RoleId, text: string): import("../types.js").KickoffAssessment {
+  const defaultAssessment: import("../types.js").KickoffAssessment = {
+    role,
+    needed: false,
+    scope: "Could not parse assessment response",
+    suggestedTasks: [],
+    dependencies: [],
+    risks: [],
+    questions: [],
+  };
+
+  if (!text.trim()) return defaultAssessment;
+
+  // Try to extract JSON from the response (may be wrapped in markdown fences)
+  const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) || text.match(/(\{[\s\S]*\})/);
+  const jsonStr = jsonMatch?.[1]?.trim() ?? text.trim();
+
+  try {
+    const parsed = JSON.parse(jsonStr);
+    return {
+      role,
+      needed: Boolean(parsed.needed),
+      scope: String(parsed.scope ?? ""),
+      suggestedTasks: Array.isArray(parsed.suggestedTasks) ? parsed.suggestedTasks.map(String) : [],
+      dependencies: Array.isArray(parsed.dependencies) ? parsed.dependencies.map(String) : [],
+      risks: Array.isArray(parsed.risks) ? parsed.risks.map(String) : [],
+      questions: Array.isArray(parsed.questions) ? parsed.questions.map(String) : [],
+    };
+  } catch {
+    return { ...defaultAssessment, scope: `Raw response: ${text.slice(0, 200)}` };
+  }
 }

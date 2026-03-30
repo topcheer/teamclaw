@@ -233,6 +233,27 @@ export type TeamMessageContract = {
   references: string[];
 };
 
+export type KickoffAssessment = {
+  role: RoleId;
+  needed: boolean;
+  scope: string;
+  suggestedTasks: string[];
+  dependencies: string[];
+  risks: string[];
+  questions: string[];
+};
+
+export type KickoffPlan = {
+  /** Complexity level determined by controller's initial analysis. */
+  complexity: "simple" | "medium" | "complex";
+  /** Roles invited to the kickoff meeting. */
+  candidateRoles: RoleId[];
+  /** Collected assessments from each role (populated after kickoff). */
+  assessments: KickoffAssessment[];
+  /** Whether the kickoff phase has completed. */
+  completed: boolean;
+};
+
 export type ControllerManifestCreatedTask = {
   title: string;
   assignedRole?: RoleId;
@@ -260,6 +281,8 @@ export type ControllerOrchestrationManifest = {
   notes?: string;
   /** Controller signals that the entire human requirement is fully satisfied — no more tasks or follow-ups needed. */
   requirementFullyComplete?: boolean;
+  /** Team kickoff plan — populated when controller uses collaborative planning. */
+  kickoffPlan?: KickoffPlan;
 };
 
 export type ControllerRunInfo = {

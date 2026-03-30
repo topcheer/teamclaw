@@ -1,7 +1,9 @@
 import { Type } from "@sinclair/typebox";
 import type {
   ControllerOrchestrationManifest,
+  KickoffAssessment,
   PluginConfig,
+  RoleId,
   TaskInfo,
   TeamState,
 } from "../types.js";
@@ -24,6 +26,8 @@ export type ControllerToolsDeps = {
   controllerUrl: string;
   getTeamState: () => TeamState | null;
   sessionKey?: string | null;
+  /** Handler for kickoff meeting requests. Injected by the controller service. */
+  kickoffHandler?: (candidateRoles: RoleId[], complexity: "simple" | "medium" | "complex", requirement: string) => Promise<{ assessments: KickoffAssessment[]; summary: string }>;
 };
 
 const EXECUTION_READY_BLOCKERS: Array<{ pattern: RegExp; reason: string }> = [
@@ -33,6 +37,11 @@ const EXECUTION_READY_BLOCKERS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /依赖于|前置条件|前置依赖|前提条件|前序任务|上游任务/u, reason: "it explicitly mentions a predecessor dependency" },
   { pattern: /待.*完成|等待.*完成/u, reason: "it is described as work for a later phase" },
 ];
+
+const VALID_ROLE_IDS = new Set([
+  "pm", "architect", "developer", "qa", "release-engineer",
+  "infra-engineer", "devops", "security-engineer", "designer", "marketing",
+]);
 
 const ENGLISH_LATER_PHASE_CLAUSE_RE = /\b(?:after|once)\b(.+?)\b(complete|completed|ready|available|exists?)\b/i;
 const ENGLISH_LATER_PHASE_DEPENDENCY_RE = /\b(?:task|tasks|service|services|module|modules|phase|phases|api|apis|interface|interfaces|review|qa|design|developer|architect|skeleton|backend|frontend|deliverable|artifact|handoff)\b/i;
@@ -49,6 +58,67 @@ export function createControllerTools(deps: ControllerToolsDeps) {
   const baseUrl = controllerUrl;
 
   return [
+    {
+      name: "teamclaw_request_kickoff",
+      label: "Request Team Kickoff Meeting",
+      description: "Provision candidate role workers and collect structured assessments from each before creating execution tasks. Use for medium/complex projects where multiple roles need to collaborate.",
+      parameters: Type.Object({
+        requirement: Type.String({ description: "The full user requirement to present to the team for assessment" }),
+        candidateRoles: Type.Array(
+          Type.String({ description: "Role IDs to invite to the kickoff meeting (e.g. architect, developer, qa)" }),
+        ),
+        complexity: Type.Union([
+          Type.Literal("simple"),
+          Type.Literal("medium"),
+          Type.Literal("complex"),
+        ], { description: "Project complexity: simple (skip kickoff, 1-2 roles), medium (partial kickoff, 2-3 roles), complex (full team kickoff, 4+ roles)" }),
+      }),
+      async execute(_id: string, params: Record<string, unknown>) {
+        if (!deps.kickoffHandler) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: "Kickoff meeting is not available in this deployment. Proceed with direct task creation.",
+            }],
+          };
+        }
+
+        const requirement = String(params.requirement ?? "").trim();
+        if (!requirement) {
+          return { content: [{ type: "text" as const, text: "requirement is required." }] };
+        }
+
+        const rawRoles = Array.isArray(params.candidateRoles) ? params.candidateRoles : [];
+        const candidateRoles = rawRoles
+          .map((r) => String(r ?? "").trim().toLowerCase())
+          .filter((r): r is RoleId => VALID_ROLE_IDS.has(r));
+
+        if (candidateRoles.length === 0) {
+          return { content: [{ type: "text" as const, text: "At least one valid candidate role is required." }] };
+        }
+
+        const complexity = (params.complexity === "simple" || params.complexity === "medium" || params.complexity === "complex")
+          ? params.complexity
+          : "medium";
+
+        try {
+          const result = await deps.kickoffHandler(candidateRoles, complexity, requirement);
+          return {
+            content: [{
+              type: "text" as const,
+              text: result.summary,
+            }],
+          };
+        } catch (err) {
+          return {
+            content: [{
+              type: "text" as const,
+              text: `Kickoff meeting failed: ${err instanceof Error ? err.message : String(err)}. Proceed with controller-only planning.`,
+            }],
+          };
+        }
+      },
+    },
     {
       name: "teamclaw_create_task",
       label: "Create Team Task",

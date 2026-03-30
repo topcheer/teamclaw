@@ -97,6 +97,39 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
   }
 
   async function startServer(): Promise<void> {
+    // Kickoff assessor — uses the worker's subagent runtime for lightweight assessment
+    const kickoffAssessor = externalTaskExecutor
+      ? async (requirement: string, role: string): Promise<Record<string, unknown>> => {
+          const { buildKickoffAssessmentPrompt } = await import("../controller/kickoff-orchestrator.js");
+          const prompt = buildKickoffAssessmentPrompt(role as import("../types.js").RoleId, requirement);
+          const sessionKey = `teamclaw-kickoff-${role}-${Date.now()}`;
+          const raw = await externalTaskExecutor(prompt, {
+            taskId: `kickoff-${role}`,
+            title: `Kickoff Assessment (${role})`,
+            description: prompt,
+            executionSessionKey: sessionKey,
+          });
+          const text = typeof raw === "string" ? raw : raw.text;
+          // Parse the JSON response
+          const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) || text.match(/(\{[\s\S]*\})/);
+          const jsonStr = jsonMatch?.[1]?.trim() ?? text.trim();
+          try {
+            const parsed = JSON.parse(jsonStr);
+            return {
+              role,
+              needed: Boolean(parsed.needed),
+              scope: String(parsed.scope ?? ""),
+              suggestedTasks: Array.isArray(parsed.suggestedTasks) ? parsed.suggestedTasks : [],
+              dependencies: Array.isArray(parsed.dependencies) ? parsed.dependencies : [],
+              risks: Array.isArray(parsed.risks) ? parsed.risks : [],
+              questions: Array.isArray(parsed.questions) ? parsed.questions : [],
+            };
+          } catch {
+            return { role, needed: false, scope: `Could not parse: ${text.slice(0, 200)}`, suggestedTasks: [], dependencies: [], risks: [], questions: [] };
+          }
+        }
+      : undefined;
+
     const handler = createWorkerHttpHandler(
         { role: config.role, port: config.port },
         logger,
@@ -106,6 +139,7 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
         reportTaskResult,
         cancelAssignedTask,
         isTaskCancelled,
+        kickoffAssessor,
       );
 
     if (server) {

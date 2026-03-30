@@ -55,6 +55,7 @@ function registerController(api: OpenClawPluginApi, config: ReturnType<typeof pa
 
   let getControllerTeamState = (): TeamState | null => null;
   let controllerUrl = `http://127.0.0.1:${config.port}`;
+  let kickoffHandler: ((candidateRoles: import("./src/types.js").RoleId[], complexity: "simple" | "medium" | "complex", requirement: string) => Promise<{ assessments: import("./src/types.js").KickoffAssessment[]; summary: string }>) | undefined;
 
   // Service (starts HTTP server + mDNS + WebSocket)
   api.registerService(createControllerService({
@@ -69,6 +70,9 @@ function registerController(api: OpenClawPluginApi, config: ReturnType<typeof pa
     onActualPort: (port) => {
       controllerUrl = `http://127.0.0.1:${port}`;
       localWorkerManager?.setControllerUrl(controllerUrl);
+    },
+    onKickoffHandlerAvailable: (handler) => {
+      kickoffHandler = handler;
     },
   }));
 
@@ -112,6 +116,7 @@ function registerController(api: OpenClawPluginApi, config: ReturnType<typeof pa
       controllerUrl,
       getTeamState: getControllerTeamState,
       sessionKey: ctx.sessionKey ?? null,
+      kickoffHandler,
     });
   });
 }
