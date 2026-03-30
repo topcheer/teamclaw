@@ -81,13 +81,23 @@ export type WorkspaceFilePayload = {
   contentType: string;
 };
 
-export async function listWorkspaceTree(): Promise<WorkspaceTreePayload> {
+export async function listWorkspaceTree(maxDepth?: number): Promise<WorkspaceTreePayload> {
   const workspaceDir = await ensureWorkspaceDir();
-  const entries = await readTree(workspaceDir, "", 0);
+  const entries = await readTree(workspaceDir, "", 0, maxDepth);
   return {
     root: "/",
     entries,
   };
+}
+
+/** Load children of a single directory (one level). Used for lazy-loading. */
+export async function listWorkspaceSubtree(relativePath: string): Promise<WorkspaceTreeNode[]> {
+  const { absolutePath, normalizedPath } = await resolveWorkspacePath(relativePath);
+  const stat = await fs.stat(absolutePath);
+  if (!stat.isDirectory()) {
+    throw new Error("Path is not a directory");
+  }
+  return readTree(absolutePath, normalizedPath, 0, 1);
 }
 
 export async function readWorkspaceFile(relativePath: string): Promise<WorkspaceFilePayload> {
@@ -189,8 +199,9 @@ function normalizeWorkspacePath(relativePath: string): string {
   return normalized;
 }
 
-async function readTree(dirPath: string, relativeDir: string, depth: number): Promise<WorkspaceTreeNode[]> {
-  if (depth > MAX_TREE_DEPTH) {
+async function readTree(dirPath: string, relativeDir: string, depth: number, maxDepth?: number): Promise<WorkspaceTreeNode[]> {
+  const effectiveMaxDepth = maxDepth ?? MAX_TREE_DEPTH;
+  if (depth > effectiveMaxDepth) {
     return [];
   }
 
@@ -209,11 +220,13 @@ async function readTree(dirPath: string, relativeDir: string, depth: number): Pr
     const childAbsolutePath = path.join(dirPath, dirent.name);
 
     if (dirent.isDirectory()) {
+      // At max depth, mark directory as lazy-loadable (no children yet)
+      const atLimit = depth + 1 > effectiveMaxDepth;
       nodes.push({
         name: dirent.name,
         path: childRelativePath,
         type: "directory",
-        children: await readTree(childAbsolutePath, childRelativePath, depth + 1),
+        children: atLimit ? undefined : await readTree(childAbsolutePath, childRelativePath, depth + 1, effectiveMaxDepth),
       });
       continue;
     }

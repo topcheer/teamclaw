@@ -1347,7 +1347,7 @@ body {
   display: block;
 }
 
-.workspace-tree-summary,
+.workspace-tree-dir-toggle,
 .workspace-tree-file {
   width: 100%;
   min-height: 40px;
@@ -1363,23 +1363,25 @@ body {
   text-align: left;
   cursor: pointer;
   transition: background 0.18s, border-color 0.18s, color 0.18s;
+  user-select: none;
 }
 
-.workspace-tree-summary {
-  list-style: none;
+.workspace-tree-arrow {
+  flex-shrink: 0;
+  display: inline-block;
+  width: 12px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  transition: transform 0.15s;
 }
 
-.workspace-tree-summary::-webkit-details-marker {
-  display: none;
-}
-
-.workspace-tree-summary:hover,
+.workspace-tree-dir-toggle:hover,
 .workspace-tree-file:hover {
   background: var(--bg-tertiary);
   border-color: var(--border);
 }
 
-.workspace-tree-summary:focus-visible,
+.workspace-tree-dir-toggle:focus-visible,
 .workspace-tree-file:focus-visible,
 .workspace-view-tab:focus-visible {
   outline: 2px solid var(--accent-hover);
@@ -1413,6 +1415,14 @@ body {
   margin-left: 14px;
   padding-left: 10px;
   border-left: 1px solid var(--border);
+}
+
+.workspace-tree-loading,
+.workspace-tree-empty {
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-style: italic;
 }
 
 .workspace-file-meta {

@@ -35,7 +35,7 @@ import {
   sendError,
   generateId,
 } from "../protocol.js";
-import { listWorkspaceTree, readWorkspaceFile, readWorkspaceRawFile } from "../workspace-browser.js";
+import { listWorkspaceTree, listWorkspaceSubtree, readWorkspaceFile, readWorkspaceRawFile } from "../workspace-browser.js";
 import { ROLES, normalizeRecommendedSkills, resolveRecommendedSkillsForRole } from "../roles.js";
 import { buildRepoSyncInfo, ensureControllerGitRepo, exportControllerGitBundle, importControllerGitBundle } from "../git-collaboration.js";
 import type { LocalWorkerManager } from "./local-worker-manager.js";
@@ -2609,7 +2609,24 @@ async function handleRequest(
 
   if (req.method === "GET" && pathname === "/api/v1/workspace/tree") {
     try {
-      sendJson(res, 200, await listWorkspaceTree());
+      // depth=N limits tree expansion (default 1 for lazy loading)
+      const depthParam = requestUrl.searchParams.get("depth");
+      const maxDepth = depthParam !== null ? Math.max(0, Math.min(parseInt(depthParam, 10) || 1, 8)) : 1;
+      sendJson(res, 200, await listWorkspaceTree(maxDepth));
+    } catch (err) {
+      sendError(res, workspaceRequestErrorStatus(err), workspaceRequestErrorMessage(err));
+    }
+    return;
+  }
+
+  if (req.method === "GET" && pathname === "/api/v1/workspace/subtree") {
+    const dirPath = requestUrl.searchParams.get("path") ?? "";
+    if (!dirPath) {
+      sendError(res, 400, "path is required");
+      return;
+    }
+    try {
+      sendJson(res, 200, { entries: await listWorkspaceSubtree(dirPath) });
     } catch (err) {
       sendError(res, workspaceRequestErrorStatus(err), workspaceRequestErrorMessage(err));
     }

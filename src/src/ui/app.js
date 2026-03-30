@@ -1022,15 +1022,17 @@
   function renderWorkspaceTreeNodes(nodes) {
     return '<ul class="workspace-tree-list">' + nodes.map(function (node) {
       if (node.type === "directory") {
+        const hasChildren = node.children && node.children.length > 0;
+        const isLazy = !node.children; // children === undefined means not yet loaded
         return (
           '<li class="workspace-tree-folder">' +
-          '  <details open>' +
-          '    <summary class="workspace-tree-summary">' +
-          '      <span class="workspace-tree-icon">▾</span>' +
-          '      <span class="workspace-tree-label">' + escapeHtml(node.name) + "</span>" +
-          "    </summary>" +
-          '    <div class="workspace-tree-children">' + renderWorkspaceTreeNodes(node.children || []) + "</div>" +
-          "  </details>" +
+          '  <div class="workspace-tree-dir-toggle' + (isLazy ? ' is-lazy' : '') + '" data-dir-path="' + escapeHtml(node.path) + '">' +
+          '    <span class="workspace-tree-arrow">▸</span>' +
+          '    <span class="workspace-tree-label">' + escapeHtml(node.name) + "</span>" +
+          "  </div>" +
+          '  <div class="workspace-tree-children" style="display:none">' +
+              (hasChildren ? renderWorkspaceTreeNodes(node.children) : '') +
+          "  </div>" +
           "</li>"
         );
       }
@@ -1975,7 +1977,46 @@
   if (workspaceTreeContainer) {
     workspaceTreeContainer.addEventListener("click", function (event) {
       const target = event.target instanceof Element ? event.target : null;
-      const button = target ? target.closest("[data-workspace-path]") : null;
+      if (!target) return;
+
+      // Directory toggle (lazy-load on first expand)
+      const dirToggle = target.closest(".workspace-tree-dir-toggle");
+      if (dirToggle) {
+        const li = dirToggle.closest(".workspace-tree-folder");
+        if (!li) return;
+        const childrenContainer = li.querySelector(".workspace-tree-children");
+        if (!childrenContainer) return;
+        const arrow = dirToggle.querySelector(".workspace-tree-arrow");
+        const isOpen = childrenContainer.style.display !== "none";
+
+        if (isOpen) {
+          childrenContainer.style.display = "none";
+          if (arrow) arrow.textContent = "▸";
+        } else {
+          childrenContainer.style.display = "";
+          if (arrow) arrow.textContent = "▾";
+          // Lazy-load if not yet loaded
+          if (dirToggle.classList.contains("is-lazy")) {
+            dirToggle.classList.remove("is-lazy");
+            var dirPath = dirToggle.dataset.dirPath || "";
+            childrenContainer.innerHTML = '<div class="workspace-tree-loading">Loading…</div>';
+            apiGet("/workspace/subtree?path=" + encodeURIComponent(dirPath)).then(function (data) {
+              var entries = data.entries || [];
+              if (entries.length === 0) {
+                childrenContainer.innerHTML = '<div class="workspace-tree-empty">(empty)</div>';
+              } else {
+                childrenContainer.innerHTML = renderWorkspaceTreeNodes(entries);
+              }
+            }).catch(function () {
+              childrenContainer.innerHTML = '<div class="workspace-tree-empty">Failed to load</div>';
+            });
+          }
+        }
+        return;
+      }
+
+      // File click
+      const button = target.closest("[data-workspace-path]");
       const relativePath = button && button.dataset ? button.dataset.workspacePath : "";
       if (!relativePath) {
         return;
