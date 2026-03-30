@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TeamClaw Desktop</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="command-center">
+      <div class="brand">
+        <div class="brand-mark">TC</div>
+        <div>
+          <div class="brand-title">TeamClaw Desktop</div>
+          <div class="brand-subtitle">Mission Control for any controller topology</div>
+        </div>
+      </div>
+
+      <section class="card">
+        <div class="section-head">
+          <div>
+            <div class="section-kicker">Connection</div>
+            <h2>Controller endpoint</h2>
+          </div>
+          <div id="connection-pill" class="pill pill-disconnected">Disconnected</div>
+        </div>
+        <label class="field">
+          <span>Controller URL</span>
+          <input id="controller-url" type="text" placeholder="http://127.0.0.1:9527">
+        </label>
+        <div class="actions">
+          <button id="connect-btn" class="btn btn-primary" type="button">Connect</button>
+          <button id="open-browser-btn" class="btn" type="button">Open in Browser</button>
+        </div>
+        <div id="connection-meta" class="meta-note">Desktop client talks only to the controller API and WebSocket.</div>
+      </section>
+
+      <section class="card">
+        <div class="section-head">
+          <div>
+            <div class="section-kicker">Local controller</div>
+            <h2>Launch or attach</h2>
+          </div>
+          <div id="local-pill" class="pill">Idle</div>
+        </div>
+        <label class="field">
+          <span>Launch command</span>
+          <input id="local-command" type="text" placeholder="openclaw gateway run">
+        </label>
+        <label class="field">
+          <span>Working directory</span>
+          <input id="local-cwd" type="text" placeholder="Optional">
+        </label>
+        <label class="field">
+          <span>Expected URL after launch</span>
+          <input id="local-url" type="text" placeholder="http://127.0.0.1:9527">
+        </label>
+        <div class="actions">
+          <button id="start-local-btn" class="btn btn-primary" type="button">Start local controller</button>
+          <button id="stop-local-btn" class="btn" type="button">Stop</button>
+        </div>
+        <div id="local-log" class="log-box">No local controller activity yet.</div>
+      </section>
+
+      <section class="card command-deck">
+        <div class="section-head">
+          <div>
+            <div class="section-kicker">Desktop-only</div>
+            <h2>Notification command deck</h2>
+          </div>
+        </div>
+
+        <div class="deck-summary">
+          <div class="summary-chip">
+            <span class="summary-label">Attention</span>
+            <strong id="attention-count">0</strong>
+          </div>
+          <div class="summary-chip">
+            <span class="summary-label">In Flight</span>
+            <strong id="active-count">0</strong>
+          </div>
+          <div class="summary-chip">
+            <span class="summary-label">Deliveries</span>
+            <strong id="delivery-count">0</strong>
+          </div>
+        </div>
+
+        <div class="deck-filters">
+          <button class="filter active" data-filter="all" type="button">All</button>
+          <button class="filter" data-filter="attention" type="button">Needs attention</button>
+          <button class="filter" data-filter="active" type="button">In flight</button>
+          <button class="filter" data-filter="delivery" type="button">Deliveries</button>
+        </div>
+
+        <div id="notification-list" class="notification-list">
+          <div class="empty-state">Connect to a controller to populate the command deck.</div>
+        </div>
+      </section>
+    </aside>
+
+    <main class="workspace">
+      <header class="workspace-header">
+        <div>
+          <div class="section-kicker">Embedded controller UI</div>
+          <h1>Single source of truth</h1>
+        </div>
+        <div class="workspace-actions">
+          <button id="focus-planning-btn" class="btn" type="button">Planning</button>
+          <button id="focus-clarifications-btn" class="btn" type="button">Clarifications</button>
+          <button id="focus-tasks-btn" class="btn" type="button">Tasks</button>
+        </div>
+      </header>
+
+      <section class="viewport-card">
+        <div class="viewport-meta">
+          <div id="status-line">Waiting for a controller connection…</div>
+          <div id="summary-line" class="summary-line">No controller summary yet.</div>
+        </div>
+        <div class="webview-frame">
+          <div id="webview-empty" class="webview-empty">
+            <div class="webview-empty-icon">🛰️</div>
+            <h3>Point me at a controller</h3>
+            <p>Remote or local, single-process or distributed — this client only needs the controller URL.</p>
+          </div>
+          <webview id="controller-webview" allowpopups partition="persist:teamclaw"></webview>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>

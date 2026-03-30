@@ -20,9 +20,24 @@
   const CONTROLLER_CONVERSATION_STORAGE_KEY = "teamclaw.controllerConversation";
   let controllerConversation = loadControllerConversation();
   let controllerCommandPending = false;
+  const initialUiState = parseInitialUiState();
+  let initialUiStateApplied = false;
 
   function $(selector) { return document.querySelector(selector); }
   function $$(selector) { return document.querySelectorAll(selector); }
+
+  function parseInitialUiState() {
+    try {
+      const params = new URLSearchParams(window.location.search || "");
+      return {
+        tab: params.get("tab") || "",
+        taskId: params.get("taskId") || "",
+        planningRun: params.get("planningRun") || "",
+      };
+    } catch (_err) {
+      return { tab: "", taskId: "", planningRun: "" };
+    }
+  }
 
   function getSessionStorage() {
     try {
@@ -1948,19 +1963,24 @@
     }).join("");
   }
 
+  function activateTab(nextTab) {
+    activeTab = nextTab || "tasks";
+    $$(".tab").forEach(function (item) {
+      item.classList.toggle("active", item.dataset.tab === activeTab);
+    });
+    $$(".tab-panel").forEach(function (panel) { panel.classList.remove("active"); });
+    const panel = $("#tab-" + activeTab);
+    if (panel) {
+      panel.classList.add("active");
+    }
+    if (activeTab === "workspace") {
+      refreshWorkspaceTree(false);
+    }
+  }
+
   $$(".tab").forEach(function (tab) {
     tab.addEventListener("click", function () {
-      $$(".tab").forEach(function (item) { item.classList.remove("active"); });
-      $$(".tab-panel").forEach(function (panel) { panel.classList.remove("active"); });
-      tab.classList.add("active");
-      activeTab = tab.dataset.tab || "tasks";
-      const panel = $("#tab-" + activeTab);
-      if (panel) {
-        panel.classList.add("active");
-      }
-      if (activeTab === "workspace") {
-        refreshWorkspaceTree(false);
-      }
+      activateTab(tab.dataset.tab || "tasks");
     });
   });
 
@@ -2281,8 +2301,28 @@
     });
   }
 
+  async function applyInitialUiState() {
+    if (initialUiStateApplied) {
+      return;
+    }
+    initialUiStateApplied = true;
+
+    if (initialUiState.planningRun) {
+      selectedPlanningRunId = initialUiState.planningRun;
+      renderPlanningTab(teamState.controllerRuns);
+    }
+
+    if (initialUiState.tab) {
+      activateTab(initialUiState.tab);
+    }
+
+    if (initialUiState.taskId) {
+      await openTaskDetail(initialUiState.taskId);
+    }
+  }
+
   renderWorkspaceTree(workspaceTree);
   renderWorkspaceFile();
-  refreshAll();
+  refreshAll().then(applyInitialUiState).catch(function () {});
   connectWebSocket();
 })();

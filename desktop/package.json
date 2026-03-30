@@ -1,0 +1,48 @@
+{
+  "name": "teamclaw-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cross-platform TeamClaw desktop client",
+  "author": "Junjun Zhang <topcheer@me.com>",
+  "main": "main.mjs",
+  "scripts": {
+    "dev": "electron .",
+    "dist": "electron-builder",
+    "dist:dir": "electron-builder --dir",
+    "smoke": "node --check main.mjs && node --check preload.mjs && node --check renderer/app.js"
+  },
+  "build": {
+    "appId": "com.teamclaw.desktop",
+    "productName": "TeamClaw Desktop",
+    "files": [
+      "main.mjs",
+      "preload.mjs",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "buildResources": "build"
+    },
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "identity": null
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development"
+    }
+  },
+  "devDependencies": {
+    "electron": "^36.2.1",
+    "electron-builder": "^24.13.3"
+  }
+}
