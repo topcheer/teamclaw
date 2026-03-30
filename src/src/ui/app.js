@@ -986,8 +986,11 @@
       const data = await apiGet("/workspace/file?path=" + encodeURIComponent(relativePath));
       selectedWorkspacePath = relativePath;
       selectedWorkspaceFile = data.file || null;
-      if (!(settings.keepView && selectedWorkspaceView === "preview" && isWorkspacePreviewAvailable(selectedWorkspaceFile))) {
-        selectedWorkspaceView = "source";
+      if (settings.keepView && selectedWorkspaceView === "preview" && isWorkspacePreviewAvailable(selectedWorkspaceFile)) {
+        // User explicitly chose preview and new file supports it — keep preview
+      } else {
+        // Default: md/html show preview, everything else shows source
+        selectedWorkspaceView = isWorkspacePreviewAvailable(selectedWorkspaceFile) ? "preview" : "source";
       }
       renderWorkspaceTree(workspaceTree);
       renderWorkspaceFile();
