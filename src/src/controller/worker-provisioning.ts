@@ -589,12 +589,14 @@ export class WorkerProvisioningManager {
   }
 
   private resolveControllerUrl(): string {
-    if (this.deps.config.workerProvisioningControllerUrl) {
-      return this.deps.config.workerProvisioningControllerUrl;
-    }
     if (this.backend?.type === "process") {
+      // Process workers run on the same host — always use loopback regardless
+      // of workerProvisioningControllerUrl (which may target Docker DNS).
       const port = this.deps.actualControllerPort ?? this.deps.config.port;
       return `http://127.0.0.1:${port}`;
+    }
+    if (this.deps.config.workerProvisioningControllerUrl) {
+      return this.deps.config.workerProvisioningControllerUrl;
     }
     throw new Error(
       `workerProvisioningControllerUrl is required when workerProvisioningType=${this.backend?.type}`,
