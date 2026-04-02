@@ -2,7 +2,7 @@
   "id": "teamclaw",
   "name": "TeamClaw",
   "description": "Virtual team collaboration - multiple OpenClaw instances form a virtual software company with role-based task routing.",
-  "version": "2026.4.2-1",
+  "version": "2026.4.2-2",
   "skills": [
     "./skills"
   ],
