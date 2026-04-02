@@ -30,7 +30,7 @@
     reports: [],
     notifications: [],
     localSetupInfo: null,
-    localSetupMode: "controller-process",
+    localSetupMode: "controller-manual",
     unavailableScreenVisible: false,
     unavailableReason: "",
     isInstallingLocal: false,
@@ -160,7 +160,7 @@
       "bootstrap.failed": "Couldn't reach the local TeamClaw controller.",
       "bootstrap.mode": "Install mode",
       "bootstrap.manualMode": "Local quickstart",
-      "bootstrap.manualModeHint": "Runs the controller here and launches local worker processes on demand with controller-decided defaults.",
+      "bootstrap.manualModeHint": "Runs the controller here with empty preferred provisioning roles. TeamClaw can still scale to the configured per-role worker cap.",
       "bootstrap.processMode": "Local multi-process",
       "bootstrap.processModeHint": "Runs the controller here and provisions local worker processes on demand. Uses more CPU and memory.",
       "bootstrap.command": "One-line install command",
@@ -183,7 +183,7 @@
       "bootstrap.connectRemote": "Connect to this controller",
       "bootstrap.copied": "Copied",
       "bootstrap.modeWarning": "This mode uses more resources on the current machine, but gives local workers stronger process isolation.",
-      "bootstrap.manualWarning": "This mode still executes work locally. TeamClaw provisions local worker processes on demand, but keeps the default worker pool leaner.",
+      "bootstrap.manualWarning": "This mode still executes work locally. TeamClaw provisions local worker processes on demand and keeps `workerProvisioningRoles` empty so startup readiness falls back to a warm developer worker.",
       "bootstrap.logs": "Local controller activity",
       "bootstrap.startCommand": "OpenClaw guided quickstart command",
       "bootstrap.componentsLabel": "Component install command",
@@ -305,7 +305,7 @@
       "bootstrap.failed": "暂时无法连上本机 TeamClaw controller。",
       "bootstrap.mode": "安装模式",
       "bootstrap.manualMode": "本机快速开始",
-      "bootstrap.manualModeHint": "controller 在本机运行，并按需拉起本地 worker 进程；使用 controller 决定的默认配置，安装最省事。",
+      "bootstrap.manualModeHint": "controller 在本机运行，`workerProvisioningRoles` 为空；这是最轻量的同机模式，TeamClaw 仍然可以按当前配置扩到每个角色的 worker 上限。",
       "bootstrap.processMode": "本机多进程",
       "bootstrap.processModeHint": "controller 在本机运行，并按需拉起本地 worker 进程。隔离性更强，但会消耗更多 CPU / 内存。",
       "bootstrap.command": "一行安装命令",
@@ -328,7 +328,7 @@
       "bootstrap.connectRemote": "连接这个 controller",
       "bootstrap.copied": "已复制",
       "bootstrap.modeWarning": "这个模式会更多地占用当前机器资源，但本地 worker 的进程隔离更强。",
-      "bootstrap.manualWarning": "这个模式一样能在本机直接执行任务；TeamClaw 会按需拉起本地 worker 进程，只是默认 worker 池配置更精简。",
+      "bootstrap.manualWarning": "这个模式一样能在本机直接执行任务；TeamClaw 会按需拉起本地 worker 进程，并保持 `workerProvisioningRoles` 为空，让启动 readiness 回退到预热一个 developer worker。",
       "bootstrap.logs": "本地 controller 活动",
       "bootstrap.startCommand": "OpenClaw 引导式 quickstart 命令",
       "bootstrap.componentsLabel": "拆件安装命令",
@@ -918,7 +918,7 @@
     const modeId = mode ? mode.id : state.localSetupMode;
     const hasOpenClaw = Boolean(state.localSetupInfo && state.localSetupInfo.hasOpenClaw);
     const installCommand = hasOpenClaw
-      ? (mode && mode.installCommand ? String(mode.installCommand) : "npx -y @teamclaws/teamclaw install --yes --install-mode controller-process")
+      ? (mode && mode.installCommand ? String(mode.installCommand) : "npx -y @teamclaws/teamclaw install --yes --install-mode controller-manual")
       : String((state.localSetupInfo && state.localSetupInfo.openClawInstallCommand) || "npm install -g openclaw@latest");
     const quickstartCommand = String((state.localSetupInfo && state.localSetupInfo.openClawQuickstartCommand) || "openclaw onboard --flow quickstart --install-daemon");
     const remoteInput = $("#bootstrap-controller-url");
@@ -2579,7 +2579,7 @@
     const defaultUrl = state.settings.controllerUrl || 'http://127.0.0.1:9527';
     $('#controller-url').value = defaultUrl;
     state.controllerUrl = defaultUrl;
-    state.localSetupMode = 'controller-process';
+    state.localSetupMode = 'controller-manual';
     if (state.localSetupInfo && Array.isArray(state.localSetupInfo.modes)) {
       const preferredMode = state.localSetupInfo.modes.find((entry) => entry.recommended) || state.localSetupInfo.modes[0];
       if (preferredMode && preferredMode.id) {

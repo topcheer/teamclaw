@@ -2,7 +2,7 @@
   "id": "teamclaw",
   "name": "TeamClaw",
   "description": "Virtual team collaboration - multiple OpenClaw instances form a virtual software company with role-based task routing.",
-  "version": "2026.4.2-3",
+  "version": "2026.4.2-4",
   "skills": [
     "./skills"
   ],
@@ -260,7 +260,7 @@
       "workerProvisioningRoles": {
         "type": "array",
         "default": [],
-        "description": "Preferred on-demand roles; task-required roles can still launch automatically. Empty means controller-decided defaults across all roles",
+        "description": "Preferred on-demand roles; task-required roles can still launch automatically. Empty means no preferred startup role list, so startup readiness falls back to a warm developer worker",
         "items": {
           "type": "string",
           "enum": [

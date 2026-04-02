@@ -100,7 +100,7 @@ function buildConfigSchema() {
         workerProvisioningRoles: {
           type: "array" as const,
           default: [],
-          description: "Preferred on-demand roles; task-required roles can still launch automatically. Empty means controller-decided defaults across all roles",
+          description: "Preferred on-demand roles; task-required roles can still launch automatically. Empty means no preferred startup role list, so startup readiness falls back to a warm developer worker",
           items: {
             type: "string" as const,
             enum: ROLE_IDS,

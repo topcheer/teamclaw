@@ -200,7 +200,7 @@ Add a TeamClaw plugin entry similar to this in `openclaw.json`:
           "workerProvisioningType": "process",
           "workerProvisioningRoles": [],
           "workerProvisioningMinPerRole": 0,
-          "workerProvisioningMaxPerRole": 2,
+          "workerProvisioningMaxPerRole": 10,
           "workerProvisioningIdleTtlMs": 120000,
           "workerProvisioningStartupTimeoutMs": 120000
         }
@@ -226,6 +226,12 @@ You also need a working OpenClaw model configuration. A common minimum is:
 
 If TeamClaw starts but the controller UI or desktop app shows a prominent "cannot work yet" warning, that means the host OpenClaw instance still does not have a usable model and/or auth profile available for TeamClaw's dedicated agent.
 
+If you use the guided installer instead of hand-editing config, note the install modes intentionally write different same-role caps:
+
+- `controller-manual`: lean same-host mode, `workerProvisioningRoles: []`, and startup readiness falls back to a warm `developer` worker
+- `controller-process`: same-host process provisioning with user-selected roles and max-per-role
+- `worker`: provisioning disabled on that node
+
 ### Start OpenClaw
 
 ```bash
@@ -239,6 +245,8 @@ Health check:
 ```bash
 curl http://127.0.0.1:9527/api/v1/health
 ```
+
+During provisioning warm-up this endpoint can temporarily return a non-OK readiness state before the first warm worker is online. If `workerProvisioningRoles` is empty, readiness defaults to a warm `developer` worker.
 
 Web UI:
 
@@ -356,7 +364,7 @@ Supported providers:
   "workerProvisioningType": "process",
   "workerProvisioningRoles": [],
   "workerProvisioningMinPerRole": 0,
-  "workerProvisioningMaxPerRole": 2,
+          "workerProvisioningMaxPerRole": 10,
   "workerProvisioningIdleTtlMs": 120000,
   "workerProvisioningStartupTimeoutMs": 120000
 }
@@ -386,7 +394,7 @@ If `process` is not healthy yet, `docker` and `kubernetes` will only be harder t
   "workerProvisioningWorkspaceRoot": "/workspace-root",
   "workerProvisioningDockerWorkspaceVolume": "teamclaw-workspaces",
   "workerProvisioningRoles": ["developer", "qa", "infra-engineer"],
-  "workerProvisioningMaxPerRole": 3,
+  "workerProvisioningMaxPerRole": 10,
   "workerProvisioningDockerMounts": [
     "/var/run/docker.sock:/var/run/docker.sock"
   ],

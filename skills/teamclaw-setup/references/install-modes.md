@@ -50,7 +50,7 @@ Minimal TeamClaw plugin block:
   "workerProvisioningType": "process",
   "workerProvisioningRoles": [],
   "workerProvisioningMinPerRole": 0,
-  "workerProvisioningMaxPerRole": 2,
+  "workerProvisioningMaxPerRole": 10,
   "workerProvisioningIdleTtlMs": 120000,
   "workerProvisioningStartupTimeoutMs": 120000
 }
@@ -59,6 +59,12 @@ Minimal TeamClaw plugin block:
 Use this first because it avoids multi-machine networking while still exercising the real controller, provisioned workers, UI, messages, clarifications, and git-backed workspace flow.
 
 For medium or complex requirements, this topology also exercises TeamClaw's kickoff planning flow: candidate workers can be provisioned, asked for kickoff assessments, and then reused or reclaimed after the controller synthesizes the plan.
+
+If the user is specifically choosing install modes through the guided installer, remember the resulting config differs by mode:
+
+- `controller-manual` writes `workerProvisioningType: "process"` and `workerProvisioningRoles: []`, so startup readiness falls back to a warm `developer` worker
+- `controller-process` writes `workerProvisioningType: "process"` and uses the chosen roles/max-per-role
+- `worker` disables provisioning on that node
 
 ## 4. Worker-only topology
 
@@ -87,7 +93,7 @@ Use this when the controller should launch same-machine workers only as needed:
   "teamName": "my-team",
   "workerProvisioningType": "process",
   "workerProvisioningMinPerRole": 0,
-  "workerProvisioningMaxPerRole": 2,
+  "workerProvisioningMaxPerRole": 10,
   "workerProvisioningIdleTtlMs": 120000,
   "workerProvisioningStartupTimeoutMs": 120000
 }
@@ -107,7 +113,7 @@ Use this when the user already has Docker and wants containerized workers:
   "workerProvisioningImage": "ghcr.io/topcheer/teamclaw-openclaw:latest",
   "workerProvisioningWorkspaceRoot": "/workspace-root",
   "workerProvisioningDockerWorkspaceVolume": "teamclaw-workspaces",
-  "workerProvisioningMaxPerRole": 3
+  "workerProvisioningMaxPerRole": 10
 }
 ```
 
@@ -130,7 +136,7 @@ Use this only when the user already runs the controller in or behind a reachable
   "workerProvisioningImage": "ghcr.io/topcheer/teamclaw-openclaw:latest",
   "workerProvisioningWorkspaceRoot": "/workspace-root",
   "workerProvisioningKubernetesWorkspacePersistentVolumeClaim": "teamclaw-workspace",
-  "workerProvisioningMaxPerRole": 2
+  "workerProvisioningMaxPerRole": 10
 }
 ```
 

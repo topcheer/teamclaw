@@ -10,7 +10,7 @@ Default: `http://127.0.0.1:9527`
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/health` | Health check → `{"status":"ok"}` |
+| GET | `/api/v1/health` | Health/readiness check; may report a non-OK startup readiness state until required warm workers are online |
 | GET | `/api/v1/team/status` | Full team snapshot (workers, tasks, runs, clarifications) |
 | GET | `/api/v1/roles` | List all available roles |
 

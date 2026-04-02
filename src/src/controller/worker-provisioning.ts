@@ -1416,7 +1416,7 @@ function buildProvisionedWorkerConfig(
   teamclawConfig.workerProvisioningControllerUrl = "";
   teamclawConfig.workerProvisioningRoles = [];
   teamclawConfig.workerProvisioningMinPerRole = 0;
-  teamclawConfig.workerProvisioningMaxPerRole = 1;
+  teamclawConfig.workerProvisioningMaxPerRole = 10;
   teamclawConfig.workerProvisioningIdleTtlMs = controllerConfig.workerProvisioningIdleTtlMs;
   teamclawConfig.workerProvisioningStartupTimeoutMs = controllerConfig.workerProvisioningStartupTimeoutMs;
   teamclawConfig.workerProvisioningImage = "";

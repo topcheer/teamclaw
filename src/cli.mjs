@@ -64,7 +64,7 @@ const INSTALL_MODE_OPTIONS = [
   {
     value: "controller-manual",
     label: "Local controller + default on-demand workers",
-    hint: "Lean same-host setup; TeamClaw launches local worker processes on demand with controller-decided defaults.",
+    hint: "Lean same-host setup; writes workerProvisioningRoles=[] and workerProvisioningMaxPerRole=1.",
   },
   {
     value: "controller-docker",
@@ -1363,7 +1363,7 @@ async function collectInstallChoices(configPath, config, prompter, options) {
 
   const provisioningRoles = await promptOptionalRoleList(
     prompter,
-    "Preferred on-demand roles (comma-separated, leave empty for controller-decided defaults)",
+    "Preferred on-demand roles (comma-separated, leave empty to keep workerProvisioningRoles empty and let startup readiness default to a warm developer worker)",
     resolveDefaultProvisioningRoles(existingTeamClaw),
   );
   const maxPerRole = await prompter.number({
@@ -1371,7 +1371,7 @@ async function collectInstallChoices(configPath, config, prompter, options) {
     defaultValue:
       typeof existingTeamClaw.workerProvisioningMaxPerRole === "number" && existingTeamClaw.workerProvisioningMaxPerRole >= 1
         ? existingTeamClaw.workerProvisioningMaxPerRole
-        : 2,
+        : 10,
     min: 1,
     max: 50,
   });
@@ -1677,7 +1677,7 @@ function applyInstallerChoices(config, choices, configPath) {
     teamclawConfig.workerProvisioningDisabled = true;
     teamclawConfig.workerProvisioningControllerUrl = "";
     teamclawConfig.workerProvisioningRoles = [];
-    teamclawConfig.workerProvisioningMaxPerRole = 1;
+    teamclawConfig.workerProvisioningMaxPerRole = 10;
     teamclawConfig.workerProvisioningImage = "";
     teamclawConfig.workerProvisioningPassEnv = [];
     teamclawConfig.workerProvisioningExtraEnv = {};
@@ -1697,7 +1697,7 @@ function applyInstallerChoices(config, choices, configPath) {
       teamclawConfig.workerProvisioningDisabled = false;
       teamclawConfig.workerProvisioningControllerUrl = "";
       teamclawConfig.workerProvisioningRoles = [];
-      teamclawConfig.workerProvisioningMaxPerRole = 1;
+      teamclawConfig.workerProvisioningMaxPerRole = 10;
       teamclawConfig.workerProvisioningImage = "";
       teamclawConfig.workerProvisioningPassEnv = [];
       teamclawConfig.workerProvisioningExtraEnv = {};

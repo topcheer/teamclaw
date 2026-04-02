@@ -16,16 +16,16 @@ const LOCAL_SETUP_MODES = [
   {
     id: "controller-manual",
     title: "Local quickstart",
-    description: "Runs the controller here and launches local worker processes on demand with controller-decided defaults.",
-    warning: "Leanest local setup. TeamClaw still provisions local worker processes on demand, but uses a smaller default worker pool.",
-    recommended: false,
+    description: "Runs the controller here with same-host process provisioning and empty preferred provisioning roles. TeamClaw can still scale up to the configured per-role cap.",
+    warning: "Leanest same-host setup. TeamClaw still provisions local worker processes on demand, but keeps `workerProvisioningRoles: []` so startup readiness falls back to a warm developer worker.",
+    recommended: true,
   },
   {
     id: "controller-process",
     title: "Local multi-process",
     description: "Runs the controller here and provisions local worker processes on demand.",
     warning: "Uses more CPU and memory, but gives local workers stronger process isolation.",
-    recommended: true,
+    recommended: false,
   },
 ];
 
@@ -54,7 +54,7 @@ async function saveSettings(nextSettings) {
 }
 
 function buildLocalInstallCommand(mode) {
-  const selectedMode = LOCAL_SETUP_MODES.some((entry) => entry.id === mode) ? mode : "controller-process";
+  const selectedMode = LOCAL_SETUP_MODES.some((entry) => entry.id === mode) ? mode : "controller-manual";
   return `npx -y @teamclaws/teamclaw install --yes --install-mode ${selectedMode}`;
 }
 
@@ -133,7 +133,7 @@ async function runShellCommand(command, options = {}) {
 }
 
 async function installLocalTeamClaw(options) {
-  const mode = String(options?.mode || "controller-process").trim();
+  const mode = String(options?.mode || "controller-manual").trim();
   const command = buildLocalInstallCommand(mode);
   return await runShellCommand(command, { cwd: String(options?.cwd || "").trim() || process.cwd() });
 }

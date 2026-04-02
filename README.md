@@ -145,11 +145,17 @@ Example `process` provisioning configuration:
   "workerProvisioningType": "process",
   "workerProvisioningRoles": [],
   "workerProvisioningMinPerRole": 0,
-  "workerProvisioningMaxPerRole": 2,
+  "workerProvisioningMaxPerRole": 10,
   "workerProvisioningIdleTtlMs": 120000,
   "workerProvisioningStartupTimeoutMs": 120000
 }
 ```
+
+If you use the guided installer, note that different install modes intentionally write different same-role caps:
+
+- `controller-manual` keeps a lean same-host setup with `workerProvisioningRoles: []`; startup readiness falls back to a warm `developer` worker
+- `controller-process` lets you choose `workerProvisioningRoles` and `workerProvisioningMaxPerRole`
+- `worker` disables provisioning on that node
 
 Example `docker` provisioning configuration:
 
@@ -164,7 +170,7 @@ Example `docker` provisioning configuration:
   "workerProvisioningWorkspaceRoot": "/workspace-root",
   "workerProvisioningDockerWorkspaceVolume": "teamclaw-workspaces",
   "workerProvisioningRoles": ["developer", "qa", "infra-engineer"],
-  "workerProvisioningMaxPerRole": 3,
+  "workerProvisioningMaxPerRole": 10,
   "workerProvisioningDockerMounts": [
     "/var/run/docker.sock:/var/run/docker.sock"
   ],
@@ -280,12 +286,14 @@ TeamClaw release is split intentionally:
 Maintainer checklist:
 
 ```bash
-node scripts/sync-teamclaw-plugin-manifest.mjs src
-node scripts/teamclaw-package-check.mjs src
-bash scripts/teamclaw-clawhub-release.sh --dry-run
+npm --prefix src run manifest:sync
+npm --prefix src run release:check
+npm --prefix src run release:clawhub:dry-run
 ```
 
 Before the real ClawHub push, bump `version:` in each changed `src/skills/*/SKILL.md`.
+
+The npm package is published by GitHub Actions when a `v*` tag is pushed (or via manual workflow dispatch). That workflow expects GitHub's `npm-release` environment and npm trusted publishing to already be configured.
 
 When the preview looks right:
 

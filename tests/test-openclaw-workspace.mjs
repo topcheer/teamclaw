@@ -279,6 +279,18 @@ assert.match(
   "desktop main process should always surface the published npx installer command for local setup",
 );
 
+assert.match(
+  desktopMainSource,
+  /id: "controller-manual"[\s\S]*recommended: true[\s\S]*id: "controller-process"[\s\S]*recommended: false[\s\S]*const selectedMode = LOCAL_SETUP_MODES\.some\(\(entry\) => entry\.id === mode\) \? mode : "controller-manual";/,
+  "desktop main process should keep local quickstart as the default local install mode",
+);
+
+assert.match(
+  desktopRendererSource,
+  /localSetupMode: "controller-manual"[\s\S]*install --yes --install-mode controller-manual[\s\S]*state\.localSetupMode = 'controller-manual';/,
+  "desktop renderer should default the bootstrap selection and fallback install command to local quickstart",
+);
+
   assert.doesNotMatch(
     desktopRendererSource,
     /need external workers|需要外部 workers|只启动 controller|same-process workers|同进程 workers/,

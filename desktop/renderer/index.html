@@ -225,20 +225,20 @@
         <section id="bootstrap-mode-card" class="bootstrap-card">
           <div id="bootstrap-mode-label" class="bootstrap-label">Install mode</div>
           <label class="bootstrap-mode">
-            <input type="radio" name="bootstrap-mode" data-bootstrap-mode="controller-manual">
+            <input type="radio" name="bootstrap-mode" data-bootstrap-mode="controller-manual" checked>
             <span>
               <strong id="bootstrap-mode-manual-title">Local quickstart</strong>
-              <small id="bootstrap-mode-manual-hint">Runs the controller here and launches local worker processes on demand with controller-decided defaults.</small>
+              <small id="bootstrap-mode-manual-hint">Runs the controller here with empty preferred provisioning roles. TeamClaw can still scale to the configured per-role worker cap.</small>
             </span>
           </label>
           <label class="bootstrap-mode">
-            <input type="radio" name="bootstrap-mode" data-bootstrap-mode="controller-process" checked>
+            <input type="radio" name="bootstrap-mode" data-bootstrap-mode="controller-process">
             <span>
               <strong id="bootstrap-mode-process-title">Local multi-process</strong>
               <small id="bootstrap-mode-process-hint">Runs the controller here and provisions local worker processes on demand. Uses more CPU and memory.</small>
             </span>
           </label>
-          <p id="bootstrap-mode-warning" class="bootstrap-warning">This mode uses more resources on the current machine, but gives local workers stronger process isolation.</p>
+          <p id="bootstrap-mode-warning" class="bootstrap-warning">This mode uses more resources on the current machine, but gives local workers stronger process isolation. The local quickstart mode keeps `workerProvisioningRoles: []`, so startup readiness falls back to a warm developer worker.</p>
         </section>
 
         <section class="bootstrap-card bootstrap-command-card">

@@ -71,6 +71,15 @@ For maintainers, TeamClaw now uses two release paths:
 1. **npm package** — published by GitHub Actions via `.github/workflows/teamclaw-plugin-npm-release.yml`
 2. **ClawHub code plugin + bundled skills** — published manually from the CLI
 
+The npm publish workflow runs automatically when:
+
+- a tag matching `v*` is pushed
+- or relevant package files change on `main` (`src/**`, `.github/workflows/teamclaw-plugin-npm-release.yml`, `scripts/sync-teamclaw-plugin-manifest.mjs`, `scripts/teamclaw-package-check.mjs`, `scripts/teamclaw-npm-publish.sh`)
+
+It also supports `workflow_dispatch` for a specific commit SHA on `main`.
+
+Before the first real npm publish, GitHub must already be configured for npm trusted publishing with the `npm-release` environment and this workflow file.
+
 Before either release path, sync and validate the generated plugin manifest:
 
 ```bash
@@ -101,7 +110,7 @@ For a first-time setup, the safest path is:
 2. Validate the workflow with a small smoke-test task
 3. Expand to external workers, Docker, or Kubernetes after the basics are working
 
-When on-demand provisioning is enabled, TeamClaw now treats controller startup as a readiness phase, not just a process-up check. During that warm-up, `/api/v1/health` returns a non-OK status until the controller has verified writable runtime paths and successfully brought the configured startup worker roles online.
+When on-demand provisioning is enabled, TeamClaw now treats controller startup as a readiness phase, not just a process-up check. During that warm-up, `/api/v1/health` returns a non-OK status until the controller has verified writable runtime paths and successfully brought the configured startup worker roles online. If `workerProvisioningRoles` is empty, startup readiness defaults to waiting for a warm `developer` worker.
 
 ## Documentation
 
