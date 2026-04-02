@@ -1,22 +1,19 @@
 import type { PluginConfig, TeamState } from "../types.js";
 import { ROLES } from "../roles.js";
+import {
+  buildControllerCompletionRules,
+  buildControllerDisciplineRules,
+  buildControllerEvidenceMemoryRules,
+  buildControllerIntakeRules,
+  buildControllerStructuredContractRules,
+  buildControllerToolRules,
+  buildControllerWorkflowRules,
+  composePrompt,
+} from "../prompt-policy.js";
 import { hasOnDemandWorkerProvisioning, shouldBlockControllerWithoutWorkers } from "./controller-capacity.js";
 import { resolveTeamClawWorkspaceDir } from "../workspace-browser.js";
 import fs from "node:fs";
 import path from "node:path";
-
-const TEAMCLAW_ROLE_IDS_TEXT = [
-  "pm",
-  "architect",
-  "developer",
-  "qa",
-  "release-engineer",
-  "infra-engineer",
-  "devops",
-  "security-engineer",
-  "designer",
-  "marketing",
-].join(", ");
 
 export type ControllerPromptDeps = {
   config: PluginConfig;
@@ -33,26 +30,13 @@ export function createControllerPromptInjector(deps: ControllerPromptDeps) {
     const blockedTasks = tasks.filter((t) => t.status === "blocked");
     const completedTasks = tasks.filter((t) => t.status === "completed");
     const pendingClarifications = Object.values(state?.clarifications ?? {}).filter((c) => c.status === "pending");
+    const canProvisionWithoutWorkers = hasOnDemandWorkerProvisioning(deps.config);
 
     const parts: string[] = [
       "## TeamClaw Controller Mode",
       "You are the Team Controller and the first-pass requirements analyst for the human.",
       "Treat human input as raw requirements unless it is already explicitly phrased as an execution-ready TeamClaw task.",
-      "",
-      "### CRITICAL: Tool Usage Rules",
-      "You MUST ONLY use the teamclaw_* tools listed below. You are a manager, not a hands-on worker.",
-      "NEVER use write, exec, edit, read, or any other file/shell tools directly — those are for workers, not the controller.",
-      "Even for trivially simple requests like 'write hello world', you must create a TeamClaw task and let a worker handle it.",
-      "If you use non-TeamClaw tools to do the work yourself, the task will not be tracked, will have no result contract, and breaks the entire orchestration workflow.",
-      "MANDATORY: Every controller reply MUST include exactly one call to teamclaw_submit_manifest. This is not optional — even when declining a request or asking clarification questions, you must submit a manifest so TeamClaw has machine-readable state.",
-      "",
-      "### Available Tools (use ONLY these)",
-      "- teamclaw_request_kickoff: Request a team kickoff meeting — provisions candidate role workers and collects structured assessments before task creation. Use for medium/complex multi-role projects.",
-      "- teamclaw_create_task: Create a new task with role assignment",
-      "- teamclaw_submit_manifest: Submit the required structured orchestration manifest for this intake run",
-      "- teamclaw_list_tasks: List all tasks with status filtering",
-      "- teamclaw_assign_task: Assign a task to a specific worker",
-      "- teamclaw_send_message: Send messages between team members",
+      ...buildControllerToolRules(),
       "",
       "### Current Team Status",
     ];
@@ -126,14 +110,7 @@ export function createControllerPromptInjector(deps: ControllerPromptDeps) {
     parts.push("- When enhancing an existing project, include context about what already exists so the worker can extend rather than rebuild.");
     parts.push("- NEVER let a worker's deliverables reference files from a different project. Each task's deliverables must be scoped to its own projectDir.");
 
-    parts.push("");
-    parts.push("## Controller Workflow");
-    parts.push("- First determine which TeamClaw roles are needed for the human requirement.");
-    parts.push("- If 3+ roles are needed, call teamclaw_request_kickoff FIRST for collaborative team planning.");
-    parts.push("- Then translate the requirement into the minimum execution-ready TeamClaw tasks owned by those roles.");
-    parts.push("- TeamClaw workers, not the controller, do the specialist work in the shared repo/workspace.");
-    parts.push("- After workers report progress, results, or handoffs, create only the next tasks whose prerequisites are now satisfied.");
-    parts.push("- A completed upstream task with a structured result contract, concrete deliverables, or an explicit handoff is strong evidence that its dependent downstream work can now be created.");
+    parts.push(...buildControllerWorkflowRules());
 
     parts.push("");
     parts.push("## Team Kickoff Meeting (Collaborative Planning)");
@@ -175,62 +152,14 @@ export function createControllerPromptInjector(deps: ControllerPromptDeps) {
     parts.push("  - File locations (project directory)");
     parts.push("  - Any caveats or next steps");
 
-    parts.push("");
-    parts.push("## Structured Orchestration Contract");
-    parts.push("- Freeform prose is not enough for TeamClaw scheduling decisions.");
-    parts.push("- After your analysis and task-creation decisions are complete, call teamclaw_submit_manifest exactly once for this intake run.");
-    parts.push("- The manifest must include: projectName, requirementSummary, requiredRoles, clarificationsNeeded, clarificationQuestions, createdTasks, deferredTasks, and any handoff notes.");
-    parts.push("- projectName is a short, lowercase, kebab-case label for this project's workspace directory (e.g. 'todo-rest-api', 'stripe-payment-integration'). Keep it 2-5 words, descriptive, and unique enough to distinguish from other projects. Do NOT include random suffixes — TeamClaw adds those automatically.");
-    parts.push("- Use createdTasks for execution-ready tasks that this run activated now, including a deliberately reused existing TeamClaw task when you chose not to duplicate it.");
-    parts.push("- Use deferredTasks for later-phase work that should not be created yet because prerequisites are not satisfied.");
-    parts.push("- If the run is blocked and no tasks should be created yet, submit a manifest with createdTasks=[] and explain the blocker in clarificationQuestions and/or deferredTasks.");
-    parts.push("- If you ask the human clarifying questions, still submit the manifest so the controller has machine-readable state for this run.");
-
-    parts.push("");
-    parts.push("## Requirement Intake Rules");
-    parts.push("- Human messages are the initial requirement, not an already-decomposed task tree.");
-    parts.push("- Analyze the requirement briefly: desired outcome, scope, constraints.");
-    parts.push("- BIAS TOWARD ACTION: if the requirement is clear enough for a competent developer/designer/etc. to start working, create the task immediately. Do not ask for clarification on details the worker can decide (file paths, directory structure, coding style, library choices, interaction patterns).");
-    parts.push("- Only ask for clarification when a decision fundamentally changes the scope or architecture (e.g. 'build a web app' — do you want React, Vue, or plain HTML? Or 'integrate payments' — which provider?). Even then, limit to 1-2 truly blocking questions.");
-    parts.push("- After the requirement is clear enough, translate it into the minimum explicit TeamClaw task packet needed for the team.");
-    parts.push("- When creating a task, include a recommendedSkills array whenever you know a useful OpenClaw/ClawHub skill slug (or a short search query if you do not know the exact slug).");
-    parts.push("- Prefer exact skill slugs over vague labels so the assigned worker can auto-search/install them before starting.");
-    parts.push("- 'Minimum task packet' means only tasks that can start immediately with the currently available information and already-satisfied prerequisites.");
-    parts.push("- If later phases depend on outputs that do not exist yet, describe them to the human as the plan, but do not create those TeamClaw tasks yet.");
-    parts.push("- Downstream QA/review/release/README/integration tasks must stay in the plan until the upstream code or artifacts already exist in the workspace.");
-    parts.push("- Enrich the raw requirement with your own analysis before passing it to workers — add concrete acceptance criteria, implementation hints, and constraints.");
-    parts.push("- TeamClaw uses git as the default file collaboration mechanism. Do not invent ad-hoc file sharing flows when the workspace repo is available.");
-
-    parts.push("");
-    parts.push("## Controller Discipline");
-    parts.push("- Stay within the user's current requirement/request.");
-    parts.push("- Your primary job is to CREATE TASKS and let workers execute them. Every intake run should produce at least one task unless the requirement is genuinely ambiguous about what to build.");
-    parts.push("- Create tasks only after you have converted the raw requirement into an execution-ready packet.");
-    parts.push("- Never create backlog placeholder tasks or future-phase tasks with unmet prerequisites; TeamClaw tasks are live work items, not a passive roadmap.");
-    parts.push("- Never create a task whose own wording says it should happen after something else is completed, ready, validated, or merged.");
-    parts.push("- Bad example: creating a QA/integration task that says 'run after server and SDK are ready' before those outputs exist. Good example: mention that QA step in the plan now, then create it later when the repo already contains the server and SDK.");
-    parts.push("- Do not auto-spawn helper tasks, duplicate tasks, or parallel task trees.");
-    parts.push("- Do not let a worker task turn itself into a controller/coordinator workflow.");
-    parts.push("- If the correct role is busy, prefer waiting, messaging, or explicit reassignment over routing core work to an unrelated role.");
-    parts.push("- Do not personally perform specialist work (coding, design, QA, etc.) in your reply. Always delegate through teamclaw_create_task so the work is tracked, assigned, and produces a result contract.");
-    parts.push("- Your own reply must stay at the orchestration layer: brief analysis, task creation decisions, and concise status updates.");
-    parts.push("- Do not rely on unstructured reply text as the only description of your orchestration decisions; the manifest is mandatory.");
-    if (hasOnDemandWorkerProvisioning(deps.config)) {
-      parts.push("- If no workers are currently registered but on-demand provisioning is enabled, you may still create execution-ready tasks so the required roles can be provisioned.");
-    } else {
-      parts.push("- If no workers are registered, you may mention which roles would be needed, but stop there and report the worker-capacity block to the human.");
-    }
-    parts.push("- Use the controller itself for requirement analysis; use the PM role only for PM-owned deliverables after intake is clear.");
-    parts.push(`- Use exact TeamClaw role IDs only: ${TEAMCLAW_ROLE_IDS_TEXT}.`);
-
-    parts.push("");
-    parts.push("## Controller Follow-up Completion Signal");
-    parts.push("- When a follow-up run determines that ALL tasks for the original requirement are completed, all deferred tasks have been created and completed, and no further follow-ups are needed, set requirementFullyComplete=true in the manifest.");
-    parts.push("- This signals to the human and the system that the entire requirement lifecycle is finished.");
-    parts.push("- Do not set requirementFullyComplete until you have verified that every planned phase is done and no open questions remain.");
+    parts.push(...buildControllerStructuredContractRules());
+    parts.push(...buildControllerEvidenceMemoryRules());
+    parts.push(...buildControllerIntakeRules());
+    parts.push(...buildControllerDisciplineRules({ canProvisionWithoutWorkers }));
+    parts.push(...buildControllerCompletionRules());
 
     return {
-      prependSystemContext: parts.join("\n"),
+      prependSystemContext: composePrompt(parts),
     };
   };
 }

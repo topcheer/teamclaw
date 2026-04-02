@@ -11,6 +11,7 @@ import {
   renderWorkerProgressText,
 } from "../interaction-contracts.js";
 import type { PluginConfig, WorkerIdentity } from "../types.js";
+import { normalizeClarificationQuestionSchema } from "../controller/orchestration-manifest.js";
 
 const ALLOWED_PROGRESS_STATUSES = new Set(["in_progress", "review"]);
 
@@ -352,6 +353,23 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
         question: Type.String({ description: "The exact question that must be answered before work can continue" }),
         blockingReason: Type.String({ description: "Why this task cannot proceed safely without clarification" }),
         context: Type.Optional(Type.String({ description: "Optional brief context or the specific decision that is missing" })),
+        questionSchema: Type.Optional(Type.Object({
+          kind: Type.String({ description: "Question kind: single-select, multi-select, number, or text" }),
+          title: Type.String({ description: "Question title shown to the human" }),
+          description: Type.Optional(Type.String({ description: "Optional supporting context for the question" })),
+          required: Type.Optional(Type.Boolean({ description: "Whether the question must be answered" })),
+          options: Type.Optional(Type.Array(Type.Object({
+            value: Type.String({ description: "Stable option value" }),
+            label: Type.String({ description: "Human-visible option label" }),
+            hint: Type.Optional(Type.String({ description: "Optional helper text for this option" })),
+          }))),
+          allowOther: Type.Optional(Type.Boolean({ description: "Whether freeform 'other' text is allowed" })),
+          placeholder: Type.Optional(Type.String({ description: "Optional placeholder or hint for text/number input" })),
+          unit: Type.Optional(Type.String({ description: "Optional unit label for number questions" })),
+          min: Type.Optional(Type.Number({ description: "Optional minimum numeric value" })),
+          max: Type.Optional(Type.Number({ description: "Optional maximum numeric value" })),
+          step: Type.Optional(Type.Number({ description: "Optional numeric step size" })),
+        })),
       }),
       async execute(_id: string, params: Record<string, unknown>) {
         const identity = getIdentity();
@@ -363,6 +381,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
         const question = String(params.question ?? "");
         const blockingReason = String(params.blockingReason ?? "");
         const context = typeof params.context === "string" ? params.context : undefined;
+        const questionSchema = normalizeClarificationQuestionSchema(params.questionSchema);
 
         if (!taskId || !question || !blockingReason) {
           return { content: [{ type: "text" as const, text: "taskId, question, and blockingReason are required." }] };
@@ -376,11 +395,12 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
               taskId,
               requestedBy: identity.workerId,
               requestedByWorkerId: identity.workerId,
-              requestedByRole: identity.role,
-              question,
-              blockingReason,
-              context,
-            }),
+               requestedByRole: identity.role,
+               question,
+               questionSchema,
+               blockingReason,
+               context,
+             }),
           });
 
           if (!res.ok) {

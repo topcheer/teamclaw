@@ -18,6 +18,7 @@ const PACKAGE_NAME = packageMetadata.name;
 const PACKAGE_VERSION = packageMetadata.version;
 const PACKAGE_INSTALL_SPEC = `${PACKAGE_NAME}@${PACKAGE_VERSION}`;
 const PLUGIN_ID = "teamclaw";
+const DANGEROUS_INSTALL_FLAG = "--dangerously-force-unsafe-install";
 const DEFAULT_TEAMCLAW_IMAGE = "ghcr.io/topcheer/teamclaw-openclaw:latest";
 const DEFAULT_CONTROLLER_PORT = 9527;
 const DEFAULT_WORKER_PORT = 9528;
@@ -25,8 +26,21 @@ const DEFAULT_GATEWAY_PORT = 18789;
 const DEFAULT_TEAM_NAME = "default";
 const DEFAULT_TASK_TIMEOUT_MS = 1_800_000;
 const DEFAULT_AGENT_TIMEOUT_SECONDS = 2_400;
-const DEFAULT_LOCAL_ROLES = ["architect", "developer", "qa"];
 const LEGACY_DEFAULT_PROVISIONING_ROLES = ["architect", "developer", "qa"];
+const TEAMCLAW_AGENT_ID = "teamclaw";
+const TEAMCLAW_RECOMMENDED_EXEC_SECURITY = "full";
+const TEAMCLAW_RECOMMENDED_EXEC_ASK = "off";
+const TEAMCLAW_RECOMMENDED_COMMAND_MODE = "auto";
+const AGENT_MODE_OPTIONS = [
+  {
+    value: "independent",
+    label: "Dedicated TeamClaw agent/workspace",
+  },
+  {
+    value: "main",
+    label: "Legacy shared main-agent mode",
+  },
+];
 
 const ROLE_OPTIONS = [
   { value: "pm", label: "Product Manager" },
@@ -43,19 +57,14 @@ const ROLE_OPTIONS = [
 
 const INSTALL_MODE_OPTIONS = [
   {
-    value: "single-local",
-    label: "Single machine controller + localRoles",
-    hint: "Recommended for first-time setup.",
+    value: "controller-process",
+    label: "Controller + on-demand process workers",
+    hint: "Recommended first setup on one host.",
   },
   {
     value: "controller-manual",
-    label: "Controller only (manual distributed workers)",
+    label: "Controller only + external workers",
     hint: "Use separate OpenClaw installs for workers.",
-  },
-  {
-    value: "controller-process",
-    label: "Controller + on-demand process workers",
-    hint: "Launch workers as child processes on the same host.",
   },
   {
     value: "controller-docker",
@@ -89,6 +98,11 @@ Commands:
 Options:
   --config <path>         Override the OpenClaw config path
   --yes                   Accept the recommended defaults without prompting
+  --install-mode <mode>   Install mode: controller-process, controller-manual, controller-docker, controller-kubernetes, worker
+  --controller-url <url>  Worker/manual controller URL override
+  --team-name <name>      Team name override
+  --worker-role <role>    Worker role override for --install-mode worker
+  --agent-mode <mode>     Advanced: "independent" (default) or "main"
   --skip-plugin-install   Only update openclaw.json; skip "openclaw plugins install"
   --dry-run               Show what would happen without writing files
 `);
@@ -98,6 +112,11 @@ function parseArgs(argv) {
   const options = {
     configPath: "",
     yes: false,
+    installMode: "",
+    controllerUrl: "",
+    teamName: "",
+    workerRole: "",
+    agentMode: "",
     skipPluginInstall: false,
     dryRun: false,
   };
@@ -120,6 +139,53 @@ function parseArgs(argv) {
     }
     if (arg === "--yes") {
       options.yes = true;
+      continue;
+    }
+    if (arg === "--install-mode") {
+      const value = argv[index + 1];
+      const validModes = new Set(INSTALL_MODE_OPTIONS.map((option) => option.value));
+      if (!value || !validModes.has(value)) {
+        throw new Error(`--install-mode requires one of: ${INSTALL_MODE_OPTIONS.map((option) => option.value).join(", ")}`);
+      }
+      options.installMode = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--controller-url") {
+      const value = argv[index + 1];
+      if (!value || (!value.startsWith("http://") && !value.startsWith("https://"))) {
+        throw new Error('--controller-url requires a value starting with "http://" or "https://"');
+      }
+      options.controllerUrl = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--team-name") {
+      const value = argv[index + 1];
+      if (!value || !value.trim()) {
+        throw new Error("--team-name requires a non-empty value");
+      }
+      options.teamName = value.trim();
+      index += 1;
+      continue;
+    }
+    if (arg === "--worker-role") {
+      const value = argv[index + 1];
+      const validRoles = new Set(ROLE_OPTIONS.map((option) => option.value));
+      if (!value || !validRoles.has(value)) {
+        throw new Error(`--worker-role requires one of: ${ROLE_OPTIONS.map((option) => option.value).join(", ")}`);
+      }
+      options.workerRole = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--agent-mode") {
+      const value = argv[index + 1];
+      if (!value || (value !== "independent" && value !== "main")) {
+        throw new Error('--agent-mode requires "independent" or "main"');
+      }
+      options.agentMode = value;
+      index += 1;
       continue;
     }
     if (arg === "--skip-plugin-install") {
@@ -198,20 +264,36 @@ function resolveOpenClawWorkspaceDirForConfigPath(configPath) {
   return path.join(resolveOpenClawStateDirForConfigPath(configPath), "workspace");
 }
 
-function sanitizeInstallerPathSegment(value) {
-  const normalized = String(value || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return normalized || "default";
+function resolveDefaultTeamClawAgentDirForConfigPath(configPath) {
+  return path.join(resolveOpenClawStateDirForConfigPath(configPath), "agents", TEAMCLAW_AGENT_ID, "agent");
 }
 
-function resolveDefaultTeamClawWorkspaceDir(configPath, teamName) {
-  return path.join(
-    resolveOpenClawStateDirForConfigPath(configPath),
-    "teamclaw-workspaces",
-    sanitizeInstallerPathSegment(teamName),
-  );
+function resolveDefaultTeamClawWorkspaceDir(configPath) {
+  return path.join(resolveOpenClawStateDirForConfigPath(configPath), `workspace-${TEAMCLAW_AGENT_ID}`);
+}
+
+function resolveMainAgentDirForConfigPath(configPath) {
+  return path.join(resolveOpenClawStateDirForConfigPath(configPath), "agents", "main", "agent");
+}
+
+async function detectMdnsCapability() {
+  try {
+    const Bonjour = (await import("bonjour-service")).default;
+    const bonjour = new Bonjour();
+    try {
+      const browser = bonjour.find({ type: "teamclaw" }, () => {});
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      browser?.stop?.();
+    } finally {
+      bonjour.destroy();
+    }
+    return { available: true, reason: "" };
+  } catch (error) {
+    return {
+      available: false,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 async function pathExists(targetPath) {
@@ -301,6 +383,67 @@ function resolveModelPrimaryValue(model) {
   return model.primary.trim();
 }
 
+function cloneJsonValue(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function resolveConfiguredAgentEntryRecord(config, agentId) {
+  const agents = isRecord(config.agents) ? config.agents : {};
+  const list = Array.isArray(agents.list) ? agents.list : [];
+  for (const entry of list) {
+    if (!isRecord(entry) || entry.id !== agentId) {
+      continue;
+    }
+    return entry;
+  }
+  return null;
+}
+
+function resolveEffectiveTeamClawModel(config) {
+  const teamclawEntry = resolveConfiguredAgentEntryRecord(config, TEAMCLAW_AGENT_ID);
+  if (teamclawEntry && teamclawEntry.model != null) {
+    return cloneJsonValue(teamclawEntry.model);
+  }
+  const agents = isRecord(config.agents) ? config.agents : {};
+  const defaults = isRecord(agents.defaults) ? agents.defaults : {};
+  return defaults.model != null ? cloneJsonValue(defaults.model) : null;
+}
+
+async function findExistingAuthProfilesPath(configPath) {
+  const candidates = [
+    path.join(resolveDefaultTeamClawAgentDirForConfigPath(configPath), "auth-profiles.json"),
+    path.join(resolveMainAgentDirForConfigPath(configPath), "auth-profiles.json"),
+  ];
+  for (const candidatePath of candidates) {
+    if (await pathExists(candidatePath)) {
+      return candidatePath;
+    }
+  }
+  return "";
+}
+
+async function bootstrapTeamClawAgentAuth(configPath, config) {
+  const teamclawEntry = resolveConfiguredAgentEntryRecord(config, TEAMCLAW_AGENT_ID);
+  if (!teamclawEntry || typeof teamclawEntry.agentDir !== "string" || !teamclawEntry.agentDir.trim()) {
+    return { copied: false, sourcePath: "", targetPath: "", warning: "" };
+  }
+  const targetPath = path.join(teamclawEntry.agentDir.trim(), "auth-profiles.json");
+  const sourcePath = await findExistingAuthProfilesPath(configPath);
+  if (!sourcePath) {
+    return {
+      copied: false,
+      sourcePath: "",
+      targetPath,
+      warning: "No existing OpenClaw auth-profiles.json was found, so TeamClaw can start but cannot work until host auth is configured.",
+    };
+  }
+  await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  if (path.resolve(sourcePath) !== path.resolve(targetPath)) {
+    await fs.copyFile(sourcePath, targetPath);
+  }
+  return { copied: true, sourcePath, targetPath, warning: "" };
+}
+
 function applySelectedModel(existingModel, selectedModel) {
   const nextPrimary = typeof selectedModel === "string" ? selectedModel.trim() : "";
   if (!nextPrimary) {
@@ -334,13 +477,30 @@ function getCurrentWorkspacePath(config) {
   return typeof defaults.workspace === "string" ? expandUserPath(defaults.workspace) : "";
 }
 
-function resolveInstallerWorkspaceDefault(configPath, config, teamName) {
-  const currentWorkspacePath = getCurrentWorkspacePath(config);
-  const sharedWorkspacePath = resolveOpenClawWorkspaceDirForConfigPath(configPath);
-  if (currentWorkspacePath && path.resolve(currentWorkspacePath) !== path.resolve(sharedWorkspacePath)) {
-    return currentWorkspacePath;
+function getCurrentTeamClawAgentWorkspacePath(config) {
+  const agents = isRecord(config.agents) ? config.agents : {};
+  const list = Array.isArray(agents.list) ? agents.list : [];
+  for (const entry of list) {
+    if (!isRecord(entry) || entry.id !== TEAMCLAW_AGENT_ID) {
+      continue;
+    }
+    return typeof entry.workspace === "string" ? expandUserPath(entry.workspace) : "";
   }
-  return resolveDefaultTeamClawWorkspaceDir(configPath, teamName);
+  return "";
+}
+
+function resolveCurrentAgentIsolationMode(config) {
+  const existingTeamClaw = getExistingTeamClawConfig(config);
+  return existingTeamClaw.agentIsolationMode === "main" ? "main" : "independent";
+}
+
+function resolveInstallerWorkspaceDefault(configPath, config, agentIsolationMode) {
+  if (agentIsolationMode === "main") {
+    const currentWorkspacePath = getCurrentWorkspacePath(config);
+    return currentWorkspacePath || resolveOpenClawWorkspaceDirForConfigPath(configPath);
+  }
+  const currentWorkspacePath = getCurrentTeamClawAgentWorkspacePath(config);
+  return currentWorkspacePath || resolveDefaultTeamClawWorkspaceDir(configPath);
 }
 
 function dedupeStrings(values) {
@@ -362,10 +522,9 @@ function normalizeConfiguredRoleList(raw) {
 
 function resolveDefaultProvisioningRoles(existingTeamClaw) {
   const existingRoles = normalizeConfiguredRoleList(existingTeamClaw.workerProvisioningRoles);
-  if (existingRoles.length === 0) {
-    return [];
-  }
-  return hasSameStringSet(existingRoles, LEGACY_DEFAULT_PROVISIONING_ROLES) ? [] : existingRoles;
+  return existingRoles.length > 0 && !hasSameStringSet(existingRoles, LEGACY_DEFAULT_PROVISIONING_ROLES)
+    ? existingRoles
+    : [];
 }
 
 function extractModelOptions(config) {
@@ -601,7 +760,8 @@ function buildStartCommand(configPath) {
   if (path.resolve(configPath) === path.resolve(defaultPath)) {
     return "openclaw gateway run";
   }
-  return `OPENCLAW_CONFIG_PATH=${shellEscape(configPath)} openclaw gateway run`;
+  const stateDir = resolveOpenClawStateDirForConfigPath(configPath);
+  return `OPENCLAW_STATE_DIR=${shellEscape(stateDir)} OPENCLAW_CONFIG_PATH=${shellEscape(configPath)} openclaw gateway run`;
 }
 
 function shellEscape(value) {
@@ -643,23 +803,83 @@ function rankLanAddress(address) {
   return 3;
 }
 
+function parseDefaultRouteInterface(text) {
+  const directMatch = String(text || "").match(/(?:^|\n)\s*interface:\s*(\S+)/i);
+  if (directMatch && directMatch[1]) {
+    return directMatch[1];
+  }
+  const devMatch = String(text || "").match(/(?:^|\n)default(?:\s+via\s+\S+)?\s+dev\s+(\S+)/i);
+  if (devMatch && devMatch[1]) {
+    return devMatch[1];
+  }
+  return "";
+}
+
+function resolveDefaultRouteInterface() {
+  const candidates = process.platform === "darwin"
+    ? [
+        { command: "route", args: ["-n", "get", "default"] },
+        { command: "ip", args: ["route", "show", "default"] },
+      ]
+    : [
+        { command: "ip", args: ["route", "show", "default"] },
+        { command: "route", args: ["-n", "get", "default"] },
+      ];
+  for (const candidate of candidates) {
+    const result = spawnSync(candidate.command, candidate.args, { encoding: "utf8" });
+    if (result.status !== 0 || result.error) {
+      continue;
+    }
+    const interfaceName = parseDefaultRouteInterface(result.stdout || "");
+    if (interfaceName) {
+      return interfaceName;
+    }
+  }
+  return "";
+}
+
+function isPrivateLanIpv4(address) {
+  if (String(address).startsWith("192.168.") || String(address).startsWith("10.")) {
+    return true;
+  }
+  const parts = String(address).split(".").map((value) => Number.parseInt(value, 10));
+  return parts.length === 4 && parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31;
+}
+
 function listLanUiUrls(port) {
-  const urls = [];
   const interfaces = os.networkInterfaces();
+  const seen = new Set();
+  const orderedAddresses = [];
+  const defaultRouteInterface = resolveDefaultRouteInterface();
+  if (defaultRouteInterface && Array.isArray(interfaces[defaultRouteInterface])) {
+    for (const record of interfaces[defaultRouteInterface] || []) {
+      if (!record || record.internal || record.family !== "IPv4") {
+        continue;
+      }
+      if (!seen.has(record.address)) {
+        seen.add(record.address);
+        orderedAddresses.push(record.address);
+      }
+    }
+  }
+  const fallbackAddresses = [];
   for (const records of Object.values(interfaces)) {
     for (const record of records ?? []) {
       if (!record || record.internal || record.family !== "IPv4") {
         continue;
       }
-      urls.push({
-        address: record.address,
-        url: `http://${record.address}:${port}/ui`,
-      });
+      if (!seen.has(record.address)) {
+        seen.add(record.address);
+        fallbackAddresses.push(record.address);
+      }
     }
   }
-  return urls
-    .sort((left, right) => rankLanAddress(left.address) - rankLanAddress(right.address) || left.address.localeCompare(right.address))
-    .map((entry) => entry.url);
+  fallbackAddresses.sort((left, right) => {
+    const leftScore = isPrivateLanIpv4(left) ? rankLanAddress(left) : 99;
+    const rightScore = isPrivateLanIpv4(right) ? rankLanAddress(right) : 99;
+    return leftScore - rightScore || left.localeCompare(right);
+  });
+  return orderedAddresses.concat(fallbackAddresses).map((address) => `http://${address}:${port}/ui`);
 }
 
 function installPluginWithCommand(command, args, env) {
@@ -718,56 +938,17 @@ function inspectInstalledPlugin(configPath) {
   };
 }
 
-function createPackageTarball(env) {
-  let tempDir = "";
-  try {
-    tempDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "teamclaw-installer-pack-"));
-    const result = spawnSync(
-      "npm",
-      ["pack", PACKAGE_ROOT, "--pack-destination", tempDir, "--json", "--ignore-scripts"],
-      {
-        env,
-        encoding: "utf8",
-      },
-    );
-    if (result.status !== 0 || result.error) {
-      const detail = result.error
-        ? result.error.message
-        : (result.stderr || result.stdout || `exited with code ${result.status}`).trim();
-      throw new Error(detail || "npm pack failed");
-    }
-    const payload = JSON.parse(result.stdout);
-    const filename = Array.isArray(payload) && payload[0] && typeof payload[0].filename === "string"
-      ? payload[0].filename.trim()
-      : "";
-    if (!filename) {
-      throw new Error("npm pack did not report a tarball filename");
-    }
-    const tarballPath = path.join(tempDir, filename);
-    if (!fsSync.existsSync(tarballPath)) {
-      throw new Error(`tarball was not created at ${tarballPath}`);
-    }
-    return {
-      ok: true,
-      tempDir,
-      tarballPath,
-    };
-  } catch (error) {
-    if (tempDir) {
-      fsSync.rmSync(tempDir, { recursive: true, force: true });
-    }
-    return {
-      ok: false,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
+function buildOpenClawCommandEnv(configPath) {
+  const stateDir = resolveOpenClawStateDirForConfigPath(configPath);
+  return {
+    ...process.env,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: configPath,
+  };
 }
 
 function attemptPluginUninstall({ configPath }) {
-  const env = {
-    ...process.env,
-    OPENCLAW_CONFIG_PATH: configPath,
-  };
+  const env = buildOpenClawCommandEnv(configPath);
   const candidates = [
     {
       label: "openclaw",
@@ -811,10 +992,7 @@ function attemptPluginUninstall({ configPath }) {
 }
 
 function attemptPluginInstall({ configPath }) {
-  const env = {
-    ...process.env,
-    OPENCLAW_CONFIG_PATH: configPath,
-  };
+  const env = buildOpenClawCommandEnv(configPath);
   const installedPlugin = inspectInstalledPlugin(configPath);
   if (installedPlugin?.version === PACKAGE_VERSION) {
     console.log(
@@ -839,89 +1017,88 @@ function attemptPluginInstall({ configPath }) {
       };
     }
   }
-  const candidates = [];
-  const tarballResult = createPackageTarball(env);
-  if (tarballResult.ok) {
-    console.log(
-      `\nPacked ${PACKAGE_INSTALL_SPEC} into ${path.basename(tarballResult.tarballPath)} for local plugin install.`,
-    );
-    candidates.push(
-      {
-        label: "openclaw (local tarball)",
-        command: "openclaw",
-        args: ["plugins", "install", tarballResult.tarballPath],
-        targetDescription: tarballResult.tarballPath,
-      },
-      {
-        label: "npm exec fallback (local tarball)",
-        command: "npm",
-        args: ["exec", "-y", "openclaw@latest", "--", "plugins", "install", tarballResult.tarballPath],
-        targetDescription: tarballResult.tarballPath,
-      },
-    );
-  } else {
-    console.log(
-      `\nCould not pack ${PACKAGE_INSTALL_SPEC} into a local tarball (${tarballResult.error}). Falling back to registry install...`,
-    );
-  }
-  candidates.push(
+  console.log(
+    `\nTeamClaw uses host-level orchestration capabilities, so OpenClaw requires ${DANGEROUS_INSTALL_FLAG} during plugin installation.`,
+  );
+  const candidates = [
+    {
+      label: "openclaw (local package directory)",
+      command: "openclaw",
+      args: ["plugins", "install", DANGEROUS_INSTALL_FLAG, PACKAGE_ROOT],
+      targetDescription: PACKAGE_ROOT,
+    },
+    {
+      label: "npm exec fallback (local package directory)",
+      command: "npm",
+      args: [
+        "exec",
+        "-y",
+        "openclaw@latest",
+        "--",
+        "plugins",
+        "install",
+        DANGEROUS_INSTALL_FLAG,
+        PACKAGE_ROOT,
+      ],
+      targetDescription: PACKAGE_ROOT,
+    },
     {
       label: "openclaw (exact version fallback)",
       command: "openclaw",
-      args: ["plugins", "install", PACKAGE_INSTALL_SPEC],
+      args: ["plugins", "install", DANGEROUS_INSTALL_FLAG, PACKAGE_INSTALL_SPEC],
       targetDescription: PACKAGE_INSTALL_SPEC,
     },
     {
       label: "npm exec fallback (exact version fallback)",
       command: "npm",
-      args: ["exec", "-y", "openclaw@latest", "--", "plugins", "install", PACKAGE_INSTALL_SPEC],
+      args: [
+        "exec",
+        "-y",
+        "openclaw@latest",
+        "--",
+        "plugins",
+        "install",
+        DANGEROUS_INSTALL_FLAG,
+        PACKAGE_INSTALL_SPEC,
+      ],
       targetDescription: PACKAGE_INSTALL_SPEC,
     },
-  );
+  ];
 
-  try {
-    const failures = [];
-    for (let index = 0; index < candidates.length; index += 1) {
-      const candidate = candidates[index];
-      console.log(`\nInstalling ${candidate.targetDescription} with ${candidate.label}...`);
-      const result = installPluginWithCommand(candidate.command, candidate.args, env);
-      if (result.status === 0 && !result.error) {
-        return {
-          ok: true,
-          method: candidate.label,
-        };
-      }
-      const errorCode = result.error && typeof result.error === "object" ? result.error.code : "";
-      const detail = result.error
-        ? result.error.message
-        : result.signal
-          ? `terminated by signal ${result.signal}`
-          : `exited with code ${result.status}`;
-      failures.push(`${candidate.label} failed: ${detail}`);
-      if (errorCode === "ENOENT" && index < candidates.length - 1) {
-        console.log(`${candidate.command} was not found. Trying the next install fallback...`);
-        continue;
-      }
-      if (index < candidates.length - 1) {
-        console.log(`${candidate.label} failed (${detail}). Trying the next install fallback...`);
-      }
+  const failures = [];
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    console.log(`\nInstalling ${candidate.targetDescription} with ${candidate.label}...`);
+    const result = installPluginWithCommand(candidate.command, candidate.args, env);
+    if (result.status === 0 && !result.error) {
+      return {
+        ok: true,
+        method: candidate.label,
+      };
     }
-    return {
-      ok: false,
-      error: failures.length > 0 ? failures.join("; ") : "No install command was available.",
-    };
-  } finally {
-    if (tarballResult.ok) {
-      fsSync.rmSync(tarballResult.tempDir, { recursive: true, force: true });
+    const errorCode = result.error && typeof result.error === "object" ? result.error.code : "";
+    const detail = result.error
+      ? result.error.message
+      : result.signal
+        ? `terminated by signal ${result.signal}`
+        : `exited with code ${result.status}`;
+    failures.push(`${candidate.label} failed: ${detail}`);
+    if (errorCode === "ENOENT" && index < candidates.length - 1) {
+      console.log(`${candidate.command} was not found. Trying the next install fallback...`);
+      continue;
+    }
+    if (index < candidates.length - 1) {
+      console.log(`${candidate.label} failed (${detail}). Trying the next install fallback...`);
     }
   }
+  return {
+    ok: false,
+    error: failures.length > 0 ? failures.join("; ") : "No install command was available.",
+  };
 }
 
 function attemptGatewayRestart({ configPath }) {
-  const env = {
-    ...process.env,
-    OPENCLAW_CONFIG_PATH: configPath,
-  };
+  const env = buildOpenClawCommandEnv(configPath);
   const candidates = [
     {
       label: "openclaw",
@@ -963,7 +1140,7 @@ function attemptGatewayRestart({ configPath }) {
 
 async function waitForControllerHealth(port) {
   const url = `http://127.0.0.1:${port}/api/v1/health`;
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + 120_000;
   let lastError = "";
   while (Date.now() < deadline) {
     try {
@@ -1005,7 +1182,14 @@ async function waitForControllerHealth(port) {
         }
         lastError = "unexpected health payload";
       } else {
-        lastError = `HTTP ${response.statusCode}`;
+        try {
+          const payload = JSON.parse(response.body);
+          lastError = payload?.status
+            ? `HTTP ${response.statusCode} (${payload.status})`
+            : `HTTP ${response.statusCode}`;
+        } catch {
+          lastError = `HTTP ${response.statusCode}`;
+        }
       }
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
@@ -1015,16 +1199,17 @@ async function waitForControllerHealth(port) {
   return {
     ok: false,
     url,
-    error: lastError || "timed out after 30s",
+    error: lastError || "timed out after 120s",
   };
 }
 
-async function collectInstallChoices(configPath, config, prompter) {
+async function collectInstallChoices(configPath, config, prompter, options) {
   const existingTeamClaw = getExistingTeamClawConfig(config);
   const existingMode = typeof existingTeamClaw.mode === "string" ? existingTeamClaw.mode.trim() : "";
   const existingProvisioningType =
     typeof existingTeamClaw.workerProvisioningType === "string" ? existingTeamClaw.workerProvisioningType.trim() : "";
-  let modeDefault = "single-local";
+  const agentIsolationMode = options.agentMode || resolveCurrentAgentIsolationMode(config);
+  let modeDefault = "controller-process";
   if (existingMode === "worker") {
     modeDefault = "worker";
   } else if (existingMode === "controller") {
@@ -1034,12 +1219,12 @@ async function collectInstallChoices(configPath, config, prompter) {
       modeDefault = "controller-kubernetes";
     } else if (existingProvisioningType === "process") {
       modeDefault = "controller-process";
-    } else if (!Array.isArray(existingTeamClaw.localRoles) || existingTeamClaw.localRoles.length === 0) {
+    } else {
       modeDefault = "controller-manual";
     }
   }
 
-  const installMode = await prompter.select({
+  const installMode = options.installMode || await prompter.select({
     message: "Choose an installation mode",
     options: INSTALL_MODE_OPTIONS,
     defaultValue: modeDefault,
@@ -1063,24 +1248,28 @@ async function collectInstallChoices(configPath, config, prompter) {
 
   const teamName = await prompter.text({
     message: "Team name",
-    defaultValue:
+    defaultValue: options.teamName || (
       typeof existingTeamClaw.teamName === "string" && existingTeamClaw.teamName.trim()
         ? existingTeamClaw.teamName.trim()
-        : DEFAULT_TEAM_NAME,
+        : DEFAULT_TEAM_NAME
+    ),
   });
   const workspacePath = expandUserPath(await prompter.text({
-    message: "OpenClaw workspace directory",
-    defaultValue: resolveInstallerWorkspaceDefault(configPath, config, teamName),
+    message: agentIsolationMode === "main"
+      ? "Main OpenClaw workspace directory"
+      : "TeamClaw dedicated workspace directory",
+    defaultValue: resolveInstallerWorkspaceDefault(configPath, config, agentIsolationMode),
   }));
 
   if (installMode === "worker") {
     const workerRole = await prompter.select({
       message: "Choose the worker role for this node",
       options: ROLE_OPTIONS,
-      defaultValue:
+      defaultValue: options.workerRole || (
         typeof existingTeamClaw.role === "string" && existingTeamClaw.role.trim()
           ? existingTeamClaw.role.trim()
-          : "developer",
+          : "developer"
+      ),
     });
     const workerPort = await prompter.number({
       message: "Worker API port",
@@ -1091,24 +1280,60 @@ async function collectInstallChoices(configPath, config, prompter) {
       min: 1,
       max: 65535,
     });
-    const controllerUrl = await prompter.text({
-      message: "Controller URL",
-      defaultValue:
-        typeof existingTeamClaw.controllerUrl === "string" && existingTeamClaw.controllerUrl.trim()
-          ? existingTeamClaw.controllerUrl.trim()
-          : "http://127.0.0.1:9527",
-      validate: (value) => value.startsWith("http://") || value.startsWith("https://")
-        ? ""
-        : 'Controller URL must start with "http://" or "https://".',
-    });
+    const existingControllerUrl =
+      typeof existingTeamClaw.controllerUrl === "string" && existingTeamClaw.controllerUrl.trim()
+        ? existingTeamClaw.controllerUrl.trim()
+        : "";
+    let workerControllerMode = existingControllerUrl ? "manual" : "mdns";
+    let mdnsCapability = { available: true, reason: "" };
+    if (options.controllerUrl) {
+      workerControllerMode = "manual";
+    } else if (!prompter.yes) {
+      mdnsCapability = await detectMdnsCapability();
+      if (mdnsCapability.available) {
+        prompter.note("mDNS discovery looks available on this machine.");
+        prompter.note("Use LAN auto-registration only when the controller is reachable on the same local network. Otherwise enter the controller URL manually.");
+        workerControllerMode = await prompter.select({
+          message: "How should this worker find its controller?",
+          options: [
+            {
+              value: "mdns",
+              label: "Use LAN auto-registration via mDNS",
+              hint: "Best when worker and controller are on the same LAN.",
+            },
+            {
+              value: "manual",
+              label: "Enter controller URL manually",
+              hint: "Required when controller is outside the LAN or mDNS is blocked.",
+            },
+          ],
+          defaultValue: existingControllerUrl ? "manual" : "mdns",
+        });
+      } else {
+        prompter.note(`mDNS auto-registration is not available on this machine (${mdnsCapability.reason || "probe failed"}).`);
+        workerControllerMode = "manual";
+      }
+    }
+    const controllerUrl = workerControllerMode === "manual"
+      ? await prompter.text({
+          message: "Controller URL",
+          defaultValue: options.controllerUrl || existingControllerUrl || "http://127.0.0.1:9527",
+          validate: (value) => value.startsWith("http://") || value.startsWith("https://")
+            ? ""
+            : 'Controller URL must start with "http://" or "https://".',
+        })
+      : "";
     return {
       installMode,
+      agentIsolationMode,
       selectedModel,
       teamName,
       workspacePath,
       workerRole,
       workerPort,
       controllerUrl,
+      workerControllerMode,
+      mdnsAvailable: mdnsCapability.available,
     };
   }
 
@@ -1122,27 +1347,10 @@ async function collectInstallChoices(configPath, config, prompter) {
     max: 65535,
   });
 
-  if (installMode === "single-local") {
-    const localRoles = await promptRoleList(
-      prompter,
-      "Local roles to run in this OpenClaw instance (comma-separated)",
-      Array.isArray(existingTeamClaw.localRoles) && existingTeamClaw.localRoles.length > 0
-        ? existingTeamClaw.localRoles
-        : DEFAULT_LOCAL_ROLES,
-    );
-    return {
-      installMode,
-      selectedModel,
-      teamName,
-      workspacePath,
-      controllerPort,
-      localRoles,
-    };
-  }
-
   if (installMode === "controller-manual") {
     return {
       installMode,
+      agentIsolationMode,
       selectedModel,
       teamName,
       workspacePath,
@@ -1168,6 +1376,7 @@ async function collectInstallChoices(configPath, config, prompter) {
   if (installMode === "controller-process") {
     return {
       installMode,
+      agentIsolationMode,
       selectedModel,
       teamName,
       workspacePath,
@@ -1205,6 +1414,7 @@ async function collectInstallChoices(configPath, config, prompter) {
     });
     return {
       installMode,
+      agentIsolationMode,
       selectedModel,
       teamName,
       workspacePath,
@@ -1260,6 +1470,7 @@ async function collectInstallChoices(configPath, config, prompter) {
   });
   return {
     installMode,
+    agentIsolationMode,
     selectedModel,
     teamName,
     workspacePath,
@@ -1274,7 +1485,82 @@ async function collectInstallChoices(configPath, config, prompter) {
   };
 }
 
-function applyInstallerChoices(config, choices) {
+function upsertAgentListEntry(agents, agentId, update) {
+  const list = Array.isArray(agents.list) ? agents.list.filter(isRecord) : [];
+  const existingIndex = list.findIndex((entry) => entry.id === agentId);
+  const nextEntry = {
+    ...(existingIndex >= 0 ? list[existingIndex] : {}),
+    id: agentId,
+    ...update,
+  };
+  if (existingIndex >= 0) {
+    list[existingIndex] = nextEntry;
+  } else {
+    list.push(nextEntry);
+  }
+  agents.list = list;
+}
+
+function removeAgentListEntry(agents, agentId) {
+  if (!Array.isArray(agents.list)) {
+    return;
+  }
+  agents.list = agents.list.filter((entry) => !isRecord(entry) || entry.id !== agentId);
+}
+
+function applyTeamClawHostRuntimeDefaults(next) {
+  const commands = ensureRecord(next, "commands");
+  if (typeof commands.native !== "string" || !commands.native.trim()) {
+    commands.native = TEAMCLAW_RECOMMENDED_COMMAND_MODE;
+  }
+  if (typeof commands.nativeSkills !== "string" || !commands.nativeSkills.trim()) {
+    commands.nativeSkills = TEAMCLAW_RECOMMENDED_COMMAND_MODE;
+  }
+  if (typeof commands.restart !== "boolean") {
+    commands.restart = true;
+  }
+  if (typeof commands.ownerDisplay !== "string" || !commands.ownerDisplay.trim()) {
+    commands.ownerDisplay = "raw";
+  }
+
+  const tools = ensureRecord(next, "tools");
+  const exec = ensureRecord(tools, "exec");
+  if (typeof exec.security !== "string" || !exec.security.trim()) {
+    exec.security = TEAMCLAW_RECOMMENDED_EXEC_SECURITY;
+  }
+  if (typeof exec.ask !== "string" || !exec.ask.trim()) {
+    exec.ask = TEAMCLAW_RECOMMENDED_EXEC_ASK;
+  }
+}
+
+function collectTeamClawHostRuntimeWarnings(config) {
+  const warnings = [];
+  const commands = isRecord(config.commands) ? config.commands : null;
+  const tools = isRecord(config.tools) ? config.tools : null;
+  const exec = tools && isRecord(tools.exec) ? tools.exec : null;
+
+  const execSecurity = typeof exec?.security === "string" ? exec.security.trim() : "";
+  if (execSecurity && execSecurity !== TEAMCLAW_RECOMMENDED_EXEC_SECURITY) {
+    warnings.push(
+      `tools.exec.security is set to "${execSecurity}" (TeamClaw works best with "${TEAMCLAW_RECOMMENDED_EXEC_SECURITY}"; stricter settings can block task execution).`,
+    );
+  }
+
+  const execAsk = typeof exec?.ask === "string" ? exec.ask.trim() : "";
+  if (execAsk && execAsk !== TEAMCLAW_RECOMMENDED_EXEC_ASK) {
+    warnings.push(
+      `tools.exec.ask is set to "${execAsk}" (TeamClaw works best with "${TEAMCLAW_RECOMMENDED_EXEC_ASK}"; stricter settings can trigger repeated approvals).`,
+    );
+  }
+
+  if (commands?.restart === false) {
+    warnings.push('commands.restart is disabled, so the installer cannot auto-restart OpenClaw after config changes.');
+  }
+
+  return warnings;
+}
+
+function applyInstallerChoices(config, choices, configPath) {
   const next = isRecord(config) ? structuredClone(config) : {};
   const gateway = ensureRecord(next, "gateway");
   if (typeof gateway.port !== "number" || gateway.port < 1) {
@@ -1292,8 +1578,17 @@ function applyInstallerChoices(config, choices) {
   if (choices.selectedModel) {
     agentDefaults.model = applySelectedModel(agentDefaults.model, choices.selectedModel);
   }
-  if (choices.workspacePath) {
+  if (choices.agentIsolationMode === "main" && choices.workspacePath) {
     agentDefaults.workspace = choices.workspacePath;
+  }
+  if (choices.agentIsolationMode === "independent") {
+    upsertAgentListEntry(agents, TEAMCLAW_AGENT_ID, {
+      workspace: choices.workspacePath,
+      agentDir: resolveDefaultTeamClawAgentDirForConfigPath(configPath),
+      ...(agentDefaults.model != null ? { model: cloneJsonValue(agentDefaults.model) } : {}),
+    });
+  } else {
+    removeAgentListEntry(agents, TEAMCLAW_AGENT_ID);
   }
   const existingTimeout = typeof agentDefaults.timeoutSeconds === "number"
     ? agentDefaults.timeoutSeconds
@@ -1320,6 +1615,7 @@ function applyInstallerChoices(config, choices) {
     typeof teamclawConfig.taskTimeoutMs === "number" ? teamclawConfig.taskTimeoutMs : 0,
     DEFAULT_TASK_TIMEOUT_MS,
   );
+  teamclawConfig.processModel = "multi";
   teamclawConfig.gitEnabled = typeof teamclawConfig.gitEnabled === "boolean" ? teamclawConfig.gitEnabled : true;
   teamclawConfig.gitDefaultBranch = typeof teamclawConfig.gitDefaultBranch === "string" && teamclawConfig.gitDefaultBranch.trim()
     ? teamclawConfig.gitDefaultBranch.trim()
@@ -1330,6 +1626,7 @@ function applyInstallerChoices(config, choices) {
   teamclawConfig.gitAuthorEmail = typeof teamclawConfig.gitAuthorEmail === "string" && teamclawConfig.gitAuthorEmail.trim()
     ? teamclawConfig.gitAuthorEmail.trim()
     : "teamclaw@local";
+  teamclawConfig.agentIsolationMode = choices.agentIsolationMode;
 
   teamclawConfig.workerProvisioningMinPerRole = 0;
   teamclawConfig.workerProvisioningIdleTtlMs = typeof teamclawConfig.workerProvisioningIdleTtlMs === "number" &&
@@ -1373,8 +1670,8 @@ function applyInstallerChoices(config, choices) {
     teamclawConfig.port = choices.workerPort;
     teamclawConfig.role = choices.workerRole;
     teamclawConfig.controllerUrl = choices.controllerUrl;
-    teamclawConfig.localRoles = [];
     teamclawConfig.workerProvisioningType = "none";
+    teamclawConfig.workerProvisioningDisabled = true;
     teamclawConfig.workerProvisioningControllerUrl = "";
     teamclawConfig.workerProvisioningRoles = [];
     teamclawConfig.workerProvisioningMaxPerRole = 1;
@@ -1392,23 +1689,9 @@ function applyInstallerChoices(config, choices) {
     teamclawConfig.controllerUrl = "";
     delete teamclawConfig.role;
 
-    if (choices.installMode === "single-local") {
-      teamclawConfig.localRoles = choices.localRoles;
+    if (choices.installMode === "controller-manual") {
       teamclawConfig.workerProvisioningType = "none";
-      teamclawConfig.workerProvisioningControllerUrl = "";
-      teamclawConfig.workerProvisioningRoles = [];
-      teamclawConfig.workerProvisioningMaxPerRole = 1;
-      teamclawConfig.workerProvisioningImage = "";
-      teamclawConfig.workerProvisioningPassEnv = [];
-      teamclawConfig.workerProvisioningExtraEnv = {};
-      teamclawConfig.workerProvisioningWorkspaceRoot = "";
-      teamclawConfig.workerProvisioningDockerWorkspaceVolume = "";
-      teamclawConfig.workerProvisioningKubernetesNamespace = "default";
-      teamclawConfig.workerProvisioningKubernetesServiceAccount = "";
-      teamclawConfig.workerProvisioningKubernetesWorkspacePersistentVolumeClaim = "";
-    } else if (choices.installMode === "controller-manual") {
-      teamclawConfig.localRoles = [];
-      teamclawConfig.workerProvisioningType = "none";
+      teamclawConfig.workerProvisioningDisabled = true;
       teamclawConfig.workerProvisioningControllerUrl = "";
       teamclawConfig.workerProvisioningRoles = [];
       teamclawConfig.workerProvisioningMaxPerRole = 1;
@@ -1421,8 +1704,8 @@ function applyInstallerChoices(config, choices) {
       teamclawConfig.workerProvisioningKubernetesServiceAccount = "";
       teamclawConfig.workerProvisioningKubernetesWorkspacePersistentVolumeClaim = "";
     } else if (choices.installMode === "controller-process") {
-      teamclawConfig.localRoles = [];
       teamclawConfig.workerProvisioningType = "process";
+      teamclawConfig.workerProvisioningDisabled = false;
       teamclawConfig.workerProvisioningControllerUrl = "";
       teamclawConfig.workerProvisioningRoles = choices.provisioningRoles;
       teamclawConfig.workerProvisioningMaxPerRole = choices.maxPerRole;
@@ -1435,8 +1718,8 @@ function applyInstallerChoices(config, choices) {
       teamclawConfig.workerProvisioningKubernetesServiceAccount = "";
       teamclawConfig.workerProvisioningKubernetesWorkspacePersistentVolumeClaim = "";
     } else if (choices.installMode === "controller-docker") {
-      teamclawConfig.localRoles = [];
       teamclawConfig.workerProvisioningType = "docker";
+      teamclawConfig.workerProvisioningDisabled = false;
       teamclawConfig.workerProvisioningControllerUrl = choices.controllerUrl;
       teamclawConfig.workerProvisioningRoles = choices.provisioningRoles;
       teamclawConfig.workerProvisioningMaxPerRole = choices.maxPerRole;
@@ -1449,8 +1732,8 @@ function applyInstallerChoices(config, choices) {
       teamclawConfig.workerProvisioningKubernetesServiceAccount = "";
       teamclawConfig.workerProvisioningKubernetesWorkspacePersistentVolumeClaim = "";
     } else if (choices.installMode === "controller-kubernetes") {
-      teamclawConfig.localRoles = [];
       teamclawConfig.workerProvisioningType = "kubernetes";
+      teamclawConfig.workerProvisioningDisabled = false;
       teamclawConfig.workerProvisioningControllerUrl = choices.controllerUrl;
       teamclawConfig.workerProvisioningRoles = choices.provisioningRoles;
       teamclawConfig.workerProvisioningMaxPerRole = choices.maxPerRole;
@@ -1473,6 +1756,7 @@ function applyInstallerChoices(config, choices) {
   plugins.entries = entries;
   next.plugins = plugins;
   next.agents = agents;
+  applyTeamClawHostRuntimeDefaults(next);
   next.gateway = gateway;
   return next;
 }
@@ -1481,10 +1765,17 @@ function buildSummaryLines(params) {
   const lines = [
     `Config path: ${params.configPath}`,
     `Install mode: ${params.choices.installMode}`,
+    `Agent isolation: ${params.choices.agentIsolationMode}`,
     `Workspace: ${params.choices.workspacePath}`,
   ];
   if (params.choices.selectedModel) {
     lines.push(`Default model: ${params.choices.selectedModel}`);
+  }
+  const effectiveTeamClawModel = resolveModelPrimaryValue(resolveEffectiveTeamClawModel(params.nextConfig));
+  if (effectiveTeamClawModel) {
+    lines.push(`TeamClaw agent model: ${effectiveTeamClawModel}`);
+  } else {
+    lines.push("Warning: TeamClaw has no effective model configured yet, so it can start but cannot work until a host model is configured.");
   }
   if (params.backupPath) {
     lines.push(`Backup: ${params.backupPath}`);
@@ -1508,6 +1799,14 @@ function buildSummaryLines(params) {
   } else if (params.controllerHealthStatus === "failed") {
     lines.push(`Controller health: ${params.controllerHealthError} (${params.controllerHealthUrl})`);
   }
+  if (params.teamclawAuthBootstrap?.copied) {
+    lines.push(`TeamClaw auth bootstrap: copied from ${params.teamclawAuthBootstrap.sourcePath}`);
+  } else if (params.teamclawAuthBootstrap?.warning) {
+    lines.push(`Warning: ${params.teamclawAuthBootstrap.warning}`);
+  }
+  lines.push(
+    `Host exec defaults: security=${TEAMCLAW_RECOMMENDED_EXEC_SECURITY}, ask=${TEAMCLAW_RECOMMENDED_EXEC_ASK} (applied when missing)`,
+  );
   lines.push(`Start command: ${buildStartCommand(params.configPath)}`);
 
   if (isControllerInstallMode(params.choices.installMode)) {
@@ -1534,7 +1833,15 @@ function buildSummaryLines(params) {
   }
   if (params.choices.installMode === "worker") {
     lines.push(`Worker role: ${params.choices.workerRole}`);
-    lines.push(`Controller URL: ${params.choices.controllerUrl}`);
+    if (params.choices.controllerUrl) {
+      lines.push(`Controller URL: ${params.choices.controllerUrl}`);
+    } else {
+      lines.push("Controller discovery: mDNS auto-registration");
+      lines.push("Note: mDNS auto-registration only works when the controller is reachable on the same LAN.");
+    }
+  }
+  for (const warning of params.hostRuntimeWarnings ?? []) {
+    lines.push(`Warning: ${warning}`);
   }
   return lines;
 }
@@ -1591,14 +1898,18 @@ async function runInstall(options) {
     }
 
     const config = await readOpenClawConfig(configPath);
-    const choices = await collectInstallChoices(configPath, config, prompter);
-    const nextConfig = applyInstallerChoices(config, choices);
+    const choices = await collectInstallChoices(configPath, config, prompter, options);
+    const nextConfig = applyInstallerChoices(config, choices, configPath);
 
     if (options.dryRun) {
       prompter.note("\nDry run only; no files were written.");
     } else {
       await writeConfig(configPath, nextConfig);
     }
+    const teamclawAuthBootstrap = options.dryRun
+      ? { copied: false, sourcePath: "", targetPath: "", warning: "" }
+      : await bootstrapTeamClawAgentAuth(configPath, nextConfig);
+    const hostRuntimeWarnings = collectTeamClawHostRuntimeWarnings(nextConfig);
 
     let gatewayRestartStatus = "skipped";
     let gatewayRestartMethod = "";
@@ -1627,6 +1938,9 @@ async function runInstall(options) {
       configPath,
       choices,
       backupPath,
+      nextConfig,
+      teamclawAuthBootstrap,
+      hostRuntimeWarnings,
       pluginInstallStatus,
       pluginInstallMethod,
       pluginInstallError,

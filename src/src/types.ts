@@ -23,7 +23,9 @@ export type GitSyncMode = "shared" | "bundle" | "remote";
 
 export type WorkerProvisioningType = "none" | "process" | "docker" | "kubernetes";
 
-export type ProcessModel = "single" | "multi";
+export type ProcessModel = "multi";
+
+export type AgentIsolationMode = "independent" | "main";
 
 export type ProvisionedWorkerStatus =
   | "launching"
@@ -31,6 +33,11 @@ export type ProvisionedWorkerStatus =
   | "terminating"
   | "terminated"
   | "failed";
+
+export type ProvisioningReadinessStatus =
+  | "checking"
+  | "ready"
+  | "degraded";
 
 export type GitRepoState = {
   enabled: boolean;
@@ -84,7 +91,7 @@ export type WorkerInfo = {
   role: RoleId;
   label: string;
   status: WorkerStatus;
-  transport?: "http" | "local" | "in-process";
+  transport?: "http";
   url: string;
   lastHeartbeat: number;
   capabilities: string[];
@@ -267,6 +274,28 @@ export type ControllerManifestDeferredTask = {
   whenReady: string;
 };
 
+export type ClarificationQuestionKind = "single-select" | "multi-select" | "number" | "text";
+
+export type ClarificationQuestionOption = {
+  value: string;
+  label: string;
+  hint?: string;
+};
+
+export type ClarificationQuestionSchema = {
+  kind: ClarificationQuestionKind;
+  title: string;
+  description?: string;
+  required?: boolean;
+  options?: ClarificationQuestionOption[];
+  allowOther?: boolean;
+  placeholder?: string;
+  unit?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+};
+
 export type ControllerOrchestrationManifest = {
   version: string;
   /** Short, filesystem-safe project name chosen by the controller (e.g. "todo-rest-api", "stripe-payment-integration"). */
@@ -275,6 +304,7 @@ export type ControllerOrchestrationManifest = {
   requiredRoles: RoleId[];
   clarificationsNeeded: boolean;
   clarificationQuestions: string[];
+  clarificationSchemas?: ClarificationQuestionSchema[];
   createdTasks: ControllerManifestCreatedTask[];
   deferredTasks: ControllerManifestDeferredTask[];
   handoffPlan?: string;
@@ -346,14 +376,21 @@ export type ClarificationStatus = "pending" | "answered";
 export type ClarificationRequest = {
   id: string;
   taskId: string;
+  controllerRunId?: string;
+  controllerSessionKey?: string;
   requestedBy: string;
   requestedByWorkerId?: string;
   requestedByRole?: RoleId;
   question: string;
+  questionSchema?: ClarificationQuestionSchema;
   blockingReason: string;
   context?: string;
   status: ClarificationStatus;
   answer?: string;
+  answerValue?: string;
+  answerValues?: string[];
+  answerNumber?: number;
+  answerComment?: string;
   answeredBy?: string;
   createdAt: number;
   updatedAt: number;
@@ -389,8 +426,19 @@ export type ProvisionedWorkerRecord = {
   lastError?: string;
 };
 
+export type StartupProvisioningReadiness = {
+  status: ProvisioningReadinessStatus;
+  startedAt: number;
+  checkedAt: number;
+  attempts: number;
+  requiredRoles: RoleId[];
+  readyWorkerIds: string[];
+  message?: string;
+};
+
 export type TeamProvisioningState = {
   workers: Record<string, ProvisionedWorkerRecord>;
+  startupReadiness?: StartupProvisioningReadiness;
 };
 
 export type PluginConfig = {
@@ -401,15 +449,15 @@ export type PluginConfig = {
   teamName: string;
   heartbeatIntervalMs: number;
   processModel: ProcessModel;
-  /** @deprecated Use processModel instead. Kept for backward compatibility. */
-  localRoles: RoleId[];
   taskTimeoutMs: number;
   gitEnabled: boolean;
   gitRemoteUrl: string;
   gitDefaultBranch: string;
   gitAuthorName: string;
   gitAuthorEmail: string;
+  agentIsolationMode: AgentIsolationMode;
   workerProvisioningType: WorkerProvisioningType;
+  workerProvisioningDisabled: boolean;
   workerProvisioningControllerUrl: string;
   workerProvisioningRoles: RoleId[];
   workerProvisioningMinPerRole: number;
@@ -426,6 +474,7 @@ export type PluginConfig = {
   workerProvisioningKubernetesNamespace: string;
   workerProvisioningKubernetesContext: string;
   workerProvisioningKubernetesServiceAccount: string;
+  workerProvisioningKubernetesImagePullSecrets: string[];
   workerProvisioningKubernetesWorkspacePersistentVolumeClaim: string;
   workerProvisioningKubernetesLabels: Record<string, string>;
   workerProvisioningKubernetesAnnotations: Record<string, string>;
@@ -458,6 +507,7 @@ export type DeliveryReportRecord = {
   sessionKey: string;
   generatedAt: number;
   projectName: string;
+  requirementSummary: string;
   status: "completed" | "partial" | "failed";
   taskCount: number;
   deliverableCount: number;
@@ -506,21 +556,13 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
 
   const teamName = typeof raw.teamName === "string" && raw.teamName.trim()
     ? raw.teamName.trim()
-    : "default";
+    : "TeamClaw";
 
   const heartbeatIntervalMs = typeof raw.heartbeatIntervalMs === "number" && raw.heartbeatIntervalMs >= 1000
     ? raw.heartbeatIntervalMs
     : 10000;
 
-  const localRoles = parseRoleList(raw.localRoles);
-
-  // processModel: "single" runs workers in-process, "multi" spawns child processes.
-  // Backward compat: if localRoles is set but processModel is not, default to "multi".
-  const rawProcessModel = typeof raw.processModel === "string" ? raw.processModel : "";
-  const processModel: ProcessModel =
-    rawProcessModel === "single" || rawProcessModel === "multi"
-      ? rawProcessModel
-      : localRoles.length > 0 ? "multi" : "single";
+  const processModel: ProcessModel = "multi";
 
   const taskTimeoutMs = typeof raw.taskTimeoutMs === "number" && raw.taskTimeoutMs >= 1000
     ? raw.taskTimeoutMs
@@ -544,11 +586,22 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
     ? raw.gitAuthorEmail.trim()
     : "teamclaw@local";
 
+  const agentIsolationMode: AgentIsolationMode =
+    typeof raw.agentIsolationMode === "string" && (raw.agentIsolationMode === "independent" || raw.agentIsolationMode === "main")
+      ? raw.agentIsolationMode
+      : "independent";
+
   const rawWorkerProvisioningType = parseProvisioningType(raw.workerProvisioningType);
-  // When processModel is "multi" and no explicit provisioning type was configured,
-  // auto-enable the "process" provisioner for on-demand local process spawning.
+  const workerProvisioningDisabled = raw.workerProvisioningDisabled === true;
+  // Legacy local installs often persisted workerProvisioningType="none" without
+  // distinguishing "manual/no provisioning" from "same-host local controller".
+  // Keep an explicit escape hatch via workerProvisioningDisabled, but otherwise
+  // default multi-process controllers back to process provisioning.
   const workerProvisioningType: WorkerProvisioningType =
-    rawWorkerProvisioningType === "none" && processModel === "multi" && !raw.workerProvisioningType
+    mode === "controller" &&
+    rawWorkerProvisioningType === "none" &&
+    processModel === "multi" &&
+    !workerProvisioningDisabled
       ? "process"
       : rawWorkerProvisioningType;
   const workerProvisioningControllerUrl = typeof raw.workerProvisioningControllerUrl === "string"
@@ -598,6 +651,7 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
   const workerProvisioningKubernetesServiceAccount = typeof raw.workerProvisioningKubernetesServiceAccount === "string"
     ? raw.workerProvisioningKubernetesServiceAccount.trim()
     : "";
+  const workerProvisioningKubernetesImagePullSecrets = parseStringArray(raw.workerProvisioningKubernetesImagePullSecrets);
   const workerProvisioningKubernetesWorkspacePersistentVolumeClaim =
     typeof raw.workerProvisioningKubernetesWorkspacePersistentVolumeClaim === "string"
       ? raw.workerProvisioningKubernetesWorkspacePersistentVolumeClaim.trim()
@@ -617,14 +671,15 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
     teamName,
     heartbeatIntervalMs,
     processModel,
-    localRoles,
     taskTimeoutMs,
     gitEnabled,
     gitRemoteUrl,
     gitDefaultBranch,
     gitAuthorName,
     gitAuthorEmail,
+    agentIsolationMode,
     workerProvisioningType,
+    workerProvisioningDisabled,
     workerProvisioningControllerUrl,
     workerProvisioningRoles,
     workerProvisioningMinPerRole,
@@ -641,6 +696,7 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
     workerProvisioningKubernetesNamespace,
     workerProvisioningKubernetesContext,
     workerProvisioningKubernetesServiceAccount,
+    workerProvisioningKubernetesImagePullSecrets,
     workerProvisioningKubernetesWorkspacePersistentVolumeClaim,
     workerProvisioningKubernetesLabels,
     workerProvisioningKubernetesAnnotations,

@@ -9,6 +9,7 @@ import type {
 } from "../types.js";
 import { buildControllerNoWorkersMessage, hasOnDemandWorkerProvisioning, shouldBlockControllerWithoutWorkers } from "./controller-capacity.js";
 import {
+  normalizeClarificationQuestionSchemas,
   normalizeManifestCreatedTasks,
   normalizeManifestDeferredTasks,
   normalizeManifestRoleList,
@@ -234,6 +235,27 @@ export function createControllerTools(deps: ControllerToolsDeps) {
         clarificationQuestions: Type.Optional(
           Type.Array(Type.String({ description: "Concrete clarification questions still waiting on the human" })),
         ),
+        clarificationSchemas: Type.Optional(
+          Type.Array(
+            Type.Object({
+              kind: Type.String({ description: "Question kind: single-select, multi-select, number, or text" }),
+              title: Type.String({ description: "Question title shown to the human" }),
+              description: Type.Optional(Type.String({ description: "Optional supporting context for the question" })),
+              required: Type.Optional(Type.Boolean({ description: "Whether the human must answer this question before continuing" })),
+              options: Type.Optional(Type.Array(Type.Object({
+                value: Type.String({ description: "Stable option value" }),
+                label: Type.String({ description: "Human-visible option label" }),
+                hint: Type.Optional(Type.String({ description: "Optional helper text for this option" })),
+              }))),
+              allowOther: Type.Optional(Type.Boolean({ description: "Whether freeform 'other' text is allowed alongside options" })),
+              placeholder: Type.Optional(Type.String({ description: "Optional placeholder or hint for text/number input" })),
+              unit: Type.Optional(Type.String({ description: "Optional unit label for number questions" })),
+              min: Type.Optional(Type.Number({ description: "Optional minimum numeric value" })),
+              max: Type.Optional(Type.Number({ description: "Optional maximum numeric value" })),
+              step: Type.Optional(Type.Number({ description: "Optional numeric step size" })),
+            }),
+          ),
+        ),
         createdTasks: Type.Optional(
           Type.Array(
                 Type.Object({
@@ -273,13 +295,16 @@ export function createControllerTools(deps: ControllerToolsDeps) {
           return { content: [{ type: "text" as const, text: "requirementSummary is required." }] };
         }
 
+        const clarificationSchemas = normalizeClarificationQuestionSchemas(params.clarificationSchemas);
+        const clarificationQuestions = normalizeManifestStringList(params.clarificationQuestions);
         const manifest: ControllerOrchestrationManifest = {
           version: "1.0",
           projectName: normalizeOptionalManifestText(params.projectName) || undefined,
           requirementSummary,
           requiredRoles: normalizeManifestRoleList(params.requiredRoles),
           clarificationsNeeded: Boolean(params.clarificationsNeeded),
-          clarificationQuestions: normalizeManifestStringList(params.clarificationQuestions),
+          clarificationQuestions: clarificationQuestions.length > 0 ? clarificationQuestions : clarificationSchemas.map((entry) => entry.title),
+          clarificationSchemas,
           createdTasks: normalizeManifestCreatedTasks(params.createdTasks),
           deferredTasks: normalizeManifestDeferredTasks(params.deferredTasks),
           handoffPlan: normalizeOptionalManifestText(params.handoffPlan),

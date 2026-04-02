@@ -41,7 +41,7 @@ If OpenClaw times out first, users often think TeamClaw is broken when the real 
 
 ## Common failure checks
 
-### localRoles or process
+### process provisioning
 
 - confirm the chosen model already works in plain OpenClaw
 - confirm `agents.defaults.workspace` points to a writable path

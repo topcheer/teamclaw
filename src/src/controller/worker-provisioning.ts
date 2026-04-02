@@ -12,8 +12,13 @@ import type { PluginLogger } from "../../api.js";
 import { generateId } from "../protocol.js";
 import {
   resolveDefaultOpenClawConfigPath,
-  resolveDefaultOpenClawWorkspaceDir,
+  resolveDefaultOpenClawStateDir,
   resolveDefaultTeamClawRuntimeRootDir,
+  resolveDefaultAgentDir,
+  resolveTeamClawAgentDir,
+  resolveTeamClawAgentWorkspaceRootDir,
+  resolveTeamClawWorkspaceDir,
+  TEAMCLAW_AGENT_ID,
 } from "../openclaw-workspace.js";
 import { ROLES } from "../roles.js";
 import { inferTaskRole } from "./role-inference.js";
@@ -22,6 +27,7 @@ import type {
   ProvisionedWorkerRecord,
   ProvisionedWorkerStatus,
   RoleId,
+  StartupProvisioningReadiness,
   TaskInfo,
   TeamProvisioningState,
   TeamState,
@@ -35,6 +41,8 @@ const DEFAULT_DOCKER_BUNDLED_TEAMCLAW_PLUGIN_DIR = "/app/extensions/teamclaw";
 const PROVISIONING_RECORD_RETENTION_MS = 6 * 60 * 60 * 1000;
 const PROVISIONING_FAILURE_COOLDOWN_MS = 30_000;
 const PROCESS_TERMINATION_TIMEOUT_MS = 10_000;
+const STARTUP_READINESS_POLL_INTERVAL_MS = 1_000;
+const STARTUP_READINESS_RETRY_INTERVAL_MS = 5_000;
 const DOCKER_API_VERSION = resolveDockerApiVersion();
 
 export type WorkerProvisioningManagerDeps = {
@@ -109,6 +117,23 @@ export class WorkerProvisioningManager {
       return false;
     }
     return this.refreshProvisioningState(state, Date.now());
+  }
+
+  primeStartupReadiness(): void {
+    if (!this.backend || this.stopped) {
+      return;
+    }
+    const now = Date.now();
+    const previousAttempts = this.deps.getTeamState()?.provisioning?.startupReadiness?.attempts ?? 0;
+    this.updateStartupReadiness({
+      status: "checking",
+      startedAt: now,
+      checkedAt: now,
+      attempts: previousAttempts,
+      requiredRoles: this.determineStartupReadinessRoles(),
+      readyWorkerIds: [],
+      message: "Controller started; waiting for startup provisioning warm-up.",
+    });
   }
 
   validateRegistration(
@@ -223,6 +248,82 @@ export class WorkerProvisioningManager {
     return this.reconcilePromise;
   }
 
+  async runStartupReadinessCheck(): Promise<void> {
+    if (!this.backend || this.stopped) {
+      return;
+    }
+
+    const requiredRoles = this.determineStartupReadinessRoles();
+    const previousAttempts = this.deps.getTeamState()?.provisioning?.startupReadiness?.attempts ?? 0;
+    const startedAt = Date.now();
+    this.updateStartupReadiness({
+      status: "checking",
+      startedAt,
+      checkedAt: startedAt,
+      attempts: previousAttempts + 1,
+      requiredRoles,
+      readyWorkerIds: [],
+      message: `Warming startup workers for ${requiredRoles.join(", ")}.`,
+    });
+
+    try {
+      await this.ensureStartupProvisioningPrerequisites();
+      await this.ensureWarmWorkersForRoles(requiredRoles, "startup readiness warmup");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.updateStartupReadiness({
+        status: "degraded",
+        startedAt,
+        checkedAt: Date.now(),
+        attempts: previousAttempts + 1,
+        requiredRoles,
+        readyWorkerIds: [],
+        message,
+      });
+      this.deps.logger.warn(`Provisioner: startup readiness prerequisites failed: ${message}`);
+      return;
+    }
+
+    const deadline = Date.now() + this.deps.config.workerProvisioningStartupTimeoutMs;
+    let lastRetryAt = 0;
+    while (!this.stopped && Date.now() < deadline) {
+      const readiness = this.collectRoleReadiness(requiredRoles);
+      if (readiness.missingRoles.length === 0) {
+        this.updateStartupReadiness({
+          status: "ready",
+          startedAt,
+          checkedAt: Date.now(),
+          attempts: previousAttempts + 1,
+          requiredRoles,
+          readyWorkerIds: readiness.readyWorkerIds,
+          message: `Startup provisioning ready with ${readiness.readyWorkerIds.length} warm worker(s).`,
+        });
+        return;
+      }
+
+      if (Date.now() - lastRetryAt >= STARTUP_READINESS_RETRY_INTERVAL_MS) {
+        lastRetryAt = Date.now();
+        await this.ensureWarmWorkersForRoles(readiness.missingRoles, "startup readiness retry");
+        await this.requestReconcile("startup readiness poll");
+      }
+
+      await sleep(STARTUP_READINESS_POLL_INTERVAL_MS);
+    }
+
+    const finalReadiness = this.collectRoleReadiness(requiredRoles);
+    const failureDetails = this.describeStartupReadinessFailure(finalReadiness.missingRoles);
+    this.updateStartupReadiness({
+      status: "degraded",
+      startedAt,
+      checkedAt: Date.now(),
+      attempts: previousAttempts + 1,
+      requiredRoles,
+      readyWorkerIds: finalReadiness.readyWorkerIds,
+      message: failureDetails,
+    });
+    this.deps.logger.warn(`Provisioner: startup readiness degraded: ${failureDetails}`);
+  }
+
   async stop(): Promise<void> {
     if (!this.backend) {
       return;
@@ -302,6 +403,38 @@ export class WorkerProvisioningManager {
     await this.scaleDownIdleWorkers(now);
   }
 
+  private determineStartupReadinessRoles(): RoleId[] {
+    const configured = this.deps.config.workerProvisioningRoles;
+    if (configured.length > 0) {
+      return [...new Set(configured)];
+    }
+    return ["developer"];
+  }
+
+  private async ensureStartupProvisioningPrerequisites(): Promise<void> {
+    await ensureWritableDirectory(resolveTeamClawAgentWorkspaceRootDir());
+    await ensureWritableDirectory(resolveTeamClawWorkspaceDir());
+    await ensureWritableDirectory(resolveDefaultTeamClawRuntimeRootDir());
+    if (this.deps.config.workerProvisioningType === "process") {
+      await ensureWritableDirectory(resolveTeamClawAgentDir());
+    }
+  }
+
+  private async ensureWarmWorkersForRoles(roles: RoleId[], reason: string): Promise<void> {
+    const state = this.deps.getTeamState();
+    for (const role of roles) {
+      if (this.hasActiveOrLaunchingWorkerForRole(state, role)) {
+        continue;
+      }
+      if (this.hasRecentProvisioningFailure(role)) {
+        this.deps.logger.warn(`Provisioner: startup warmup skipped ${role} due to recent failure`);
+        continue;
+      }
+      this.deps.logger.info(`Provisioner: warming ${role} worker (${reason})`);
+      await this.launchWorker(role);
+    }
+  }
+
   private async expireStalledLaunches(now: number): Promise<void> {
     const state = this.deps.getTeamState();
     if (!state?.provisioning) {
@@ -369,6 +502,54 @@ export class WorkerProvisioningManager {
       record.status === "failed" &&
       now - record.updatedAt < PROVISIONING_FAILURE_COOLDOWN_MS
     );
+  }
+
+  private hasActiveOrLaunchingWorkerForRole(state: TeamState | null, role: RoleId): boolean {
+    if (!state) {
+      return false;
+    }
+    const activeWorker = Object.values(state.workers).some((worker) =>
+      worker.role === role && worker.status !== "offline"
+    );
+    if (activeWorker) {
+      return true;
+    }
+    return Object.values(state.provisioning?.workers ?? {}).some((record) =>
+      record.role === role && (record.status === "launching" || record.status === "registered")
+    );
+  }
+
+  private collectRoleReadiness(roles: RoleId[]): { readyWorkerIds: string[]; missingRoles: RoleId[] } {
+    const state = this.deps.getTeamState();
+    const readyWorkerIds: string[] = [];
+    const missingRoles: RoleId[] = [];
+    for (const role of roles) {
+      const worker = Object.values(state?.workers ?? {}).find((candidate) =>
+        candidate.role === role && (candidate.status === "idle" || candidate.status === "busy")
+      );
+      if (worker) {
+        readyWorkerIds.push(worker.id);
+      } else {
+        missingRoles.push(role);
+      }
+    }
+    return { readyWorkerIds, missingRoles };
+  }
+
+  private describeStartupReadinessFailure(missingRoles: RoleId[]): string {
+    const records = Object.values(this.deps.getTeamState()?.provisioning?.workers ?? {});
+    const relevant = records.filter((record) => missingRoles.includes(record.role));
+    const detail = relevant
+      .map((record) => `${record.role}:${record.status}${record.lastError ? ` (${record.lastError})` : ""}`)
+      .join(", ");
+    const suffix = detail ? ` Latest records: ${detail}` : "";
+    return `Startup worker readiness failed for roles: ${missingRoles.join(", ")}.${suffix}`;
+  }
+
+  private updateStartupReadiness(readiness: StartupProvisioningReadiness): void {
+    this.deps.updateTeamState((state) => {
+      ensureProvisioningState(state).startupReadiness = readiness;
+    });
   }
 
   private async launchWorker(role: RoleId): Promise<void> {
@@ -706,6 +887,7 @@ class ProcessProvisioner implements WorkerProvisionerBackend {
         OPENCLAW_SKIP_CANVAS_HOST: "1",
         TEAMCLAW_WORKER_ID: spec.workerId,
         TEAMCLAW_LAUNCH_TOKEN: spec.launchToken,
+        ...(spec.workspaceDir ? { TEAMCLAW_WORKSPACE_DIR: spec.workspaceDir } : {}),
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -790,11 +972,15 @@ class DockerProvisioner implements WorkerProvisionerBackend {
       ...(spec.workspaceDir ? { TEAMCLAW_WORKSPACE_DIR: spec.workspaceDir } : {}),
     };
 
-    // On bridge networks the controller (on the host) can't reach container IPs
-    // directly.  Publish the worker port to a host port and tell the worker to
-    // advertise `localhost:<hostPort>` so the controller can call back.
+    // When workers share a Docker network with the controller container, advertise
+    // the container name and internal worker port so sibling containers can reach it
+    // directly. When the controller runs on the host, fall back to publishing a host
+    // port and advertising localhost for host-side callbacks.
     const usePortPublishing = spec.publishedHostPort !== undefined;
-    if (usePortPublishing) {
+    if (this.config.workerProvisioningDockerNetwork) {
+      env.TEAMCLAW_ADVERTISE_HOST = instanceName;
+      env.TEAMCLAW_ADVERTISE_PORT = String(spec.workerPort);
+    } else if (usePortPublishing) {
       env.TEAMCLAW_ADVERTISE_HOST = "localhost";
       env.TEAMCLAW_ADVERTISE_PORT = String(spec.publishedHostPort);
     }
@@ -986,6 +1172,10 @@ class KubernetesProvisioner implements WorkerProvisionerBackend {
     const hasPersistentWorkspace = Boolean(
       workspaceRoot && this.config.workerProvisioningKubernetesWorkspacePersistentVolumeClaim,
     );
+    const imagePullSecrets = this.config.workerProvisioningKubernetesImagePullSecrets
+      .map((name) => name.trim())
+      .filter((name) => name.length > 0)
+      .map((name) => ({ name }));
 
     const manifest = {
       apiVersion: "v1",
@@ -1008,6 +1198,7 @@ class KubernetesProvisioner implements WorkerProvisionerBackend {
         restartPolicy: "Never",
         hostname: buildManagedHostname(this.config.teamName, spec.role, spec.workerId),
         serviceAccountName: this.config.workerProvisioningKubernetesServiceAccount || undefined,
+        imagePullSecrets: imagePullSecrets.length > 0 ? imagePullSecrets : undefined,
         securityContext: hasPersistentWorkspace
           ? {
               runAsUser: 1000,
@@ -1209,6 +1400,7 @@ function buildProvisionedWorkerConfig(
   teamclawEntry.enabled = true;
   const teamclawConfig = ensureRecord(teamclawEntry.config);
   teamclawConfig.mode = "worker";
+  teamclawConfig.processModel = "multi";
   teamclawConfig.role = spec.role;
   teamclawConfig.port = spec.workerPort;
   teamclawConfig.controllerUrl = spec.controllerUrl;
@@ -1220,7 +1412,6 @@ function buildProvisionedWorkerConfig(
   teamclawConfig.gitDefaultBranch = controllerConfig.gitDefaultBranch;
   teamclawConfig.gitAuthorName = controllerConfig.gitAuthorName;
   teamclawConfig.gitAuthorEmail = controllerConfig.gitAuthorEmail;
-  teamclawConfig.localRoles = [];
   teamclawConfig.workerProvisioningType = "none";
   teamclawConfig.workerProvisioningControllerUrl = "";
   teamclawConfig.workerProvisioningRoles = [];
@@ -1238,6 +1429,7 @@ function buildProvisionedWorkerConfig(
   teamclawConfig.workerProvisioningKubernetesNamespace = "default";
   teamclawConfig.workerProvisioningKubernetesContext = "";
   teamclawConfig.workerProvisioningKubernetesServiceAccount = "";
+  teamclawConfig.workerProvisioningKubernetesImagePullSecrets = [];
   teamclawConfig.workerProvisioningKubernetesWorkspacePersistentVolumeClaim = "";
   teamclawConfig.workerProvisioningKubernetesLabels = {};
   teamclawConfig.workerProvisioningKubernetesAnnotations = {};
@@ -1259,6 +1451,17 @@ function ensureProvisioningState(state: TeamState): TeamProvisioningState {
   return state.provisioning;
 }
 
+async function ensureWritableDirectory(dir: string): Promise<void> {
+  await fs.mkdir(dir, { recursive: true });
+  const probePath = path.join(dir, `.teamclaw-write-probe-${process.pid}-${Date.now()}`);
+  await fs.writeFile(probePath, "ok\n", "utf8");
+  await fs.rm(probePath, { force: true });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function loadOpenClawConfig(configPath: string): Promise<Record<string, unknown>> {
   const raw = await fs.readFile(configPath, "utf8");
   return parseLooseJsonObject(raw, configPath);
@@ -1269,11 +1472,45 @@ async function prepareProcessRuntimeExtensions(stateDir: string): Promise<void> 
   const controllerExtensionsDir = path.join(path.dirname(resolveDefaultOpenClawConfigPath()), "extensions");
   if (await pathExists(controllerExtensionsDir)) {
     await fs.symlink(controllerExtensionsDir, runtimeExtensionsDir, "dir");
-    return;
+  } else {
+    await fs.mkdir(runtimeExtensionsDir, { recursive: true });
+    await fs.symlink(resolveCurrentTeamClawPluginRootDir(), path.join(runtimeExtensionsDir, "teamclaw"), "dir");
   }
 
-  await fs.mkdir(runtimeExtensionsDir, { recursive: true });
-  await fs.symlink(resolveCurrentTeamClawPluginRootDir(), path.join(runtimeExtensionsDir, "teamclaw"), "dir");
+  await copyControllerAuthProfiles(stateDir);
+}
+
+async function copyControllerAuthProfiles(stateDir: string): Promise<void> {
+  const candidateControllerStateDirs = [
+    path.dirname(resolveDefaultOpenClawConfigPath()),
+    resolveDefaultOpenClawStateDir(),
+  ];
+  const candidateAuthProfilePaths = [
+    path.join(resolveTeamClawAgentDir(), "auth-profiles.json"),
+    path.join(resolveDefaultAgentDir(), "auth-profiles.json"),
+    ...candidateControllerStateDirs.flatMap((controllerStateDir) => [
+      path.join(controllerStateDir, "agents", TEAMCLAW_AGENT_ID, "agent", "auth-profiles.json"),
+      path.join(controllerStateDir, "agents", "main", "agent", "auth-profiles.json"),
+    ]),
+  ].filter((value, index, values) => values.indexOf(value) === index);
+  let controllerAuthProfilesPath: string | undefined;
+  for (const candidatePath of candidateAuthProfilePaths) {
+    if (await pathExists(candidatePath)) {
+      controllerAuthProfilesPath = candidatePath;
+      break;
+    }
+  }
+  if (!controllerAuthProfilesPath) {
+    return;
+  }
+  const runtimeAuthProfilePaths = [
+    path.join(stateDir, "agents", TEAMCLAW_AGENT_ID, "agent", "auth-profiles.json"),
+    path.join(stateDir, "agents", "main", "agent", "auth-profiles.json"),
+  ];
+  for (const runtimeAuthProfilesPath of runtimeAuthProfilePaths) {
+    await fs.mkdir(path.dirname(runtimeAuthProfilesPath), { recursive: true });
+    await fs.copyFile(controllerAuthProfilesPath, runtimeAuthProfilesPath);
+  }
 }
 
 function cloneJson<T>(value: T): T {
@@ -1551,7 +1788,7 @@ function buildProvisionedWorkspaceDir(
   // so that file artifacts (previews, deliverables) are immediately visible to
   // the controller without requiring git sync or file transfer.
   if (provider === "process") {
-    return resolveDefaultOpenClawWorkspaceDir();
+    return resolveTeamClawAgentWorkspaceRootDir();
   }
 
   if (

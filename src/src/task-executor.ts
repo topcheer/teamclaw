@@ -1,19 +1,18 @@
 import type { OpenClawPluginApi, PluginLogger } from "../api.js";
+import {
+  buildDeliverableMetadataPolicy,
+  buildResultContractGuidance,
+  buildTaskExecutionRules,
+  buildVerificationPolicy,
+  buildWorkerMemoryContractRules,
+} from "./prompt-policy.js";
+import {
+  buildTeamClawProjectWorkspacePath,
+  resolveTeamClawWorkspaceDir,
+  resolveTeamClawProjectsDir,
+} from "./openclaw-workspace.js";
 import { getRole } from "./roles.js";
-import type { RoleId, TaskAssignmentPayload, TaskExecutionEventInput } from "./types.js";
-
-const TEAMCLAW_ROLE_IDS_TEXT = [
-  "pm",
-  "architect",
-  "developer",
-  "qa",
-  "release-engineer",
-  "infra-engineer",
-  "devops",
-  "security-engineer",
-  "designer",
-  "marketing",
-].join(", ");
+import type { RoleId, TaskAssignmentPayload, TaskExecutionEventInput, WorkerTaskResultContract } from "./types.js";
 
 const SESSION_PROGRESS_POLL_INTERVAL_MS = 1000;
 const SESSION_PROGRESS_MESSAGE_LIMIT = 200;
@@ -23,6 +22,7 @@ const RATE_LIMIT_STALL_PROBE_MS = 5 * 60 * 1000;
 const RATE_LIMIT_PROBE_TIMEOUT_MS = 60_000;
 const BACKGROUND_WORK_PROBE_MS = 60_000;
 const BACKGROUND_WORK_PROBE_TIMEOUT_MS = 60_000;
+const INACTIVITY_PROBE_TIMEOUT_MS = 60_000;
 const CHILD_SESSION_PROGRESS_POLL_INTERVAL_MS = 5_000;
 const RATE_LIMIT_WAITING_SENTINEL = "TEAMCLAW_STILL_WAITING";
 const TOOL_CALL_BLOCK_TYPES = new Set(["tool_use", "toolcall", "tool_call"]);
@@ -43,6 +43,7 @@ type SessionProgressSnapshot = {
   lastChildPollAt: number;
   lastAssistantMessage: string;
   latestMessages: unknown[];
+  lastActivityAt: number;
 };
 
 type AssistantTurnSnapshot = {
@@ -82,7 +83,18 @@ export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
       inlineContract: true,
       projectDir: assignment.projectDir,
     });
+    const workspaceDir = resolveTeamClawWorkspaceDir();
     logger.info(`TeamClaw: executing task ${taskId} as ${role} via subagent`);
+
+    function buildSubagentRunOptions(
+      options: Parameters<typeof runtime.subagent.run>[0],
+    ): Parameters<typeof runtime.subagent.run>[0] {
+      const enrichedOptions: Parameters<typeof runtime.subagent.run>[0] & { workspaceDir?: string } = {
+        ...options,
+        workspaceDir,
+      };
+      return enrichedOptions;
+    }
 
     async function emitExecutionEvent(event: TaskExecutionEventInput): Promise<void> {
       if (!reportExecutionEvent) {
@@ -100,12 +112,12 @@ export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
     }
 
     try {
-      const runResult = await runtime.subagent.run({
+      const runResult = await runtime.subagent.run(buildSubagentRunOptions({
         sessionKey,
         message: taskMessage,
         extraSystemPrompt: roleSystemPrompt,
         idempotencyKey,
-      });
+      }));
 
       logger.info(`TeamClaw: subagent run started for task ${taskId}, runId=${runResult.runId}`);
       await emitExecutionEvent({
@@ -125,8 +137,8 @@ export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
         lastChildPollAt: 0,
         lastAssistantMessage: "",
         latestMessages: [],
+        lastActivityAt: Date.now(),
       };
-      const deadline = Date.now() + taskTimeoutMs;
       const rateLimitState: {
         active: boolean;
         visibleAt?: number;
@@ -135,6 +147,24 @@ export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
       } = {
         active: false,
         probeCount: 0,
+      };
+      const inactivityState: {
+        active: boolean;
+        visibleAt?: number;
+        nextProbeAt?: number;
+        probeCount: number;
+      } = {
+        active: false,
+        nextProbeAt: Date.now() + taskTimeoutMs,
+        probeCount: 0,
+      };
+
+      const noteObservedActivity = (): void => {
+        const now = Date.now();
+        progressSnapshot.lastActivityAt = now;
+        inactivityState.active = false;
+        inactivityState.visibleAt = undefined;
+        inactivityState.nextProbeAt = now + taskTimeoutMs;
       };
       const backgroundWaitState: {
         active: boolean;
@@ -206,6 +236,9 @@ export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
         const entries = buildSessionProgressEntries(progressSnapshot.latestMessages, taskMessage);
         const newEntries = getNewSessionProgressEntries(entries, progressSnapshot.fingerprints);
         progressSnapshot.fingerprints = entries.map((entry) => entry.fingerprint);
+        if (newEntries.length > 0) {
+          noteObservedActivity();
+        }
         progressSnapshot.childSessionKeys = mergeChildSessionKeys(
           progressSnapshot.childSessionKeys,
           collectChildSessionKeys(progressSnapshot.latestMessages),
@@ -276,12 +309,12 @@ export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
           message: `Model rate limit has delayed task progress for over ${formatDuration(RATE_LIMIT_STALL_PROBE_MS)}. Re-checking whether the current task has already completed.`,
         });
 
-        const probeRun = await runtime.subagent.run({
+        const probeRun = await runtime.subagent.run(buildSubagentRunOptions({
           sessionKey,
           message: buildRateLimitProbeMessage(taskId, roleDef?.label ?? role),
           extraSystemPrompt: roleSystemPrompt,
           idempotencyKey: `${idempotencyKey ?? `teamclaw-${taskId}`}:rate-limit-probe:${rateLimitState.probeCount}`,
-        });
+        }));
         const probeWait = await runtime.subagent.waitForRun({
           runId: probeRun.runId,
           timeoutMs: RATE_LIMIT_PROBE_TIMEOUT_MS,
@@ -330,18 +363,15 @@ export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
           message: `Background work has been running for over ${formatDuration(BACKGROUND_WORK_PROBE_MS)}. Re-checking whether the original task is now complete.`,
         });
 
-        const probeRun = await runtime.subagent.run({
+        const probeRun = await runtime.subagent.run(buildSubagentRunOptions({
           sessionKey,
           message: buildBackgroundWorkProbeMessage(taskId, roleDef?.label ?? role),
           extraSystemPrompt: roleSystemPrompt,
           idempotencyKey: `${idempotencyKey ?? `teamclaw-${taskId}`}:background-work-probe:${backgroundWaitState.probeCount}`,
-        });
+        }));
         const probeWait = await runtime.subagent.waitForRun({
           runId: probeRun.runId,
-          timeoutMs: Math.min(
-            BACKGROUND_WORK_PROBE_TIMEOUT_MS,
-            Math.max(1_000, deadline - Date.now()),
-          ),
+          timeoutMs: BACKGROUND_WORK_PROBE_TIMEOUT_MS,
         });
 
         try {
@@ -380,6 +410,71 @@ export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
         return probeTurn;
       };
 
+      const probeInactiveTaskCompletion = async (): Promise<AssistantTurnSnapshot | null> => {
+        inactivityState.probeCount += 1;
+        const now = Date.now();
+        inactivityState.active = true;
+        inactivityState.visibleAt = now;
+        inactivityState.nextProbeAt = now + taskTimeoutMs;
+        await emitExecutionEvent({
+          type: "progress",
+          phase: "inactivity_probe",
+          source: "worker",
+          status: "running",
+          runId: runResult.runId,
+          sessionKey,
+          message: `No new visible task progress has appeared for over ${formatDuration(taskTimeoutMs)}. Re-checking whether the original task is complete or still actively running.`,
+        });
+
+        const probeRun = await runtime.subagent.run(buildSubagentRunOptions({
+          sessionKey,
+          message: buildInactivityProbeMessage(taskId, roleDef?.label ?? role, taskTimeoutMs),
+          extraSystemPrompt: roleSystemPrompt,
+          idempotencyKey: `${idempotencyKey ?? `teamclaw-${taskId}`}:inactivity-probe:${inactivityState.probeCount}`,
+        }));
+        const probeWait = await runtime.subagent.waitForRun({
+          runId: probeRun.runId,
+          timeoutMs: INACTIVITY_PROBE_TIMEOUT_MS,
+        });
+
+        try {
+          await syncSessionProgress();
+        } catch (err) {
+          logger.debug?.(`TeamClaw: failed inactivity probe session sync for ${taskId}: ${String(err)}`);
+        }
+
+        if (probeWait.status === "error" && isRateLimitMessage(probeWait.error || "")) {
+          await markRateLimitWaiting();
+          return null;
+        }
+        if (probeWait.status !== "ok") {
+          return null;
+        }
+
+        const probeTurn = await extractSessionAssistantTurn();
+        if (!probeTurn.text || probeTurn.backgroundPending || isRateLimitMessage(probeTurn.text) || isStillWaitingResponse(probeTurn.text)) {
+          inactivityState.active = false;
+          inactivityState.visibleAt = undefined;
+          inactivityState.nextProbeAt = Date.now() + taskTimeoutMs;
+          await emitExecutionEvent({
+            type: "progress",
+            phase: "inactivity_still_waiting",
+            source: "worker",
+            status: "running",
+            runId: runResult.runId,
+            sessionKey,
+            message: "The task is still actively pending with no final result yet. TeamClaw will continue waiting instead of failing it.",
+          });
+          return null;
+        }
+
+        if (rateLimitState.active) {
+          clearRateLimitWaiting();
+        }
+        noteObservedActivity();
+        return probeTurn;
+      };
+
       let keepPolling = true;
       const pollSessionProgress = (async () => {
         while (keepPolling) {
@@ -400,12 +495,6 @@ export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
       let completionOverride: string | null = null;
       try {
         while (true) {
-          const remainingMs = deadline - Date.now();
-          if (remainingMs <= 0) {
-            waitResult = { status: "timeout" as const };
-            break;
-          }
-
           if (rateLimitState.active && (rateLimitState.nextProbeAt ?? Number.POSITIVE_INFINITY) <= Date.now()) {
             completionOverride = await probeRateLimitedTaskCompletion();
             if (completionOverride) {
@@ -414,10 +503,22 @@ export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
             }
           }
 
-          const sliceTimeoutMs = Math.max(1_000, Math.min(RUN_WAIT_SLICE_MS, remainingMs));
+          if (
+            !rateLimitState.active
+            && !backgroundWaitState.active
+            && (inactivityState.nextProbeAt ?? Number.POSITIVE_INFINITY) <= Date.now()
+          ) {
+            const inactivityProbeTurn = await probeInactiveTaskCompletion();
+            if (inactivityProbeTurn) {
+              completionOverride = inactivityProbeTurn.text;
+              waitResult = { status: "ok" as const };
+              break;
+            }
+          }
+
           waitResult = await runtime.subagent.waitForRun({
             runId: runResult.runId,
-            timeoutMs: sliceTimeoutMs,
+            timeoutMs: RUN_WAIT_SLICE_MS,
           });
 
           if (waitResult.status === "ok") {
@@ -448,13 +549,8 @@ export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
           : await extractSessionAssistantTurn();
         while (isBackgroundWorkPendingTurn(assistantTurn)) {
           await markBackgroundWorkWaiting();
-          const remainingMs = deadline - Date.now();
-          if (remainingMs <= 0) {
-            waitResult = { status: "timeout" as const };
-            break;
-          }
           const nextProbeAt = backgroundWaitState.nextProbeAt ?? (Date.now() + BACKGROUND_WORK_PROBE_MS);
-          const delayMs = Math.max(1_000, Math.min(nextProbeAt - Date.now(), remainingMs));
+          const delayMs = Math.max(1_000, nextProbeAt - Date.now());
           await delay(delayMs);
           const probeTurn = await probeBackgroundTaskCompletion();
           if (probeTurn) {
@@ -485,21 +581,17 @@ export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
             logger.info(`TeamClaw: task ${taskId} — extracted inline result contract from ${role}`);
             return { text: extracted.cleanedText || rawResult, contract: extracted.contract };
           }
+          if (rawResult && isApprovalRequiredResponse(rawResult)) {
+            logger.warn(`TeamClaw: task ${taskId} is blocked waiting for exec approval as ${role}`);
+            return {
+              text: rawResult,
+              contract: buildApprovalBlockedContract(rawResult),
+            };
+          }
           logger.info(`TeamClaw: task ${taskId} completed successfully as ${role}`);
           return { text: rawResult };
         }
         clearBackgroundWorkWaiting();
-      }
-
-      if (waitResult.status === "timeout") {
-        await emitExecutionEvent({
-          type: "error",
-          phase: "timeout",
-          source: "subagent",
-          status: "failed",
-          message: `Task execution timed out after ${formatDuration(taskTimeoutMs)}`,
-        });
-        throw new Error(`Task execution timed out after ${formatDuration(taskTimeoutMs)}`);
       }
 
       await emitExecutionEvent({
@@ -802,150 +894,12 @@ function buildTaskMessage(
   options?: { inlineContract?: boolean; projectDir?: string },
 ): string {
   const rules = [
-    "- Deliver exactly the artifact requested by this task.",
-    "- Follow the task verb literally: if the task asks for a brief, plan, matrix, review, package, positioning, or design artifact, produce that artifact and stop there.",
-    "- Do NOT scaffold code, project structure, configs, or files unless the task explicitly asks for implementation work.",
-    "- Do NOT create additional tasks, task trees, or duplicate follow-up work.",
-    "- Do NOT re-scope this into a multi-role coordination workflow.",
-    "- Do NOT delegate the core work of this task away to another role.",
-    "- If Task Context includes recent completed deliverables, treat them as upstream inputs and search the shared workspace for any referenced task IDs or filenames before requesting clarification.",
-    "- Do NOT attempt to inspect or resolve another worker's OpenClaw session or session key; those sessions are isolated per worker.",
-    "- If the task includes a Recommended Skills section, use those skills first and prefer the exact listed slugs when searching for additional help.",
-    "- Do NOT mark the task completed or failed via progress tools. Return the final deliverable (or raise an error) and let TeamClaw close the task.",
-    "- If critical information is missing and you cannot proceed safely, request clarification and wait instead of guessing.",
-    "- If more work is needed, mention it briefly in your result or use a handoff/review tool on this same task.",
-    `- Do NOT use sessions_yield or end your turn while background work, coding agents, or process sessions are still running; if the task is not complete yet, reply with exactly ${RATE_LIMIT_WAITING_SENTINEL}.`,
-    "- Never return 'running in background' as the final result for a TeamClaw task. If you spawn a helper session, keep monitoring it and only return after you have the actual deliverable.",
-    "- Use structured fields on progress, review, handoff, and messaging tools whenever coordination is needed.",
-    `- When naming a role, use exact TeamClaw role IDs: ${TEAMCLAW_ROLE_IDS_TEXT}.`,
+    ...buildTaskExecutionRules(RATE_LIMIT_WAITING_SENTINEL),
+    ...buildWorkerMemoryContractRules(),
+    ...buildVerificationPolicy(),
+    ...buildDeliverableMetadataPolicy(),
+    ...buildResultContractGuidance({ inlineContract: Boolean(options?.inlineContract) }),
   ];
-
-  // Verification checklist — workers must verify before submitting results
-  const verificationRules = [
-    "",
-    "## Verification Before Completion",
-    "You MUST verify your work actually functions before submitting the result contract. A human team lead will review your deliverables — incomplete or broken work reflects poorly on the team.",
-    "",
-    "**For web applications (HTML/CSS/JS, React, Vue, etc.):**",
-    "1. Start a local HTTP server in the project directory (e.g., `npx -y serve -l 3333` or `python3 -m http.server 3333`).",
-    "2. Use `curl -s http://localhost:3333/` to confirm it returns valid HTML (not a 404 or error page).",
-    "3. Check the HTML for basic correctness: no unclosed tags, JS `<script>` blocks parse without syntax errors.",
-    "4. If the page uses JavaScript, run a quick syntax check: `node -e \"require('fs').readFileSync('index.html','utf8')\"` or similar.",
-    "5. After verification, STOP the server process so the preview system can start its own.",
-    "6. Report what you verified and the results in your completion summary.",
-    "",
-    "**For CLI tools / scripts:**",
-    "- Run the tool with example arguments and include the actual terminal output in your result.",
-    "- Test at least one success case and one error case (e.g., missing arguments, invalid input).",
-    "",
-    "**For Node.js / Python projects:**",
-    "- Run `npm test` or `pytest` or the project's test command.",
-    "- If no test suite exists, write a quick smoke test and run it.",
-    "- For servers: start the server, hit a health endpoint with `curl`, confirm a 200 response, then stop it.",
-    "",
-    "**For REST API projects:**",
-    "- Start the server and verify ALL API endpoints with `curl` (include POST with request body).",
-    "- Confirm the OpenAPI/Swagger UI page is accessible: `curl -s http://localhost:<port>/swagger-ui/index.html` (or the framework-specific path) — it MUST return HTML, not 404.",
-    "- If Swagger UI returns 404, fix the dependency/configuration before submitting.",
-    "- After verification, STOP the server so the preview system can launch it on its own port.",
-    "",
-    "**For documents / designs:**",
-    "- Re-read the document end-to-end and fix any incomplete sections or placeholders.",
-    "- Ensure the document directly answers the original requirement — don't leave TODOs.",
-    "- If the document references diagrams or external resources, verify the references are correct.",
-    "",
-    "**For all deliverables:**",
-    "- List every file you created or modified in the result contract deliverables array.",
-    "- CRITICAL: Only include deliverables from YOUR current task's project directory. NEVER reference files from other projects in the workspace.",
-    "- If you see files from other projects in the workspace, ignore them completely — they belong to different tasks.",
-    "- If something didn't work as expected, report it honestly in blockers rather than hiding it.",
-    "- The human will see your verification output, so be thorough — this is your quality gate.",
-  ];
-  rules.push(...verificationRules);
-
-  // Deliverable metadata guidance — enables preview system and user presentation
-  const deliverableMetadataRules = [
-    "",
-    "## Deliverable Metadata (Critical for Preview System)",
-    "TeamClaw can auto-launch web applications and expose preview URLs. For this to work, you MUST provide accurate metadata in your result contract deliverables:",
-    "",
-    "**Web applications (frontend, full-stack, APIs with UI):**",
-    "```json",
-    '{',
-    '  "kind": "directory",',
-    '  "value": "teamclaw/projects/<project>/",',
-    '  "summary": "Express REST API with React frontend",',
-    '  "artifactType": "web-app",',
-    '  "previewCommand": "npm run dev -- --port {PORT}",',
-    '  "previewCwd": "teamclaw/projects/<project>/",',
-    '  "previewReadyPath": "/"',
-    '}',
-    "```",
-    "- `previewCommand` MUST use `{PORT}` placeholder — the preview system injects the actual port.",
-    "- `previewCwd` is relative to the workspace root. The system sets cwd automatically — do NOT include `cd` in the command.",
-    "- Do NOT include venv setup, `source activate`, or `pip install` in previewCommand — the system auto-detects venvs and installs deps.",
-    "- Keep previewCommand simple — just the server start command. Examples: `python -m uvicorn main:app --host 0.0.0.0 --port {PORT}`, `npm start -- --port {PORT}`",
-    "",
-    "**Static HTML sites (no build step):**",
-    "- Set `artifactType: \"web-app\"` and leave `previewCommand` empty — the system auto-serves static files.",
-    "",
-    "**REST API projects (no frontend HTML):**",
-    "You MUST include an interactive API documentation UI so the preview system can display it. This is critical — without it, the preview iframe shows a 404.",
-    "⚠️ CRITICAL: `previewCommand` is REQUIRED for REST API deliverables. The system cannot start Python/Java/Go servers without it. Only Node.js projects with package.json scripts are auto-detected.",
-    "```json",
-    '{',
-    '  "kind": "directory",',
-    '  "value": "teamclaw/projects/<project>/",',
-    '  "summary": "Spring Boot REST API with Swagger UI",',
-    '  "artifactType": "rest-api",',
-    '  "previewCommand": "mvn spring-boot:run -Dspring-boot.run.jvmArguments=\\"-Dserver.port={PORT}\\"",',
-    '  "previewCwd": "teamclaw/projects/<project>/",',
-    '  "previewReadyPath": "/swagger-ui/index.html"',
-    '}',
-    "```",
-    "Technology-specific OpenAPI setup AND previewCommand (MANDATORY for all REST API projects):",
-    "- **Java Spring Boot**: dep `springdoc-openapi-starter-webmvc-ui:2.8.6`; `previewCommand`: `mvn spring-boot:run -Dspring-boot.run.jvmArguments=\"-Dserver.port={PORT}\"`, `previewReadyPath`: `/swagger-ui/index.html`",
-    "- **Node.js Express**: `swagger-ui-express` + `swagger-jsdoc` → `/api-docs`; `previewCommand`: `npm start -- --port {PORT}`, `previewReadyPath`: `/api-docs`",
-    "- **Python FastAPI**: Built-in; `previewCommand`: `python -m uvicorn main:app --host 0.0.0.0 --port {PORT}`, `previewReadyPath`: `/docs`",
-    "- **Python Flask**: `flask-restx` or `flasgger` → `/apidocs`; `previewCommand`: `python -m flask --app app run --host 0.0.0.0 --port {PORT}`, `previewReadyPath`: `/apidocs`",
-    "- **Go (Gin/Echo)**: `swaggo/swag` + `gin-swagger`; `previewCommand`: `go run . --port {PORT}`, `previewReadyPath`: `/swagger/index.html`",
-    "- `previewReadyPath` MUST point to the Swagger/OpenAPI UI page, NOT `/` (which returns 404 for pure APIs).",
-    "",
-    "**CLI tools / scripts:**",
-    "- Use `kind: \"file\"`, include sample invocation and output in `summary`.",
-    '- Example summary: "Run with: python3 rename_images.py --directory ./photos --execute"',
-    "",
-    "**Design documents / reports:**",
-    "- Use `kind: \"file\"` with `artifactType: \"document\"`.",
-    "- Include the key decisions or structure overview in `summary`.",
-  ];
-  rules.push(...deliverableMetadataRules);
-
-  if (options?.inlineContract) {
-    rules.push(
-      "- IMPORTANT: At the very end of your reply, you MUST include a structured result contract as a fenced JSON block. This is how TeamClaw understands your result — without it, your work cannot be routed to the next step. Use this exact format:",
-      "",
-      "```teamclaw-result-contract",
-      JSON.stringify({
-        outcome: "completed|failed|blocked",
-        summary: "One-sentence summary of what was accomplished",
-        deliverables: [{ kind: "file|directory|command|artifact|note", value: "path or description", summary: "optional note" }],
-        keyPoints: ["Important decisions or findings"],
-        blockers: ["Any unresolved blockers (empty array if none)"],
-        followUps: [{ type: "review|handoff|clarification|downstream-task", targetRole: "role-id", reason: "why" }],
-        questions: ["Open questions (empty array if none)"],
-        discoveredPatterns: ["Reusable codebase patterns found during this task"],
-        notes: "Optional extra delivery notes",
-      }, null, 2),
-      "```",
-      "",
-      "  Replace the placeholder values with real data from your work. The `outcome`, `summary`, and `deliverables` fields are required. Use `[]` for empty arrays. The fenced block MUST use the `teamclaw-result-contract` language tag.",
-    );
-  } else {
-    rules.push(
-      "- Before your final reply, submit a structured worker result contract with teamclaw_submit_result_contract so TeamClaw can route the next step without parsing prose.",
-    );
-  }
 
   const sections = [
     taskDescription,
@@ -956,12 +910,17 @@ function buildTaskMessage(
   ];
 
   if (options?.projectDir) {
+    const workspaceProjectPath = buildTeamClawProjectWorkspacePath(options.projectDir);
+    const absoluteProjectPath = `${resolveTeamClawProjectsDir()}/${options.projectDir}`.replace(/\/+/gu, "/");
     sections.push(
       "",
       "## Working Directory",
-      `This task's project directory is: \`teamclaw/projects/${options.projectDir}/\``,
+      `This task's project directory is: \`${workspaceProjectPath}/\``,
+      `Authoritative absolute path: \`${absoluteProjectPath}/\``,
       "All files you create, read, or modify for this task MUST be inside this directory.",
       "If the directory is empty, create the necessary structure. If it already has files from prior tasks in the same project, build on them.",
+      "If the task description mentions a different absolute workspace path, treat that path as stale guidance and use this authoritative project directory instead.",
+      "When the task references project-local files such as `ARCHITECTURE.md`, `README.md`, or `package.json`, resolve them inside this project directory first.",
       "Do NOT place files in the workspace root or any other project's directory.",
     );
   }
@@ -1021,6 +980,17 @@ function buildBackgroundWorkProbeMessage(taskId: string, roleLabel: string): str
     "Do not restart the task from scratch.",
     "Inspect the background coding or process session you previously started, continue from the existing workspace/session state, and only finalize once the original task deliverable is genuinely complete.",
     "Do not call sessions_yield again unless you are still explicitly waiting on unfinished background work.",
+    "If the original task is fully complete now, immediately submit the structured result contract and provide the final result for that original task.",
+    `If the original task is not complete yet, reply with exactly ${RATE_LIMIT_WAITING_SENTINEL}.`,
+  ].join("\n");
+}
+
+function buildInactivityProbeMessage(taskId: string, roleLabel: string, inactivityMs: number): string {
+  return [
+    `This is a follow-up check for task ${taskId} (${roleLabel}).`,
+    `There has been no new visible progress for over ${formatDuration(inactivityMs)}.`,
+    "Do not restart the task from scratch.",
+    "Continue from the existing workspace and session state only.",
     "If the original task is fully complete now, immediately submit the structured result contract and provide the final result for that original task.",
     `If the original task is not complete yet, reply with exactly ${RATE_LIMIT_WAITING_SENTINEL}.`,
   ].join("\n");
@@ -1095,6 +1065,45 @@ function isStillWaitingResponse(value: string): boolean {
     return true;
   }
   return /(still waiting|continue waiting|not complete yet|尚未完成|继续等待|仍在等待)/i.test(normalized);
+}
+
+function extractPendingApprovalCommands(value: string): string[] {
+  const matches = String(value || "").match(/\/approve\s+[^\s]+\s+(?:allow-once|allow-always|deny)\b/gi) ?? [];
+  return Array.from(new Set(matches.map((entry) => entry.trim()).filter(Boolean)));
+}
+
+function isApprovalRequiredResponse(value: string): boolean {
+  const normalized = String(value || "").trim();
+  if (!normalized) {
+    return false;
+  }
+  return /approval required|i need approval to run commands|pending exec commands?|reply with:\s*\/approve|需要批准|等待.*批准/i.test(normalized)
+    || extractPendingApprovalCommands(normalized).length > 0;
+}
+
+function buildApprovalBlockedContract(rawResult: string): WorkerTaskResultContract {
+  const approvalCommands = extractPendingApprovalCommands(rawResult);
+  const blockingReason = "Pending exec approval is required before this task can continue.";
+  return {
+    version: "1.0",
+    outcome: "blocked",
+    summary: "Task is blocked waiting for exec approval.",
+    deliverables: approvalCommands.map((command) => ({
+      kind: "command",
+      value: command,
+      summary: "Approval command emitted by the worker runtime.",
+    })),
+    keyPoints: approvalCommands,
+    blockers: [blockingReason],
+    followUps: [{
+      type: "clarification",
+      reason: blockingReason,
+    }],
+    questions: [
+      "A worker command needs exec approval before this task can continue. Should TeamClaw retry after the approval policy is fixed or the commands are approved?",
+    ],
+    notes: rawResult,
+  };
 }
 
 function isInternalRetryPrompt(value: string, stream?: string): boolean {

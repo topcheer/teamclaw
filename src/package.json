@@ -1,6 +1,6 @@
 {
   "name": "@teamclaws/teamclaw",
-  "version": "2026.3.26-2",
+  "version": "2026.4.2-1",
   "description": "OpenClaw virtual software team orchestration plugin",
   "private": false,
   "keywords": [
@@ -41,8 +41,10 @@
     "tsconfig.json"
   ],
   "scripts": {
+    "manifest:sync": "cd .. && node scripts/sync-teamclaw-plugin-manifest.mjs src",
     "pack:dry-run": "npm pack --dry-run --json --ignore-scripts",
-    "release:check": "node ../scripts/teamclaw-package-check.mjs src"
+    "release:check": "cd .. && node scripts/teamclaw-package-check.mjs src",
+    "release:clawhub:dry-run": "cd .. && bash scripts/teamclaw-clawhub-release.sh --dry-run"
   },
   "dependencies": {
     "@sinclair/typebox": "0.34.48",

@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import type { TeamProvisioningState, TeamState, WorkerIdentity } from "./types.js";
+import type {
+  StartupProvisioningReadiness,
+  TeamProvisioningState,
+  TeamState,
+  WorkerIdentity,
+} from "./types.js";
 
 function resolvePluginStateDir(): string {
   const explicitStateDir = process.env.OPENCLAW_STATE_DIR?.trim();
@@ -19,6 +24,38 @@ const STATE_DIR = resolvePluginStateDir();
 function createEmptyProvisioningState(): TeamProvisioningState {
   return {
     workers: {},
+  };
+}
+
+function normalizeStartupReadiness(value: unknown): StartupProvisioningReadiness | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const status = record.status === "checking" || record.status === "ready" || record.status === "degraded"
+    ? record.status
+    : undefined;
+  const startedAt = typeof record.startedAt === "number" ? record.startedAt : undefined;
+  const checkedAt = typeof record.checkedAt === "number" ? record.checkedAt : undefined;
+  const attempts = typeof record.attempts === "number" && record.attempts >= 0 ? Math.floor(record.attempts) : 0;
+  const requiredRoles = Array.isArray(record.requiredRoles)
+    ? record.requiredRoles.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  const readyWorkerIds = Array.isArray(record.readyWorkerIds)
+    ? record.readyWorkerIds.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  const message = typeof record.message === "string" && record.message.trim() ? record.message : undefined;
+  if (!status || startedAt === undefined || checkedAt === undefined) {
+    return undefined;
+  }
+  return {
+    status,
+    startedAt,
+    checkedAt,
+    attempts,
+    requiredRoles,
+    readyWorkerIds,
+    message,
   };
 }
 
@@ -58,6 +95,7 @@ async function loadTeamState(teamName: string): Promise<TeamState | null> {
     if (!parsed.provisioning.workers || typeof parsed.provisioning.workers !== "object") {
       parsed.provisioning.workers = {};
     }
+    parsed.provisioning.startupReadiness = normalizeStartupReadiness(parsed.provisioning.startupReadiness);
     return parsed;
   } catch {
     return null;
@@ -74,6 +112,7 @@ async function saveTeamState(state: TeamState): Promise<void> {
   state.provisioning.workers = state.provisioning.workers && typeof state.provisioning.workers === "object"
     ? state.provisioning.workers
     : {};
+  state.provisioning.startupReadiness = normalizeStartupReadiness(state.provisioning.startupReadiness);
   state.controllerRuns = state.controllerRuns && typeof state.controllerRuns === "object"
     ? state.controllerRuns
     : {};

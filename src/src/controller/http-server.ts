@@ -13,6 +13,7 @@ import type {
   PluginConfig,
   RepoSyncInfo,
   RoleId,
+  StartupProvisioningReadiness,
   TaskExecution,
   TaskExecutionEvent,
   TaskExecutionEventInput,
@@ -38,15 +39,12 @@ import {
 import { listWorkspaceTree, listWorkspaceSubtree, readWorkspaceFile, readWorkspaceRawFile } from "../workspace-browser.js";
 import { ROLES, normalizeRecommendedSkills, resolveRecommendedSkillsForRole } from "../roles.js";
 import { buildRepoSyncInfo, ensureControllerGitRepo, exportControllerGitBundle, importControllerGitBundle } from "../git-collaboration.js";
-import type { LocalWorkerManager } from "./local-worker-manager.js";
-import type { InProcessWorkerManager } from "./in-process-worker-manager.js";
 import { TaskRouter } from "./task-router.js";
 import { MessageRouter } from "./message-router.js";
 import { TeamWebSocketServer } from "./websocket.js";
 import type { WorkerProvisioningManager } from "./worker-provisioning.js";
 import type { PreviewManager } from "./preview-manager.js";
 import { createControllerPromptInjector } from "./prompt-injector.js";
-import { inferTaskRole, FALLBACK_ROLE } from "./role-inference.js";
 import { buildControllerNoWorkersMessage, shouldBlockControllerWithoutWorkers } from "./controller-capacity.js";
 import { generateDeliveryReport, isSessionComplete, renderReportHtml, type DeliveryReport } from "./delivery-report.js";
 import {
@@ -58,8 +56,17 @@ import {
   normalizeWorkerTaskResultContract,
   enrichDeliverablesWithPreviewInference,
 } from "../interaction-contracts.js";
-import { resolveTeamClawWorkspaceDir, resolveTeamClawProjectsDir, resolveDefaultOpenClawWorkspaceDir, deriveProjectSlug } from "../openclaw-workspace.js";
-import { normalizeControllerManifest } from "./orchestration-manifest.js";
+import {
+  buildTeamClawProjectWorkspacePath,
+  buildTeamClawAgentSessionKey,
+  getTeamClawModelReadiness,
+  resolveTeamClawAgentWorkspaceRootDir,
+  resolveTeamClawWorkspaceDir,
+  resolveTeamClawProjectsDir,
+  deriveProjectSlug,
+} from "../openclaw-workspace.js";
+import { resolvePreferredLanAddress } from "../networking.js";
+import { normalizeClarificationQuestionSchema, normalizeControllerManifest } from "./orchestration-manifest.js";
 import type { KickoffHandler } from "./controller-service.js";
 
 export type ControllerHttpDeps = {
@@ -71,8 +78,6 @@ export type ControllerHttpDeps = {
   taskRouter: TaskRouter;
   messageRouter: MessageRouter;
   wsServer: TeamWebSocketServer;
-  localWorkerManager?: LocalWorkerManager;
-  inProcessWorkerManager?: InProcessWorkerManager;
   workerProvisioningManager?: WorkerProvisioningManager | null;
   previewManager?: PreviewManager;
   /** Late-bound kickoff handler for automatic team kickoff on complex projects. */
@@ -86,13 +91,44 @@ const MAX_TASK_CONTEXT_SUMMARY_CHARS = 500;
 const CONTROLLER_INTAKE_SESSION_PREFIX = "teamclaw-controller-web:";
 const CONTROLLER_INTAKE_AGENT_SESSION_RE = /^agent:[^:]+:(teamclaw-controller-web:[a-zA-Z0-9:_-]{1,120})$/;
 const CONTROLLER_RUN_WAIT_SLICE_MS = 30_000;
+const EXISTING_PROJECT_REUSE_HINT_RE = /\b(existing|optimi(?:s|z)e|optimi(?:s|z)ation|improvement|enhanc(?:e|ement)|follow[- ]?up|extend|update|bugfix|bug fix)\b/iu;
+const PROJECT_MATCH_STOPWORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "app",
+  "application",
+  "build",
+  "complete",
+  "existing",
+  "follow",
+  "for",
+  "hub",
+  "improvement",
+  "improvements",
+  "internal",
+  "optimization",
+  "product",
+  "project",
+  "requirement",
+  "request",
+  "studio",
+  "system",
+  "the",
+  "this",
+  "up",
+  "update",
+  "web",
+]);
 const CONTROLLER_RATE_LIMIT_STALL_PROBE_MS = 5 * 60 * 1000;
 const CONTROLLER_RATE_LIMIT_PROBE_TIMEOUT_MS = 60_000;
+const CONTROLLER_INACTIVITY_PROBE_TIMEOUT_MS = 60_000;
 const CONTROLLER_RATE_LIMIT_WAITING_SENTINEL = "TEAMCLAW_STILL_WAITING";
 const CONTROLLER_INTAKE_MAX_RETRIES = 2;
 const CONTROLLER_INTAKE_RETRY_DELAY_MS = 3_000;
 const CONTROLLER_INTAKE_RETRYABLE_ERROR_PATTERN = /(500|502|503|server error|internal error|overloaded|unavailable)/i;
 const controllerIntakeQueue = new Map<string, Promise<void>>();
+const EXTERNAL_WORKER_INSTALL_SPEC = "@teamclaws/teamclaw";
 
 export function buildControllerIntakeSystemPrompt(
   deps: Pick<ControllerHttpDeps, "config" | "getTeamState">,
@@ -102,6 +138,49 @@ export function buildControllerIntakeSystemPrompt(
     getTeamState: deps.getTeamState,
   });
   return injector()?.prependSystemContext ?? "";
+}
+
+function resolveRequestPort(req: IncomingMessage, fallbackPort: number): number {
+  const hostHeader = req.headers.host?.trim();
+  if (!hostHeader) {
+    return fallbackPort;
+  }
+  try {
+    const parsed = new URL(`http://${hostHeader}`);
+    return parsed.port ? Number(parsed.port) : fallbackPort;
+  } catch {
+    return fallbackPort;
+  }
+}
+
+function resolveRecommendedLanControllerUrl(req: IncomingMessage, fallbackPort: number): string {
+  const port = resolveRequestPort(req, fallbackPort);
+  const preferredLan = resolvePreferredLanAddress();
+  return preferredLan ? `http://${preferredLan}:${port}` : "";
+}
+
+function shellEscapeSingleQuotes(value: string): string {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function buildExternalWorkerInstallInfo(req: IncomingMessage, config: PluginConfig): Record<string, unknown> {
+  const recommendedControllerUrl = resolveRecommendedLanControllerUrl(req, config.port);
+  return {
+    teamName: config.teamName,
+    recommendedControllerUrl,
+    roles: ROLES.map((role) => ({ id: role.id, label: role.label, icon: role.icon })),
+    autoDiscoveryCommandPrefix:
+      `npx -y ${EXTERNAL_WORKER_INSTALL_SPEC} install --yes --install-mode worker --team-name ${shellEscapeSingleQuotes(config.teamName)} --worker-role `,
+    manualCommandPrefix:
+      `npx -y ${EXTERNAL_WORKER_INSTALL_SPEC} install --yes --install-mode worker --team-name ${shellEscapeSingleQuotes(config.teamName)} --worker-role `,
+    manualControllerUrlFlag: recommendedControllerUrl
+      ? ` --controller-url ${shellEscapeSingleQuotes(recommendedControllerUrl)}`
+      : "",
+    manualControllerWarning: recommendedControllerUrl
+      ? "Manual worker installs must use the controller LAN IP, not localhost/127.0.0.1."
+      : "No private LAN IPv4 address was detected on this controller host yet, so manual worker install commands are unavailable until a LAN address exists.",
+    autoDiscoveryWarning: "mDNS auto-discovery only works when the worker and controller are reachable on the same LAN.",
+  };
 }
 
 function mapTaskStatusToExecutionStatus(taskStatus: TaskStatus, current?: TaskExecution["status"]): TaskExecution["status"] {
@@ -168,7 +247,7 @@ function buildTaskExecutionIdentity(taskId: string, workerId: string): {
 } {
   const attemptId = generateId();
   return {
-    executionSessionKey: `teamclaw-task-${taskId}-${attemptId}`,
+    executionSessionKey: buildTeamClawAgentSessionKey(`teamclaw-task-${taskId}-${attemptId}`),
     executionIdempotencyKey: `teamclaw-${taskId}-${workerId}-${attemptId}`,
   };
 }
@@ -379,10 +458,16 @@ function createControllerRun(
   },
 ): ControllerRunInfo {
   const now = Date.now();
+  const existingState = deps.getTeamState();
+  const inheritedProjectDir = options?.sourceTaskId
+    ? existingState?.tasks[options.sourceTaskId]?.projectDir
+    : resolveProjectDirForSession(sessionKey, existingState)
+      ?? resolveExistingProjectDirFromMessage(message, existingState);
   const run: ControllerRunInfo = {
     id: generateId(),
     title: buildControllerRunTitle(message, options?.source ?? "human", options?.sourceTaskTitle),
     sessionKey,
+    projectDir: inheritedProjectDir ?? deriveProjectSlug(message),
     source: options?.source ?? "human",
     sourceTaskId: options?.sourceTaskId,
     sourceTaskTitle: options?.sourceTaskTitle,
@@ -400,6 +485,154 @@ function createControllerRun(
   const createdRun = state.controllerRuns[run.id] ?? run;
   deps.wsServer.broadcastUpdate({ type: "controller:run", data: serializeControllerRun(createdRun) });
   return createdRun;
+}
+
+function resolveExistingProjectDirFromMessage(
+  message: string,
+  state: TeamState | null,
+): string | undefined {
+  if (!EXISTING_PROJECT_REUSE_HINT_RE.test(message)) {
+    return undefined;
+  }
+  const normalizedMessage = normalizeProjectMatchingText(message);
+  if (!normalizedMessage) {
+    return undefined;
+  }
+  const explicitAlias = normalizeProjectMatchingText(extractProjectAliasFromText(message) ?? "");
+
+  let best: { projectDir: string; score: number; updatedAt: number } | null = null;
+  const candidates = collectExistingProjectCandidates(state);
+  for (const candidate of candidates) {
+    const normalizedAliases = Array.from(candidate.aliases)
+      .map((alias) => normalizeProjectMatchingText(alias))
+      .filter(Boolean)
+      .reduce<string[]>((acc, alias) => {
+        acc.push(alias);
+        return acc;
+      }, []);
+    const hasExplicitAliasMatch = explicitAlias
+      ? normalizedAliases.some((alias) => alias.includes(explicitAlias) || explicitAlias.includes(alias))
+      : false;
+    if (explicitAlias && !hasExplicitAliasMatch) {
+      continue;
+    }
+    const aliasScore = normalizedAliases
+      .reduce((score, alias) => {
+        if (!alias) {
+          return score;
+        }
+        return normalizedMessage.includes(alias)
+          ? Math.max(score, alias.split(" ").length + 10)
+          : score;
+      }, 0);
+    const tokenScore = scoreProjectTokenOverlap(normalizedMessage, candidate.searchText);
+    const totalScore = Math.max(aliasScore, tokenScore);
+    if (totalScore < 2) {
+      continue;
+    }
+    if (!best || totalScore > best.score || (totalScore === best.score && candidate.updatedAt > best.updatedAt)) {
+      best = {
+        projectDir: candidate.projectDir,
+        score: totalScore,
+        updatedAt: candidate.updatedAt,
+      };
+    }
+  }
+  return best?.projectDir;
+}
+
+function collectExistingProjectCandidates(state: TeamState | null): Array<{
+  projectDir: string;
+  aliases: Set<string>;
+  searchText: string;
+  updatedAt: number;
+}> {
+  const byProjectDir = new Map<string, { aliases: Set<string>; texts: string[]; updatedAt: number }>();
+  const addCandidate = (projectDir: string | undefined, text: string | undefined, updatedAt: number, alias?: string | null) => {
+    if (!projectDir) {
+      return;
+    }
+    const entry = byProjectDir.get(projectDir) ?? { aliases: new Set<string>(), texts: [], updatedAt: 0 };
+    if (text && text.trim()) {
+      entry.texts.push(text);
+    }
+    if (alias && alias.trim()) {
+      entry.aliases.add(alias.trim());
+    }
+    entry.updatedAt = Math.max(entry.updatedAt, updatedAt);
+    byProjectDir.set(projectDir, entry);
+  };
+
+  for (const run of Object.values(state?.controllerRuns ?? {})) {
+    addCandidate(run.projectDir, run.request, run.updatedAt, extractProjectAliasFromText(run.request));
+    addCandidate(run.projectDir, run.title, run.updatedAt, extractProjectAliasFromText(run.title));
+  }
+  for (const task of Object.values(state?.tasks ?? {})) {
+    addCandidate(task.projectDir, task.title, task.updatedAt, extractProjectAliasFromText(task.title));
+    addCandidate(task.projectDir, task.description, task.updatedAt, extractProjectAliasFromText(task.description));
+    addCandidate(task.projectDir, task.resultContract?.summary, task.updatedAt);
+  }
+
+  return Array.from(byProjectDir.entries()).map(([projectDir, entry]) => ({
+    projectDir,
+    aliases: entry.aliases,
+    searchText: entry.texts.join("\n"),
+    updatedAt: entry.updatedAt,
+  }));
+}
+
+function extractProjectAliasFromText(text: string | undefined): string | null {
+  const firstMeaningfulLine = String(text ?? "")
+    .split(/\n+/u)
+    .map((line) => line.replace(/^#+\s*/u, "").trim())
+    .find(Boolean);
+  if (!firstMeaningfulLine) {
+    return null;
+  }
+  const normalized = firstMeaningfulLine
+    .replace(/^(product|optimization)\s+requirement[:：]\s*/iu, "")
+    .replace(/^implement\s+/iu, "")
+    .replace(/^design\s+/iu, "")
+    .replace(/^enhance\s+/iu, "")
+    .replace(/^qa[:\s-]+/iu, "")
+    .replace(/\s+(architecture|application|web app|workflows?|improvements?)$/iu, "")
+    .trim();
+  if (normalized.length < 4 || normalized.length > 80) {
+    return null;
+  }
+  return normalized;
+}
+
+function normalizeProjectMatchingText(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[`*_#:[\]()/\\-]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function scoreProjectTokenOverlap(message: string, candidateText: string): number {
+  const messageTokens = tokenizeProjectMatchingText(message);
+  if (messageTokens.size === 0) {
+    return 0;
+  }
+  const candidateTokens = tokenizeProjectMatchingText(candidateText);
+  let overlap = 0;
+  for (const token of candidateTokens) {
+    if (messageTokens.has(token)) {
+      overlap += 1;
+    }
+  }
+  return overlap;
+}
+
+function tokenizeProjectMatchingText(text: string): Set<string> {
+  return new Set(
+    normalizeProjectMatchingText(text)
+      .split(" ")
+      .map((token) => token.trim())
+      .filter((token) => token.length >= 4 && !PROJECT_MATCH_STOPWORDS.has(token)),
+  );
 }
 
 function updateControllerRun(
@@ -438,7 +671,6 @@ function serializeTask(task?: TaskInfo, includeExecutionEvents = false): Record<
   }
 
   const payload: Record<string, unknown> = { ...task };
-  delete payload.controllerSessionKey;
   if (!task.execution) {
     return payload;
   }
@@ -533,9 +765,10 @@ function normalizeControllerIntakeSessionKey(input: unknown): string {
     return fallback;
   }
 
-  return logicalKey.startsWith(CONTROLLER_INTAKE_SESSION_PREFIX)
+  const normalizedLogicalKey = logicalKey.startsWith(CONTROLLER_INTAKE_SESSION_PREFIX)
     ? logicalKey
     : `${CONTROLLER_INTAKE_SESSION_PREFIX}${logicalKey}`;
+  return buildTeamClawAgentSessionKey(normalizedLogicalKey);
 }
 
 async function withSerializedControllerIntake<T>(
@@ -707,6 +940,14 @@ function findLatestControllerRunIdForSession(
       return right.updatedAt - left.updatedAt;
     });
   return matchingRuns[0]?.id ?? null;
+}
+
+function resolveProjectDirForSession(
+  sessionKey: string,
+  state: TeamState | null,
+): string | undefined {
+  const runId = findLatestControllerRunIdForSession(sessionKey, state, { preferActive: true });
+  return runId ? state?.controllerRuns[runId]?.projectDir : undefined;
 }
 
 function resolveControllerWorkflowSessionKey(task: TaskInfo, state: TeamState | null): string | undefined {
@@ -893,6 +1134,12 @@ function buildBackfilledControllerManifest(
     requiredRoles: Array.from(inferredRoles),
     clarificationsNeeded: clarificationQuestions.length > 0 && actualCreatedTasks.length === 0,
     clarificationQuestions,
+    clarificationSchemas: clarificationQuestions.map((question) => ({
+      kind: "text",
+      title: question,
+      required: true,
+      placeholder: "Provide the missing information",
+    })),
     createdTasks: actualCreatedTasks.map((task) => ({
       title: task.title,
       assignedRole: task.assignedRole,
@@ -904,6 +1151,173 @@ function buildBackfilledControllerManifest(
       : undefined,
     notes: "Backfilled by the controller because the model did not submit the required structured manifest.",
   };
+}
+
+function looksLikeSoftwareRequirement(request: string): boolean {
+  const normalized = request.toLowerCase();
+  return /(api|backend|frontend|fastapi|react|vue|node|python|typescript|javascript|sql|database|service|app|web|mobile|docker|kubernetes|deploy|测试|系统|平台|接口|服务|数据库|应用|前端|后端)/.test(normalized);
+}
+
+function buildFallbackControllerTaskTitle(request: string, assignedRole?: RoleId): string {
+  const firstMeaningfulLine = request
+    .split(/\n+/)
+    .map((line) => line.replace(/^#+\s*/, "").trim())
+    .find(Boolean);
+  if (firstMeaningfulLine) {
+    const normalized = firstMeaningfulLine.replace(/^需求[:：]?\s*/, "").trim();
+    if (normalized.length > 0) {
+      const capped = normalized.slice(0, 72).trim();
+      return /[\u4e00-\u9fff]/.test(capped)
+        ? `实现${capped}`
+        : `Implement ${capped}`;
+    }
+  }
+  return assignedRole === "developer"
+    ? "Implement the requested software deliverable"
+    : `Perform the requested ${assignedRole || "software"} work`;
+}
+
+async function createControllerManagedTask(
+  input: {
+    title: string;
+    description: string;
+    priority?: TaskPriority;
+    assignedRole?: RoleId;
+    createdBy: string;
+    controllerSessionKey?: string;
+    recommendedSkills?: string[];
+  },
+  deps: ControllerHttpDeps,
+): Promise<TaskInfo | undefined> {
+  const taskId = generateId();
+  const now = Date.now();
+  const repoState = await refreshControllerRepoState(deps);
+  const normalizedSessionKey = input.createdBy === "controller" && input.controllerSessionKey
+    ? normalizeControllerIntakeSessionKey(input.controllerSessionKey)
+    : undefined;
+
+  let projectDir: string | undefined;
+  if (normalizedSessionKey) {
+    const runId = findLatestControllerRunIdForSession(normalizedSessionKey, deps.getTeamState(), { preferActive: true });
+    const parentRun = runId ? deps.getTeamState()?.controllerRuns[runId] : undefined;
+    projectDir = parentRun?.projectDir;
+  }
+  if (!projectDir) {
+    projectDir = deriveProjectSlug(input.title);
+  }
+
+  const normalizedRecommendedSkills = normalizeRecommendedSkills(input.recommendedSkills ?? []);
+  const task: TaskInfo = {
+    id: taskId,
+    title: input.title,
+    description: input.description,
+    status: "pending",
+    priority: input.priority ?? "medium",
+    assignedRole: input.assignedRole,
+    createdBy: input.createdBy,
+    recommendedSkills: normalizedRecommendedSkills.length > 0 ? normalizedRecommendedSkills : undefined,
+    controllerSessionKey: normalizedSessionKey,
+    projectDir,
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  deps.updateTeamState((state) => {
+    state.tasks[taskId] = task;
+  });
+  recordTaskExecutionEvent(taskId, {
+    type: "lifecycle",
+    phase: "created",
+    source: "controller",
+    status: "pending",
+    message: `Task created by ${input.createdBy}.`,
+    role: input.assignedRole,
+  }, deps);
+  if (repoState?.enabled) {
+    recordTaskExecutionEvent(taskId, {
+      type: "lifecycle",
+      phase: "repo_ready",
+      source: "controller",
+      status: "pending",
+      message: repoState.remoteReady && repoState.remoteUrl
+        ? `Git collaboration ready on ${repoState.defaultBranch} with remote ${repoState.remoteUrl}.`
+        : `Git collaboration ready on ${repoState.defaultBranch} using controller-managed bundle sync.`,
+      role: input.assignedRole,
+    }, deps);
+  }
+  if (normalizedRecommendedSkills.length > 0) {
+    recordTaskExecutionEvent(taskId, {
+      type: "lifecycle",
+      phase: "skills_recommended",
+      source: "controller",
+      status: "pending",
+      message: `Recommended skills: ${normalizedRecommendedSkills.join(", ")}`,
+      role: input.assignedRole,
+    }, deps);
+  }
+
+  await autoAssignPendingTasks(deps);
+
+  const updatedTask = deps.getTeamState()?.tasks[taskId];
+  deps.wsServer.broadcastUpdate({ type: "task:created", data: serializeTask(updatedTask) });
+  return updatedTask;
+}
+
+async function maybeBackfillExecutionReadyTask(
+  controllerRunId: string,
+  sessionKey: string,
+  request: string,
+  manifest: ControllerOrchestrationManifest,
+  deps: ControllerHttpDeps,
+  options?: {
+    source?: ControllerRunSource;
+  },
+): Promise<string[]> {
+  if (manifest.createdTasks.length > 0 || manifest.clarificationsNeeded || manifest.requirementFullyComplete) {
+    return [];
+  }
+  if (options?.source === "task_follow_up") {
+    return [];
+  }
+  if (!looksLikeSoftwareRequirement(request)) {
+    return [];
+  }
+
+  const assignedRole = manifest.requiredRoles.includes("developer")
+    ? "developer"
+    : manifest.requiredRoles[0];
+  const task = await createControllerManagedTask({
+    title: buildFallbackControllerTaskTitle(request, assignedRole),
+    description: request,
+    assignedRole,
+    createdBy: "controller",
+    controllerSessionKey: sessionKey,
+    recommendedSkills: resolveRecommendedSkillsForRole(assignedRole, []),
+  }, deps);
+  if (!task) {
+    return [];
+  }
+
+  manifest.createdTasks = [{
+    title: task.title,
+    assignedRole: task.assignedRole,
+    expectedOutcome: summarizeManifestExpectedOutcome(task),
+  }];
+  manifest.notes = manifest.notes
+    ? `${manifest.notes} Controller synthesized a fallback execution-ready task because the model returned no created tasks.`
+    : "Controller synthesized a fallback execution-ready task because the model returned no created tasks.";
+  updateControllerRun(controllerRunId, deps, (run) => {
+    run.manifest = manifest;
+    appendControllerRunEvent(run, {
+      type: "warning",
+      phase: "task_backfilled",
+      source: "controller",
+      status: "running",
+      sessionKey,
+      message: `Controller synthesized fallback task ${task.id} (${task.assignedRole || "unassigned"}).`,
+    });
+  });
+  return [task.id];
 }
 
 function ensureControllerManifest(
@@ -988,9 +1402,15 @@ function buildControllerFollowUpMessage(task: TaskInfo, state: TeamState | null)
         }
       }
 
-      // Collect unanswered clarification questions from prior runs
-      const priorQuestions = priorRuns
-        .flatMap((run) => run.manifest?.clarificationQuestions ?? [])
+      // Collect only still-pending clarification questions for this session.
+      const pendingClarifications = Object.values(state.clarifications)
+        .filter((clarification) =>
+          clarification.status === "pending"
+          && normalizeControllerIntakeSessionKey(clarification.controllerSessionKey) === normalizeControllerIntakeSessionKey(sessionKey),
+        )
+        .sort((a, b) => b.updatedAt - a.updatedAt);
+      const priorQuestions = pendingClarifications
+        .map((clarification) => clarification.question)
         .filter(Boolean);
       if (priorQuestions.length > 0) {
         parts.push("", "## Prior Clarification Questions (from earlier runs)");
@@ -1016,6 +1436,176 @@ function buildControllerFollowUpMessage(task: TaskInfo, state: TeamState | null)
   return parts.filter(Boolean).join("\n");
 }
 
+function buildControllerClarificationAnswerMessage(
+  clarification: ClarificationRequest,
+  answer: string,
+  answeredBy: string,
+): string {
+  return [
+    "The human has answered a pending controller clarification.",
+    `Question: ${clarification.question}`,
+    `Answer: ${answer}`,
+    `Answered by: ${answeredBy}`,
+    "Use this answer to continue the same requirement and update the plan/tasks accordingly.",
+  ].join("\n");
+}
+
+function buildStructuredClarificationAnswer(
+  clarification: ClarificationRequest,
+  payload: {
+    answer?: string;
+    answerValue?: string;
+    answerValues?: string[];
+    answerNumber?: number;
+    answerComment?: string;
+  },
+): string {
+  if (typeof payload.answer === "string" && payload.answer.trim()) {
+    return payload.answer.trim();
+  }
+  const schema = clarification.questionSchema;
+  const optionLabel = (value: string): string => {
+    const match = schema?.options?.find((entry) => entry.value === value);
+    return match?.label || value;
+  };
+  const parts: string[] = [];
+  if (schema?.kind === "single-select" && payload.answerValue) {
+    parts.push(optionLabel(payload.answerValue));
+  } else if (schema?.kind === "multi-select" && Array.isArray(payload.answerValues) && payload.answerValues.length > 0) {
+    parts.push(payload.answerValues.map((entry) => optionLabel(entry)).join(", "));
+  } else if (schema?.kind === "number" && typeof payload.answerNumber === "number" && Number.isFinite(payload.answerNumber)) {
+    parts.push(`${payload.answerNumber}${schema.unit ? ` ${schema.unit}` : ""}`);
+  } else if (payload.answerValue) {
+    parts.push(payload.answerValue);
+  }
+  if (payload.answerComment && payload.answerComment.trim()) {
+    parts.push(parts.length > 0 ? `Additional context: ${payload.answerComment.trim()}` : payload.answerComment.trim());
+  }
+  return parts.join("\n").trim();
+}
+
+function normalizeComparableText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildManifestClarificationEntries(
+  manifest: ControllerOrchestrationManifest,
+): Array<{ question: string; questionSchema?: ClarificationRequest["questionSchema"] }> {
+  const normalizedQuestions = manifest.clarificationQuestions
+    .map((entry) => String(entry || "").trim())
+    .filter(Boolean);
+  const schemas = Array.isArray(manifest.clarificationSchemas) ? manifest.clarificationSchemas : [];
+  if (schemas.length > 0) {
+    return schemas.map((schema, index) => ({
+      question: normalizedQuestions[index] || schema.title,
+      questionSchema: schema,
+    }));
+  }
+  return normalizedQuestions.map((question) => ({ question }));
+}
+
+function syncControllerRunClarifications(
+  controllerRunId: string,
+  sessionKey: string,
+  manifest: ControllerOrchestrationManifest,
+  deps: ControllerHttpDeps,
+): ClarificationRequest[] {
+  const entries = buildManifestClarificationEntries(manifest);
+  if (entries.length === 0) {
+    return [];
+  }
+
+  const created: ClarificationRequest[] = [];
+  const now = Date.now();
+  deps.updateTeamState((state) => {
+    const existingQuestions = new Map(
+      Object.values(state.clarifications)
+        .filter((item) => item.controllerRunId === controllerRunId)
+        .map((item) => [normalizeComparableText(item.question), item]),
+    );
+
+    for (const entry of entries) {
+      const key = normalizeComparableText(entry.question);
+      if (existingQuestions.has(key)) {
+        continue;
+      }
+      const clarification: ClarificationRequest = {
+        id: generateId(),
+        taskId: "",
+        controllerRunId,
+        controllerSessionKey: sessionKey,
+        requestedBy: "controller",
+        question: entry.question,
+        questionSchema: entry.questionSchema,
+        blockingReason: "The controller needs this information before it can confidently continue planning and downstream task creation.",
+        context: manifest.requirementSummary,
+        status: "pending",
+        createdAt: now,
+        updatedAt: now,
+      };
+      state.clarifications[clarification.id] = clarification;
+      created.push(clarification);
+    }
+  });
+
+  for (const clarification of created) {
+    deps.wsServer.broadcastUpdate({ type: "clarification:requested", data: clarification });
+  }
+  return created;
+}
+
+function reconcileControllerClarifications(deps: ControllerHttpDeps): TeamState | null {
+  const state = deps.getTeamState();
+  if (!state) {
+    return null;
+  }
+
+  deps.updateTeamState((draft) => {
+    const runsBySession = new Map<string, ControllerRunInfo[]>();
+    for (const run of Object.values(draft.controllerRuns)) {
+      const normalizedSessionKey = normalizeControllerIntakeSessionKey(run.sessionKey);
+      const bucket = runsBySession.get(normalizedSessionKey) ?? [];
+      bucket.push(run);
+      runsBySession.set(normalizedSessionKey, bucket);
+    }
+
+    for (const clar of Object.values(draft.clarifications)) {
+      if (clar.status !== "pending" || clar.requestedBy !== "controller" || clar.taskId) {
+        continue;
+      }
+      const normalizedSessionKey = normalizeControllerIntakeSessionKey(clar.controllerSessionKey);
+      const sessionRuns = runsBySession.get(normalizedSessionKey) ?? [];
+      const supersedingRun = sessionRuns.find((run) =>
+        run.updatedAt > clar.updatedAt
+        && (
+          run.manifest?.createdTasks.length
+          || run.manifest?.requirementFullyComplete
+        ),
+      );
+      if (!supersedingRun) {
+        continue;
+      }
+      clar.status = "answered";
+      clar.answer = "Automatically superseded by later controller progress.";
+      clar.answeredBy = "system";
+      clar.answeredAt = supersedingRun.updatedAt;
+      clar.updatedAt = supersedingRun.updatedAt;
+    }
+  });
+
+  for (const run of Object.values(state.controllerRuns)) {
+    if (!run.manifest?.clarificationsNeeded) {
+      continue;
+    }
+    syncControllerRunClarifications(run.id, run.sessionKey, run.manifest, deps);
+  }
+
+  return deps.getTeamState();
+}
+
 function buildControllerRateLimitProbeMessage(
   sourceTaskId?: string,
   sourceTaskTitle?: string,
@@ -1026,6 +1616,24 @@ function buildControllerRateLimitProbeMessage(
   return [
     `This is a follow-up check for ${workflowLabel}.`,
     "The earlier controller run appears to be delayed by upstream model rate limiting.",
+    "Do not restart the workflow from scratch.",
+    "Do not duplicate tasks that already exist, are active, or are completed.",
+    "If the earlier controller follow-up is fully complete now, immediately submit the required structured manifest for that same workflow step and provide the final orchestration reply.",
+    `If the earlier controller follow-up is not complete yet, reply with exactly ${CONTROLLER_RATE_LIMIT_WAITING_SENTINEL}.`,
+  ].join("\n");
+}
+
+function buildControllerInactivityProbeMessage(
+  inactivityMs: number,
+  sourceTaskId?: string,
+  sourceTaskTitle?: string,
+): string {
+  const workflowLabel = sourceTaskTitle
+    ? `${sourceTaskTitle}${sourceTaskId ? ` (${sourceTaskId})` : ""}`
+    : (sourceTaskId ? `task ${sourceTaskId}` : "this controller workflow");
+  return [
+    `This is a follow-up check for ${workflowLabel}.`,
+    `There has been no new visible controller workflow progress for over ${formatDuration(inactivityMs)}.`,
     "Do not restart the workflow from scratch.",
     "Do not duplicate tasks that already exist, are active, or are completed.",
     "If the earlier controller follow-up is fully complete now, immediately submit the required structured manifest for that same workflow step and provide the final orchestration reply.",
@@ -1057,6 +1665,7 @@ async function checkAndGenerateReport(task: TaskInfo, deps: ControllerHttpDeps):
       sessionKey: report.sessionKey,
       generatedAt: report.generatedAt,
       projectName: report.projectName,
+      requirementSummary: report.requirementSummary,
       status: report.status,
       taskCount: report.taskCount,
       deliverableCount: report.deliverables.length,
@@ -1180,6 +1789,16 @@ async function runControllerIntakeUnlocked(
     active: false,
     probeCount: 0,
   };
+  const inactivityState: {
+    active: boolean;
+    visibleAt?: number;
+    nextProbeAt?: number;
+    probeCount: number;
+  } = {
+    active: false,
+    nextProbeAt: Date.now() + deps.config.taskTimeoutMs,
+    probeCount: 0,
+  };
 
   const markRateLimitWaiting = async (): Promise<void> => {
     if (rateLimitState.active) {
@@ -1204,6 +1823,12 @@ async function runControllerIntakeUnlocked(
     rateLimitState.active = false;
     rateLimitState.visibleAt = undefined;
     rateLimitState.nextProbeAt = undefined;
+  };
+
+  const noteObservedControllerActivity = (): void => {
+    inactivityState.active = false;
+    inactivityState.visibleAt = undefined;
+    inactivityState.nextProbeAt = Date.now() + deps.config.taskTimeoutMs;
   };
 
   const extractSessionAssistantReply = async (): Promise<string> => {
@@ -1259,19 +1884,76 @@ async function runControllerIntakeUnlocked(
     }
 
     clearRateLimitWaiting();
+    noteObservedControllerActivity();
+    return probeReply;
+  };
+
+  const probeInactiveControllerCompletion = async (): Promise<string | null> => {
+    inactivityState.probeCount += 1;
+    const now = Date.now();
+    inactivityState.active = true;
+    inactivityState.visibleAt = now;
+    inactivityState.nextProbeAt = now + deps.config.taskTimeoutMs;
+    recordControllerRunEvent(controllerRun.id, {
+      type: "progress",
+      phase: "inactivity_probe",
+      source: "controller",
+      status: "running",
+      sessionKey,
+      runId: runResult.runId,
+      message: `No new controller workflow output has appeared for over ${formatDuration(deps.config.taskTimeoutMs)}. Re-checking whether this orchestration step is complete or still running.`,
+    }, deps);
+
+    const probeRun = await deps.runtime.subagent.run({
+      sessionKey,
+      message: buildControllerInactivityProbeMessage(
+        deps.config.taskTimeoutMs,
+        options?.sourceTaskId,
+        options?.sourceTaskTitle,
+      ),
+      extraSystemPrompt: buildControllerIntakeSystemPrompt(deps),
+      idempotencyKey: `${runResult.runId}:inactivity-probe:${inactivityState.probeCount}`,
+    });
+    const probeWait = await deps.runtime.subagent.waitForRun({
+      runId: probeRun.runId,
+      timeoutMs: CONTROLLER_INACTIVITY_PROBE_TIMEOUT_MS,
+    });
+
+    if (probeWait.status === "error" && isRateLimitMessage(probeWait.error || "")) {
+      await markRateLimitWaiting();
+      return null;
+    }
+    if (probeWait.status !== "ok") {
+      return null;
+    }
+
+    const probeReply = await extractSessionAssistantReply();
+    if (!probeReply || isRateLimitMessage(probeReply) || isStillWaitingResponse(probeReply)) {
+      inactivityState.active = false;
+      inactivityState.visibleAt = undefined;
+      inactivityState.nextProbeAt = Date.now() + deps.config.taskTimeoutMs;
+      recordControllerRunEvent(controllerRun.id, {
+        type: "progress",
+        phase: "inactivity_still_waiting",
+        source: "controller",
+        status: "running",
+        sessionKey,
+        runId: runResult.runId,
+        message: "The controller workflow is still running without a final result yet. TeamClaw will keep waiting instead of failing the run.",
+      }, deps);
+      return null;
+    }
+
+    if (rateLimitState.active) {
+      clearRateLimitWaiting();
+    }
+    noteObservedControllerActivity();
     return probeReply;
   };
 
   let waitResult: Awaited<ReturnType<typeof deps.runtime.subagent.waitForRun>> = { status: "timeout" };
   let completionOverride: string | null = null;
-  const deadline = Date.now() + deps.config.taskTimeoutMs;
   while (true) {
-    const remainingMs = deadline - Date.now();
-    if (remainingMs <= 0) {
-      waitResult = { status: "timeout" };
-      break;
-    }
-
     if (rateLimitState.active && (rateLimitState.nextProbeAt ?? Number.POSITIVE_INFINITY) <= Date.now()) {
       completionOverride = await probeRateLimitedControllerCompletion();
       if (completionOverride) {
@@ -1280,14 +1962,22 @@ async function runControllerIntakeUnlocked(
       }
     }
 
-    const sliceTimeoutMs = Math.max(1_000, Math.min(CONTROLLER_RUN_WAIT_SLICE_MS, remainingMs));
+    if (!rateLimitState.active && (inactivityState.nextProbeAt ?? Number.POSITIVE_INFINITY) <= Date.now()) {
+      completionOverride = await probeInactiveControllerCompletion();
+      if (completionOverride) {
+        waitResult = { status: "ok" };
+        break;
+      }
+    }
+
     waitResult = await deps.runtime.subagent.waitForRun({
       runId: runResult.runId,
-      timeoutMs: sliceTimeoutMs,
+      timeoutMs: CONTROLLER_RUN_WAIT_SLICE_MS,
     });
 
     if (waitResult.status === "ok") {
       clearRateLimitWaiting();
+      noteObservedControllerActivity();
       break;
     }
     if (waitResult.status === "error") {
@@ -1297,24 +1987,6 @@ async function runControllerIntakeUnlocked(
       }
       break;
     }
-  }
-
-  if (waitResult.status === "timeout") {
-    const createdTaskIds = tagControllerCreatedTasks(taskIdsBeforeRun, sessionKey, deps);
-    updateControllerRun(controllerRun.id, deps, (run) => {
-      run.createdTaskIds = createdTaskIds;
-      run.error = "Controller intake timed out";
-      appendControllerRunEvent(run, {
-        type: "error",
-        phase: "timeout",
-        source: "controller",
-        status: "failed",
-        sessionKey,
-        runId: runResult.runId,
-        message: "Controller intake timed out.",
-      });
-    });
-    throw new Error("Controller intake timed out");
   }
   if (waitResult.status !== "ok") {
     const errorMessage = waitResult.error || "Controller intake failed";
@@ -1335,7 +2007,7 @@ async function runControllerIntakeUnlocked(
     throw new Error(errorMessage);
   }
 
-  const createdTaskIds = tagControllerCreatedTasks(taskIdsBeforeRun, sessionKey, deps);
+  let createdTaskIds = tagControllerCreatedTasks(taskIdsBeforeRun, sessionKey, deps);
 
   const rawReply = completionOverride || await extractSessionAssistantReply()
     || "Controller completed the intake run but did not return any text.";
@@ -1347,6 +2019,18 @@ async function runControllerIntakeUnlocked(
     createdTaskIds,
     deps,
   );
+  const fallbackTaskIds = await maybeBackfillExecutionReadyTask(
+    controllerRun.id,
+    sessionKey,
+    message,
+    recordedManifest,
+    deps,
+    { source: options?.source },
+  );
+  if (fallbackTaskIds.length > 0) {
+    createdTaskIds = Array.from(new Set([...createdTaskIds, ...fallbackTaskIds]));
+  }
+  syncControllerRunClarifications(controllerRun.id, sessionKey, recordedManifest, deps);
   const reconciledTasks = reconcileControllerManifestTaskBindings(sessionKey, createdTaskIds, recordedManifest, deps);
 
   // ── Automatic Team Kickoff ────────────────────────────────────────────
@@ -1547,6 +2231,10 @@ function buildRecommendedSkillsContext(task: TaskInfo): string {
 
 function buildTaskAssignmentDescription(task: TaskInfo, state: TeamState | null, repoInfo?: RepoSyncInfo): string {
   const parts = [task.description];
+  const projectContext = buildProjectDirectoryContext(task.projectDir);
+  if (projectContext) {
+    parts.push("", projectContext);
+  }
   const recommendedSkillsContext = buildRecommendedSkillsContext(task);
   if (recommendedSkillsContext) {
     parts.push("", recommendedSkillsContext);
@@ -1563,6 +2251,21 @@ function buildTaskAssignmentDescription(task: TaskInfo, state: TeamState | null,
     parts.push("", buildRepoTaskContext(repoInfo));
   }
   return parts.join("\n");
+}
+
+function buildProjectDirectoryContext(projectDir?: string): string | null {
+  if (!projectDir) {
+    return null;
+  }
+  const workspaceRelativePath = buildTeamClawProjectWorkspacePath(projectDir);
+  const absoluteProjectPath = path.join(resolveTeamClawProjectsDir(), projectDir).replace(/\\/gu, "/");
+  return [
+    "## Authoritative Project Paths",
+    `- Workspace-relative project path: \`${workspaceRelativePath}/\``,
+    `- Absolute project path: \`${absoluteProjectPath}/\``,
+    "- If the task description mentions any other workspace path, treat it as stale text from an older layout.",
+    "- Resolve project-local files (for example `ARCHITECTURE.md`, `README.md`, `package.json`, `data/...`) inside the authoritative project path above.",
+  ].join("\n");
 }
 
 function buildRepoTaskContext(repoInfo: RepoSyncInfo): string {
@@ -1691,22 +2394,16 @@ async function cancelTaskExecution(
   }
 
   let cancelled = false;
-  if (deps.inProcessWorkerManager?.isInProcessWorkerId(workerId)) {
-    cancelled = await deps.inProcessWorkerManager.cancelTask(workerId, taskId);
-  } else if (deps.localWorkerManager?.isLocalWorkerId(workerId)) {
-    cancelled = await deps.localWorkerManager.cancelTaskExecution(workerId, taskId);
-  } else {
-    try {
-      const res = await fetch(`${worker.url}/api/v1/tasks/${taskId}/cancel`, {
-        method: "POST",
-      });
-      cancelled = res.ok;
-      if (!res.ok) {
-        deps.logger.warn(`Controller: worker cancel failed for ${taskId} on ${workerId} (${res.status})`);
-      }
-    } catch (err) {
-      deps.logger.warn(`Controller: failed to cancel task ${taskId} on ${workerId}: ${String(err)}`);
+  try {
+    const res = await fetch(`${worker.url}/api/v1/tasks/${taskId}/cancel`, {
+      method: "POST",
+    });
+    cancelled = res.ok;
+    if (!res.ok) {
+      deps.logger.warn(`Controller: worker cancel failed for ${taskId} on ${workerId} (${res.status})`);
     }
+  } catch (err) {
+    deps.logger.warn(`Controller: failed to cancel task ${taskId} on ${workerId}: ${String(err)}`);
   }
 
   if (!cancelled) {
@@ -1744,6 +2441,73 @@ function workspaceRequestErrorStatus(err: unknown): number {
 
 function workspaceRequestErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : "Workspace request failed";
+}
+
+function getEffectiveStartupReadiness(
+  deps: ControllerHttpDeps,
+  state: TeamState | null,
+): StartupProvisioningReadiness | null {
+  if (!deps.workerProvisioningManager?.isEnabled()) {
+    return null;
+  }
+  const requiredRoles = deps.config.workerProvisioningRoles.length > 0
+    ? [...new Set(deps.config.workerProvisioningRoles)]
+    : ["developer"];
+  const readyWorkerIds = requiredRoles
+    .map((role) => Object.values(state?.workers ?? {}).find((worker) =>
+      worker.role === role && (worker.status === "idle" || worker.status === "busy")
+    )?.id)
+    .filter((workerId): workerId is string => Boolean(workerId));
+
+  if (readyWorkerIds.length === requiredRoles.length) {
+    const recorded = state?.provisioning?.startupReadiness;
+    return {
+      status: "ready",
+      startedAt: recorded?.startedAt ?? state?.createdAt ?? Date.now(),
+      checkedAt: Date.now(),
+      attempts: recorded?.attempts ?? 0,
+      requiredRoles,
+      readyWorkerIds,
+      message: recorded?.status === "ready"
+        ? recorded.message
+        : `Startup provisioning ready with ${readyWorkerIds.length} warm worker(s).`,
+    };
+  }
+
+  return state?.provisioning?.startupReadiness ?? {
+    status: "checking",
+    startedAt: state?.createdAt ?? Date.now(),
+    checkedAt: Date.now(),
+    attempts: 0,
+    requiredRoles,
+    readyWorkerIds,
+    message: `Startup provisioning warm-up is still initializing for ${requiredRoles.join(", ")}.`,
+  };
+}
+
+function buildStartupReadinessMessage(readiness: StartupProvisioningReadiness): string {
+  const requiredRoles = readiness.requiredRoles.length > 0 ? readiness.requiredRoles.join(", ") : "configured startup roles";
+  if (readiness.status === "ready") {
+    return readiness.message ?? "Startup provisioning is ready.";
+  }
+  if (readiness.status === "checking") {
+    return readiness.message ?? `Startup provisioning is still warming workers for ${requiredRoles}.`;
+  }
+  return readiness.message ?? `Startup provisioning is degraded for ${requiredRoles}. Check provisioning logs and fix worker startup before retrying.`;
+}
+
+function shouldBlockControllerUntilProvisioningReady(
+  deps: ControllerHttpDeps,
+  state: TeamState | null,
+): { blocked: boolean; readiness: StartupProvisioningReadiness | null } {
+  const readiness = getEffectiveStartupReadiness(deps, state);
+  if (!readiness) {
+    return { blocked: false, readiness: null };
+  }
+  return {
+    blocked: readiness.status !== "ready",
+    readiness,
+  };
 }
 
 /**
@@ -1795,7 +2559,7 @@ function enrichWithFilesystemHtmlScan(
   let openclawWorkspaceDir: string;
   try {
     workspaceDir = resolveTeamClawWorkspaceDir();
-    openclawWorkspaceDir = resolveDefaultOpenClawWorkspaceDir();
+    openclawWorkspaceDir = resolveTeamClawAgentWorkspaceRootDir();
   } catch {
     return null;
   }
@@ -1876,6 +2640,104 @@ function enrichWithFilesystemHtmlScan(
   }
 
   return { ...contract, deliverables: newDeliverables };
+}
+
+const MEANINGFUL_PROJECT_CHANGE_EXTENSIONS = new Set([
+  ".js", ".jsx", ".ts", ".tsx", ".json", ".html", ".css", ".scss", ".md", ".txt", ".yml", ".yaml",
+]);
+
+const IGNORED_PROJECT_CHANGE_DIRS = new Set([
+  "node_modules", ".git", "dist", "build", ".next", ".cache", "coverage", "tmp", "temp",
+]);
+
+const IGNORED_PROJECT_CHANGE_FILES = new Set([
+  "package-lock.json", "pnpm-lock.yaml", "yarn.lock",
+]);
+
+function taskRequiresMeaningfulProjectChangeGate(task: TaskInfo): boolean {
+  if (task.assignedRole !== "developer" || !task.projectDir) {
+    return false;
+  }
+  const text = `${task.title}\n${task.description}`.toLowerCase();
+  if (/\b(qa|audit|review|verify|verification|validate|test|retest|confirm|check)\b/u.test(text)) {
+    return false;
+  }
+  if (/(审计|审核|验证|复检|复查|确认|测试|检查)/u.test(text)) {
+    return false;
+  }
+  return /\b(implement|build|fix|rework|update|add|enhanc|deliver|write|create)\b/u.test(text);
+}
+
+function projectHasMeaningfulFileChanges(task: TaskInfo): boolean {
+  if (!task.projectDir) {
+    return false;
+  }
+  const projectRoot = path.join(resolveTeamClawProjectsDir(), task.projectDir);
+  if (!fs.existsSync(projectRoot)) {
+    return false;
+  }
+  const threshold = Math.max(task.startedAt ?? 0, task.createdAt ?? 0) - 1000;
+  const stack = [projectRoot];
+  while (stack.length > 0) {
+    const currentDir = stack.pop()!;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (!IGNORED_PROJECT_CHANGE_DIRS.has(entry.name)) {
+          stack.push(path.join(currentDir, entry.name));
+        }
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      if (IGNORED_PROJECT_CHANGE_FILES.has(entry.name)) {
+        continue;
+      }
+      const ext = path.extname(entry.name).toLowerCase();
+      if (!MEANINGFUL_PROJECT_CHANGE_EXTENSIONS.has(ext)) {
+        continue;
+      }
+      const fullPath = path.join(currentDir, entry.name);
+      try {
+        const stats = fs.statSync(fullPath);
+        if (stats.mtimeMs >= threshold) {
+          return true;
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+  return false;
+}
+
+function allowsNoChangeCompletion(
+  task: TaskInfo,
+  contract: WorkerTaskResultContract | undefined,
+  resultText: string,
+): boolean {
+  const taskText = `${task.title}\n${task.description}`.toLowerCase();
+  const evidenceText = [
+    contract?.summary ?? "",
+    contract?.notes ?? "",
+    ...(contract?.keyPoints ?? []),
+    resultText,
+  ].join("\n").toLowerCase();
+  const hasVerificationEvidence =
+    (contract?.deliverables ?? []).some((deliverable) => deliverable.kind === "command" || deliverable.kind === "note")
+    || /\b(go test|go vet|npm test|pnpm test|yarn test|pytest|cargo test|verified|verification|passes|all tests pass|no remaining)\b/u.test(evidenceText);
+  const noChangeIsExpected =
+    /\b(qa|audit|review|verify|verification|validate|test|retest|confirm|check)\b/u.test(taskText)
+    || /(审计|审核|验证|复检|复查|确认|测试|检查)/u.test(taskText)
+    || /\b(already fixed|already resolved|no further changes|no code changes|no file changes|no additional changes|verified existing fix)\b/u.test(evidenceText)
+    || /(已修复|已解决|无需改动|无需修改|没有额外修改|无需额外变更|只需验证)/u.test(evidenceText);
+  return hasVerificationEvidence && noChangeIsExpected;
 }
 
 function applyTaskResult(
@@ -1967,6 +2829,98 @@ function applyTaskResult(
   }
 
   return updatedTask;
+}
+
+async function requestTaskClarification(params: {
+  taskId: string;
+  requestedBy: string;
+  requestedByWorkerId?: string;
+  requestedByRole?: RoleId;
+  question: string;
+  blockingReason: string;
+  context?: string;
+  questionSchema?: ClarificationRequest["questionSchema"];
+}, deps: ControllerHttpDeps): Promise<{
+  status: "created" | "already-pending" | "conflict" | "missing-task";
+  clarification?: ClarificationRequest;
+  task?: TaskInfo;
+}> {
+  const { getTeamState, updateTeamState, wsServer } = deps;
+  const currentState = getTeamState();
+  const currentTask = currentState?.tasks[params.taskId];
+  if (!currentTask) {
+    return { status: "missing-task" };
+  }
+
+  if (currentTask.clarificationRequestId) {
+    const existing = currentState?.clarifications[currentTask.clarificationRequestId];
+    if (existing?.status === "pending") {
+      return { status: "already-pending", clarification: existing, task: currentTask };
+    }
+  }
+
+  if (currentTask.status === "completed" || currentTask.status === "failed") {
+    return { status: "conflict", task: currentTask };
+  }
+
+  const previousWorkerId = currentTask.assignedWorkerId;
+  const clarificationId = generateId();
+  const now = Date.now();
+  const clarification: ClarificationRequest = {
+    id: clarificationId,
+    taskId: params.taskId,
+    requestedBy: params.requestedBy,
+    requestedByWorkerId: params.requestedByWorkerId,
+    requestedByRole: params.requestedByRole,
+    question: params.question,
+    questionSchema: params.questionSchema,
+    blockingReason: params.blockingReason,
+    context: params.context,
+    status: "pending",
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  const state = updateTeamState((s) => {
+    s.clarifications[clarificationId] = clarification;
+    const task = s.tasks[params.taskId];
+    if (!task) {
+      return;
+    }
+
+    const assignedWorkerId = task.assignedWorkerId;
+    task.status = "blocked";
+    task.progress = `Awaiting clarification: ${params.question}`;
+    task.clarificationRequestId = clarificationId;
+    task.assignedWorkerId = undefined;
+    task.updatedAt = now;
+
+    if (assignedWorkerId && s.workers[assignedWorkerId]) {
+      const assignedWorker = s.workers[assignedWorkerId];
+      if (assignedWorker.status !== "offline") {
+        assignedWorker.status = "idle";
+      }
+      assignedWorker.currentTaskId = undefined;
+    }
+  });
+
+  await cancelTaskExecution(params.taskId, previousWorkerId, "clarification request", deps);
+
+  const updatedTask = state.tasks[params.taskId];
+  wsServer.broadcastUpdate({ type: "clarification:requested", data: clarification });
+  if (updatedTask) {
+    recordTaskExecutionEvent(params.taskId, {
+      type: "lifecycle",
+      phase: "clarification_requested",
+      source: "controller",
+      message: `Clarification requested: ${params.question}`,
+      role: clarification.requestedByRole,
+      workerId: clarification.requestedByWorkerId,
+    }, deps);
+    wsServer.broadcastUpdate({ type: "task:updated", data: serializeTask(updatedTask) });
+  }
+
+  return { status: "created", clarification, task: updatedTask };
 }
 
 function ensureTaskResultContract(
@@ -2175,6 +3129,7 @@ function revertTaskAssignment(taskId: string, workerId: string, deps: Controller
       }
       worker.currentTaskId = undefined;
     }
+
   });
 
   const updatedTask = state.tasks[taskId];
@@ -2196,23 +3151,6 @@ async function deliverMessageToWorker(
   message: TeamMessage,
   deps: ControllerHttpDeps,
 ): Promise<void> {
-  const { localWorkerManager, inProcessWorkerManager } = deps;
-
-  // In-process workers don't have external HTTP — messages are no-ops for now
-  if (inProcessWorkerManager?.isInProcessWorkerId(worker.id)) {
-    deps.logger.info(`Controller: message to in-process worker ${worker.id} (queued internally)`);
-    return;
-  }
-
-  if (localWorkerManager?.isLocalWorkerId(worker.id)) {
-    const queued = await localWorkerManager.queueMessage(worker.id, message);
-    if (queued) {
-      return;
-    }
-
-    deps.logger.warn(`Controller: local message path unavailable for ${worker.id}, falling back to worker URL`);
-  }
-
   const res = await fetch(`${worker.url}/api/v1/messages`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2253,7 +3191,7 @@ async function dispatchTaskToWorker(
   worker: WorkerInfo,
   deps: ControllerHttpDeps,
 ): Promise<void> {
-  const { getTeamState, localWorkerManager, inProcessWorkerManager } = deps;
+  const { getTeamState } = deps;
   const state = getTeamState();
   const task = state?.tasks[taskId];
   if (!task) {
@@ -2266,9 +3204,7 @@ async function dispatchTaskToWorker(
     try { fs.mkdirSync(projectPath, { recursive: true }); } catch { /* best-effort */ }
   }
 
-  const sharedWorkspace = localWorkerManager?.isLocalWorkerId(worker.id)
-    || inProcessWorkerManager?.isInProcessWorkerId(worker.id)
-    || deps.workerProvisioningManager?.isSharedWorkspaceWorker(worker.id)
+  const sharedWorkspace = deps.workerProvisioningManager?.isSharedWorkspaceWorker(worker.id)
     || false;
   const repoState = await refreshControllerRepoState(deps);
   const repoInfo = buildRepoSyncInfo(repoState, sharedWorkspace);
@@ -2286,24 +3222,6 @@ async function dispatchTaskToWorker(
     executionIdempotencyKey: executionIdentity.executionIdempotencyKey,
     repo: repoInfo,
   };
-
-  // In-process workers: dispatch via direct function call
-  if (inProcessWorkerManager?.isInProcessWorkerId(worker.id)) {
-    const accepted = await inProcessWorkerManager.dispatchTask(worker.id, assignment);
-    if (accepted) {
-      return;
-    }
-    deps.logger.warn(`Controller: in-process dispatch unavailable for ${worker.id}, falling back to worker URL`);
-  }
-
-  if (localWorkerManager?.isLocalWorkerId(worker.id)) {
-    const accepted = await localWorkerManager.dispatchTask(worker.id, assignment);
-    if (accepted) {
-      return;
-    }
-
-    deps.logger.warn(`Controller: local dispatch path unavailable for ${worker.id}, falling back to worker URL`);
-  }
 
   const res = await fetch(`${worker.url}/api/v1/tasks/assign`, {
     method: "POST",
@@ -2391,11 +3309,9 @@ async function autoAssignPendingTasks(
   deps: ControllerHttpDeps,
   preferredWorkerId?: string,
 ): Promise<TaskInfo[]> {
-  const { getTeamState, updateTeamState, taskRouter, wsServer, logger, inProcessWorkerManager } = deps;
+  const { getTeamState, taskRouter, wsServer, logger } = deps;
   const attemptedPairs = new Set<string>();
   const assignedTasks: TaskInfo[] = [];
-  let provisionRetries = 0;
-  const MAX_PROVISION_RETRIES = 5;
 
   while (true) {
     const state = getTeamState();
@@ -2403,27 +3319,21 @@ async function autoAssignPendingTasks(
       break;
     }
 
-    const nextAssignment = taskRouter
+    const candidateAssignments = taskRouter
       .autoAssignPendingTasks(state.tasks, state.workers)
-      .filter(({ worker }) => !preferredWorkerId || worker.id === preferredWorkerId)
-      .find(({ task, worker }) => !attemptedPairs.has(`${task.id}:${worker.id}`));
+      .filter(({ task, worker }) => !attemptedPairs.has(`${task.id}:${worker.id}`));
+
+    const nextAssignment = (
+      (preferredWorkerId
+        ? candidateAssignments.find(({ worker }) => worker.id === preferredWorkerId)
+        : undefined)
+      ?? candidateAssignments[0]
+    );
 
     if (!nextAssignment) {
-      // No idle worker matched — try on-demand provisioning for in-process mode.
-      // IMPORTANT: Do NOT loop back immediately after provisioning.  A tight
-      // `continue` here would spin the event loop at 100% CPU, flood the log,
-      // and starve all other I/O (health checks, intake responses).
-      // Instead, provision then yield via a short async delay so the event loop
-      // can process worker initialization before we retry.
-      if (inProcessWorkerManager && !preferredWorkerId) {
-        const provisioned = provisionInProcessWorkersForPendingTasks(deps);
-        if (provisioned > 0 && provisionRetries < MAX_PROVISION_RETRIES) {
-          provisionRetries++;
-          // Yield to the event loop, then retry to pick up the new workers.
-          await new Promise((resolve) => setTimeout(resolve, 50));
-          continue;
-        }
-      }
+      scheduleProvisioningReconcile(deps, preferredWorkerId
+        ? `auto-assign-wait:${preferredWorkerId}`
+        : "auto-assign-wait");
       break;
     }
 
@@ -2450,77 +3360,8 @@ async function autoAssignPendingTasks(
   return assignedTasks;
 }
 
-/**
- * On-demand in-process worker provisioning.  Scans pending tasks, infers the
- * needed role, and creates a virtual worker if none exists for that role.
- * Returns the number of workers newly provisioned.
- */
-function provisionInProcessWorkersForPendingTasks(deps: ControllerHttpDeps): number {
-  const { getTeamState, updateTeamState, inProcessWorkerManager, logger } = deps;
-  if (!inProcessWorkerManager) {
-    return 0;
-  }
-
-  const state = getTeamState();
-  if (!state) {
-    return 0;
-  }
-
-  const pendingTasks = Object.values(state.tasks).filter(
-    (t) => t.status === "pending" && !t.assignedWorkerId,
-  );
-  if (pendingTasks.length === 0) {
-    return 0;
-  }
-
-  const maxPerRole = deps.config.workerProvisioningMaxPerRole || 3;
-
-  // Count pending tasks per role to determine demand
-  const demandByRole = new Map<RoleId, number>();
-  for (const task of pendingTasks) {
-    const role = inferTaskRole(task) ?? FALLBACK_ROLE;
-    demandByRole.set(role, (demandByRole.get(role) ?? 0) + 1);
-  }
-
-  let provisioned = 0;
-
-  for (const [role, demand] of demandByRole) {
-    // How many workers already exist for this role?
-    const activeForRole = inProcessWorkerManager.countWorkersForRole(role);
-    // How many idle workers are available?
-    const idleAvailable = inProcessWorkerManager.getIdleWorkerForRole(role) ? 1 : 0;
-
-    // Need enough workers to handle demand, capped at maxPerRole
-    const needed = Math.min(demand, maxPerRole) - activeForRole;
-
-    for (let i = 0; i < needed; i++) {
-      if (inProcessWorkerManager.countWorkersForRole(role) >= maxPerRole) break;
-      inProcessWorkerManager.ensureWorker(role);
-      provisioned++;
-      logger.info(`Controller: on-demand provisioned in-process worker for role "${role}" (${inProcessWorkerManager.countWorkersForRole(role)}/${maxPerRole}, triggered by ${demand} pending tasks)`);
-    }
-  }
-
-  if (provisioned > 0) {
-    // Sync newly created workers into TeamState.
-    inProcessWorkerManager.syncState(state);
-    updateTeamState(() => {}); // persist
-  }
-
-  return provisioned;
-}
-
 export function createControllerHttpServer(deps: ControllerHttpDeps): http.Server {
   const { logger, wsServer } = deps;
-
-  // Wire execution event reporting into the in-process worker manager so
-  // progress events (tool calls, assistant messages) from worker subagent
-  // sessions are recorded and broadcast to the dashboard UI.
-  if (deps.inProcessWorkerManager) {
-    deps.inProcessWorkerManager.setReportExecutionEvent((taskId, event) => {
-      recordTaskExecutionEvent(taskId, event, deps);
-    });
-  }
 
   const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
     // CORS preflight
@@ -2548,23 +3389,18 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
   // Attach WebSocket
   wsServer.attach(server);
 
-  // Startup reconciliation: after a restart, in-process workers are gone but
-  // persisted tasks may still be pending.  Schedule auto-assign after a short
-  // delay so the server is fully up before we start provisioning workers.
-  if (deps.inProcessWorkerManager) {
-    setTimeout(() => {
-      const state = deps.getTeamState();
-      const pendingCount = state
-        ? Object.values(state.tasks).filter((t) => t.status === "pending" && !t.assignedWorkerId).length
-        : 0;
-      if (pendingCount > 0) {
-        logger.info(`Controller: startup reconciliation — ${pendingCount} orphaned pending tasks, triggering auto-assign`);
-        void autoAssignPendingTasks(deps).catch((err) => {
-          logger.warn(`Controller: startup auto-assign failed: ${String(err)}`);
-        });
-      }
-    }, 2000);
-  }
+  setTimeout(() => {
+    const state = deps.getTeamState();
+    const pendingCount = state
+      ? Object.values(state.tasks).filter((t) => t.status === "pending" && !t.assignedWorkerId).length
+      : 0;
+    if (pendingCount > 0) {
+      logger.info(`Controller: startup reconciliation — ${pendingCount} pending tasks, triggering auto-assign`);
+      void autoAssignPendingTasks(deps).catch((err) => {
+        logger.warn(`Controller: startup auto-assign failed: ${String(err)}`);
+      });
+    }
+  }, 2000);
 
   return server;
 }
@@ -2577,6 +3413,7 @@ async function handleRequest(
 ): Promise<void> {
   const { config, logger, getTeamState, updateTeamState, taskRouter, messageRouter, wsServer } = deps;
   const requestUrl = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  const currentState = getTeamState();
 
   // ==================== Web UI ====================
   if (req.method === "GET" && pathname === "/") {
@@ -2599,6 +3436,12 @@ async function handleRequest(
       serveStaticFile(res, path.join(uiPath, file), "text/css; charset=utf-8");
     } else if (file.endsWith(".js")) {
       serveStaticFile(res, path.join(uiPath, file), "application/javascript; charset=utf-8");
+    } else if (file.endsWith(".png")) {
+      serveStaticFile(res, path.join(uiPath, file), "image/png");
+    } else if (file.endsWith(".svg")) {
+      serveStaticFile(res, path.join(uiPath, file), "image/svg+xml; charset=utf-8");
+    } else if (file.endsWith(".ico")) {
+      serveStaticFile(res, path.join(uiPath, file), "image/x-icon");
     } else {
       serveStaticFile(res, path.join(uiPath, file), "application/octet-stream");
     }
@@ -2721,15 +3564,6 @@ async function handleRequest(
   // DELETE /api/v1/workers/:id
   if (req.method === "DELETE" && pathname.match(/^\/api\/v1\/workers\/[^/]+$/)) {
     const workerId = pathname.split("/").pop()!;
-    if (deps.localWorkerManager?.isLocalWorkerId(workerId)) {
-      sendError(res, 400, "Local workers are managed by controller config");
-      return;
-    }
-    if (deps.inProcessWorkerManager?.isInProcessWorkerId(workerId)) {
-      sendError(res, 400, "In-process workers are managed by controller config");
-      return;
-    }
-
     if (deps.workerProvisioningManager?.hasManagedWorker(workerId)) {
       await deps.workerProvisioningManager.onWorkerRemoved(workerId, "worker delete requested");
     }
@@ -2825,6 +3659,13 @@ async function handleRequest(
     if (!title) {
       sendError(res, 400, "title is required");
       return;
+    }
+    if (createdBy === "controller") {
+      const readinessGate = shouldBlockControllerUntilProvisioningReady(deps, currentState);
+      if (readinessGate.blocked && readinessGate.readiness) {
+        sendError(res, 503, buildStartupReadinessMessage(readinessGate.readiness));
+        return;
+      }
     }
     if (createdBy === "controller" && shouldBlockControllerWithoutWorkers(deps.config, getTeamState())) {
       sendError(res, 409, buildControllerNoWorkersMessage());
@@ -3203,7 +4044,7 @@ async function handleRequest(
     const taskId = pathname.split("/")[4]!;
     const body = await parseJsonBody(req);
     const result = typeof body.result === "string" ? body.result : "";
-    const error = typeof body.error === "string" ? body.error : undefined;
+    let error = typeof body.error === "string" ? body.error : undefined;
     const workerId = typeof body.workerId === "string" ? body.workerId : undefined;
     const currentTask = getTeamState()?.tasks[taskId];
     if (!currentTask) {
@@ -3231,9 +4072,62 @@ async function handleRequest(
         phase: "result_contract_recorded",
         source: "worker",
         status: error ? "failed" : "running",
-        message: submittedContract.summary,
+          message: submittedContract.summary,
+          workerId,
+          role: currentTask.assignedRole,
+        }, deps);
+    }
+
+    if (!error && submittedContract?.outcome === "blocked") {
+      const requested = await requestTaskClarification({
+        taskId,
+        requestedBy: workerId ?? "worker",
+        requestedByWorkerId: workerId,
+        requestedByRole: currentTask.assignedRole,
+        question: submittedContract.questions[0]
+          ?? "This task is blocked and needs a human decision before work can continue. What should TeamClaw do next?",
+        blockingReason: submittedContract.blockers[0] ?? submittedContract.summary,
+        context: [
+          submittedContract.notes,
+          result.trim(),
+          submittedContract.keyPoints.length > 0
+            ? `Worker-provided commands/details:\n${submittedContract.keyPoints.join("\n")}`
+            : "",
+        ].filter(Boolean).join("\n\n"),
+      }, deps);
+      if (requested.status === "missing-task") {
+        sendError(res, 404, "Task not found");
+        return;
+      }
+      if (requested.status === "conflict") {
+        sendError(res, 409, "Cannot request clarification for a completed task");
+        return;
+      }
+      sendJson(res, requested.status === "already-pending" ? 200 : 201, {
+        status: requested.status,
+        clarification: requested.clarification,
+        task: serializeTask(requested.task),
+      });
+      return;
+    }
+
+    const gatedTask = getTeamState()?.tasks[taskId];
+    if (
+      !error
+      && gatedTask
+      && taskRequiresMeaningfulProjectChangeGate(gatedTask)
+      && !projectHasMeaningfulFileChanges(gatedTask)
+      && !allowsNoChangeCompletion(gatedTask, submittedContract, result)
+    ) {
+      error = "Task reported completion but no meaningful project file changes were detected in the assigned project directory.";
+      recordTaskExecutionEvent(taskId, {
+        type: "warning",
+        phase: "completion_gate",
+        source: "controller",
+        status: "failed",
+        message: error,
         workerId,
-        role: currentTask.assignedRole,
+        role: gatedTask.assignedRole,
       }, deps);
     }
 
@@ -3334,18 +4228,13 @@ async function handleRequest(
     const updatedRun = updateControllerRun(runId, deps, (run) => {
       run.manifest = manifest;
 
-      // Derive projectDir from LLM-provided projectName (or fallback to requirementSummary)
-      if (manifest.projectName || manifest.requirementSummary) {
-        const slug = deriveProjectSlug(manifest.projectName || manifest.requirementSummary);
-        run.projectDir = slug;
-
-        // Backfill projectDir onto all tasks created by this run (overrides title-derived fallback)
+      if (run.projectDir) {
         const state = deps.getTeamState();
         if (state) {
           for (const taskId of run.createdTaskIds) {
             const task = state.tasks[taskId];
-            if (task) {
-              task.projectDir = slug;
+            if (task && !task.projectDir) {
+              task.projectDir = run.projectDir;
             }
           }
         }
@@ -3387,7 +4276,7 @@ async function handleRequest(
 
   // GET /api/v1/controller/runs
   if (req.method === "GET" && pathname === "/api/v1/controller/runs") {
-    const state = getTeamState();
+    const state = reconcileControllerClarifications(deps);
     const controllerRuns = state
       ? Object.values(state.controllerRuns)
         .sort((left, right) => right.updatedAt - left.updatedAt)
@@ -3399,6 +4288,11 @@ async function handleRequest(
 
   // POST /api/v1/controller/intake
   if (req.method === "POST" && pathname === "/api/v1/controller/intake") {
+    const readinessGate = shouldBlockControllerUntilProvisioningReady(deps, currentState);
+    if (readinessGate.blocked && readinessGate.readiness) {
+      sendError(res, 503, buildStartupReadinessMessage(readinessGate.readiness));
+      return;
+    }
     const body = await parseJsonBody(req);
     const message = typeof body.message === "string" ? body.message.trim() : "";
     if (!message) {
@@ -3547,95 +4441,49 @@ async function handleRequest(
     const question = typeof body.question === "string" ? body.question.trim() : "";
     const blockingReason = typeof body.blockingReason === "string" ? body.blockingReason.trim() : "";
     const context = typeof body.context === "string" && body.context.trim() ? body.context.trim() : undefined;
+    const questionSchema = normalizeClarificationQuestionSchema(body.questionSchema);
 
     if (!taskId || !question || !blockingReason) {
       sendError(res, 400, "taskId, question, and blockingReason are required");
       return;
     }
 
-    const currentState = getTeamState();
-    const currentTask = currentState?.tasks[taskId];
-    if (!currentTask) {
-      sendError(res, 404, "Task not found");
-      return;
-    }
-
-    if (currentTask.clarificationRequestId) {
-      const existing = currentState?.clarifications[currentTask.clarificationRequestId];
-      if (existing?.status === "pending") {
-        sendJson(res, 200, { clarification: existing, task: currentTask, status: "already-pending" });
-        return;
-      }
-    }
-
-    if (currentTask.status === "completed" || currentTask.status === "failed") {
-      sendError(res, 409, "Cannot request clarification for a completed task");
-      return;
-    }
-
-    const previousWorkerId = currentTask.assignedWorkerId;
-
-    const clarificationId = generateId();
-    const now = Date.now();
-    const clarification: ClarificationRequest = {
-      id: clarificationId,
+    const requested = await requestTaskClarification({
       taskId,
       requestedBy,
       requestedByWorkerId,
       requestedByRole,
       question,
+      questionSchema,
       blockingReason,
       context,
-      status: "pending",
-      createdAt: now,
-      updatedAt: now,
-    };
-
-    const state = updateTeamState((s) => {
-      s.clarifications[clarificationId] = clarification;
-      const task = s.tasks[taskId];
-      if (!task) {
-        return;
-      }
-
-      const assignedWorkerId = task.assignedWorkerId;
-      task.status = "blocked";
-      task.progress = `Awaiting clarification: ${question}`;
-      task.clarificationRequestId = clarificationId;
-      task.assignedWorkerId = undefined;
-      task.updatedAt = now;
-
-      if (assignedWorkerId && s.workers[assignedWorkerId]) {
-        const assignedWorker = s.workers[assignedWorkerId];
-        if (assignedWorker.status !== "offline") {
-          assignedWorker.status = "idle";
-        }
-        assignedWorker.currentTaskId = undefined;
-      }
-    });
-
-    await cancelTaskExecution(taskId, previousWorkerId, "clarification request", deps);
-
-    const updatedTask = state.tasks[taskId];
-    wsServer.broadcastUpdate({ type: "clarification:requested", data: clarification });
-    if (updatedTask) {
-      recordTaskExecutionEvent(taskId, {
-        type: "lifecycle",
-        phase: "clarification_requested",
-        source: "controller",
-        message: `Clarification requested: ${question}`,
-        role: clarification.requestedByRole,
-        workerId: clarification.requestedByWorkerId,
-      }, deps);
-      wsServer.broadcastUpdate({ type: "task:updated", data: serializeTask(updatedTask) });
+    }, deps);
+    if (requested.status === "missing-task") {
+      sendError(res, 404, "Task not found");
+      return;
     }
-    sendJson(res, 201, { clarification, task: serializeTask(updatedTask) });
+    if (requested.status === "conflict") {
+      sendError(res, 409, "Cannot request clarification for a completed task");
+      return;
+    }
+    if (requested.status === "already-pending") {
+      sendJson(res, 200, {
+        clarification: requested.clarification,
+        task: serializeTask(requested.task),
+        status: "already-pending",
+      });
+      return;
+    }
+    sendJson(res, 201, {
+      clarification: requested.clarification,
+      task: serializeTask(requested.task),
+    });
     return;
   }
 
   // GET /api/v1/clarifications
   if (req.method === "GET" && pathname === "/api/v1/clarifications") {
-    const state = getTeamState();
+    const state = reconcileControllerClarifications(deps);
     const clarifications = state
       ? Object.values(state.clarifications).sort((left, right) => right.createdAt - left.createdAt)
       : [];
@@ -3650,20 +4498,37 @@ async function handleRequest(
   if (req.method === "POST" && pathname.match(/^\/api\/v1\/clarifications\/[^/]+\/answer$/)) {
     const clarificationId = pathname.split("/")[4]!;
     const body = await parseJsonBody(req);
-    const answer = typeof body.answer === "string" ? body.answer.trim() : "";
+    const answerValue = typeof body.answerValue === "string" ? body.answerValue.trim() : undefined;
+    const answerValues = Array.isArray(body.answerValues)
+      ? body.answerValues.map((entry) => String(entry || "").trim()).filter(Boolean)
+      : undefined;
+    const answerNumber = typeof body.answerNumber === "number" && Number.isFinite(body.answerNumber)
+      ? body.answerNumber
+      : undefined;
+    const answerComment = typeof body.answerComment === "string" && body.answerComment.trim()
+      ? body.answerComment.trim()
+      : undefined;
     const answeredBy = typeof body.answeredBy === "string" && body.answeredBy.trim()
       ? body.answeredBy.trim()
       : "human";
-
-    if (!answer) {
-      sendError(res, 400, "answer is required");
-      return;
-    }
 
     const currentState = getTeamState();
     const currentClarification = currentState?.clarifications[clarificationId];
     if (!currentClarification) {
       sendError(res, 404, "Clarification request not found");
+      return;
+    }
+
+    const answer = buildStructuredClarificationAnswer(currentClarification, {
+      answer: typeof body.answer === "string" ? body.answer.trim() : "",
+      answerValue,
+      answerValues,
+      answerNumber,
+      answerComment,
+    });
+
+    if (!answer) {
+      sendError(res, 400, "answer is required");
       return;
     }
 
@@ -3681,6 +4546,10 @@ async function handleRequest(
 
       clarification.status = "answered";
       clarification.answer = answer;
+      clarification.answerValue = answerValue;
+      clarification.answerValues = answerValues;
+      clarification.answerNumber = answerNumber;
+      clarification.answerComment = answerComment;
       clarification.answeredBy = answeredBy;
       clarification.answeredAt = now;
       clarification.updatedAt = now;
@@ -3698,7 +4567,7 @@ async function handleRequest(
     });
 
     const clarification = state.clarifications[clarificationId];
-    const task = clarification ? state.tasks[clarification.taskId] : undefined;
+    const task = clarification?.taskId ? state.tasks[clarification.taskId] : undefined;
 
     let responseMessage: TeamMessage | undefined;
     if (clarification?.requestedByRole && task) {
@@ -3732,6 +4601,13 @@ async function handleRequest(
 
     let resumedTask = task;
     let resumedWorker: WorkerInfo | null = null;
+    let continuedControllerRun: {
+      sessionKey: string;
+      controllerRunId?: string;
+      runId?: string;
+      reply?: string;
+      queued?: boolean;
+    } | null = null;
     if (task) {
       const latestState = getTeamState()!;
       if (clarification?.requestedByWorkerId && latestState.workers[clarification.requestedByWorkerId]?.status === "idle") {
@@ -3743,6 +4619,25 @@ async function handleRequest(
       if (resumedWorker) {
         resumedTask = await assignTaskToWorker(task.id, resumedWorker, deps, {
           assignedRole: task.assignedRole,
+        });
+      }
+    } else if (clarification?.controllerRunId) {
+      const targetSessionKey = clarification.controllerSessionKey
+        || state.controllerRuns[clarification.controllerRunId]?.sessionKey;
+      if (targetSessionKey) {
+        continuedControllerRun = {
+          sessionKey: targetSessionKey,
+          controllerRunId: clarification.controllerRunId,
+          queued: true,
+        };
+        void runControllerIntake(
+          buildControllerClarificationAnswerMessage(clarification, answer, answeredBy),
+          targetSessionKey,
+          deps,
+        ).catch((err) => {
+          deps.logger.warn(
+            `Controller: failed to continue intake after clarification ${clarification.id}: ${String(err)}`,
+          );
         });
       }
     }
@@ -3764,6 +4659,7 @@ async function handleRequest(
       clarification,
       task: serializeTask(resumedTask),
       resumedWorker,
+      controllerRun: continuedControllerRun,
       message: responseMessage,
     });
     return;
@@ -3869,7 +4765,10 @@ async function handleRequest(
 
   // GET /api/v1/team/status
   if (req.method === "GET" && pathname === "/api/v1/team/status") {
-    const state = getTeamState();
+    const state = reconcileControllerClarifications(deps);
+    const startupReadiness = getEffectiveStartupReadiness(deps, state);
+    const modelReadiness = getTeamClawModelReadiness();
+    const externalWorkerInstall = buildExternalWorkerInstallInfo(req, config);
     if (!state) {
       sendJson(res, 200, {
         teamName: config.teamName,
@@ -3881,6 +4780,9 @@ async function handleRequest(
         previews: [],
         repo: null,
         pendingClarificationCount: 0,
+        modelReadiness,
+        externalWorkerInstall,
+        provisioning: startupReadiness ? { startupReadiness } : undefined,
       });
       return;
     }
@@ -3897,6 +4799,12 @@ async function handleRequest(
       clarifications,
       previews: Object.values(state.previews ?? {}),
       repo: state.repo ?? null,
+      modelReadiness,
+      externalWorkerInstall,
+      provisioning: {
+        ...(state.provisioning ?? { workers: {} }),
+        startupReadiness,
+      },
       taskCount: Object.keys(state.tasks).length,
       workerCount: Object.keys(state.workers).length,
       pendingClarificationCount: clarifications.filter((item) => item.status === "pending").length,
@@ -4039,7 +4947,16 @@ async function handleRequest(
 
   // GET /api/v1/health
   if (req.method === "GET" && pathname === "/api/v1/health") {
-    sendJson(res, 200, { status: "ok", mode: "controller", timestamp: Date.now() });
+    const readiness = getEffectiveStartupReadiness(deps, currentState);
+    const modelReadiness = getTeamClawModelReadiness();
+    const statusCode = readiness && readiness.status !== "ready" ? 503 : 200;
+    sendJson(res, statusCode, {
+      status: readiness?.status === "degraded" ? "degraded" : readiness?.status === "checking" ? "starting" : "ok",
+      mode: "controller",
+      timestamp: Date.now(),
+      provisioningReadiness: readiness,
+      modelReadiness,
+    });
     return;
   }
 

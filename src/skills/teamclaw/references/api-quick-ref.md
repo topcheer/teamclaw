@@ -74,7 +74,7 @@ Default: `http://127.0.0.1:9527`
 
 **Worker statuses:** `idle`, `busy`, `offline`
 
-**Transport types:** `http` (remote), `local` (child process), `in-process` (subagent)
+**Transport types:** `http` (external or dynamically provisioned worker callback)
 
 ### Messages
 

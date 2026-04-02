@@ -4,13 +4,20 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TeamClaw - Virtual Team Dashboard</title>
+  <link rel="icon" href="/ui/assets/teamclaw-app-icon.png" type="image/png">
+  <link rel="apple-touch-icon" href="/ui/assets/teamclaw-app-icon.png">
   <link rel="stylesheet" href="/ui/style.css">
 </head>
 <body>
   <header class="header">
-    <h1 class="header-title">TeamClaw</h1>
+    <div class="header-brand">
+      <img class="header-logo" src="/ui/assets/teamclaw-app-icon.png" alt="TeamClaw logo">
+      <h1 class="header-title">TeamClaw</h1>
+    </div>
     <div class="header-status">
       <span id="connection-status" class="status-dot disconnected"></span>
+      <button id="language-toggle" class="header-mini-btn" type="button">中文</button>
+      <button id="worker-install-toggle" class="header-mini-btn" type="button" hidden>Add worker</button>
       <span id="team-name">Team</span>
     </div>
   </header>
@@ -18,25 +25,39 @@
   <main class="main">
     <aside class="sidebar">
       <div class="sidebar-section">
-        <h2 class="sidebar-heading">Workers</h2>
+        <h2 class="sidebar-heading" data-i18n="sidebar.workers">Workers</h2>
         <div id="workers-list" class="workers-list">
-          <div class="empty-state">No workers connected</div>
+          <div class="empty-state" data-i18n="empty.noWorkers">No workers connected</div>
         </div>
       </div>
       <div class="sidebar-section">
-        <h2 class="sidebar-heading">Roles</h2>
+        <h2 class="sidebar-heading" data-i18n="sidebar.roles">Roles</h2>
         <div id="roles-list" class="roles-list"></div>
       </div>
     </aside>
 
     <div class="content">
+      <div id="runtime-alert" class="runtime-alert hidden"></div>
+      <section id="external-worker-install" class="worker-install-card hidden"></section>
       <div class="tabs">
-        <button class="tab" data-tab="planning">Planning <span id="planning-tab-count" class="tab-badge">0</span></button>
-        <button class="tab active" data-tab="tasks">Tasks</button>
-        <button class="tab" data-tab="workspace">Workspace</button>
-        <button class="tab" data-tab="clarifications">Clarifications <span id="clarifications-tab-count" class="tab-badge">0</span></button>
-        <button class="tab" data-tab="messages">Messages</button>
-        <button class="tab" data-tab="create-task">Manual Task</button>
+        <button class="tab" data-tab="planning">
+          <span class="tab-label" data-i18n="tab.planning">Planning</span>
+          <span id="planning-tab-count" class="tab-badge">0</span>
+          <span id="planning-tab-signal" class="tab-signal"></span>
+        </button>
+        <button class="tab active" data-tab="tasks">
+          <span class="tab-label" data-i18n="tab.tasks">Tasks</span>
+          <span id="tasks-tab-count" class="tab-badge">0</span>
+          <span id="tasks-tab-signal" class="tab-signal"></span>
+        </button>
+        <button class="tab" data-tab="workspace"><span class="tab-label" data-i18n="tab.workspace">Workspace</span></button>
+        <button class="tab" data-tab="clarifications">
+          <span class="tab-label" data-i18n="tab.clarifications">Clarifications</span>
+          <span id="clarifications-tab-count" class="tab-badge">0</span>
+          <span id="clarifications-tab-signal" class="tab-signal"></span>
+        </button>
+        <button class="tab" data-tab="messages"><span class="tab-label" data-i18n="tab.messages">Messages</span></button>
+        <button class="tab" data-tab="create-task" data-i18n="tab.manualTask">Manual Task</button>
       </div>
 
       <div class="tab-content">
@@ -52,8 +73,8 @@
             <div class="planning-main">
               <div id="planning-empty" class="planning-empty-state">
                 <div class="planning-empty-icon">🤝</div>
-                <h3>Team Planning</h3>
-                <p>Submit a requirement via the command bar below. Complex projects (3+ roles) will trigger a team kickoff meeting where each role assesses the requirement collaboratively.</p>
+                  <h3 data-i18n="planning.title">Team Planning</h3>
+                  <p data-i18n="planning.description">Submit a requirement via the command bar below. Complex projects (3+ roles) will trigger a team kickoff meeting where each role assesses the requirement collaboratively.</p>
               </div>
               <div id="planning-split" class="planning-split" style="display:none">
                 <section class="planning-pane planning-pane-left">
@@ -88,7 +109,7 @@
             <button class="filter-btn" data-filter="failed">Failed</button>
           </div>
           <div id="tasks-board" class="tasks-board">
-            <div class="empty-state">No tasks yet</div>
+            <div class="empty-state" data-i18n="empty.noTasks">No tasks yet</div>
           </div>
         </div>
 
@@ -101,7 +122,7 @@
                   <div class="workspace-panel-kicker">Workspace</div>
                   <h3>Files</h3>
                 </div>
-                <button id="workspace-tree-refresh" class="btn btn-small" type="button">Refresh</button>
+                <button id="workspace-tree-refresh" class="btn btn-small" type="button" data-i18n="action.refresh">Refresh</button>
               </div>
               <div id="workspace-tree" class="workspace-tree">
                 <div class="empty-state">Workspace tree loading…</div>
@@ -111,18 +132,18 @@
             <section class="workspace-viewer-panel">
               <div class="workspace-panel-header">
                 <div>
-                  <div class="workspace-panel-kicker">Preview</div>
-                  <h3 id="workspace-file-name">Select a file</h3>
+                  <div class="workspace-panel-kicker" data-i18n="workspace.preview">Preview</div>
+                  <h3 id="workspace-file-name" data-i18n="workspace.selectFile">Select a file</h3>
                   <div id="workspace-file-meta" class="workspace-file-meta"></div>
                 </div>
                 <div class="workspace-viewer-actions">
-                  <a id="workspace-open-raw" class="btn btn-small workspace-open-raw hidden" href="#" target="_blank" rel="noreferrer">Open Raw</a>
+                  <a id="workspace-open-raw" class="btn btn-small workspace-open-raw hidden" href="#" target="_blank" rel="noreferrer" data-i18n="workspace.openRaw">Open Raw</a>
                 </div>
               </div>
 
               <div class="workspace-view-tabs">
-                <button id="workspace-view-source" class="workspace-view-tab active" type="button" data-workspace-view="source">Source</button>
-                <button id="workspace-view-preview" class="workspace-view-tab" type="button" data-workspace-view="preview">Preview</button>
+                <button id="workspace-view-source" class="workspace-view-tab active" type="button" data-workspace-view="source" data-i18n="workspace.source">Source</button>
+                <button id="workspace-view-preview" class="workspace-view-tab" type="button" data-workspace-view="preview" data-i18n="workspace.preview">Preview</button>
               </div>
 
               <div class="workspace-view-body">
@@ -136,44 +157,44 @@
         <!-- Clarifications Tab -->
         <div id="tab-clarifications" class="tab-panel">
           <div id="clarifications-list" class="clarifications-list">
-            <div class="empty-state">No clarification requests</div>
+            <div class="empty-state" data-i18n="empty.noClarifications">No clarification requests</div>
           </div>
         </div>
 
         <!-- Messages Tab -->
         <div id="tab-messages" class="tab-panel">
           <div class="panel-note">
-            Controller activity is persisted here so you can follow requirement intake, orchestration, and follow-up runs from the web UI.
+            <span data-i18n="messages.panelNote">Controller activity is persisted here so you can follow requirement intake, orchestration, and follow-up runs from the web UI.</span>
           </div>
           <div id="controller-runs" class="controller-runs">
-            <div class="empty-state">No controller activity yet</div>
+            <div class="empty-state" data-i18n="empty.noControllerActivity">No controller activity yet</div>
           </div>
           <div id="messages-feed" class="messages-feed">
-            <div class="empty-state">No messages yet</div>
+            <div class="empty-state" data-i18n="empty.noMessages">No messages yet</div>
           </div>
         </div>
 
         <!-- Create Task Tab -->
         <div id="tab-create-task" class="tab-panel">
           <div class="panel-note">
-            Raw human requirements should go to the controller conversation first. Use this form only for explicit manual task injection or testing.
+            <span data-i18n="manualTask.note">Raw human requirements should go to the controller conversation first. Use this form only for explicit manual task injection or testing.</span>
           </div>
           <form id="create-task-form" class="create-task-form">
             <div class="form-group">
-              <label for="task-title">Title</label>
-              <input type="text" id="task-title" placeholder="Task title..." required>
+              <label for="task-title" data-i18n="manualTask.title">Title</label>
+              <input type="text" id="task-title" placeholder="Task title..." data-i18n-placeholder="manualTask.titlePlaceholder" required>
             </div>
             <div class="form-group">
-              <label for="task-desc">Description</label>
-              <textarea id="task-desc" placeholder="Execution-ready task description..." rows="4" required></textarea>
+              <label for="task-desc" data-i18n="manualTask.description">Description</label>
+              <textarea id="task-desc" placeholder="Execution-ready task description..." data-i18n-placeholder="manualTask.descriptionPlaceholder" rows="4" required></textarea>
             </div>
             <div class="form-group">
-              <label for="task-recommended-skills">Recommended Skills</label>
-              <input type="text" id="task-recommended-skills" placeholder="Comma-separated skill slugs, e.g. find-skills, ui-ux-pro-max">
+              <label for="task-recommended-skills" data-i18n="manualTask.skills">Recommended Skills</label>
+              <input type="text" id="task-recommended-skills" placeholder="Comma-separated skill slugs, e.g. find-skills, ui-ux-pro-max" data-i18n-placeholder="manualTask.skillsPlaceholder">
             </div>
             <div class="form-row">
               <div class="form-group">
-                <label for="task-priority">Priority</label>
+                <label for="task-priority" data-i18n="manualTask.priority">Priority</label>
                 <select id="task-priority">
                   <option value="low">Low</option>
                   <option value="medium" selected>Medium</option>
@@ -182,9 +203,9 @@
                 </select>
               </div>
               <div class="form-group">
-                <label for="task-role">Assigned Role</label>
+                <label for="task-role" data-i18n="manualTask.assignedRole">Assigned Role</label>
                 <select id="task-role">
-                  <option value="">Auto-assign</option>
+                  <option value="" data-i18n="manualTask.autoAssign">Auto-assign</option>
                   <option value="pm">Product Manager</option>
                   <option value="architect">Software Architect</option>
                   <option value="developer">Developer</option>
@@ -198,12 +219,26 @@
                 </select>
               </div>
             </div>
-            <button type="submit" class="btn btn-primary">Create Manual Task</button>
+            <button type="submit" class="btn btn-primary" data-i18n="manualTask.create">Create Manual Task</button>
           </form>
         </div>
       </div>
     </div>
   </main>
+
+  <div id="clarification-prompt-modal" class="clarification-prompt-modal" aria-hidden="true">
+    <div class="clarification-prompt-backdrop" data-clarification-prompt-close></div>
+    <section class="clarification-prompt-panel" role="dialog" aria-modal="true" aria-labelledby="clarification-prompt-title">
+      <header class="clarification-prompt-header">
+        <div>
+          <div class="clarification-prompt-kicker">Clarification needed</div>
+          <h2 id="clarification-prompt-title">Human input required</h2>
+        </div>
+        <button id="clarification-prompt-close" class="btn btn-small" type="button">Dismiss</button>
+      </header>
+      <div id="clarification-prompt-body" class="clarification-prompt-body"></div>
+    </section>
+  </div>
 
   <div id="task-detail-modal" class="task-detail-modal" aria-hidden="true">
     <div class="task-detail-backdrop" data-task-detail-close></div>
@@ -221,21 +256,33 @@
       </header>
 
       <div class="task-detail-toolbar">
-        <label class="task-detail-follow">
-          <input id="task-detail-follow-toggle" type="checkbox" checked>
-          <span>Follow live output</span>
-        </label>
         <span id="task-detail-live-badge" class="task-detail-live-badge">Idle</span>
       </div>
 
       <div class="task-detail-tabs">
-        <button class="task-detail-tab active" type="button" data-task-detail-tab="overview">Overview</button>
-        <button class="task-detail-tab" type="button" data-task-detail-tab="timeline">Timeline</button>
+        <button class="task-detail-tab active" type="button" data-task-detail-tab="details">
+          <span>Task details</span>
+          <span class="task-detail-tab-count" data-task-detail-tab-count="details"></span>
+        </button>
+        <button class="task-detail-tab" type="button" data-task-detail-tab="timeline">
+          <span>Timeline</span>
+          <span class="task-detail-tab-count" data-task-detail-tab-count="timeline"></span>
+        </button>
+        <button class="task-detail-tab" type="button" data-task-detail-tab="clarifications">
+          <span>Clarifications</span>
+          <span class="task-detail-tab-count" data-task-detail-tab-count="clarifications"></span>
+        </button>
+        <button class="task-detail-tab" type="button" data-task-detail-tab="messages">
+          <span>Messages</span>
+          <span class="task-detail-tab-count" data-task-detail-tab-count="messages"></span>
+        </button>
       </div>
 
       <div class="task-detail-body">
-        <div id="task-detail-overview" class="task-detail-panel-content active"></div>
+        <div id="task-detail-details" class="task-detail-panel-content active"></div>
         <div id="task-detail-timeline" class="task-detail-panel-content"></div>
+        <div id="task-detail-clarifications" class="task-detail-panel-content"></div>
+        <div id="task-detail-messages" class="task-detail-panel-content"></div>
       </div>
     </section>
   </div>

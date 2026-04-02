@@ -3,10 +3,6 @@ import type { PluginConfig, TeamState } from "../types.js";
 export function hasOnDemandWorkerProvisioning(
   config: Pick<PluginConfig, "workerProvisioningType" | "processModel">,
 ): boolean {
-  // Single-process mode uses InProcessWorkerManager for on-demand provisioning
-  if (config.processModel === "single") {
-    return true;
-  }
   return config.workerProvisioningType !== "none";
 }
 

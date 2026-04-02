@@ -5,7 +5,7 @@ import { createHeartbeatPayload } from "../protocol.js";
 import { IdentityManager } from "../identity.js";
 import { MessageQueue } from "./message-queue.js";
 import { createWorkerHttpHandler } from "./http-handler.js";
-import { ensureOpenClawWorkspaceMemoryDir } from "../openclaw-workspace.js";
+import { buildTeamClawAgentSessionKey, ensureOpenClawWorkspaceMemoryDir } from "../openclaw-workspace.js";
 
 export type TaskExecutorResultLike = string | { text: string; contract?: Record<string, unknown> };
 
@@ -37,7 +37,7 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
         const taskId = assignment.taskId;
         cancelledTaskIds.delete(taskId);
         activeTaskId = taskId;
-        activeTaskSessionKeys.set(taskId, assignment.executionSessionKey || `teamclaw-task-${taskId}`);
+        activeTaskSessionKeys.set(taskId, assignment.executionSessionKey || buildTeamClawAgentSessionKey(`teamclaw-task-${taskId}`));
         try {
           await deps.prepareTaskAssignment?.(assignment);
           const taskPrompt = [assignment.title.trim(), assignment.description.trim()].filter(Boolean).join("\n\n");
@@ -102,7 +102,7 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
       ? async (requirement: string, role: string): Promise<Record<string, unknown>> => {
           const { buildKickoffAssessmentPrompt } = await import("../controller/kickoff-orchestrator.js");
           const prompt = buildKickoffAssessmentPrompt(role as import("../types.js").RoleId, requirement);
-          const sessionKey = `teamclaw-kickoff-${role}-${Date.now()}`;
+          const sessionKey = buildTeamClawAgentSessionKey(`teamclaw-kickoff-${role}-${Date.now()}`);
           const raw = await externalTaskExecutor(prompt, {
             taskId: `kickoff-${role}`,
             title: `Kickoff Assessment (${role})`,

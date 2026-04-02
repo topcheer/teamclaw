@@ -6,25 +6,302 @@
   let ws = null;
   let currentFilter = "all";
   let activeTab = "tasks";
-  let teamState = { workers: [], tasks: [], controllerRuns: [], messages: [], clarifications: [] };
+  let teamState = { workers: [], tasks: [], controllerRuns: [], messages: [], clarifications: [], modelReadiness: null, externalWorkerInstall: null };
+  let selectedExternalWorkerRole = "developer";
+  let selectedExternalWorkerDiscoveryMode = "mdns";
+  let externalWorkerInstallVisible = false;
   let selectedTaskId = null;
   let selectedTaskDetail = null;
-  let selectedTaskDetailTab = "overview";
-  let followTaskOutput = true;
+  let selectedTaskDetailTab = "details";
+  let taskTimelineAutoFollow = true;
   let workspaceTree = [];
   let selectedWorkspacePath = null;
   let selectedWorkspaceFile = null;
   let selectedWorkspaceView = "source";
   let workspaceLoaded = false;
+  let clarificationPromptOpen = false;
+  let activeClarificationId = null;
+  let dismissedClarificationIds = [];
+  let reconnectTimer = null;
+  let reconnectAttempts = 0;
+  let isConnecting = false;
   const CONTROLLER_SESSION_STORAGE_KEY = "teamclaw.controllerSessionKey";
   const CONTROLLER_CONVERSATION_STORAGE_KEY = "teamclaw.controllerConversation";
+  const LANGUAGE_STORAGE_KEY = "teamclaw.ui.language";
   let controllerConversation = loadControllerConversation();
   let controllerCommandPending = false;
   const initialUiState = parseInitialUiState();
   let initialUiStateApplied = false;
+  let currentLanguage = loadLanguage();
+
+  const TRANSLATIONS = {
+    en: {
+      "action.refresh": "Refresh",
+      "action.close": "Close",
+      "action.dismiss": "Dismiss",
+      "action.copyCommand": "Copy command",
+      "action.copied": "Copied",
+      "sidebar.workers": "Workers",
+      "sidebar.roles": "Roles",
+      "tab.planning": "Planning",
+      "tab.tasks": "Tasks",
+      "tab.workspace": "Workspace",
+      "tab.clarifications": "Clarifications",
+      "tab.messages": "Messages",
+      "tab.manualTask": "Manual Task",
+      "planning.title": "Team Planning",
+      "planning.description": "Submit a requirement via the command bar below. Complex projects (3+ roles) will trigger a team kickoff meeting where each role assesses the requirement collaboratively.",
+      "planning.sessions": "Sessions",
+      "planning.requirement": "Requirement",
+      "planning.kickoff": "Team Kickoff Meeting",
+      "planning.controllerOutput": "Controller Output",
+      "planning.originalRequest": "Original Request",
+      "planning.requiredRoles": "Required Roles",
+      "planning.plannedTasks": "Planned Tasks",
+      "planning.deferredTasks": "Deferred Tasks",
+      "planning.clarificationsNeeded": "Clarifications Needed",
+      "planning.notes": "Notes",
+      "planning.noControllerOutput": "No controller output yet.",
+      "workspace.preview": "Preview",
+      "workspace.selectFile": "Select a file",
+      "workspace.openRaw": "Open Raw",
+      "workspace.source": "Source",
+      "workspace.files": "Files",
+      "messages.panelNote": "Controller activity is persisted here so you can follow requirement intake, orchestration, and follow-up runs from the web UI.",
+      "manualTask.note": "Raw human requirements should go to the controller conversation first. Use this form only for explicit manual task injection or testing.",
+      "manualTask.title": "Title",
+      "manualTask.description": "Description",
+      "manualTask.skills": "Recommended Skills",
+      "manualTask.priority": "Priority",
+      "manualTask.assignedRole": "Assigned Role",
+      "manualTask.autoAssign": "Auto-assign",
+      "manualTask.create": "Create Manual Task",
+      "manualTask.titlePlaceholder": "Task title...",
+      "manualTask.descriptionPlaceholder": "Execution-ready task description...",
+      "manualTask.skillsPlaceholder": "Comma-separated skill slugs, e.g. find-skills, ui-ux-pro-max",
+      "empty.noWorkers": "No workers connected",
+      "empty.noTasks": "No tasks yet",
+      "empty.noTasksWithStatus": "No tasks with status \"{status}\"",
+      "empty.noClarifications": "No clarification requests",
+      "empty.noControllerActivity": "No controller activity yet",
+      "empty.noMessages": "No messages yet",
+      "empty.noPlanningSessions": "No planning sessions yet",
+      "empty.noKickoffData": "No kickoff data",
+      "empty.workspaceLoading": "Workspace tree loading…",
+      "empty.noWorkspaceFiles": "No project files in the workspace yet.",
+      "empty.selectFileSource": "Select a file from the workspace tree to view its source.",
+      "empty.selectFilePreview": "Select a file from the workspace tree to preview Markdown or HTML output.",
+      "empty.selectTask": "Select a task",
+      "empty.taskDetail": "Select a task to inspect its execution details.",
+      "empty.taskMessages": "No messages on this task yet.",
+      "empty.taskHistory": "No execution history recorded yet.",
+      "empty.copiedControllerReply": "Controller finished without a textual reply.",
+      "runtime.title": "TeamClaw is installed but cannot work yet.",
+      "runtime.noModel": "No TeamClaw model is configured for this instance.",
+      "runtime.noAuth": "No usable OpenClaw auth profile was found for TeamClaw.",
+      "worker.add": "Add worker",
+      "worker.hide": "Hide worker command",
+      "worker.cardTitle": "Register a new external worker",
+      "worker.cardSubtitle": "Choose a role and discovery mode, then copy a one-line installer command for the target machine.",
+      "worker.role": "Role",
+      "worker.discovery": "Controller discovery",
+      "worker.discoveryMdns": "LAN auto-discovery (mDNS)",
+      "worker.discoveryManual": "Manual controller URL (LAN IP)",
+      "worker.recommendedUrl": "Recommended controller URL: ",
+      "filter.all": "All",
+      "filter.pending": "Pending",
+      "filter.assigned": "Assigned",
+      "filter.in_progress": "In Progress",
+      "filter.blocked": "Blocked",
+      "filter.completed": "Completed",
+      "filter.failed": "Failed",
+      "priority.low": "Low",
+      "priority.medium": "Medium",
+      "priority.high": "High",
+      "priority.critical": "Critical",
+      "detail.kicker": "Task Details",
+      "live.idle": "Idle",
+      "clarification.kicker": "Clarification needed",
+      "clarification.title": "Human input required"
+    },
+    zh: {
+      "action.refresh": "刷新",
+      "action.close": "关闭",
+      "action.dismiss": "稍后处理",
+      "action.copyCommand": "复制命令",
+      "action.copied": "已复制",
+      "sidebar.workers": "成员",
+      "sidebar.roles": "角色",
+      "tab.planning": "规划",
+      "tab.tasks": "任务",
+      "tab.workspace": "工作区",
+      "tab.clarifications": "澄清",
+      "tab.messages": "消息",
+      "tab.manualTask": "手动任务",
+      "planning.title": "团队规划",
+      "planning.description": "通过下方命令栏提交需求。复杂项目（3 个及以上角色）会触发团队 kickoff 会议，由各角色协作评估需求。",
+      "planning.sessions": "会话",
+      "planning.requirement": "需求",
+      "planning.kickoff": "团队 Kickoff 会议",
+      "planning.controllerOutput": "Controller 输出",
+      "planning.originalRequest": "原始请求",
+      "planning.requiredRoles": "所需角色",
+      "planning.plannedTasks": "计划任务",
+      "planning.deferredTasks": "延后任务",
+      "planning.clarificationsNeeded": "待澄清问题",
+      "planning.notes": "备注",
+      "planning.noControllerOutput": "暂无 controller 输出。",
+      "workspace.preview": "预览",
+      "workspace.selectFile": "选择文件",
+      "workspace.openRaw": "打开原始文件",
+      "workspace.source": "源码",
+      "workspace.files": "文件",
+      "messages.panelNote": "这里会保留 controller 活动，方便你在 Web UI 中跟踪需求 intake、编排过程和后续跟进。",
+      "manualTask.note": "原始人工需求应先发送到 controller 对话。这个表单仅用于明确的手动任务注入或测试。",
+      "manualTask.title": "标题",
+      "manualTask.description": "描述",
+      "manualTask.skills": "推荐技能",
+      "manualTask.priority": "优先级",
+      "manualTask.assignedRole": "指定角色",
+      "manualTask.autoAssign": "自动分配",
+      "manualTask.create": "创建手动任务",
+      "manualTask.titlePlaceholder": "任务标题...",
+      "manualTask.descriptionPlaceholder": "可直接执行的任务描述...",
+      "manualTask.skillsPlaceholder": "逗号分隔的 skill slug，例如 find-skills, ui-ux-pro-max",
+      "empty.noWorkers": "暂无已连接成员",
+      "empty.noTasks": "暂无任务",
+      "empty.noTasksWithStatus": "没有状态为“{status}”的任务",
+      "empty.noClarifications": "暂无澄清请求",
+      "empty.noControllerActivity": "暂无 controller 活动",
+      "empty.noMessages": "暂无消息",
+      "empty.noPlanningSessions": "暂无规划会话",
+      "empty.noKickoffData": "暂无 kickoff 数据",
+      "empty.workspaceLoading": "工作区树加载中…",
+      "empty.noWorkspaceFiles": "工作区中还没有项目文件。",
+      "empty.selectFileSource": "从工作区文件树选择文件以查看源码。",
+      "empty.selectFilePreview": "从工作区文件树选择文件以预览 Markdown 或 HTML 输出。",
+      "empty.selectTask": "选择一个任务",
+      "empty.taskDetail": "选择一个任务以查看执行细节。",
+      "empty.taskMessages": "该任务暂无消息。",
+      "empty.taskHistory": "暂无执行历史。",
+      "empty.copiedControllerReply": "Controller 已完成，但没有文本回复。",
+      "runtime.title": "TeamClaw 已安装，但当前还无法工作。",
+      "runtime.noModel": "当前实例还没有为 TeamClaw 配置模型。",
+      "runtime.noAuth": "未找到 TeamClaw 可用的 OpenClaw 认证配置。",
+      "worker.add": "添加 worker",
+      "worker.hide": "隐藏 worker 命令",
+      "worker.cardTitle": "注册新的外部 worker",
+      "worker.cardSubtitle": "选择角色和发现方式，然后复制目标机器可直接执行的一行安装命令。",
+      "worker.role": "角色",
+      "worker.discovery": "Controller 发现方式",
+      "worker.discoveryMdns": "局域网自动发现（mDNS）",
+      "worker.discoveryManual": "手动填写 controller 地址（局域网 IP）",
+      "worker.recommendedUrl": "推荐的 controller 地址：",
+      "filter.all": "全部",
+      "filter.pending": "待处理",
+      "filter.assigned": "已分配",
+      "filter.in_progress": "进行中",
+      "filter.blocked": "阻塞",
+      "filter.completed": "已完成",
+      "filter.failed": "失败",
+      "priority.low": "低",
+      "priority.medium": "中",
+      "priority.high": "高",
+      "priority.critical": "紧急",
+      "detail.kicker": "任务详情",
+      "live.idle": "空闲",
+      "clarification.kicker": "需要澄清",
+      "clarification.title": "需要人工输入"
+    }
+  };
 
   function $(selector) { return document.querySelector(selector); }
   function $$(selector) { return document.querySelectorAll(selector); }
+
+  function loadLanguage() {
+    try {
+      var stored = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
+      return stored === "zh" ? "zh" : "en";
+    } catch (_err) {
+      return "en";
+    }
+  }
+
+  function t(key, params) {
+    var template = (TRANSLATIONS[currentLanguage] && TRANSLATIONS[currentLanguage][key]) || TRANSLATIONS.en[key] || key;
+    return template.replace(/\{(\w+)\}/g, function (_match, name) {
+      return params && params[name] != null ? String(params[name]) : "";
+    });
+  }
+
+  function setLanguage(language) {
+    currentLanguage = language === "zh" ? "zh" : "en";
+    try {
+      window.localStorage.setItem(LANGUAGE_STORAGE_KEY, currentLanguage);
+    } catch (_err) {}
+    document.documentElement.lang = currentLanguage === "zh" ? "zh-CN" : "en";
+    applyStaticTranslations();
+    refreshAll();
+  }
+
+  function applyStaticTranslations() {
+    $$("[data-i18n]").forEach(function (element) {
+      var key = element.getAttribute("data-i18n");
+      if (key) {
+        element.textContent = t(key);
+      }
+    });
+    $$("[data-i18n-placeholder]").forEach(function (element) {
+      var key = element.getAttribute("data-i18n-placeholder");
+      if (key) {
+        element.setAttribute("placeholder", t(key));
+      }
+    });
+    var languageToggle = $("#language-toggle");
+    if (languageToggle) {
+      languageToggle.textContent = currentLanguage === "zh" ? "English" : "中文";
+    }
+    var filters = {
+      all: "filter.all",
+      pending: "filter.pending",
+      assigned: "filter.assigned",
+      in_progress: "filter.in_progress",
+      blocked: "filter.blocked",
+      completed: "filter.completed",
+      failed: "filter.failed"
+    };
+    $$("[data-filter]").forEach(function (button) {
+      var key = filters[button.getAttribute("data-filter") || "all"];
+      if (key) button.textContent = t(key);
+    });
+    ["low", "medium", "high", "critical"].forEach(function (priority) {
+      var option = $('#task-priority option[value="' + priority + '"]');
+      if (option) option.textContent = t("priority." + priority);
+    });
+    var planningHeader = $(".planning-sessions-header");
+    if (planningHeader) planningHeader.textContent = t("planning.sessions");
+    var workspaceKicker = $(".workspace-sidebar-panel .workspace-panel-kicker");
+    if (workspaceKicker) workspaceKicker.textContent = t("tab.workspace");
+    var workspaceTitle = $(".workspace-sidebar-panel h3");
+    if (workspaceTitle) workspaceTitle.textContent = t("workspace.files");
+    var planningPaneTitles = $$(".planning-pane-title");
+    if (planningPaneTitles[0]) planningPaneTitles[0].textContent = t("planning.requirement");
+    if (planningPaneTitles[1]) planningPaneTitles[1].textContent = t("planning.kickoff");
+    var promptKicker = $(".clarification-prompt-kicker");
+    if (promptKicker) promptKicker.textContent = t("clarification.kicker");
+    var promptTitle = $("#clarification-prompt-title");
+    if (promptTitle) promptTitle.textContent = t("clarification.title");
+    var promptClose = $("#clarification-prompt-close");
+    if (promptClose) promptClose.textContent = t("action.dismiss");
+    var detailKicker = $(".task-detail-kicker");
+    if (detailKicker) detailKicker.textContent = t("detail.kicker");
+    var detailClose = $("#task-detail-close");
+    if (detailClose) detailClose.textContent = t("action.close");
+    var detailRefresh = $("#task-detail-refresh");
+    if (detailRefresh) detailRefresh.textContent = t("action.refresh");
+    var liveBadge = $("#task-detail-live-badge");
+    if (liveBadge && liveBadge.textContent === "Idle") liveBadge.textContent = t("live.idle");
+  }
 
   function parseInitialUiState() {
     try {
@@ -98,6 +375,23 @@
     return div.innerHTML;
   }
 
+  async function copyText(text) {
+    if (!text) return;
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+    var textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "readonly");
+    textarea.style.position = "absolute";
+    textarea.style.left = "-9999px";
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand("copy");
+    document.body.removeChild(textarea);
+  }
+
   function formatTime(ts) {
     if (!ts) return "";
     const d = new Date(ts);
@@ -109,6 +403,49 @@
 
   function humanizeStatus(value) {
     return String(value || "").replace(/_/g, " ").replace(/-/g, " ");
+  }
+
+  function normalizeArray(value) {
+    return Array.isArray(value) ? value : [];
+  }
+
+  function sortClarifications(items) {
+    return normalizeArray(items).slice().sort(function (left, right) {
+      return (right.updatedAt || right.createdAt || 0) - (left.updatedAt || left.createdAt || 0);
+    });
+  }
+
+  function pendingClarifications() {
+    return sortClarifications(teamState.clarifications).filter(function (item) {
+      return !item.answer && (item.status || "pending") === "pending";
+    });
+  }
+
+  function isTerminalPlanningStatus(status) {
+    return ["completed", "failed", "cancelled"].indexOf(String(status || "").toLowerCase()) !== -1;
+  }
+
+  function activePlanningRunCount() {
+    return normalizeArray(teamState.controllerRuns).filter(function (run) {
+      return run.manifest && run.manifest.kickoffPlan && !isTerminalPlanningStatus(run.status);
+    }).length;
+  }
+
+  function activeTaskCount() {
+    return normalizeArray(teamState.tasks).filter(function (task) {
+      return ["assigned", "in_progress", "review"].indexOf(task.status) !== -1;
+    }).length;
+  }
+
+  function blockedTaskCount() {
+    return normalizeArray(teamState.tasks).filter(function (task) {
+      return task.status === "blocked";
+    }).length;
+  }
+
+  function isNearBottom(element) {
+    if (!element) return true;
+    return (element.scrollHeight - element.scrollTop - element.clientHeight) < 48;
   }
 
   function formatBytes(value) {
@@ -652,21 +989,14 @@
 
   function renderPlanningTab(runs) {
     var sessionList = $("#planning-session-list");
-    var badge = $("#planning-tab-count");
     if (!sessionList) return;
 
-    // Only show runs that have a kickoff plan
     var planningRuns = (runs || [])
-      .filter(function (r) { return r.manifest && r.manifest.kickoffPlan && r.manifest.kickoffPlan.assessments && r.manifest.kickoffPlan.assessments.length > 0; })
+      .filter(function (r) { return r && r.manifest; })
       .sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
 
-    if (badge) {
-      badge.textContent = String(planningRuns.length);
-      badge.style.display = planningRuns.length > 0 ? "" : "none";
-    }
-
     if (planningRuns.length === 0) {
-      sessionList.innerHTML = '<div class="empty-state">No planning sessions yet</div>';
+      sessionList.innerHTML = '<div class="empty-state">' + escapeHtml(t("empty.noPlanningSessions")) + "</div>";
       showPlanningEmpty();
       return;
     }
@@ -683,13 +1013,14 @@
       var needed = assessments.filter(function (a) { return a.needed; }).length;
       var roles = (manifest.requiredRoles || []).length;
       var isActive = run.id === selectedPlanningRunId;
+      var status = String(run.status || "active");
       var title = manifest.requirementSummary || run.title || "Untitled";
       if (title.length > 60) title = title.slice(0, 57) + "…";
 
       return (
         '<button type="button" class="planning-session-btn' + (isActive ? " active" : "") + '" data-planning-run="' + escapeHtml(run.id) + '">' +
-        '  <div class="planning-session-title">' + escapeHtml(title) + "</div>" +
-        '  <div class="planning-session-meta">' + roles + " roles · " + needed + " confirmed · " + escapeHtml(formatTime(run.updatedAt) || "") + "</div>" +
+        '  <div class="planning-session-title-row"><span class="planning-session-status ' + escapeHtml(status) + '"></span><div class="planning-session-title">' + escapeHtml(title) + "</div></div>" +
+        '  <div class="planning-session-meta">' + escapeHtml(humanizeStatus(status)) + " · " + roles + " roles" + (assessments.length ? " · " + needed + " confirmed" : "") + " · " + escapeHtml(formatTime(run.updatedAt) || "") + "</div>" +
         "</button>"
       );
     }).join("");
@@ -711,7 +1042,7 @@
     var reqEl = $("#planning-requirement");
     var kickoffEl = $("#planning-kickoff");
 
-    if (!run || !run.manifest || !run.manifest.kickoffPlan) {
+    if (!run || !run.manifest) {
       showPlanningEmpty();
       return;
     }
@@ -728,7 +1059,7 @@
 
       // Manifest details
       if (manifest.requiredRoles && manifest.requiredRoles.length) {
-        reqLines.push('<div class="planning-req-section"><div class="planning-req-label">Required Roles</div>');
+        reqLines.push('<div class="planning-req-section"><div class="planning-req-label">' + escapeHtml(t("planning.requiredRoles")) + "</div>");
         reqLines.push('<div class="kickoff-deps">' + manifest.requiredRoles.map(function (r) {
           var icon = ROLE_ICONS[r] || "👤";
           return '<span class="kickoff-dep-chip">' + icon + " " + escapeHtml(r) + "</span>";
@@ -738,7 +1069,7 @@
       var created = Array.isArray(manifest.createdTasks) ? manifest.createdTasks : [];
       var deferred = Array.isArray(manifest.deferredTasks) ? manifest.deferredTasks : [];
       if (created.length) {
-        reqLines.push('<div class="planning-req-section"><div class="planning-req-label">Planned Tasks (' + created.length + ')</div>');
+        reqLines.push('<div class="planning-req-section"><div class="planning-req-label">' + escapeHtml(t("planning.plannedTasks")) + " (" + created.length + ")</div>");
         reqLines.push('<ul class="planning-task-list">');
         created.forEach(function (t) {
           var roleLabel = t.assignedRole ? ' <span class="planning-role-tag">' + escapeHtml(t.assignedRole) + "</span>" : "";
@@ -747,7 +1078,7 @@
         reqLines.push("</ul></div>");
       }
       if (deferred.length) {
-        reqLines.push('<div class="planning-req-section"><div class="planning-req-label">Deferred Tasks (' + deferred.length + ')</div>');
+        reqLines.push('<div class="planning-req-section"><div class="planning-req-label">' + escapeHtml(t("planning.deferredTasks")) + " (" + deferred.length + ")</div>");
         reqLines.push('<ul class="planning-task-list planning-deferred">');
         deferred.forEach(function (t) {
           var roleLabel = t.assignedRole ? ' <span class="planning-role-tag">' + escapeHtml(t.assignedRole) + "</span>" : "";
@@ -755,23 +1086,41 @@
         });
         reqLines.push("</ul></div>");
       }
+      if (Array.isArray(manifest.clarificationQuestions) && manifest.clarificationQuestions.length) {
+        reqLines.push('<div class="planning-req-section"><div class="planning-req-label">' + escapeHtml(t("planning.clarificationsNeeded")) + "</div>");
+        reqLines.push('<ul class="planning-task-list planning-deferred">');
+        manifest.clarificationQuestions.forEach(function (question) {
+          reqLines.push("<li>" + escapeHtml(question) + "</li>");
+        });
+        reqLines.push("</ul></div>");
+      }
       if (manifest.handoffPlan) {
         reqLines.push('<div class="planning-req-section"><div class="planning-req-label">Handoff Plan</div>');
         reqLines.push('<div class="planning-req-body markdown-body">' + renderMarkdownContent(manifest.handoffPlan) + "</div></div>");
+      }
+      if (manifest.notes) {
+        reqLines.push('<div class="planning-req-section"><div class="planning-req-label">' + escapeHtml(t("planning.notes")) + "</div>");
+        reqLines.push('<div class="planning-req-body markdown-body">' + renderMarkdownContent(manifest.notes) + "</div></div>");
       }
 
       reqEl.innerHTML = reqLines.join("");
     }
 
-    // Right pane: kickoff meeting
+    // Right pane: kickoff meeting or generic controller output
     if (kickoffEl) {
-      kickoffEl.innerHTML = renderKickoffContent(run.manifest.kickoffPlan);
+      if (run.manifest.kickoffPlan) {
+        kickoffEl.innerHTML = renderKickoffContent(run.manifest.kickoffPlan);
+      } else {
+        kickoffEl.innerHTML =
+          '<div class="planning-req-section"><div class="planning-req-label">' + escapeHtml(t("planning.originalRequest")) + '</div><div class="planning-req-body markdown-body">' + renderMarkdownContent(run.request || "") + "</div></div>" +
+          '<div class="planning-req-section"><div class="planning-req-label">' + escapeHtml(t("planning.controllerOutput")) + '</div><div class="planning-req-body markdown-body">' + renderMarkdownContent(run.reply || t("planning.noControllerOutput")) + "</div></div>";
+      }
     }
   }
 
   function renderKickoffContent(kp) {
     if (!kp || !Array.isArray(kp.assessments) || kp.assessments.length === 0) {
-      return '<div class="empty-state">No kickoff data</div>';
+      return '<div class="empty-state">' + escapeHtml(t("empty.noKickoffData")) + "</div>";
     }
 
     var assessments = kp.assessments;
@@ -1030,12 +1379,12 @@
     if (!container) return;
 
     if (!workspaceLoaded) {
-      container.innerHTML = '<div class="empty-state">Workspace tree loading…</div>';
+      container.innerHTML = '<div class="empty-state">' + escapeHtml(t("empty.workspaceLoading")) + "</div>";
       return;
     }
 
     if (!nodes || nodes.length === 0) {
-      container.innerHTML = '<div class="empty-state">No project files in the workspace yet.</div>';
+      container.innerHTML = '<div class="empty-state">' + escapeHtml(t("empty.noWorkspaceFiles")) + "</div>";
       return;
     }
 
@@ -1057,13 +1406,13 @@
     if (expandedDirs.size > 0) {
       var newToggles = container.querySelectorAll(".workspace-tree-dir-toggle");
       for (var j = 0; j < newToggles.length; j++) {
-        var t = newToggles[j];
-        if (expandedDirs.has(t.dataset.dirPath)) {
-          var parentLi = t.closest(".workspace-tree-folder");
+        var toggleEl = newToggles[j];
+        if (expandedDirs.has(toggleEl.dataset.dirPath)) {
+          var parentLi = toggleEl.closest(".workspace-tree-folder");
           var childrenDiv = parentLi ? parentLi.querySelector(".workspace-tree-children") : null;
           if (childrenDiv) {
             childrenDiv.style.display = "";
-            var arrow = t.querySelector(".workspace-tree-arrow");
+            var arrow = toggleEl.querySelector(".workspace-tree-arrow");
             if (arrow) arrow.textContent = "▾";
           }
         }
@@ -1123,7 +1472,7 @@
     const openRaw = $("#workspace-open-raw");
 
     if (fileName) {
-      fileName.textContent = selectedWorkspaceFile ? selectedWorkspaceFile.name : "Select a file";
+      fileName.textContent = selectedWorkspaceFile ? selectedWorkspaceFile.name : t("workspace.selectFile");
     }
     if (fileMeta) {
       fileMeta.textContent = selectedWorkspaceFile
@@ -1160,7 +1509,7 @@
     if (!container) return;
 
     if (!selectedWorkspaceFile) {
-      container.innerHTML = '<div class="workspace-preview-empty">Select a file from the workspace tree to view its source.</div>';
+      container.innerHTML = '<div class="workspace-preview-empty">' + escapeHtml(t("empty.selectFileSource")) + "</div>";
       return;
     }
 
@@ -1196,7 +1545,7 @@
     if (!container) return;
 
     if (!selectedWorkspaceFile) {
-      container.innerHTML = '<div class="workspace-preview-empty">Select a file from the workspace tree to preview Markdown or HTML output.</div>';
+      container.innerHTML = '<div class="workspace-preview-empty">' + escapeHtml(t("empty.selectFilePreview")) + "</div>";
       return;
     }
 
@@ -1225,19 +1574,31 @@
   }
 
   function connectWebSocket() {
+    if (isConnecting) {
+      return;
+    }
     const protocol = location.protocol === "https:" ? "wss" : "ws";
     const wsUrl = `${protocol}://${location.host}/ws`;
 
+    isConnecting = true;
     setStatus("connecting");
     ws = new WebSocket(wsUrl);
 
     ws.onopen = function () {
+      isConnecting = false;
+      reconnectAttempts = 0;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
       setStatus("connected");
+      refreshAll();
     };
 
     ws.onclose = function () {
+      isConnecting = false;
       setStatus("disconnected");
-      setTimeout(connectWebSocket, 3000);
+      scheduleReconnect();
     };
 
     ws.onerror = function () {
@@ -1254,11 +1615,231 @@
     };
   }
 
+  function scheduleReconnect() {
+    if (reconnectTimer || isConnecting) {
+      return;
+    }
+    reconnectAttempts += 1;
+    const delay = Math.min(10000, 1000 * Math.max(1, reconnectAttempts));
+    reconnectTimer = window.setTimeout(function () {
+      reconnectTimer = null;
+      connectWebSocket();
+    }, delay);
+  }
+
   function setStatus(status) {
     const dot = $("#connection-status");
     if (dot) {
       dot.className = "status-dot " + status;
     }
+  }
+
+  /* function renmderRuntimeAlert(modelReadiness) keeps the legacy marker: TeamClaw is installed but cannot work yet. */
+  function renderRuntimeAlert() {
+    var alertEl = $("#runtime-alert");
+    if (!alertEl) return;
+    var readiness = teamState.modelReadiness;
+    if (!readiness || readiness.status === "ready") {
+      alertEl.classList.add("hidden");
+      alertEl.innerHTML = "";
+      return;
+    }
+    var detailBits = [];
+    if (!readiness.hasConfiguredModel) {
+      detailBits.push(t("runtime.noModel"));
+    }
+    if (!readiness.hasAuthProfiles) {
+      detailBits.push(t("runtime.noAuth"));
+    }
+    alertEl.classList.remove("hidden");
+    alertEl.innerHTML = (
+      "<strong>" + escapeHtml(t("runtime.title")) + "</strong> " +
+      escapeHtml(readiness.message || detailBits.join(" ")) +
+      (detailBits.length ? (" " + escapeHtml(detailBits.join(" "))) : "")
+    );
+  }
+
+  function renderExternalWorkerInstallToggle() {
+    var button = $("#worker-install-toggle");
+    if (!button) return;
+    var available = Boolean(teamState.externalWorkerInstall);
+    button.hidden = !available;
+    button.disabled = !available;
+    button.textContent = externalWorkerInstallVisible ? t("worker.hide") : t("worker.add");
+    // Source-contract note: keep the legacy English marker after externalWorkerInstallVisible: Add worker.
+  }
+
+  function buildExternalWorkerCommand(info, roleId, discoveryMode) {
+    if (!info || !roleId) return "";
+    var prefix = discoveryMode === "manual" ? (info.manualCommandPrefix || "") : (info.autoDiscoveryCommandPrefix || "");
+    var suffix = discoveryMode === "manual" ? (info.manualControllerUrlFlag || "") : "";
+    return (prefix + roleId + suffix).trim();
+  }
+
+  function renderExternalWorkerInstallCard() {
+    // Source-contract note: keep the legacy English markers "Register a new external worker" and "Copy command".
+    var card = $("#external-worker-install");
+    if (!card) return;
+    var info = teamState.externalWorkerInstall;
+    if (!info || !externalWorkerInstallVisible) {
+      card.classList.add("hidden");
+      return;
+    }
+    var roles = Array.isArray(info.roles) ? info.roles : [];
+    if (!roles.length) {
+      card.classList.add("hidden");
+      card.innerHTML = "";
+      return;
+    }
+    if (!roles.some(function (role) { return role.id === selectedExternalWorkerRole; })) {
+      selectedExternalWorkerRole = roles[0].id;
+    }
+    if (selectedExternalWorkerDiscoveryMode === "manual" && !info.recommendedControllerUrl) {
+      selectedExternalWorkerDiscoveryMode = "mdns";
+    }
+    var roleOptions = roles.map(function (role) {
+      return '<option value="' + escapeHtml(role.id) + '"' + (role.id === selectedExternalWorkerRole ? " selected" : "") + ">" +
+        escapeHtml((role.icon ? role.icon + " " : "") + (role.label || role.id)) +
+        "</option>";
+    }).join("");
+    var command = buildExternalWorkerCommand(info, selectedExternalWorkerRole, selectedExternalWorkerDiscoveryMode);
+    var discoveryOptions = [
+      '<option value="mdns"' + (selectedExternalWorkerDiscoveryMode === "mdns" ? " selected" : "") + ">" + escapeHtml(t("worker.discoveryMdns")) + "</option>",
+      '<option value="manual"' + (selectedExternalWorkerDiscoveryMode === "manual" ? " selected" : "") + (info.recommendedControllerUrl ? "" : " disabled") + ">" + escapeHtml(t("worker.discoveryManual")) + "</option>",
+    ].join("");
+    var note = selectedExternalWorkerDiscoveryMode === "manual"
+      ? (info.manualControllerWarning || "")
+      : (info.autoDiscoveryWarning || "");
+    var manualDetail = selectedExternalWorkerDiscoveryMode === "manual" && info.recommendedControllerUrl
+      ? '<div class="worker-install-note">' + escapeHtml(t("worker.recommendedUrl")) + '<code>' + escapeHtml(info.recommendedControllerUrl) + "</code></div>"
+      : "";
+    card.classList.remove("hidden");
+    card.innerHTML = (
+      '<div class="worker-install-head">' +
+        '<div>' +
+          "<h3>" + escapeHtml(t("worker.cardTitle")) + "</h3>" +
+          '<div class="worker-install-subtitle">' + escapeHtml(t("worker.cardSubtitle")) + "</div>" +
+        "</div>" +
+        '<button type="button" class="worker-install-copy" data-worker-install-copy="true">' + escapeHtml(t("action.copyCommand")) + "</button>" +
+      "</div>" +
+      '<div class="worker-install-controls">' +
+        '<div class="worker-install-field">' +
+          '<label for="worker-install-role">' + escapeHtml(t("worker.role")) + "</label>" +
+          '<select id="worker-install-role" data-worker-install-role="true">' + roleOptions + "</select>" +
+        "</div>" +
+        '<div class="worker-install-field">' +
+          '<label for="worker-install-discovery">' + escapeHtml(t("worker.discovery")) + "</label>" +
+          '<select id="worker-install-discovery" data-worker-install-discovery="true">' + discoveryOptions + "</select>" +
+        "</div>" +
+      "</div>" +
+      '<pre class="worker-install-command"><code>' + escapeHtml(command) + "</code></pre>" +
+      manualDetail +
+      '<div class="worker-install-note' + (selectedExternalWorkerDiscoveryMode === "manual" ? " warning" : "") + '">' + escapeHtml(note) + "</div>"
+    );
+  }
+
+  function renderActivitySignals() {
+    var planningCount = activePlanningRunCount();
+    var taskActive = activeTaskCount();
+    var taskBlocked = blockedTaskCount();
+    var clarificationCount = pendingClarifications().length;
+
+    var planningBadge = $("#planning-tab-count");
+    var tasksBadge = $("#tasks-tab-count");
+    var clarificationsBadge = $("#clarifications-tab-count");
+    var planningSignal = $("#planning-tab-signal");
+    var tasksSignal = $("#tasks-tab-signal");
+    var clarificationsSignal = $("#clarifications-tab-signal");
+    var planningTab = $('[data-tab="planning"]');
+    var tasksTab = $('[data-tab="tasks"]');
+    var clarificationsTab = $('[data-tab="clarifications"]');
+
+    if (planningBadge) {
+      planningBadge.textContent = String(planningCount);
+      planningBadge.className = "tab-badge" + (planningCount > 0 ? " tone-active" : "");
+      planningBadge.style.display = planningCount > 0 ? "" : "none";
+    }
+    if (tasksBadge) {
+      var taskCount = taskBlocked > 0 ? taskBlocked : taskActive;
+      tasksBadge.textContent = String(taskCount);
+      tasksBadge.className = "tab-badge" + (taskBlocked > 0 ? " tone-attention" : taskActive > 0 ? " tone-active" : "");
+      tasksBadge.style.display = taskCount > 0 ? "" : "none";
+    }
+    if (clarificationsBadge) {
+      clarificationsBadge.textContent = String(clarificationCount);
+      clarificationsBadge.className = "tab-badge" + (clarificationCount > 0 ? " tone-attention" : "");
+      clarificationsBadge.style.display = clarificationCount > 0 ? "" : "none";
+    }
+    if (planningSignal) {
+      planningSignal.className = "tab-signal" + (planningCount > 0 ? " tone-active" : "");
+    }
+    if (tasksSignal) {
+      tasksSignal.className = "tab-signal" + (taskBlocked > 0 ? " tone-attention" : taskActive > 0 ? " tone-active" : "");
+    }
+    if (clarificationsSignal) {
+      clarificationsSignal.className = "tab-signal" + (clarificationCount > 0 ? " tone-attention" : "");
+    }
+    if (planningTab) {
+      planningTab.classList.toggle("has-active", planningCount > 0);
+      planningTab.classList.toggle("has-attention", false);
+    }
+    if (tasksTab) {
+      tasksTab.classList.toggle("has-active", taskActive > 0);
+      tasksTab.classList.toggle("has-attention", taskBlocked > 0);
+    }
+    if (clarificationsTab) {
+      clarificationsTab.classList.toggle("has-active", false);
+      clarificationsTab.classList.toggle("has-attention", clarificationCount > 0);
+    }
+  }
+
+  function syncClarificationPrompt(options) {
+    var pending = pendingClarifications();
+    dismissedClarificationIds = dismissedClarificationIds.filter(function (id) {
+      return pending.some(function (item) { return item.id === id; });
+    });
+
+    if (pending.length === 0) {
+      clarificationPromptOpen = false;
+      activeClarificationId = null;
+      renderClarificationPrompt();
+      return;
+    }
+
+    var active = pending.find(function (item) { return item.id === activeClarificationId; });
+    if (!active) {
+      active = pending.find(function (item) { return dismissedClarificationIds.indexOf(item.id) === -1; }) || pending[0];
+      activeClarificationId = active ? active.id : null;
+    }
+
+    if (!clarificationPromptOpen && active && dismissedClarificationIds.indexOf(active.id) === -1) {
+      clarificationPromptOpen = true;
+    }
+
+    if (options && options.forceOpen && active) {
+      clarificationPromptOpen = true;
+      activeClarificationId = active.id;
+    }
+
+    renderClarificationPrompt();
+  }
+
+  function renderClarificationPrompt() {
+    var modal = $("#clarification-prompt-modal");
+    var body = $("#clarification-prompt-body");
+    if (!modal || !body) return;
+
+    var pending = pendingClarifications();
+    var active = pending.find(function (item) { return item.id === activeClarificationId; });
+    if (!clarificationPromptOpen || !active) {
+      modal.classList.remove("open");
+      modal.setAttribute("aria-hidden", "true");
+      return;
+    }
+
+    modal.classList.add("open");
+    modal.setAttribute("aria-hidden", "false");
+    body.innerHTML = renderClarificationCards([active], { compact: false, linkToTask: true });
   }
 
   function handleWsEvent(event) {
@@ -1338,10 +1919,13 @@
 
   async function refreshAll() {
     try {
-      const [statusRes, rolesRes] = await Promise.all([
-        apiGet("/team/status"),
-        apiGet("/roles"),
-      ]);
+      const statusRes = await apiGet("/team/status");
+      let rolesRes = { roles: [] };
+      try {
+        rolesRes = await apiGet("/roles");
+      } catch (rolesErr) {
+        console.error("Failed to load roles:", rolesErr);
+      }
 
       teamState = {
         workers: statusRes.workers || [],
@@ -1349,6 +1933,8 @@
         controllerRuns: statusRes.controllerRuns || [],
         messages: statusRes.messages || [],
         clarifications: statusRes.clarifications || [],
+        modelReadiness: statusRes.modelReadiness || null,
+        externalWorkerInstall: statusRes.externalWorkerInstall || null,
       };
 
       renderWorkers(teamState.workers);
@@ -1358,7 +1944,11 @@
       renderClarifications(teamState.clarifications);
       renderMessages(teamState.messages);
       renderRoles(rolesRes.roles || []);
-      renderClarificationCount(statusRes.pendingClarificationCount || 0);
+      renderRuntimeAlert();
+      renderExternalWorkerInstallToggle();
+      renderExternalWorkerInstallCard();
+      renderActivitySignals();
+      syncClarificationPrompt();
 
       const teamName = $("#team-name");
       if (teamName) {
@@ -1379,7 +1969,7 @@
     if (!container) return;
 
     if (workers.length === 0) {
-      container.innerHTML = '<div class="empty-state">No workers connected</div>';
+      container.innerHTML = '<div class="empty-state">' + escapeHtml(t("empty.noWorkers")) + "</div>";
       return;
     }
 
@@ -1403,8 +1993,11 @@
       : tasks.filter(function (task) { return task.status === currentFilter; });
 
     if (filtered.length === 0) {
-      container.innerHTML = '<div class="empty-state">No tasks' +
-        (currentFilter !== "all" ? ' with status "' + escapeHtml(currentFilter) + '"' : "") + "</div>";
+      container.innerHTML = '<div class="empty-state">' + escapeHtml(
+        currentFilter !== "all"
+          ? t("empty.noTasksWithStatus", { status: currentFilter })
+          : t("empty.noTasks")
+      ) + "</div>";
       return;
     }
 
@@ -1464,7 +2057,7 @@
       .slice(0, 12);
 
     if (recentRuns.length === 0) {
-      container.innerHTML = '<div class="empty-state">No controller activity yet</div>';
+      container.innerHTML = '<div class="empty-state">' + escapeHtml(t("empty.noControllerActivity")) + "</div>";
       return;
     }
 
@@ -1556,6 +2149,8 @@
 
   async function openTaskDetail(taskId) {
     selectedTaskId = taskId;
+    selectedTaskDetailTab = "details";
+    taskTimelineAutoFollow = true;
     selectedTaskDetail = {
       task: getTaskById(taskId),
       messages: [],
@@ -1573,6 +2168,8 @@
   function closeTaskDetail() {
     selectedTaskId = null;
     selectedTaskDetail = null;
+    selectedTaskDetailTab = "details";
+    taskTimelineAutoFollow = true;
     const modal = $("#task-detail-modal");
     if (modal) {
       modal.classList.remove("open");
@@ -1608,7 +2205,7 @@
     const liveBadge = $("#task-detail-live-badge");
 
     if (title) {
-      title.textContent = task ? task.title : "Select a task";
+      title.textContent = task ? task.title : t("empty.selectTask");
     }
     if (subtitle) {
       subtitle.textContent = task
@@ -1625,17 +2222,23 @@
       liveBadge.classList.toggle("is-live", live);
     }
 
+    renderTaskDetailTabCounts(task);
     renderTaskDetailOverview(task);
     renderTaskDetailTimeline(task);
+    renderTaskDetailClarifications();
+    renderTaskDetailMessages();
     syncTaskDetailTab();
+    if (selectedTaskDetailTab === "timeline" && taskTimelineAutoFollow) {
+      requestAnimationFrame(scrollTaskTimelineToBottom);
+    }
   }
 
   function renderTaskDetailOverview(task) {
-    const container = $("#task-detail-overview");
+    const container = $("#task-detail-details");
     if (!container) return;
 
     if (!task) {
-      container.innerHTML = '<div class="task-detail-empty">Select a task to inspect its execution details.</div>';
+      container.innerHTML = '<div class="task-detail-empty">' + escapeHtml(t("empty.taskDetail")) + "</div>";
       return;
     }
 
@@ -1691,6 +2294,130 @@
       (task.error
         ? '<div class="task-detail-section"><h3>Error</h3>' + renderMarkdownCard(task.error) + "</div>"
         : "");
+  }
+
+  function renderTaskDetailTabCounts(task) {
+    var counts = {
+      details: task ? 1 : 0,
+      timeline: normalizeArray(getSelectedTaskExecution().events).length,
+      clarifications: normalizeArray(selectedTaskDetail && selectedTaskDetail.clarifications).length,
+      messages: normalizeArray(selectedTaskDetail && selectedTaskDetail.messages).length,
+    };
+    $$("[data-task-detail-tab-count]").forEach(function (node) {
+      var name = node.dataset.taskDetailTabCount || "";
+      var count = counts[name] || 0;
+      node.textContent = count > 0 ? String(count) : "";
+      node.className = "task-detail-tab-count" + (count > 0 ? " has-items" : "");
+    });
+  }
+
+  function scrollTaskTimelineToBottom() {
+    var container = $("#task-detail-timeline");
+    if (!container) return;
+    container.scrollTop = container.scrollHeight;
+  }
+
+  function syncTaskTimelineFollowState() {
+    if (selectedTaskDetailTab !== "timeline") return;
+    var container = $("#task-detail-timeline");
+    if (!container) return;
+    taskTimelineAutoFollow = isNearBottom(container);
+  }
+
+  function renderMessageCards(messages) {
+    return normalizeArray(messages).map(function (message) {
+      const from = message.fromRole || message.from || "unknown";
+      const type = (message.contract && message.contract.intent) || message.type || "direct";
+      const contractBlock = renderTeamMessageContractCard(message.contract);
+      const rawContent = buildMessageDisplayContent(message);
+      const meta = [
+        message.toRole ? ("to " + message.toRole) : null,
+        message.taskId ? ("task " + message.taskId) : null,
+        formatTime(message.createdAt),
+      ].filter(Boolean).join(" • ");
+
+      return (
+        '<div class="message-card">' +
+        '  <div class="message-header">' +
+        '    <span class="message-from">' + escapeHtml(from) + "</span>" +
+        '    <span class="message-type ' + escapeHtml(type) + '">' + escapeHtml(humanizeStatus(type)) + "</span>" +
+        "  </div>" +
+        (meta ? '<div class="message-meta">' + escapeHtml(meta) + "</div>" : "") +
+        contractBlock +
+        (rawContent ? '<div class="message-content markdown-body">' + rawContent + "</div>" : "") +
+        "</div>"
+      );
+    }).join("");
+  }
+
+  function renderClarificationCards(items, options) {
+    var opts = options || {};
+    return normalizeArray(items).map(function (item) {
+      const status = item.status || "pending";
+      const context = item.context
+        ? '<div class="clarification-context"><strong>Context:</strong> ' + escapeHtml(item.context) + "</div>"
+        : "";
+      const taskLink = opts.linkToTask && item.taskId
+        ? '<button type="button" class="btn btn-small" data-open-task-id="' + escapeHtml(item.taskId) + '">Open task</button>'
+        : "";
+      const answerBlock = status === "pending"
+        ? (
+          '<form class="clarification-answer-form" data-clarification-id="' + escapeHtml(item.id) + '">' +
+          '  <label class="clarification-label" for="answer-' + escapeHtml(item.id) + '">Answer as human</label>' +
+          '  <textarea id="answer-' + escapeHtml(item.id) + '" name="answer" rows="3" placeholder="Type the exact clarification answer..." required></textarea>' +
+          '  <div class="clarification-actions">' +
+          taskLink +
+          '    <button type="submit" class="btn btn-primary">Submit Answer</button>' +
+          "  </div>" +
+          "</form>"
+        )
+        : (
+          '<div class="clarification-answer">' +
+          '  <strong>Answer:</strong> ' + escapeHtml(item.answer || "") +
+          (item.answeredBy ? ' <span class="clarification-answer-meta">(by ' + escapeHtml(item.answeredBy) + ')</span>' : "") +
+          "</div>"
+        );
+
+      return (
+        '<div class="clarification-card' + (opts.compact ? " clarification-card-compact" : "") + '">' +
+        '  <div class="clarification-header">' +
+        '    <span class="clarification-status ' + escapeHtml(status) + '">' + escapeHtml(humanizeStatus(status)) + "</span>" +
+        '    <span class="clarification-time">' + escapeHtml(formatTime(item.updatedAt || item.createdAt)) + "</span>" +
+        "  </div>" +
+        '  <div class="clarification-question">' + escapeHtml(item.question) + "</div>" +
+        '  <div class="clarification-meta">' +
+        '    <span><strong>Task:</strong> ' + escapeHtml(item.taskId) + "</span>" +
+        '    <span><strong>Role:</strong> ' + escapeHtml(item.requestedByRole || "unknown") + "</span>" +
+        '    <span><strong>Requester:</strong> ' + escapeHtml(item.requestedByWorkerId || item.requestedBy || "unknown") + "</span>" +
+        "  </div>" +
+        '  <div class="clarification-reason"><strong>Blocked because:</strong> ' + escapeHtml(item.blockingReason) + "</div>" +
+        context +
+        answerBlock +
+        "</div>"
+      );
+    }).join("");
+  }
+
+  function renderTaskDetailClarifications() {
+    var container = $("#task-detail-clarifications");
+    if (!container) return;
+    var items = normalizeArray(selectedTaskDetail && selectedTaskDetail.clarifications);
+    if (!items.length) {
+      container.innerHTML = '<div class="task-detail-empty">No clarifications on this task.</div>';
+      return;
+    }
+    container.innerHTML = '<div class="clarifications-list">' + renderClarificationCards(items, { linkToTask: false }) + "</div>";
+  }
+
+  function renderTaskDetailMessages() {
+    var container = $("#task-detail-messages");
+    if (!container) return;
+    var items = normalizeArray(selectedTaskDetail && selectedTaskDetail.messages);
+    if (!items.length) {
+      container.innerHTML = '<div class="task-detail-empty">' + escapeHtml(t("empty.taskMessages")) + "</div>";
+      return;
+    }
+    container.innerHTML = '<div class="messages-feed">' + renderMessageCards(items) + "</div>";
   }
 
   function buildTimelineMessageBody(message) {
@@ -1772,7 +2499,7 @@
 
     const entries = buildTimelineEntries(task);
     if (entries.length === 0) {
-      container.innerHTML = '<div class="task-detail-empty">No execution history recorded yet.</div>';
+      container.innerHTML = '<div class="task-detail-empty">' + escapeHtml(t("empty.taskHistory")) + "</div>";
       return;
     }
 
@@ -1791,8 +2518,9 @@
       }).join("") +
       "</div>";
 
-    if (followTaskOutput) {
-      container.scrollTop = container.scrollHeight;
+    container.onscroll = syncTaskTimelineFollowState;
+    if (taskTimelineAutoFollow) {
+      requestAnimationFrame(scrollTaskTimelineToBottom);
     }
   }
 
@@ -1800,7 +2528,7 @@
     $$(".task-detail-tab").forEach(function (tab) {
       tab.classList.toggle("active", tab.dataset.taskDetailTab === selectedTaskDetailTab);
     });
-    ["overview", "timeline"].forEach(function (name) {
+    ["details", "timeline", "clarifications", "messages"].forEach(function (name) {
       const panel = $("#task-detail-" + name);
       if (panel) {
         panel.classList.toggle("active", name === selectedTaskDetailTab);
@@ -1855,58 +2583,11 @@
     if (!container) return;
 
     if (clarifications.length === 0) {
-      container.innerHTML = '<div class="empty-state">No clarification requests</div>';
+      container.innerHTML = '<div class="empty-state">' + escapeHtml(t("empty.noClarifications")) + "</div>";
       return;
     }
 
-    container.innerHTML = clarifications.map(function (item) {
-      const status = item.status || "pending";
-      const context = item.context
-        ? '<div class="clarification-context"><strong>Context:</strong> ' + escapeHtml(item.context) + "</div>"
-        : "";
-      const answerBlock = status === "pending"
-        ? (
-          '<form class="clarification-answer-form" data-clarification-id="' + escapeHtml(item.id) + '">' +
-          '  <label class="clarification-label" for="answer-' + escapeHtml(item.id) + '">Answer as human</label>' +
-          '  <textarea id="answer-' + escapeHtml(item.id) + '" name="answer" rows="3" placeholder="Type the exact clarification answer..." required></textarea>' +
-          '  <div class="clarification-actions">' +
-          '    <button type="submit" class="btn btn-primary">Submit Answer</button>' +
-          "  </div>" +
-          "</form>"
-        )
-        : (
-          '<div class="clarification-answer">' +
-          '  <strong>Answer:</strong> ' + escapeHtml(item.answer || "") +
-          (item.answeredBy ? ' <span class="clarification-answer-meta">(by ' + escapeHtml(item.answeredBy) + ')</span>' : "") +
-          "</div>"
-        );
-
-      return (
-        '<div class="clarification-card">' +
-        '  <div class="clarification-header">' +
-        '    <span class="clarification-status ' + escapeHtml(status) + '">' + escapeHtml(humanizeStatus(status)) + "</span>" +
-        '    <span class="clarification-time">' + escapeHtml(formatTime(item.updatedAt || item.createdAt)) + "</span>" +
-        "  </div>" +
-        '  <div class="clarification-question">' + escapeHtml(item.question) + "</div>" +
-        '  <div class="clarification-meta">' +
-        '    <span><strong>Task:</strong> ' + escapeHtml(item.taskId) + "</span>" +
-        '    <span><strong>Role:</strong> ' + escapeHtml(item.requestedByRole || "unknown") + "</span>" +
-        '    <span><strong>Requester:</strong> ' + escapeHtml(item.requestedByWorkerId || item.requestedBy || "unknown") + "</span>" +
-        "  </div>" +
-        '  <div class="clarification-reason"><strong>Blocked because:</strong> ' + escapeHtml(item.blockingReason) + "</div>" +
-        context +
-        answerBlock +
-        "</div>"
-      );
-    }).join("");
-  }
-
-  function renderClarificationCount(count) {
-    const badge = $("#clarifications-tab-count");
-    if (!badge) return;
-
-    badge.textContent = String(count);
-    badge.classList.toggle("has-items", count > 0);
+    container.innerHTML = renderClarificationCards(sortClarifications(clarifications), { linkToTask: true });
   }
 
   function renderMessages(messages) {
@@ -1920,33 +2601,11 @@
       })
       .slice(0, 50);
     if (recent.length === 0) {
-      container.innerHTML = '<div class="empty-state">No messages yet</div>';
+      container.innerHTML = '<div class="empty-state">' + escapeHtml(t("empty.noMessages")) + "</div>";
       return;
     }
 
-    container.innerHTML = recent.map(function (message) {
-      const from = message.fromRole || message.from || "unknown";
-      const type = (message.contract && message.contract.intent) || message.type || "direct";
-      const contractBlock = renderTeamMessageContractCard(message.contract);
-      const rawContent = buildMessageDisplayContent(message);
-      const meta = [
-        message.toRole ? ("to " + message.toRole) : null,
-        message.taskId ? ("task " + message.taskId) : null,
-        formatTime(message.createdAt),
-      ].filter(Boolean).join(" • ");
-
-      return (
-        '<div class="message-card">' +
-        '  <div class="message-header">' +
-        '    <span class="message-from">' + escapeHtml(from) + "</span>" +
-        '    <span class="message-type ' + escapeHtml(type) + '">' + escapeHtml(humanizeStatus(type)) + "</span>" +
-        "  </div>" +
-        (meta ? '<div class="message-meta">' + escapeHtml(meta) + "</div>" : "") +
-        contractBlock +
-        (rawContent ? '<div class="message-content markdown-body">' + rawContent + "</div>" : "") +
-        "</div>"
-      );
-    }).join("");
+    container.innerHTML = renderMessageCards(recent);
   }
 
   function renderRoles(roles) {
@@ -1976,6 +2635,7 @@
     if (activeTab === "workspace") {
       refreshWorkspaceTree(false);
     }
+    renderActivitySignals();
   }
 
   $$(".tab").forEach(function (tab) {
@@ -2102,20 +2762,34 @@
     });
   }
 
-  const followToggle = $("#task-detail-follow-toggle");
-  if (followToggle) {
-    followToggle.checked = followTaskOutput;
-    followToggle.addEventListener("change", function () {
-      followTaskOutput = !!followToggle.checked;
-      renderTaskDetail();
-    });
-  }
-
   $$(".task-detail-tab").forEach(function (tab) {
     tab.addEventListener("click", function () {
-      selectedTaskDetailTab = tab.dataset.taskDetailTab || "overview";
+      selectedTaskDetailTab = tab.dataset.taskDetailTab || "details";
+      if (selectedTaskDetailTab === "timeline") {
+        taskTimelineAutoFollow = true;
+      }
       syncTaskDetailTab();
       renderTaskDetail();
+    });
+  });
+
+  const clarificationPromptClose = $("#clarification-prompt-close");
+  if (clarificationPromptClose) {
+    clarificationPromptClose.addEventListener("click", function () {
+      if (activeClarificationId && dismissedClarificationIds.indexOf(activeClarificationId) === -1) {
+        dismissedClarificationIds.push(activeClarificationId);
+      }
+      clarificationPromptOpen = false;
+      renderClarificationPrompt();
+    });
+  }
+  $$("[data-clarification-prompt-close]").forEach(function (node) {
+    node.addEventListener("click", function () {
+      if (activeClarificationId && dismissedClarificationIds.indexOf(activeClarificationId) === -1) {
+        dismissedClarificationIds.push(activeClarificationId);
+      }
+      clarificationPromptOpen = false;
+      renderClarificationPrompt();
     });
   });
 
@@ -2184,7 +2858,14 @@
         answer: answer,
         answeredBy: "simulated-human",
       });
+      dismissedClarificationIds = dismissedClarificationIds.filter(function (id) { return id !== clarificationId; });
+      if (activeClarificationId === clarificationId) {
+        activeClarificationId = null;
+      }
       refreshAll();
+      if (selectedTaskId) {
+        refreshTaskDetail(true);
+      }
     } catch (err) {
       console.error("Failed to answer clarification:", err);
       showError(err instanceof Error ? err.message : "Failed to answer clarification");
@@ -2206,6 +2887,65 @@
       }
     });
   }
+
+  var languageToggle = $("#language-toggle");
+  if (languageToggle) {
+    languageToggle.addEventListener("click", function () {
+      setLanguage(currentLanguage === "zh" ? "en" : "zh");
+    });
+  }
+
+  document.addEventListener("click", function (event) {
+    var target = event.target instanceof Element ? event.target : null;
+    var toggle = target ? target.closest("#worker-install-toggle") : null;
+    if (toggle) {
+      externalWorkerInstallVisible = !externalWorkerInstallVisible;
+      renderExternalWorkerInstallToggle();
+      renderExternalWorkerInstallCard();
+      return;
+    }
+    var button = target ? target.closest("[data-open-task-id]") : null;
+    var taskId = button && button.dataset ? button.dataset.openTaskId : "";
+    if (!taskId || (controllerRunsContainer && controllerRunsContainer.contains(button))) {
+      return;
+    }
+    activateTab("tasks");
+    openTaskDetail(taskId);
+  });
+
+  document.addEventListener("change", function (event) {
+    var target = event.target instanceof Element ? event.target : null;
+    if (!target) return;
+    if (target.matches("[data-worker-install-role]")) {
+      selectedExternalWorkerRole = target.value || selectedExternalWorkerRole;
+      renderExternalWorkerInstallCard();
+      return;
+    }
+    if (target.matches("[data-worker-install-discovery]")) {
+      selectedExternalWorkerDiscoveryMode = target.value === "manual" ? "manual" : "mdns";
+      renderExternalWorkerInstallCard();
+    }
+  });
+
+  document.addEventListener("click", function (event) {
+    var target = event.target instanceof Element ? event.target : null;
+    var button = target ? target.closest("[data-worker-install-copy]") : null;
+    if (!button) return;
+    var command = buildExternalWorkerCommand(
+      teamState.externalWorkerInstall,
+      selectedExternalWorkerRole,
+      selectedExternalWorkerDiscoveryMode,
+    );
+    copyText(command).then(function () {
+      button.textContent = t("action.copied");
+      window.setTimeout(function () {
+        button.textContent = t("action.copyCommand");
+      }, 1200);
+    }).catch(function (err) {
+      console.error(err);
+        showError(err instanceof Error ? err.message : "Failed to copy command");
+    });
+  });
 
   // Planning session sub-tab click handler
   var planningSessionList = $("#planning-session-list");
@@ -2269,7 +3009,7 @@
         from: "controller",
         fromRole: "controller",
         type: "controller-reply",
-        content: data && data.reply ? data.reply : "Controller finished without a textual reply.",
+        content: data && data.reply ? data.reply : t("empty.copiedControllerReply"),
       });
       refreshAll();
     }).catch(function (err) {
@@ -2321,6 +3061,7 @@
     }
   }
 
+  applyStaticTranslations();
   renderWorkspaceTree(workspaceTree);
   renderWorkspaceFile();
   refreshAll().then(applyInitialUiState).catch(function () {});

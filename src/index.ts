@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
 import { parsePluginConfig } from "./src/types.js";
 import type { TaskAssignmentPayload, TaskExecutionEventInput, TeamState, WorkerIdentity } from "./src/types.js";
@@ -9,11 +11,10 @@ import { createWorkerPromptInjector } from "./src/worker/prompt-injector.js";
 import { createWorkerTools } from "./src/worker/tools.js";
 import { MessageQueue } from "./src/worker/message-queue.js";
 import { createControllerService } from "./src/controller/controller-service.js";
-import { LocalWorkerManager } from "./src/controller/local-worker-manager.js";
-import { InProcessWorkerManager } from "./src/controller/in-process-worker-manager.js";
 import { createControllerPromptInjector } from "./src/controller/prompt-injector.js";
 import { createControllerTools } from "./src/controller/controller-tools.js";
 import { publishWorkerRepo, syncWorkerRepo } from "./src/git-collaboration.js";
+import { resolveTeamClawProjectsDir } from "./src/openclaw-workspace.js";
 import { installRecommendedSkills } from "./src/worker/skill-installer.js";
 
 export default definePluginEntry({
@@ -35,24 +36,6 @@ export default definePluginEntry({
 
 function registerController(api: OpenClawPluginApi, config: ReturnType<typeof parsePluginConfig>) {
   const logger = api.logger;
-  let localWorkerManager: LocalWorkerManager | undefined;
-  let inProcessWorkerManager: InProcessWorkerManager | undefined;
-
-  if (config.processModel === "multi") {
-    localWorkerManager = new LocalWorkerManager({
-      config,
-      logger,
-      runtime: api.runtime,
-    });
-  } else {
-    // single-process: virtual workers as subagent sessions
-    inProcessWorkerManager = new InProcessWorkerManager({
-      config,
-      logger,
-      runtime: api.runtime,
-    });
-  }
-
   let getControllerTeamState = (): TeamState | null => null;
   let controllerUrl = `http://127.0.0.1:${config.port}`;
   let kickoffHandler: ((candidateRoles: import("./src/types.js").RoleId[], complexity: "simple" | "medium" | "complex", requirement: string) => Promise<{ assessments: import("./src/types.js").KickoffAssessment[]; summary: string }>) | undefined;
@@ -62,14 +45,11 @@ function registerController(api: OpenClawPluginApi, config: ReturnType<typeof pa
     config,
     logger,
     runtime: api.runtime,
-    localWorkerManager,
-    inProcessWorkerManager,
     onTeamStateAvailable: (getter) => {
       getControllerTeamState = getter;
     },
     onActualPort: (port) => {
       controllerUrl = `http://127.0.0.1:${port}`;
-      localWorkerManager?.setControllerUrl(controllerUrl);
     },
     onKickoffHandlerAvailable: (handler) => {
       kickoffHandler = handler;
@@ -79,19 +59,6 @@ function registerController(api: OpenClawPluginApi, config: ReturnType<typeof pa
 
   // Prompt injection
   api.on("before_prompt_build", async (_event: unknown, ctx: { sessionKey?: string | null }) => {
-    if (localWorkerManager) {
-      const localIdentity = localWorkerManager.getIdentityForSession(ctx.sessionKey);
-      const localMessageQueue = localWorkerManager.getMessageQueueForSession(ctx.sessionKey);
-      if (localIdentity && localMessageQueue) {
-        const injector = createWorkerPromptInjector(
-          { ...config, role: localIdentity.role },
-          () => localIdentity,
-          localMessageQueue,
-        );
-        return injector() ?? {};
-      }
-    }
-
     const state = getControllerTeamState() ?? await loadTeamState(config.teamName);
     const injector = createControllerPromptInjector({
       config,
@@ -102,16 +69,6 @@ function registerController(api: OpenClawPluginApi, config: ReturnType<typeof pa
 
   // Tools - register all controller tools via factory returning an array
   api.registerTool((ctx: { sessionKey?: string | null }) => {
-    if (localWorkerManager) {
-      const localIdentity = localWorkerManager.getIdentityForSession(ctx.sessionKey);
-      if (localIdentity) {
-        return createWorkerTools({
-          config: { ...config, role: localIdentity.role },
-          getIdentity: () => localIdentity,
-        });
-      }
-    }
-
     return createControllerTools({
       config,
       controllerUrl,
@@ -175,6 +132,41 @@ function registerWorker(api: OpenClawPluginApi, config: ReturnType<typeof parseP
     reportExecutionEvent,
   });
 
+  function resolveProjectSyncPaths(projectDir: string | undefined): { sharedProjectDir: string; localProjectDir: string } | null {
+    const normalizedProjectDir = projectDir?.trim();
+    const sharedWorkspaceOverride = process.env.TEAMCLAW_WORKSPACE_DIR?.trim();
+    if (!normalizedProjectDir || !sharedWorkspaceOverride) {
+      return null;
+    }
+
+    const sharedProjectDir = path.join(resolveTeamClawProjectsDir(), normalizedProjectDir);
+    const localEnv = { ...process.env };
+    delete localEnv.TEAMCLAW_WORKSPACE_DIR;
+    const localProjectDir = path.join(resolveTeamClawProjectsDir(localEnv), normalizedProjectDir);
+    if (sharedProjectDir === localProjectDir) {
+      return null;
+    }
+    return { sharedProjectDir, localProjectDir };
+  }
+
+  async function pathExists(targetPath: string): Promise<boolean> {
+    try {
+      await fs.access(targetPath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function syncProjectDir(sourceDir: string, destinationDir: string): Promise<boolean> {
+    if (!await pathExists(sourceDir)) {
+      return false;
+    }
+    await fs.mkdir(path.dirname(destinationDir), { recursive: true });
+    await fs.cp(sourceDir, destinationDir, { recursive: true, force: true });
+    return true;
+  }
+
   // Service
   api.registerService(
     createWorkerService({
@@ -202,6 +194,20 @@ function registerWorker(api: OpenClawPluginApi, config: ReturnType<typeof parseP
               message,
             });
             logger.warn(`Worker: skill preflight failed for ${assignment.taskId}: ${message}`);
+          }
+        }
+
+        const syncPaths = resolveProjectSyncPaths(assignment.projectDir);
+        if (syncPaths) {
+          const restored = await syncProjectDir(syncPaths.sharedProjectDir, syncPaths.localProjectDir);
+          if (restored) {
+            await reportExecutionEvent(assignment.taskId, {
+              type: "lifecycle",
+              phase: "project_sync_restored",
+              source: "worker",
+              status: "running",
+              message: `Restored shared project files into the worker runtime from ${syncPaths.sharedProjectDir}.`,
+            });
           }
         }
 
@@ -239,6 +245,20 @@ function registerWorker(api: OpenClawPluginApi, config: ReturnType<typeof parseP
         }
       },
       publishTaskAssignment: async (assignment) => {
+        const syncPaths = resolveProjectSyncPaths(assignment.projectDir);
+        if (syncPaths) {
+          const published = await syncProjectDir(syncPaths.localProjectDir, syncPaths.sharedProjectDir);
+          if (published) {
+            await reportExecutionEvent(assignment.taskId, {
+              type: "lifecycle",
+              phase: "project_sync_published",
+              source: "worker",
+              status: "running",
+              message: `Published worker runtime project files back to the shared workspace at ${syncPaths.sharedProjectDir}.`,
+            });
+          }
+        }
+
         const controllerUrl = currentControllerUrl || config.controllerUrl.trim();
         if (!assignment.repo?.enabled || !controllerUrl) {
           return;

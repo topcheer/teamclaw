@@ -1,4 +1,5 @@
 import type { RoleDefinition, RoleId } from "./types.js";
+import { buildRoleOperatingRules, buildWorkerMemoryContractRules, composePrompt } from "./prompt-policy.js";
 
 const ROLES: RoleDefinition[] = [
   {
@@ -99,6 +100,9 @@ const ROLES: RoleDefinition[] = [
       "and ensuring quality standards.",
       "When reviewing work, check for edge cases, error handling, and adherence to specifications.",
       "Provide detailed, reproducible bug reports.",
+      "Prioritize a fast, evidence-based verdict over extra automation.",
+      "If you find a clear bug with solid reproduction steps, report it and conclude instead of continuing to expand optional coverage.",
+      "Only create auxiliary artifacts such as smoke scripts when they are explicitly requested or can be finished quickly without delaying your final QA result.",
     ].join("\n"),
     suggestedNextRoles: ["developer", "release-engineer"],
   },
@@ -255,45 +259,15 @@ const ROLES: RoleDefinition[] = [
   },
 ];
 
-const TEAMCLAW_ROLE_IDS_TEXT = [
-  "pm",
-  "architect",
-  "developer",
-  "qa",
-  "release-engineer",
-  "infra-engineer",
-  "devops",
-  "security-engineer",
-  "designer",
-  "marketing",
-].join(", ");
-
 for (const role of ROLES) {
-  const suggestedRoles = role.suggestedNextRoles.length > 0 ? role.suggestedNextRoles.join(", ") : "none";
-  const recommendedSkills = role.recommendedSkills.length > 0 ? role.recommendedSkills.join(", ") : "none";
-  role.systemPrompt = [
+  role.systemPrompt = composePrompt(
     role.systemPrompt,
-    "",
-     "## TeamClaw Operating Rules",
-     "- You are a team member, not the controller. Complete the current task yourself.",
-     "- Stay within your assigned role. Do not switch roles unless the task explicitly asks for cross-role analysis.",
-     "- Do not create new tasks, parallel workstreams, or extra backlog items on your own.",
-     "- Do not delegate the core work of your current task to another role.",
-     "- Respect the requested deliverable shape: if the task asks for a brief, plan, matrix, review, or design artifact, do that artifact instead of expanding it into full implementation work.",
-     "- If required information or a product/technical decision is missing, request clarification instead of guessing.",
-     "- Prefer open-source/free tools and services when they can satisfy the task.",
-     "- If required infrastructure, credentials, or tool access are unavailable in the current environment, report the blocker and request clarification instead of inventing a result.",
-     "- Treat file paths from plans, docs, and teammate messages as hints, not facts. Verify that a referenced file exists in the current workspace before reading or editing it; if it does not, search for the nearest real file and explicitly note the path drift.",
-     "- Treat other workers' OpenClaw sessions and session keys as unavailable; use the shared workspace, the current task context, and teammate messages instead of trying cross-session inspection.",
-     "- Do not mark a task completed or failed via progress updates. Finish by returning the deliverable or raising the blocking error so TeamClaw can close the task correctly.",
-      "- If only a commercial or proprietary option would unblock the task, ask the human for approval before assuming it is allowed.",
-      "- If follow-up work is needed, mention it in your result or use handoff/review tools for this current task only.",
-      "- When submitting a result contract, include discoveredPatterns for any reusable codebase patterns you found (e.g. conventions, gotchas, dependencies between files). These are consolidated into team memory for future tasks.",
-      "- Before working in a directory, check for `.teamclaw-notes.md` files that may contain context from previous tasks. If you discover reusable directory-specific knowledge, create or update `.teamclaw-notes.md` in that directory.",
-      `- Use exact TeamClaw role IDs when collaborating: ${TEAMCLAW_ROLE_IDS_TEXT}.`,
-      `- If a true follow-up is required after your deliverable, prefer these exact next roles: ${suggestedRoles}.`,
-      `- Default starter skills for this role: ${recommendedSkills}. If the task includes more specific recommended skills, prefer those.`,
-     ].join("\n");
+    buildRoleOperatingRules({
+      suggestedRoles: role.suggestedNextRoles,
+      recommendedSkills: role.recommendedSkills,
+    }),
+    buildWorkerMemoryContractRules(),
+  );
 }
 
 const ROLE_MAP = new Map<string, RoleDefinition>(ROLES.map((r) => [r.id, r]));
@@ -331,7 +305,7 @@ function buildRolePrompt(role: RoleDefinition, teamContext?: string): string {
   if (teamContext) {
     parts.push(`\nTeam Context:\n${teamContext}`);
   }
-  return parts.join("\n");
+  return composePrompt(...parts);
 }
 
 export { ROLES, ROLE_IDS, getRole, buildRolePrompt, normalizeRecommendedSkills, resolveRecommendedSkillsForRole };

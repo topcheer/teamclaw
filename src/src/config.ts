@@ -31,7 +31,7 @@ function buildConfigSchema() {
         },
         teamName: {
           type: "string" as const,
-          default: "default",
+          default: "TeamClaw",
           description: "Team name for mDNS identification",
         },
         heartbeatIntervalMs: {
@@ -42,7 +42,7 @@ function buildConfigSchema() {
         taskTimeoutMs: {
           type: "number" as const,
           default: 1800000,
-          description: "Maximum time in milliseconds to wait for a role task to finish",
+          description: "Inactivity threshold in milliseconds before TeamClaw probes a stalled role task instead of failing it",
         },
         gitEnabled: {
           type: "boolean" as const,
@@ -69,26 +69,28 @@ function buildConfigSchema() {
           default: "teamclaw@local",
           description: "Git author email used for TeamClaw-managed workspace commits",
         },
-        localRoles: {
-          type: "array" as const,
-          default: [],
-          description: "(Deprecated) Use processModel instead. Static local roles for backward compatibility.",
-          items: {
-            type: "string" as const,
-            enum: ROLE_IDS,
-          },
+        agentIsolationMode: {
+          type: "string" as const,
+          enum: ["independent", "main"],
+          default: "independent",
+          description: "Runtime isolation mode: dedicated TeamClaw agent/workspace, or legacy main-agent shared mode",
         },
         processModel: {
           type: "string" as const,
-          enum: ["single", "multi"],
-          default: "single",
-          description: "Worker execution model: 'single' runs workers in-process as subagent sessions, 'multi' spawns separate gateway processes",
+          enum: ["multi"],
+          default: "multi",
+          description: "Worker execution model: TeamClaw runs workers as separate gateway processes",
         },
         workerProvisioningType: {
           type: "string" as const,
           enum: ["none", "process", "docker", "kubernetes"],
           default: "none",
           description: "Controller-only on-demand worker launch backend",
+        },
+        workerProvisioningDisabled: {
+          type: "boolean" as const,
+          default: false,
+          description: "Explicitly disable controller-managed on-demand workers even when TeamClaw would normally default to same-host process provisioning",
         },
         workerProvisioningControllerUrl: {
           type: "string" as const,
@@ -183,6 +185,14 @@ function buildConfigSchema() {
           default: "",
           description: "Optional service account name for launched worker pods",
         },
+        workerProvisioningKubernetesImagePullSecrets: {
+          type: "array" as const,
+          default: [],
+          description: "Optional image pull secret names added to launched worker pods",
+          items: {
+            type: "string" as const,
+          },
+        },
         workerProvisioningKubernetesWorkspacePersistentVolumeClaim: {
           type: "string" as const,
           default: "",
@@ -214,8 +224,8 @@ function buildConfigSchema() {
       teamName: { label: "Team Name", help: "Team identifier for mDNS" },
       heartbeatIntervalMs: { label: "Heartbeat Interval", help: "In milliseconds, minimum 1000" },
       taskTimeoutMs: {
-        label: "Task Timeout",
-        help: "Maximum time to wait for a role task to finish before marking it failed (in milliseconds)",
+        label: "Task Stall Threshold",
+        help: "In milliseconds, how long TeamClaw waits without visible progress before probing the task instead of failing it",
       },
       gitEnabled: {
         label: "Git Collaboration",
@@ -237,17 +247,21 @@ function buildConfigSchema() {
         label: "Git Author Email",
         help: "Author email for TeamClaw-managed workspace commits",
       },
-      localRoles: {
-        label: "Local Roles (Deprecated)",
-        help: "Use Process Model instead",
+      agentIsolationMode: {
+        label: "Agent Isolation Mode",
+        help: "Use a dedicated TeamClaw agent/workspace by default, or the legacy shared main-agent mode",
       },
       processModel: {
         label: "Process Model",
-        help: "'single' runs workers in the same process; 'multi' spawns separate gateway processes",
+        help: "TeamClaw runs workers as separate gateway processes",
       },
       workerProvisioningType: {
         label: "On-demand Worker Provider",
         help: "Launch missing workers on demand using process, Docker, or Kubernetes",
+      },
+      workerProvisioningDisabled: {
+        label: "Disable On-demand Workers",
+        help: "Force TeamClaw to keep worker provisioning off even for same-host local controllers",
       },
       workerProvisioningControllerUrl: {
         label: "Provisioned Worker Controller URL",
@@ -312,6 +326,10 @@ function buildConfigSchema() {
       workerProvisioningKubernetesServiceAccount: {
         label: "Kubernetes Service Account",
         help: "Optional service account for launched worker pods",
+      },
+      workerProvisioningKubernetesImagePullSecrets: {
+        label: "Kubernetes Image Pull Secrets",
+        help: "Optional secret names added to launched worker pods so they can pull private images",
       },
       workerProvisioningKubernetesWorkspacePersistentVolumeClaim: {
         label: "Kubernetes Workspace PVC",

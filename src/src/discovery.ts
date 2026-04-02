@@ -66,7 +66,7 @@ export class MDnsBrowser {
 
         browser.on("up", (service) => {
           const txtRecord = service.txt as Record<string, string> | undefined;
-          const svcTeamName = txtRecord?.teamName ?? "default";
+          const svcTeamName = txtRecord?.teamName ?? "TeamClaw";
           const host = Array.isArray(service.addresses) && service.addresses.length > 0
             ? service.addresses[0]
             : (service.host ?? "localhost");

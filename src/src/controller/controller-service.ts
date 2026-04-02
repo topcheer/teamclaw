@@ -1,5 +1,4 @@
 import type { OpenClawPluginApi, OpenClawPluginService, OpenClawPluginServiceContext, PluginLogger } from "../../api.js";
-import os from "node:os";
 import fs from "node:fs";
 import { exec } from "node:child_process";
 import type { KickoffAssessment, PluginConfig, RoleId, TeamState } from "../types.js";
@@ -7,8 +6,6 @@ import { loadTeamState, saveTeamState } from "../state.js";
 import { MDnsAdvertiser } from "../discovery.js";
 import { WORKER_TIMEOUT_MS } from "../protocol.js";
 import { createControllerHttpServer } from "./http-server.js";
-import type { LocalWorkerManager } from "./local-worker-manager.js";
-import type { InProcessWorkerManager } from "./in-process-worker-manager.js";
 import { TaskRouter } from "./task-router.js";
 import { MessageRouter } from "./message-router.js";
 import { TeamWebSocketServer } from "./websocket.js";
@@ -17,7 +14,7 @@ import { ensureControllerGitRepo } from "../git-collaboration.js";
 import { WorkerProvisioningManager } from "./worker-provisioning.js";
 import { PreviewManager } from "./preview-manager.js";
 import { runKickoffMeeting, buildKickoffAssessmentPrompt, ASSESSMENT_TIMEOUT_MS } from "./kickoff-orchestrator.js";
-import { getRole } from "../roles.js";
+import { resolvePreferredLanAddress } from "../networking.js";
 
 export type KickoffHandler = (
   candidateRoles: RoleId[],
@@ -29,8 +26,6 @@ export type ControllerServiceDeps = {
   config: PluginConfig;
   logger: PluginLogger;
   runtime: OpenClawPluginApi["runtime"];
-  localWorkerManager?: LocalWorkerManager;
-  inProcessWorkerManager?: InProcessWorkerManager;
   onTeamStateAvailable?: (getter: () => TeamState | null) => void;
   /** Called once the HTTP server has bound to an actual port. */
   onActualPort?: (port: number) => void;
@@ -39,25 +34,15 @@ export type ControllerServiceDeps = {
 };
 
 function getPreferredLanUiUrl(port: number): string | null {
-  const candidates: string[] = [];
-  const interfaces = os.networkInterfaces();
-  for (const records of Object.values(interfaces)) {
-    for (const record of records ?? []) {
-      if (!record || record.internal || record.family !== "IPv4") {
-        continue;
-      }
-      candidates.push(record.address);
-    }
-  }
-  candidates.sort((left, right) => left.localeCompare(right));
-  if (candidates.length === 0) {
+  const preferredLanAddress = resolvePreferredLanAddress();
+  if (!preferredLanAddress) {
     return null;
   }
-  return `http://${candidates[0]}:${port}/ui`;
+  return `http://${preferredLanAddress}:${port}/ui`;
 }
 
 export function createControllerService(deps: ControllerServiceDeps): OpenClawPluginService {
-  const { config, logger, localWorkerManager, inProcessWorkerManager } = deps;
+  const { config, logger } = deps;
   let teamState: TeamState | null = null;
   let mdnsAdvertiser: MDnsAdvertiser;
   let taskRouter: TaskRouter;
@@ -113,6 +98,9 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
         getTeamState: () => teamState,
         updateTeamState: updateState,
       });
+      if (workerProvisioningManager.isEnabled()) {
+        workerProvisioningManager.primeStartupReadiness();
+      }
 
       previewManager = new PreviewManager({
         logger,
@@ -121,10 +109,8 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
       });
 
       // Run ALL syncState calls (avoid || short-circuit skipping some).
-      const syncA = localWorkerManager?.syncState(teamState) ?? false;
-      const syncB = inProcessWorkerManager?.syncState(teamState) ?? false;
       const syncC = workerProvisioningManager.syncState(teamState);
-      if (repoStateChanged || syncA || syncB || syncC) {
+      if (repoStateChanged || syncC) {
         await saveTeamState(teamState);
       }
 
@@ -177,8 +163,6 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
         taskRouter,
         messageRouter,
         wsServer,
-        localWorkerManager,
-        inProcessWorkerManager,
         workerProvisioningManager,
         previewManager,
         getKickoffHandler: () => serviceKickoffHandler,
@@ -226,35 +210,12 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
       if (workerProvisioningManager.isEnabled()) {
         workerProvisioningManager.setActualPort(actualPort);
       }
-      if (inProcessWorkerManager) {
-        inProcessWorkerManager.setControllerPort(actualPort);
-      }
 
       // Start mDNS advertising with the actual port
       await mdnsAdvertiser.start(actualPort, config.teamName);
 
-      if (localWorkerManager?.hasLocalWorkers()) {
-        logger.info(`Controller: starting ${localWorkerManager.workerCount()} local workers...`);
-        try {
-          await localWorkerManager.start();
-          logger.info(`Controller: local workers started`);
-        } catch (err) {
-          logger.error(`Controller: failed to start local workers: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      }
-
-      // Single-process: in-process workers are now provisioned on-demand
-      // when tasks arrive.  Sync any pre-existing workers into state.
-      // (Orphaned tasks were already reset to pending by the earlier cleanup block.)
-      if (inProcessWorkerManager) {
-        if (inProcessWorkerManager.syncState(teamState!)) {
-          await saveTeamState(teamState!);
-        }
-        logger.info(`Controller: in-process worker manager ready (on-demand provisioning)`);
-      }
-
       if (workerProvisioningManager.isEnabled()) {
-        void workerProvisioningManager.requestReconcile("controller startup");
+        void workerProvisioningManager.runStartupReadinessCheck();
       }
 
       // ── Kickoff handler ───────────────────────────────────────────────
@@ -265,23 +226,12 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
             logger,
             getTeamState: () => teamState,
             ensureRoleProvisioned: async (role) => {
-              if (inProcessWorkerManager) {
-                inProcessWorkerManager.ensureWorker(role);
-                inProcessWorkerManager.syncState(teamState!);
-                return;
-              }
               if (workerProvisioningManager?.isEnabled()) {
                 await workerProvisioningManager.requestReconcile(`kickoff-provision-${role}`);
-                return;
-              }
-              // For local workers, trigger a reconcile which will provision as needed
-              if (localWorkerManager) {
-                // Local workers are statically provisioned; nothing to do
-                return;
               }
             },
             requestWorkerAssessment: async (worker, req) => {
-              return await requestKickoffAssessment(worker, req, deps, inProcessWorkerManager, actualPort);
+              return await requestKickoffAssessment(worker, req);
             },
           },
         );
@@ -306,14 +256,6 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
 
         for (const [workerId, worker] of Object.entries(teamState.workers)) {
           if (worker.status === "offline") continue;
-          if (localWorkerManager?.isLocalWorker(worker)) {
-            worker.lastHeartbeat = now;
-            continue;
-          }
-          if (inProcessWorkerManager?.isInProcessWorker(worker)) {
-            worker.lastHeartbeat = now;
-            continue;
-          }
           if (now - worker.lastHeartbeat > WORKER_TIMEOUT_MS) {
             logger.info(`Controller: worker ${workerId} timed out`);
             const activeTaskId = worker.currentTaskId;
@@ -348,19 +290,6 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
           saveTeamState(teamState);
         }
 
-        // Reap idle in-process workers (on-demand provisioning cleanup)
-        if (inProcessWorkerManager) {
-          const idleTtl = config.workerProvisioningIdleTtlMs || 300_000; // default 5 min
-          const reaped = inProcessWorkerManager.reapIdleWorkers(idleTtl);
-          if (reaped.length > 0) {
-            for (const wid of reaped) {
-              delete teamState.workers[wid];
-              wsServer.broadcastUpdate({ type: "worker:offline", data: { workerId: wid } });
-            }
-            saveTeamState(teamState);
-          }
-        }
-
         if (workerProvisioningManager?.isEnabled()) {
           void workerProvisioningManager.requestReconcile("periodic controller sync");
         }
@@ -376,12 +305,6 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
       if (timeoutTimer) {
         clearInterval(timeoutTimer);
         timeoutTimer = null;
-      }
-      if (localWorkerManager?.hasLocalWorkers()) {
-        await localWorkerManager.stop();
-      }
-      if (inProcessWorkerManager) {
-        await inProcessWorkerManager.stop();
       }
       if (workerProvisioningManager) {
         await workerProvisioningManager.stop();
@@ -410,50 +333,14 @@ function openBrowser(url: string, logger: PluginLogger): void {
 /**
  * Request a kickoff assessment from a worker.
  *
- * For in-process workers: runs a lightweight subagent session.
- * For external workers (HTTP): POSTs to the worker's kickoff endpoint.
+ * Request kickoff assessment from a worker over HTTP.
  */
 async function requestKickoffAssessment(
   worker: import("../types.js").WorkerInfo,
   requirement: string,
-  deps: ControllerServiceDeps,
-  inProcessWorkerManager: InProcessWorkerManager | undefined,
-  controllerPort: number,
 ): Promise<import("../types.js").KickoffAssessment> {
   const role = worker.role;
   const prompt = buildKickoffAssessmentPrompt(role, requirement);
-
-  if (worker.transport === "in-process" && inProcessWorkerManager) {
-    // Run a lightweight subagent session for assessment
-    const roleDef = getRole(role);
-    const systemPrompt = roleDef?.systemPrompt ?? `You are a ${role} in a virtual software team.`;
-    const sessionKey = `teamclaw-kickoff-${role}-${Date.now()}`;
-
-    const runResult = await deps.runtime.subagent.run({
-      sessionKey,
-      message: prompt,
-      extraSystemPrompt: systemPrompt,
-      idempotencyKey: `kickoff-assess-${role}-${Date.now()}`,
-    });
-
-    const waitResult = await deps.runtime.subagent.waitForRun({
-      runId: runResult.runId,
-      timeoutMs: ASSESSMENT_TIMEOUT_MS,
-    });
-
-    if (waitResult.status !== "ok") {
-      throw new Error(`Assessment timed out or failed for ${role} (status=${waitResult.status})`);
-    }
-
-    // Extract the response text
-    const sessionMessages = await deps.runtime.subagent.getSessionMessages({ sessionKey });
-    const messages = Array.isArray(sessionMessages?.messages) ? sessionMessages.messages : [];
-    const lastAssistant = [...messages].reverse().find(
-      (m: unknown) => (m as Record<string, unknown>).role === "assistant",
-    );
-    const responseText = extractTextFromMessage(lastAssistant);
-    return parseAssessmentResponse(role, responseText);
-  }
 
   // External worker — POST to kickoff assess endpoint
   if (!worker.url) {
@@ -479,55 +366,5 @@ async function requestKickoffAssessment(
     return data.assessment;
   } finally {
     clearTimeout(timeout);
-  }
-}
-
-function extractTextFromMessage(message: unknown): string {
-  if (!message) return "";
-  const msg = message as Record<string, unknown>;
-  if (typeof msg.content === "string") return msg.content;
-  if (Array.isArray(msg.content)) {
-    return msg.content
-      .map((block: unknown) => {
-        const b = block as Record<string, unknown>;
-        if (b.type === "text" && typeof b.text === "string") return b.text;
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
-  }
-  return "";
-}
-
-function parseAssessmentResponse(role: import("../types.js").RoleId, text: string): import("../types.js").KickoffAssessment {
-  const defaultAssessment: import("../types.js").KickoffAssessment = {
-    role,
-    needed: false,
-    scope: "Could not parse assessment response",
-    suggestedTasks: [],
-    dependencies: [],
-    risks: [],
-    questions: [],
-  };
-
-  if (!text.trim()) return defaultAssessment;
-
-  // Try to extract JSON from the response (may be wrapped in markdown fences)
-  const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/) || text.match(/(\{[\s\S]*\})/);
-  const jsonStr = jsonMatch?.[1]?.trim() ?? text.trim();
-
-  try {
-    const parsed = JSON.parse(jsonStr);
-    return {
-      role,
-      needed: Boolean(parsed.needed),
-      scope: String(parsed.scope ?? ""),
-      suggestedTasks: Array.isArray(parsed.suggestedTasks) ? parsed.suggestedTasks.map(String) : [],
-      dependencies: Array.isArray(parsed.dependencies) ? parsed.dependencies.map(String) : [],
-      risks: Array.isArray(parsed.risks) ? parsed.risks.map(String) : [],
-      questions: Array.isArray(parsed.questions) ? parsed.questions.map(String) : [],
-    };
-  } catch {
-    return { ...defaultAssessment, scope: `Raw response: ${text.slice(0, 200)}` };
   }
 }

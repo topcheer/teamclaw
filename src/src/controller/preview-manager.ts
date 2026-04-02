@@ -3,7 +3,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import type { ChildProcess } from "node:child_process";
 import type { PluginLogger } from "../../api.js";
-import { resolveDefaultOpenClawWorkspaceDir } from "../openclaw-workspace.js";
+import { resolveTeamClawAgentWorkspaceRootDir } from "../openclaw-workspace.js";
 import type { DynamicPreviewRecord, TeamState, WorkerTaskResultContract, WorkerTaskResultDeliverable } from "../types.js";
 import { spawnManagedCommandProcess, stopManagedProcess } from "./managed-gateway-process.js";
 
@@ -313,7 +313,7 @@ export class PreviewManager {
   }
 
   private async collectPreviewSpecs(taskId: string, contract: WorkerTaskResultContract): Promise<DynamicPreviewSpec[]> {
-    const workspaceRoot = resolveDefaultOpenClawWorkspaceDir();
+    const workspaceRoot = resolveTeamClawAgentWorkspaceRootDir();
     const specs: DynamicPreviewSpec[] = [];
 
     for (const [deliverableIndex, deliverable] of contract.deliverables.entries()) {
@@ -406,7 +406,7 @@ export class PreviewManager {
   }
 
   private async launchPreview(record: DynamicPreviewRecord): Promise<void> {
-    const workspaceRoot = resolveDefaultOpenClawWorkspaceDir();
+    const workspaceRoot = resolveTeamClawAgentWorkspaceRootDir();
     const cwd = resolveWorkspaceDirectory(workspaceRoot, record.previewCwd);
     if (!cwd) {
       this.markPreviewFailed(record.id, `Dynamic preview path must stay inside the workspace: ${record.previewCwd}`);
