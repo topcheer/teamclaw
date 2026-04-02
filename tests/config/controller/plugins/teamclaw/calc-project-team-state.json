@@ -1,0 +1,672 @@
+{
+  "teamName": "calc-project",
+  "workers": {},
+  "tasks": {},
+  "controllerRuns": {},
+  "messages": [],
+  "clarifications": {},
+  "repo": {
+    "enabled": true,
+    "mode": "bundle",
+    "defaultBranch": "main",
+    "remoteReady": false,
+    "headCommit": "6b0bd72a31eb5e2c36afcd5744c85dc2502327d2",
+    "headSummary": "chore: bootstrap TeamClaw workspace",
+    "dirty": false,
+    "lastPreparedAt": 1774965389624
+  },
+  "createdAt": 1774965169115,
+  "updatedAt": 1774966058589,
+  "provisioning": {
+    "workers": {
+      "provisioned-developer-mneoflrk-1q8wjv": {
+        "workerId": "provisioned-developer-mneoflrk-1q8wjv",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneoflrk-iepu3k-mneoflrk-nf2ss5",
+        "requestedAt": 1774965169139,
+        "updatedAt": 1774966058570
+      },
+      "provisioned-qa-mneoflrs-rxn15d": {
+        "workerId": "provisioned-qa-mneoflrs-rxn15d",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneoflrs-2y6kwg-mneoflrs-q6k6g6",
+        "requestedAt": 1774965169144,
+        "updatedAt": 1774966058570
+      },
+      "provisioned-architect-mneoflru-nbghv9": {
+        "workerId": "provisioned-architect-mneoflru-nbghv9",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneoflru-31bcli-mneoflru-i7l4j0",
+        "requestedAt": 1774965169146,
+        "updatedAt": 1774966058570
+      },
+      "provisioned-developer-mneogki0-49rthd": {
+        "workerId": "provisioned-developer-mneogki0-49rthd",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneogki0-7lxi57-mneogki0-nlu2xv",
+        "requestedAt": 1774965214153,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneogki7-gct2ge": {
+        "workerId": "provisioned-qa-mneogki7-gct2ge",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneogki7-gw9r9e-mneogki7-rbi6z8",
+        "requestedAt": 1774965214159,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneogki9-h91xrg": {
+        "workerId": "provisioned-architect-mneogki9-h91xrg",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneogki9-wrxl07-mneogki9-wt2o3s",
+        "requestedAt": 1774965214162,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-developer-mneokbws-t27rz4": {
+        "workerId": "provisioned-developer-mneokbws-t27rz4",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneokbws-ncebfv-mneokbws-170gcj",
+        "requestedAt": 1774965389646,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneokbx3-d2zp92": {
+        "workerId": "provisioned-qa-mneokbx3-d2zp92",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneokbx3-60s5kq-mneokbx3-16b7ch",
+        "requestedAt": 1774965389655,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneokbx4-ilcrjm": {
+        "workerId": "provisioned-architect-mneokbx4-ilcrjm",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneokbx4-97vzhp-mneokbx4-w87aiy",
+        "requestedAt": 1774965389656,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-developer-mneolan2-566615": {
+        "workerId": "provisioned-developer-mneolan2-566615",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneolan2-g8eyzv-mneolan2-1v5v1m",
+        "requestedAt": 1774965434655,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneolan6-amqhap": {
+        "workerId": "provisioned-qa-mneolan6-amqhap",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneolan6-0kgpyr-mneolan6-e84d0j",
+        "requestedAt": 1774965434658,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneolan9-6tqq9t": {
+        "workerId": "provisioned-architect-mneolan9-6tqq9t",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneolan9-194ifm-mneolan9-3jmj6h",
+        "requestedAt": 1774965434661,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-developer-mneolxsn-1uhtf4": {
+        "workerId": "provisioned-developer-mneolxsn-1uhtf4",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneolxsn-cj216k-mneolxsn-ufkk4x",
+        "requestedAt": 1774965464663,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneolxsv-k10eqg": {
+        "workerId": "provisioned-qa-mneolxsv-k10eqg",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneolxsv-hh0p36-mneolxsv-l4eo6r",
+        "requestedAt": 1774965464671,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneolxsx-us6swq": {
+        "workerId": "provisioned-architect-mneolxsx-us6swq",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneolxsx-hm77v8-mneolxsx-d6wns4",
+        "requestedAt": 1774965464673,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-developer-mneomkyb-wu7fmd": {
+        "workerId": "provisioned-developer-mneomkyb-wu7fmd",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneomkyb-qkemev-mneomkyb-w4l1cm",
+        "requestedAt": 1774965494675,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneomkyd-zk126m": {
+        "workerId": "provisioned-qa-mneomkyd-zk126m",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneomkyd-02htv7-mneomkyd-tdel2n",
+        "requestedAt": 1774965494677,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneomkyg-ucbx3h": {
+        "workerId": "provisioned-architect-mneomkyg-ucbx3h",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneomkyg-tq29pg-mneomkyg-9e1bkm",
+        "requestedAt": 1774965494680,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-developer-mneon83y-5z8wku": {
+        "workerId": "provisioned-developer-mneon83y-5z8wku",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneon83y-sl8f6r-mneon83y-cktl1o",
+        "requestedAt": 1774965524686,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneon841-lh8cnv": {
+        "workerId": "provisioned-qa-mneon841-lh8cnv",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneon841-ew9vf2-mneon841-ljpohj",
+        "requestedAt": 1774965524689,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneon844-aownmf": {
+        "workerId": "provisioned-architect-mneon844-aownmf",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneon844-b97y86-mneon844-s53vur",
+        "requestedAt": 1774965524692,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-developer-mneonv9q-rsba9c": {
+        "workerId": "provisioned-developer-mneonv9q-rsba9c",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneonv9q-l054le-mneonv9q-2w1hxm",
+        "requestedAt": 1774965554703,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneonv9v-ua84a4": {
+        "workerId": "provisioned-qa-mneonv9v-ua84a4",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneonv9v-p52r2b-mneonv9v-w9qwnr",
+        "requestedAt": 1774965554707,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneonv9y-inakew": {
+        "workerId": "provisioned-architect-mneonv9y-inakew",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneonv9y-uylz7f-mneonv9y-4eqywk",
+        "requestedAt": 1774965554710,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-developer-mneooifi-rhpow4": {
+        "workerId": "provisioned-developer-mneooifi-rhpow4",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneooifi-yubap7-mneooifi-svkjd4",
+        "requestedAt": 1774965584718,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneooifl-p97e49": {
+        "workerId": "provisioned-qa-mneooifl-p97e49",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneooifl-qzxxv8-mneooifl-nrkexo",
+        "requestedAt": 1774965584721,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneooifo-2wakun": {
+        "workerId": "provisioned-architect-mneooifo-2wakun",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneooifo-ffgwpi-mneooifo-53k0dq",
+        "requestedAt": 1774965584724,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-developer-mneop5l6-745w4z": {
+        "workerId": "provisioned-developer-mneop5l6-745w4z",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneop5l6-wkme8r-mneop5l6-b8407z",
+        "requestedAt": 1774965614730,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneop5l9-qyx51g": {
+        "workerId": "provisioned-qa-mneop5l9-qyx51g",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneop5l9-xh9x7i-mneop5l9-7u3d0u",
+        "requestedAt": 1774965614733,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneop5lf-t6wmk1": {
+        "workerId": "provisioned-architect-mneop5lf-t6wmk1",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneop5lf-452khb-mneop5lf-yn07m1",
+        "requestedAt": 1774965614739,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-developer-mneopsqx-cmrwap": {
+        "workerId": "provisioned-developer-mneopsqx-cmrwap",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneopsqx-07gs90-mneopsqx-23e99x",
+        "requestedAt": 1774965644745,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneopsqz-riqf55": {
+        "workerId": "provisioned-qa-mneopsqz-riqf55",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneopsqz-22f5qi-mneopsqz-v062y6",
+        "requestedAt": 1774965644747,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneopsr2-2j5z0d": {
+        "workerId": "provisioned-architect-mneopsr2-2j5z0d",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneopsr2-077iwd-mneopsr2-bjpo3z",
+        "requestedAt": 1774965644750,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-developer-mneoqfwm-sp4jh2": {
+        "workerId": "provisioned-developer-mneoqfwm-sp4jh2",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneoqfwm-tap1qn-mneoqfwm-msw1v8",
+        "requestedAt": 1774965674758,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneoqfwp-gzlum0": {
+        "workerId": "provisioned-qa-mneoqfwp-gzlum0",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneoqfwp-ahey6w-mneoqfwp-j5cz04",
+        "requestedAt": 1774965674761,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneoqfwr-rcfmrx": {
+        "workerId": "provisioned-architect-mneoqfwr-rcfmrx",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneoqfwr-hv0752-mneoqfwr-o2z9pf",
+        "requestedAt": 1774965674763,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-developer-mneor329-n8njuk": {
+        "workerId": "provisioned-developer-mneor329-n8njuk",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneor329-lqax14-mneor329-0q1wxf",
+        "requestedAt": 1774965704769,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneor32b-bfzsdv": {
+        "workerId": "provisioned-qa-mneor32b-bfzsdv",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneor32b-3vtn8v-mneor32b-hneq8l",
+        "requestedAt": 1774965704771,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneor32e-r8iozf": {
+        "workerId": "provisioned-architect-mneor32e-r8iozf",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneor32e-bz0uf6-mneor32e-4ven50",
+        "requestedAt": 1774965704774,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-developer-mneorq80-zwvtya": {
+        "workerId": "provisioned-developer-mneorq80-zwvtya",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneorq80-acoxho-mneorq80-8llf1w",
+        "requestedAt": 1774965734784,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneorq83-4o90lp": {
+        "workerId": "provisioned-qa-mneorq83-4o90lp",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneorq83-jzfvxw-mneorq83-6t7i5h",
+        "requestedAt": 1774965734787,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneorq86-zrjaj0": {
+        "workerId": "provisioned-architect-mneorq86-zrjaj0",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneorq86-q9nyz2-mneorq86-ornyd3",
+        "requestedAt": 1774965734790,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-developer-mneosddr-62rt7n": {
+        "workerId": "provisioned-developer-mneosddr-62rt7n",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneosddr-5caxg0-mneosddr-v5vi8p",
+        "requestedAt": 1774965764799,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneosddv-to0rzo": {
+        "workerId": "provisioned-qa-mneosddv-to0rzo",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneosddv-hqfhi0-mneosddv-c2x8j8",
+        "requestedAt": 1774965764803,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneosddx-2w8wmp": {
+        "workerId": "provisioned-architect-mneosddx-2w8wmp",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneosddx-zv5igp-mneosddx-xfu7ov",
+        "requestedAt": 1774965764805,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-developer-mneot0je-6m4yqo": {
+        "workerId": "provisioned-developer-mneot0je-6m4yqo",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneot0je-qnlxl5-mneot0je-av2lm6",
+        "requestedAt": 1774965794810,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneot0jg-wxsyy0": {
+        "workerId": "provisioned-qa-mneot0jg-wxsyy0",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneot0jg-ta7ggh-mneot0jg-32hec0",
+        "requestedAt": 1774965794812,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneot0ji-qf87c2": {
+        "workerId": "provisioned-architect-mneot0ji-qf87c2",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneot0ji-pm7kn1-mneot0ji-opcubp",
+        "requestedAt": 1774965794814,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-developer-mneotnp1-da4yyp": {
+        "workerId": "provisioned-developer-mneotnp1-da4yyp",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneotnp1-6uz4yn-mneotnp1-w037jv",
+        "requestedAt": 1774965824821,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneotnp4-oya247": {
+        "workerId": "provisioned-qa-mneotnp4-oya247",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneotnp4-ltwfxj-mneotnp4-eae4kb",
+        "requestedAt": 1774965824824,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneotnp7-4faalx": {
+        "workerId": "provisioned-architect-mneotnp7-4faalx",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneotnp7-gy9kuf-mneotnp7-cq7u1c",
+        "requestedAt": 1774965824827,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-developer-mneouaun-kyorah": {
+        "workerId": "provisioned-developer-mneouaun-kyorah",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneouaun-527xjh-mneouaun-6zf4ev",
+        "requestedAt": 1774965854832,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneouaur-pl5wme": {
+        "workerId": "provisioned-qa-mneouaur-pl5wme",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneouaur-l58bbr-mneouaur-y87uj4",
+        "requestedAt": 1774965854836,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneouaut-4dcni0": {
+        "workerId": "provisioned-architect-mneouaut-4dcni0",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneouaut-mmsr9v-mneouaut-2iu2b8",
+        "requestedAt": 1774965854837,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-developer-mneouy0f-yy52pu": {
+        "workerId": "provisioned-developer-mneouy0f-yy52pu",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneouy0f-g8wr3m-mneouy0f-buxnu5",
+        "requestedAt": 1774965884847,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneouy0i-82plkb": {
+        "workerId": "provisioned-qa-mneouy0i-82plkb",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneouy0i-sj1gl2-mneouy0i-lfry7m",
+        "requestedAt": 1774965884850,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneouy0k-xiga94": {
+        "workerId": "provisioned-architect-mneouy0k-xiga94",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneouy0k-mf8d4x-mneouy0k-k1rd7t",
+        "requestedAt": 1774965884853,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-developer-mneovl5z-z3ebix": {
+        "workerId": "provisioned-developer-mneovl5z-z3ebix",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneovl5z-xs5x09-mneovl5z-tnlpim",
+        "requestedAt": 1774965914855,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneovl62-9r6ymo": {
+        "workerId": "provisioned-qa-mneovl62-9r6ymo",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneovl62-lxrvuf-mneovl62-v30pb0",
+        "requestedAt": 1774965914858,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneovl65-b830o7": {
+        "workerId": "provisioned-architect-mneovl65-b830o7",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneovl65-ymo669-mneovl65-wrvjpz",
+        "requestedAt": 1774965914861,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-developer-mneow8br-7161hx": {
+        "workerId": "provisioned-developer-mneow8br-7161hx",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneow8br-faz8bo-mneow8br-arx9nj",
+        "requestedAt": 1774965944872,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneow8bv-u4qbdh": {
+        "workerId": "provisioned-qa-mneow8bv-u4qbdh",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneow8bv-bj4sro-mneow8bv-qr0zbv",
+        "requestedAt": 1774965944876,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneow8bx-4x3un6": {
+        "workerId": "provisioned-architect-mneow8bx-4x3un6",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneow8bx-fkrceg-mneow8bx-t5qw0x",
+        "requestedAt": 1774965944877,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-developer-mneowvhe-pf7rev": {
+        "workerId": "provisioned-developer-mneowvhe-pf7rev",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneowvhe-weliz0-mneowvhe-wfplm7",
+        "requestedAt": 1774965974882,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneowvhh-vuqcsc": {
+        "workerId": "provisioned-qa-mneowvhh-vuqcsc",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneowvhh-a0llr2-mneowvhh-u8zkhs",
+        "requestedAt": 1774965974885,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneowvhk-nzyb3z": {
+        "workerId": "provisioned-architect-mneowvhk-nzyb3z",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneowvhk-4ssogf-mneowvhk-4fmc8m",
+        "requestedAt": 1774965974889,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-developer-mneoxinc-a9en9i": {
+        "workerId": "provisioned-developer-mneoxinc-a9en9i",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneoxinc-a14n32-mneoxinc-9qik7t",
+        "requestedAt": 1774966004904,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneoxinf-ck7b9p": {
+        "workerId": "provisioned-qa-mneoxinf-ck7b9p",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneoxinf-f5wh95-mneoxinf-cwnvoz",
+        "requestedAt": 1774966004907,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneoxink-ta5ins": {
+        "workerId": "provisioned-architect-mneoxink-ta5ins",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneoxink-1dithn-mneoxink-13nxyb",
+        "requestedAt": 1774966004912,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-developer-mneoy5tb-e26nl9": {
+        "workerId": "provisioned-developer-mneoy5tb-e26nl9",
+        "role": "developer",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneoy5tb-kibblv-mneoy5tb-27kn42",
+        "requestedAt": 1774966034927,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-qa-mneoy5td-dp36rd": {
+        "workerId": "provisioned-qa-mneoy5td-dp36rd",
+        "role": "qa",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneoy5td-sqrfgu-mneoy5td-8m5loc",
+        "requestedAt": 1774966034929,
+        "updatedAt": 1774966058571
+      },
+      "provisioned-architect-mneoy5tf-iyto73": {
+        "workerId": "provisioned-architect-mneoy5tf-iyto73",
+        "role": "architect",
+        "provider": "docker",
+        "status": "terminated",
+        "launchToken": "mneoy5tf-3a5hub-mneoy5tf-8su0v1",
+        "requestedAt": 1774966034932,
+        "updatedAt": 1774966058571
+      }
+    }
+  }
+}

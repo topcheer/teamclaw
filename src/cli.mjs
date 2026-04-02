@@ -63,8 +63,8 @@ const INSTALL_MODE_OPTIONS = [
   },
   {
     value: "controller-manual",
-    label: "Controller only + external workers",
-    hint: "Use separate OpenClaw installs for workers.",
+    label: "Local controller + default on-demand workers",
+    hint: "Lean same-host setup; TeamClaw launches local worker processes on demand with controller-decided defaults.",
   },
   {
     value: "controller-docker",
@@ -776,7 +776,10 @@ function isControllerInstallMode(installMode) {
 }
 
 function isOnDemandControllerInstallMode(installMode) {
-  return installMode === "controller-process" || installMode === "controller-docker" || installMode === "controller-kubernetes";
+  return installMode === "controller-manual" ||
+    installMode === "controller-process" ||
+    installMode === "controller-docker" ||
+    installMode === "controller-kubernetes";
 }
 
 function describeProvisioningRoles(roles) {
@@ -1690,8 +1693,8 @@ function applyInstallerChoices(config, choices, configPath) {
     delete teamclawConfig.role;
 
     if (choices.installMode === "controller-manual") {
-      teamclawConfig.workerProvisioningType = "none";
-      teamclawConfig.workerProvisioningDisabled = true;
+      teamclawConfig.workerProvisioningType = "process";
+      teamclawConfig.workerProvisioningDisabled = false;
       teamclawConfig.workerProvisioningControllerUrl = "";
       teamclawConfig.workerProvisioningRoles = [];
       teamclawConfig.workerProvisioningMaxPerRole = 1;
@@ -1963,7 +1966,7 @@ async function runInstall(options) {
     } else if (choices.installMode === "controller-kubernetes") {
       prompter.note("Before using Kubernetes provisioning, make sure kubectl, namespace access, and the worker image are ready.");
     } else if (choices.installMode === "controller-manual") {
-      prompter.note("Next step: run this installer again on your worker nodes with the dedicated worker mode.");
+      prompter.note("Next step: open the local TeamClaw UI and let it provision local workers on demand.");
     } else if (choices.installMode === "worker") {
       prompter.note("Next step: start this worker node so it can register with the controller.");
     }

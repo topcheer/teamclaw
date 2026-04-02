@@ -8,13 +8,30 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_SETTINGS = {
   controllerUrl: "http://127.0.0.1:9527",
-  localControllerUrl: "http://127.0.0.1:9527",
-  localControllerCommand: "openclaw gateway run",
-  localControllerCwd: "",
 };
 
 let mainWindow = null;
-let localController = null;
+
+const LOCAL_SETUP_MODES = [
+  {
+    id: "controller-manual",
+    title: "Local quickstart",
+    description: "Runs the controller here and launches local worker processes on demand with controller-decided defaults.",
+    warning: "Leanest local setup. TeamClaw still provisions local worker processes on demand, but uses a smaller default worker pool.",
+    recommended: false,
+  },
+  {
+    id: "controller-process",
+    title: "Local multi-process",
+    description: "Runs the controller here and provisions local worker processes on demand.",
+    warning: "Uses more CPU and memory, but gives local workers stronger process isolation.",
+    recommended: true,
+  },
+];
+
+function getDesktopIconPath() {
+  return path.join(__dirname, "renderer", "assets", "teamclaw-app-icon.png");
+}
 
 function getSettingsPath() {
   return path.join(app.getPath("userData"), "settings.json");
@@ -36,85 +53,45 @@ async function saveSettings(nextSettings) {
   return settings;
 }
 
-function sendLocalControllerEvent(event) {
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    return;
-  }
-  mainWindow.webContents.send("local-controller:event", event);
+function buildLocalInstallCommand(mode) {
+  const selectedMode = LOCAL_SETUP_MODES.some((entry) => entry.id === mode) ? mode : "controller-process";
+  return `npx -y @teamclaws/teamclaw install --yes --install-mode ${selectedMode}`;
 }
 
-function serializeLocalController() {
-  if (!localController) {
-    return {
-      running: false,
-      pid: null,
-      command: "",
-      cwd: "",
-      startedAt: null,
-      logLines: [],
-    };
+async function hasOpenClawInstalled() {
+  try {
+    await new Promise((resolve, reject) => {
+      const child = spawn("openclaw", ["--help"], { stdio: "ignore", windowsHide: true });
+      child.on("error", reject);
+      child.on("exit", (code) => {
+        if (code === 0) {
+          resolve(true);
+          return;
+        }
+        reject(new Error(`openclaw --help exited with ${code ?? 1}`));
+      });
+    });
+    return true;
+  } catch {
+    return false;
   }
+}
+
+async function getLocalSetupInfo() {
+  const hasOpenClaw = await hasOpenClawInstalled();
   return {
-    running: !localController.exited,
-    pid: localController.child.pid ?? null,
-    command: localController.command,
-    cwd: localController.cwd,
-    startedAt: localController.startedAt,
-    logLines: localController.logLines.slice(-120),
+    hasOpenClaw,
+    openClawInstallCommand: "npm install -g openclaw@latest",
+    openClawQuickstartCommand: "openclaw onboard --flow quickstart --install-daemon",
+    modes: LOCAL_SETUP_MODES.map((entry) => ({
+      ...entry,
+      installCommand: buildLocalInstallCommand(entry.id),
+    })),
   };
 }
 
-function appendLocalControllerLog(stream, chunk) {
-  if (!localController) {
-    return;
-  }
-  const text = String(chunk || "");
-  const lines = text.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
-  for (const line of lines) {
-    localController.logLines.push({
-      id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      stream,
-      line,
-      createdAt: Date.now(),
-    });
-  }
-  localController.logLines = localController.logLines.slice(-200);
-  sendLocalControllerEvent({ type: "log", payload: serializeLocalController() });
-}
-
-async function stopLocalControllerProcess() {
-  if (!localController || localController.exited) {
-    localController = null;
-    return serializeLocalController();
-  }
-
-  const child = localController.child;
-  const pid = child.pid;
-  localController.exited = true;
-  try {
-    if (process.platform === "win32" && pid) {
-      const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true });
-      await new Promise((resolve) => killer.on("exit", resolve));
-    } else {
-      child.kill("SIGTERM");
-    }
-  } catch {
-    // best effort
-  }
-  localController = null;
-  sendLocalControllerEvent({ type: "stopped", payload: serializeLocalController() });
-  return serializeLocalController();
-}
-
-async function startLocalControllerProcess(options) {
-  const command = String(options?.command || DEFAULT_SETTINGS.localControllerCommand).trim();
-  const cwd = String(options?.cwd || "").trim() || process.cwd();
-  if (!command) {
-    throw new Error("Local controller command is required");
-  }
-
-  await stopLocalControllerProcess();
-
+async function runShellCommand(command, options = {}) {
+  const cwd = String(options.cwd || "").trim() || process.cwd();
   const child = spawn(command, {
     cwd,
     env: process.env,
@@ -123,35 +100,50 @@ async function startLocalControllerProcess(options) {
     windowsHide: true,
   });
 
-  localController = {
-    child,
-    command,
-    cwd,
-    startedAt: Date.now(),
-    exited: false,
-    logLines: [],
-  };
-
-  child.stdout?.on("data", (chunk) => appendLocalControllerLog("stdout", chunk));
-  child.stderr?.on("data", (chunk) => appendLocalControllerLog("stderr", chunk));
-  child.on("exit", (code, signal) => {
-    if (!localController || localController.child !== child) {
-      return;
-    }
-    localController.exited = true;
-    appendLocalControllerLog("system", `Process exited (${signal || code || 0})`);
-    sendLocalControllerEvent({
-      type: "exit",
-      payload: {
-        ...serializeLocalController(),
-        exitCode: code,
-        signal,
-      },
-    });
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.on("data", (chunk) => {
+    stdout += String(chunk || "");
+  });
+  child.stderr?.on("data", (chunk) => {
+    stderr += String(chunk || "");
   });
 
-  sendLocalControllerEvent({ type: "started", payload: serializeLocalController() });
-  return serializeLocalController();
+  return await new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      const result = {
+        ok: code === 0,
+        code: code ?? null,
+        signal: signal ?? null,
+        stdout: stdout.trim(),
+        stderr: stderr.trim(),
+        command,
+        cwd,
+      };
+      if (code === 0) {
+        resolve(result);
+        return;
+      }
+      const failure = new Error(stderr.trim() || stdout.trim() || `Command failed: ${command}`);
+      Object.assign(failure, result);
+      reject(failure);
+    });
+  });
+}
+
+async function installLocalTeamClaw(options) {
+  const mode = String(options?.mode || "controller-process").trim();
+  const command = buildLocalInstallCommand(mode);
+  return await runShellCommand(command, { cwd: String(options?.cwd || "").trim() || process.cwd() });
+}
+
+async function installOpenClawLocally(options) {
+  const command = String(options?.command || "npm install -g openclaw@latest").trim();
+  if (!command) {
+    throw new Error("OpenClaw install command is required");
+  }
+  return await runShellCommand(command, { cwd: String(options?.cwd || "").trim() || process.cwd() });
 }
 
 async function createMainWindow() {
@@ -162,6 +154,7 @@ async function createMainWindow() {
     minHeight: 760,
     backgroundColor: "#0b1020",
     title: "TeamClaw Desktop",
+    icon: getDesktopIconPath(),
     webPreferences: {
       preload: path.join(__dirname, "preload.mjs"),
       contextIsolation: true,
@@ -177,6 +170,9 @@ async function createMainWindow() {
 }
 
 app.whenReady().then(async () => {
+  if (process.platform === "darwin" && app.dock) {
+    app.dock.setIcon(getDesktopIconPath());
+  }
   await createMainWindow();
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -187,16 +183,15 @@ app.whenReady().then(async () => {
 
 app.on("window-all-closed", async () => {
   if (process.platform !== "darwin") {
-    await stopLocalControllerProcess();
     app.quit();
   }
 });
 
 ipcMain.handle("settings:get", async () => loadSettings());
 ipcMain.handle("settings:save", async (_event, settings) => saveSettings(settings));
-ipcMain.handle("controller:start-local", async (_event, options) => startLocalControllerProcess(options));
-ipcMain.handle("controller:stop-local", async () => stopLocalControllerProcess());
-ipcMain.handle("controller:status", async () => serializeLocalController());
+ipcMain.handle("controller:get-setup-info", async () => getLocalSetupInfo());
+ipcMain.handle("controller:install-local", async (_event, options) => installLocalTeamClaw(options));
+ipcMain.handle("openclaw:install-local", async (_event, options) => installOpenClawLocally(options));
 ipcMain.handle("shell:openExternal", async (_event, url) => {
   await shell.openExternal(String(url || ""));
 });

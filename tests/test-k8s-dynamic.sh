@@ -14,9 +14,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 K8S_DIR="${SCRIPT_DIR}/k8s"
 NAMESPACE="teamclaw"
 CONTROLLER_POD="teamclaw-controller"
-LOCAL_PORT=9528
+LOCAL_PORT="${LOCAL_PORT:-19528}"
+TEAMCLAW_TEST_IMAGE="${TEAMCLAW_TEST_IMAGE:-registry.iot2.win/openclaw:teamclaw-test}"
+E2E_REQUIREMENT_FILE="${TEAMCLAW_E2E_REQUIREMENT_FILE:-${SCRIPT_DIR}/requirements/s6-travel-hotel.md}"
+E2E_TIMEOUT="${TEAMCLAW_E2E_TIMEOUT:-900}"
 BASE_URL="http://localhost:${LOCAL_PORT}"
 PORT_FWD_PID=""
+RENDER_DIR="$(mktemp -d "${TMPDIR:-/tmp}/teamclaw-k8s-dynamic.XXXXXX")"
+PODS_RENDERED="${RENDER_DIR}/pods.yaml"
+CONFIGMAPS_RENDERED="${RENDER_DIR}/configmaps.yaml"
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -28,6 +34,20 @@ NC='\033[0m'
 log_pass() { echo -e "  ${GREEN}PASS${NC} $1"; }
 log_fail() { echo -e "  ${RED}FAIL${NC} $1"; }
 log_info() { echo -e "  ${CYAN}INFO${NC} $1"; }
+
+render_manifest() {
+  local source_file=$1
+  local target_file=$2
+  python3 - "$source_file" "$target_file" "$TEAMCLAW_TEST_IMAGE" <<'PY'
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1]).read_text()
+image = sys.argv[3]
+source = source.replace("registry.iot2.win/openclaw:teamclaw-test", image)
+Path(sys.argv[2]).write_text(source)
+PY
+}
 
 cleanup() {
   local exit_code=$?
@@ -47,6 +67,7 @@ cleanup() {
     # Delete services
     kubectl delete -f "${K8S_DIR}/services.yaml" -n "$NAMESPACE" --ignore-not-found --grace-period=5 2>/dev/null || true
   fi
+  rm -rf "$RENDER_DIR"
   exit $exit_code
 }
 
@@ -67,6 +88,8 @@ echo -e "${NC}"
 echo "  Namespace: ${NAMESPACE}"
 echo "  Pod:       ${CONTROLLER_POD}"
 echo "  Port:      ${LOCAL_PORT} (local) → 9527 (pod)"
+echo "  Image:     ${TEAMCLAW_TEST_IMAGE}"
+echo "  Requirement: $(basename "${E2E_REQUIREMENT_FILE}")"
 echo ""
 
 # ----------------------------------------------------------
@@ -84,7 +107,9 @@ fi
 cat "${K8S_DIR}/secret.yaml.template" | ZAI_API_KEY="$ZAI_API_KEY" kubectl apply -n "$NAMESPACE" -f - 2>/dev/null
 
 # Configmaps + RBAC + PVC + Services
-kubectl apply -f "${K8S_DIR}/configmaps.yaml" -n "$NAMESPACE" 2>/dev/null
+render_manifest "${K8S_DIR}/configmaps.yaml" "${CONFIGMAPS_RENDERED}"
+render_manifest "${K8S_DIR}/pods.yaml" "${PODS_RENDERED}"
+kubectl apply -f "${CONFIGMAPS_RENDERED}" -n "$NAMESPACE" 2>/dev/null
 kubectl apply -f "${K8S_DIR}/rbac.yaml" -n "$NAMESPACE" 2>/dev/null
 kubectl apply -f "${K8S_DIR}/workspace-pvc.yaml" -n "$NAMESPACE" 2>/dev/null
 kubectl apply -f "${K8S_DIR}/services.yaml" -n "$NAMESPACE" 2>/dev/null
@@ -96,7 +121,7 @@ log_pass "Namespace, secrets, configmaps, RBAC, PVC, and services created"
 echo ""
 echo -e "${BOLD}[2/7]${NC} Deploy controller pod..."
 
-kubectl apply -f "${K8S_DIR}/pods.yaml" --selector=scenario=s6 -n "$NAMESPACE"
+kubectl apply -f "${PODS_RENDERED}" --selector=scenario=s6 -n "$NAMESPACE"
 log_info "Waiting for controller pod to be ready..."
 
 kubectl wait --for=condition=Ready "pod/${CONTROLLER_POD}" -n "$NAMESPACE" --timeout=120s 2>/dev/null
@@ -196,28 +221,27 @@ else
 fi
 
 # ----------------------------------------------------------
-# Step 7: Run API tests
+# Step 7: Run E2E delivery test (LLM-powered)
 # ----------------------------------------------------------
 echo ""
-echo -e "${BOLD}[7/8]${NC} Run API test suite..."
+echo -e "${BOLD}[7/8]${NC} Run E2E delivery test..."
+
+if [ -f "${SCRIPT_DIR}/test-e2e-delivery.sh" ] && [ -f "$E2E_REQUIREMENT_FILE" ]; then
+  bash "${SCRIPT_DIR}/test-e2e-delivery.sh" "${BASE_URL}" "$E2E_REQUIREMENT_FILE" "distributed" "${E2E_TIMEOUT}"
+else
+  log_skip "test-e2e-delivery.sh or requirement file not found, skipping E2E delivery test"
+fi
+
+# ----------------------------------------------------------
+# Step 8: Run API tests
+# ----------------------------------------------------------
+echo ""
+echo -e "${BOLD}[8/8]${NC} Run API test suite..."
 
 if [ -f "${SCRIPT_DIR}/test-api.sh" ]; then
   bash "${SCRIPT_DIR}/test-api.sh" "${BASE_URL}" "distributed"
 else
   log_skip "test-api.sh not found"
-fi
-
-# ----------------------------------------------------------
-# Step 8: Run E2E delivery test (LLM-powered)
-# ----------------------------------------------------------
-echo ""
-echo -e "${BOLD}[8/8]${NC} Run E2E delivery test..."
-
-REQUIREMENT_FILE="${SCRIPT_DIR}/requirements/s6-travel-hotel.md"
-if [ -f "${SCRIPT_DIR}/test-e2e-delivery.sh" ] && [ -f "$REQUIREMENT_FILE" ]; then
-  bash "${SCRIPT_DIR}/test-e2e-delivery.sh" "${BASE_URL}" "$REQUIREMENT_FILE" "distributed" 900
-else
-  log_skip "test-e2e-delivery.sh or requirement file not found, skipping E2E delivery test"
 fi
 
 # ----------------------------------------------------------

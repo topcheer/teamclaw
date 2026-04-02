@@ -1427,6 +1427,9 @@ function buildControllerFollowUpMessage(task: TaskInfo, state: TeamState | null)
     "Continue orchestrating this same requirement.",
     "Review the current TeamClaw state before acting.",
     "Create only the next execution-ready task(s) whose prerequisites are now satisfied.",
+    "For any large-scale requirement, prefer parallel fan-out over serial mega-phases: if multiple independent developer workstreams are ready, create all of them now instead of a single umbrella developer task.",
+    "Decompose developer work by module or subsystem with clear file ownership and interfaces so multiple developer workers can collaborate safely in parallel.",
+    "Use TeamClaw's available same-role capacity: create multiple developer tasks when the work can proceed concurrently rather than forcing one developer to carry the whole rewrite alone.",
     "Do not duplicate tasks that already exist, are active, or are already completed.",
     "If this task produced a web application with a live preview URL, include it in your reply so the human can verify the result.",
     "If all planned phases are complete and no follow-ups remain, set requirementFullyComplete=true in the manifest and provide a final delivery summary.",
@@ -1434,6 +1437,37 @@ function buildControllerFollowUpMessage(task: TaskInfo, state: TeamState | null)
   );
 
   return parts.filter(Boolean).join("\n");
+}
+
+function buildControllerParallelHelpMessage(
+  task: TaskInfo,
+  state: TeamState | null,
+  input: {
+    requestedBy: string;
+    requestedByRole?: RoleId;
+    targetRole?: RoleId;
+    reason: string;
+    requestedWorkerCount?: number;
+    suggestedWorkstreams: string[];
+  },
+): string {
+  const targetRole = input.targetRole || input.requestedByRole || task.assignedRole || "developer";
+  return [
+    buildControllerFollowUpMessage(task, state),
+    "",
+    "## Parallel Help Request",
+    `Current worker ${input.requestedBy} has asked TeamClaw to expand parallel help for role ${targetRole}.`,
+    input.requestedByRole ? `Requesting worker role: ${input.requestedByRole}` : "",
+    typeof input.requestedWorkerCount === "number"
+      ? `Desired same-role worker capacity for this requirement: ${input.requestedWorkerCount}`
+      : "",
+    `Why more parallel help is needed: ${input.reason}`,
+    input.suggestedWorkstreams.length > 0
+      ? `Suggested parallel workstreams:\n${input.suggestedWorkstreams.map((item) => `- ${item}`).join("\n")}`
+      : "",
+    "If the suggested workstreams are genuinely independent, create multiple execution-ready tasks for that role now instead of keeping one giant serial task.",
+    "Reuse active tasks when possible, but if no matching tasks already exist, fan out the work into distinct module- or subsystem-scoped tasks that can run concurrently.",
+  ].filter(Boolean).join("\n");
 }
 
 function buildControllerClarificationAnswerMessage(
@@ -2644,6 +2678,8 @@ function enrichWithFilesystemHtmlScan(
 
 const MEANINGFUL_PROJECT_CHANGE_EXTENSIONS = new Set([
   ".js", ".jsx", ".ts", ".tsx", ".json", ".html", ".css", ".scss", ".md", ".txt", ".yml", ".yaml",
+  ".go", ".mod", ".sum", ".py", ".rb", ".rs", ".java", ".kt", ".swift", ".c", ".cc", ".cpp", ".h", ".hpp",
+  ".cs", ".php", ".sh", ".bash", ".zsh", ".sql", ".toml", ".ini",
 ]);
 
 const IGNORED_PROJECT_CHANGE_DIRS = new Set([
@@ -2668,7 +2704,57 @@ function taskRequiresMeaningfulProjectChangeGate(task: TaskInfo): boolean {
   return /\b(implement|build|fix|rework|update|add|enhanc|deliver|write|create)\b/u.test(text);
 }
 
-function projectHasMeaningfulFileChanges(task: TaskInfo): boolean {
+function projectHasMeaningfulDeliverableEvidence(
+  task: TaskInfo,
+  contract: WorkerTaskResultContract | undefined,
+): boolean {
+  if (!task.projectDir || !contract) {
+    return false;
+  }
+  const projectRoot = path.join(resolveTeamClawProjectsDir(), task.projectDir);
+  for (const deliverable of contract.deliverables) {
+    if (deliverable.kind !== "file" && deliverable.kind !== "directory") {
+      continue;
+    }
+    const rawValue = deliverable.value.trim().replace(/\\/g, "/");
+    if (!rawValue) {
+      continue;
+    }
+    const normalizedValue = rawValue.startsWith("projects/")
+      ? rawValue.slice("projects/".length)
+      : rawValue;
+    if (
+      normalizedValue !== task.projectDir
+      && !normalizedValue.startsWith(`${task.projectDir}/`)
+    ) {
+      continue;
+    }
+    const relativePath = normalizedValue === task.projectDir
+      ? ""
+      : normalizedValue.slice(task.projectDir.length + 1);
+    const fullPath = relativePath ? path.join(projectRoot, relativePath) : projectRoot;
+    try {
+      const stats = fs.statSync(fullPath);
+      if (stats.isFile()) {
+        return true;
+      }
+      if (stats.isDirectory()) {
+        const entries = fs.readdirSync(fullPath, { withFileTypes: true });
+        if (entries.some((entry) => entry.isFile() || entry.isDirectory())) {
+          return true;
+        }
+      }
+    } catch {
+      continue;
+    }
+  }
+  return false;
+}
+
+function projectHasMeaningfulFileChanges(
+  task: TaskInfo,
+  contract?: WorkerTaskResultContract,
+): boolean {
   if (!task.projectDir) {
     return false;
   }
@@ -2714,7 +2800,7 @@ function projectHasMeaningfulFileChanges(task: TaskInfo): boolean {
       }
     }
   }
-  return false;
+  return projectHasMeaningfulDeliverableEvidence(task, contract);
 }
 
 function allowsNoChangeCompletion(
@@ -2979,6 +3065,25 @@ function ensureTaskResultContract(
     workerId: currentTask.assignedWorkerId,
     role: currentTask.assignedRole,
   }, deps);
+  return contract;
+}
+
+function buildEffectiveTaskResultContract(
+  task: TaskInfo,
+  result: string,
+  error: string | undefined,
+  submittedContract?: WorkerTaskResultContract,
+): WorkerTaskResultContract {
+  let contract = submittedContract
+    ? filterStaleDeliverables(submittedContract, task.projectDir)
+    : backfillWorkerTaskResultContract(task, result, error);
+  if (!error) {
+    const enriched = enrichDeliverablesWithPreviewInference(contract, result)
+      ?? enrichWithFilesystemHtmlScan(contract, task.projectDir);
+    if (enriched) {
+      contract = enriched;
+    }
+  }
   return contract;
 }
 
@@ -4078,20 +4183,40 @@ async function handleRequest(
         }, deps);
     }
 
-    if (!error && submittedContract?.outcome === "blocked") {
+    const effectiveContract = buildEffectiveTaskResultContract(currentTask, result, error, submittedContract);
+
+    if (!error && effectiveContract.outcome === "blocked") {
+      updateTeamState((teamState) => {
+        const task = teamState.tasks[taskId];
+        if (!task) {
+          return;
+        }
+        task.resultContract = effectiveContract;
+        task.updatedAt = Date.now();
+      });
+      if (!submittedContract) {
+        recordTaskExecutionEvent(taskId, {
+          type: "lifecycle",
+          phase: "result_contract_backfilled",
+          source: "controller",
+          message: "Worker did not submit a structured result contract; TeamClaw backfilled one from the recorded task result.",
+          workerId: currentTask.assignedWorkerId,
+          role: currentTask.assignedRole,
+        }, deps);
+      }
       const requested = await requestTaskClarification({
         taskId,
         requestedBy: workerId ?? "worker",
         requestedByWorkerId: workerId,
         requestedByRole: currentTask.assignedRole,
-        question: submittedContract.questions[0]
+        question: effectiveContract.questions[0]
           ?? "This task is blocked and needs a human decision before work can continue. What should TeamClaw do next?",
-        blockingReason: submittedContract.blockers[0] ?? submittedContract.summary,
+        blockingReason: effectiveContract.blockers[0] ?? effectiveContract.summary,
         context: [
-          submittedContract.notes,
+          effectiveContract.notes,
           result.trim(),
-          submittedContract.keyPoints.length > 0
-            ? `Worker-provided commands/details:\n${submittedContract.keyPoints.join("\n")}`
+          effectiveContract.keyPoints.length > 0
+            ? `Worker-provided commands/details:\n${effectiveContract.keyPoints.join("\n")}`
             : "",
         ].filter(Boolean).join("\n\n"),
       }, deps);
@@ -4116,7 +4241,7 @@ async function handleRequest(
       !error
       && gatedTask
       && taskRequiresMeaningfulProjectChangeGate(gatedTask)
-      && !projectHasMeaningfulFileChanges(gatedTask)
+      && !projectHasMeaningfulFileChanges(gatedTask, effectiveContract)
       && !allowsNoChangeCompletion(gatedTask, submittedContract, result)
     ) {
       error = "Task reported completion but no meaningful project file changes were detected in the assigned project directory.";
@@ -4202,6 +4327,63 @@ async function handleRequest(
       execution: buildTaskExecutionSummary(recorded.task.execution),
       event: recorded.event,
     });
+    return;
+  }
+
+  // POST /api/v1/tasks/:id/parallel-help
+  if (req.method === "POST" && pathname.match(/^\/api\/v1\/tasks\/[^/]+\/parallel-help$/)) {
+    const taskId = pathname.split("/")[4]!;
+    const body = await parseJsonBody(req);
+    const currentTask = getTeamState()?.tasks[taskId];
+    if (!currentTask) {
+      sendError(res, 404, "Task not found");
+      return;
+    }
+    const requestedBy = typeof body.requestedBy === "string" ? body.requestedBy : "";
+    const reason = typeof body.reason === "string" ? body.reason.trim() : "";
+    const requestedByRole = typeof body.requestedByRole === "string" ? body.requestedByRole as RoleId : undefined;
+    const targetRole = typeof body.targetRole === "string" ? body.targetRole as RoleId : undefined;
+    const requestedWorkerCount = typeof body.requestedWorkerCount === "number"
+      ? Math.max(2, Math.min(10, Math.floor(body.requestedWorkerCount)))
+      : undefined;
+    const suggestedWorkstreams = Array.isArray(body.suggestedWorkstreams)
+      ? body.suggestedWorkstreams.map((entry: unknown) => String(entry ?? "").trim()).filter(Boolean)
+      : [];
+    if (!requestedBy || !reason) {
+      sendError(res, 400, "requestedBy and reason are required");
+      return;
+    }
+    const sessionKey = resolveControllerWorkflowSessionKey(currentTask, getTeamState());
+    if (!sessionKey) {
+      sendError(res, 409, "Task is not linked to a controller session");
+      return;
+    }
+    recordTaskExecutionEvent(taskId, {
+      type: "progress",
+      phase: "parallel_help_requested",
+      source: "worker",
+      message: `Worker requested more ${targetRole || requestedByRole || currentTask.assignedRole || "developer"} capacity for parallel work: ${reason}`,
+      workerId: requestedBy,
+      role: requestedByRole,
+    }, deps);
+    const result = await runControllerIntake(
+      buildControllerParallelHelpMessage(currentTask, getTeamState(), {
+        requestedBy,
+        requestedByRole,
+        targetRole,
+        reason,
+        requestedWorkerCount,
+        suggestedWorkstreams,
+      }),
+      sessionKey,
+      deps,
+      {
+        source: "task_follow_up",
+        sourceTaskId: currentTask.id,
+        sourceTaskTitle: currentTask.title,
+      },
+    );
+    sendJson(res, 201, result);
     return;
   }
 

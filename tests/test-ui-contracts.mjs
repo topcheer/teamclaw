@@ -41,6 +41,16 @@ async function runUiContractSmoke() {
     /function buildTimelineClarificationBody/,
     "UI timeline should render clarification details alongside execution and messages",
   );
+  assert.doesNotMatch(
+    uiAppSource,
+    /renderPlanningTab[\s\S]*Only show runs that have a kickoff plan[\s\S]*kickoffPlan/,
+    "Web planning should not hide non-kickoff controller runs",
+  );
+  assert.match(
+    uiAppSource,
+    /let rolesRes = \{ roles: \[\] \};[\s\S]*rolesRes = await apiGet\("\/roles"\);[\s\S]*console\.error\("Failed to load roles:/,
+    "Web refresh should tolerate roles endpoint failures and still render main team state",
+  );
   assert.match(
     uiStyleSource,
     /\.contract-card/,

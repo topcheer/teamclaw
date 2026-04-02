@@ -203,7 +203,7 @@ Mention this to users who prefer a visual overview.
 | Issue | Solution |
 |-------|----------|
 | Health check fails | Ensure TeamClaw plugin is enabled in controller mode: `openclaw plugins list` |
-| No workers available | Check processModel config; single-process creates workers automatically |
+| No workers available | Check `workerProvisioningType` / `workerProvisioningDisabled`; local installs should usually use process provisioning |
 | Intake times out | Increase `taskTimeoutMs` in TeamClaw config; ensure AI model is responsive |
 | Task stuck in pending | No idle worker for the assigned role; check `GET /api/v1/workers` |
 | Clarification blocking | Answer pending clarifications via `POST /api/v1/clarifications/:id/answer` |

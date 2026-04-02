@@ -14,7 +14,6 @@ const workerPromptPath = path.join(projectRoot, "src", "src", "worker", "prompt-
 const taskExecutorPath = path.join(projectRoot, "src", "src", "task-executor.ts");
 const controllerPromptPath = path.join(projectRoot, "src", "src", "controller", "prompt-injector.ts");
 const manifestPath = path.join(projectRoot, "src", "src", "controller", "orchestration-manifest.ts");
-const localWorkerManagerPath = path.join(projectRoot, "src", "src", "controller", "local-worker-manager.ts");
 const managedGatewayProcessPath = path.join(projectRoot, "src", "src", "controller", "managed-gateway-process.ts");
 const controllerToolsPath = path.join(projectRoot, "src", "src", "controller", "controller-tools.ts");
 const workerToolsPath = path.join(projectRoot, "src", "src", "worker", "tools.ts");
@@ -25,13 +24,16 @@ const readmePath = path.join(projectRoot, "README.md");
 const sitePath = path.join(projectRoot, "docs", "index.html");
 
 const expectedRoles = [
-  "data-engineer",
-  "sre",
-  "technical-writer",
-  "solution-engineer",
-  "support-engineer",
-  "compliance-engineer",
-  "privacy-engineer",
+  "pm",
+  "architect",
+  "developer",
+  "qa",
+  "release-engineer",
+  "infra-engineer",
+  "devops",
+  "security-engineer",
+  "designer",
+  "marketing",
 ];
 
 async function runRoleRegistrySmoke() {
@@ -43,7 +45,6 @@ async function runRoleRegistrySmoke() {
     taskExecutorSource,
     controllerPromptSource,
     manifestSource,
-    localWorkerManagerSource,
     managedGatewayProcessSource,
     controllerToolsSource,
     workerToolsSource,
@@ -60,7 +61,6 @@ async function runRoleRegistrySmoke() {
     fs.readFile(taskExecutorPath, "utf8"),
     fs.readFile(controllerPromptPath, "utf8"),
     fs.readFile(manifestPath, "utf8"),
-    fs.readFile(localWorkerManagerPath, "utf8"),
     fs.readFile(managedGatewayProcessPath, "utf8"),
     fs.readFile(controllerToolsPath, "utf8"),
     fs.readFile(workerToolsPath, "utf8"),
@@ -82,53 +82,28 @@ async function runRoleRegistrySmoke() {
 
   assert.match(
     rolesSource,
-    /const ROLE_IDS_TEXT = ROLE_IDS\.join\(", "\);/,
-    "roles.ts should derive ROLE_IDS_TEXT from the central role list",
-  );
-  assert.match(
-    rolesSource,
-    /function isRoleId\(value: string\): value is RoleId/,
-    "roles.ts should expose a reusable isRoleId helper",
+    /const TEAMCLAW_ROLE_IDS_TEXT = \[/,
+    "roles.ts should keep a centralized TeamClaw role ID text list",
   );
   assert.match(
     configSource,
-    /role:\s*\{[\s\S]*enum:\s*ROLE_IDS[\s\S]*default:\s*"developer"/,
-    "config schema should validate worker role values against ROLE_IDS",
+    /import \{ ROLE_IDS \} from "\.\/roles\.js";[\s\S]*workerProvisioningRoles:\s*\{[\s\S]*items:\s*\{[\s\S]*enum:\s*ROLE_IDS,/,
+    "config schema should validate provisioned role values against ROLE_IDS",
   );
   assert.match(
     workerPromptSource,
-    /import \{ getRole, ROLE_IDS_TEXT \} from "\.\.\/roles\.js";/,
-    "worker prompt should import ROLE_IDS_TEXT from the shared role registry",
+    /import \{ getRole \} from "\.\.\/roles\.js";[\s\S]*const TEAMCLAW_ROLE_IDS_TEXT = \[/,
+    "worker prompt should reuse shared role lookup and expose the TeamClaw role list text",
   );
   assert.match(
     controllerPromptSource,
-    /import \{ ROLES, ROLE_IDS_TEXT \} from "\.\.\/roles\.js";/,
-    "controller prompt should import ROLE_IDS_TEXT from the shared role registry",
+    /import \{ ROLES \} from "\.\.\/roles\.js";[\s\S]*const TEAMCLAW_ROLE_IDS_TEXT = \[/,
+    "controller prompt should reuse shared roles and expose the TeamClaw role list text",
   );
   assert.match(
     taskExecutorSource,
-    /import \{ getRole, ROLE_IDS_TEXT \} from "\.\/roles\.js";/,
-    "task executor should import ROLE_IDS_TEXT from the shared role registry",
-  );
-  assert.match(
-    manifestSource,
-    /import \{ isRoleId \} from "\.\.\/roles\.js";/,
-    "manifest normalization should reuse the shared role helper",
-  );
-  assert.match(
-    localWorkerManagerSource,
-    /import \{ getRole, isRoleId \} from "\.\.\/roles\.js";[\s\S]*import \{ spawnManagedGatewayProcess, stopManagedGatewayProcess \} from "\.\/managed-gateway-process\.js";/,
-    "local worker manager should reuse the shared role helper",
-  );
-  assert.match(
-    localWorkerManagerSource,
-    /spawnManagedGatewayProcess\(\{[\s\S]*OPENCLAW_SKIP_CHANNELS:\s*"1"[\s\S]*OPENCLAW_DISABLE_BONJOUR:\s*"1"/,
-    "controller-managed local child workers should skip OpenClaw channel startup, disable bonjour when the controller already knows the worker URL, and launch through the managed gateway wrapper so orphaned runtimes do not accumulate after controller restarts",
-  );
-  assert.match(
-    localWorkerManagerSource,
-    /stopManagedGatewayProcess\(child,\s*LOCAL_WORKER_STOP_TIMEOUT_MS/,
-    "controller-managed local child workers should stop through the shared gateway cleanup helper instead of only signaling a single PID",
+    /import \{ getRole \} from "\.\/roles\.js";[\s\S]*const TEAMCLAW_ROLE_IDS_TEXT = \[/,
+    "task executor should reuse shared role lookup and expose the TeamClaw role list text",
   );
   assert.match(
     managedGatewayProcessSource,
@@ -147,28 +122,24 @@ async function runRoleRegistrySmoke() {
   );
   assert.match(
     controllerToolsSource,
-    /Exact target role ID \(\$\{ROLE_IDS_TEXT\}\)/,
-    "controller tools should describe target roles using the shared role text",
+    /Exact target role ID \(pm, architect, developer, qa, release-engineer, infra-engineer, devops, security-engineer, designer, marketing\)/,
+    "controller tools should describe target roles using the supported TeamClaw role IDs",
   );
   assert.match(
     workerToolsSource,
-    /Exact target role ID \(\$\{ROLE_IDS_TEXT\}\)/,
-    "worker tools should describe target roles using the shared role text",
+    /Exact target role ID \(pm, architect, developer, qa, release-engineer, infra-engineer, devops, security-engineer, designer, marketing\)/,
+    "worker tools should describe target roles using the supported TeamClaw role IDs",
   );
 
   const pluginJson = JSON.parse(pluginJsonSource);
-  const roleEnum = pluginJson.configSchema.properties.role.enum;
-  const localRoleEnum = pluginJson.configSchema.properties.localRoles.items.enum;
   const provisionRoleEnum = pluginJson.configSchema.properties.workerProvisioningRoles.items.enum;
   for (const role of expectedRoles) {
-    assert.ok(roleEnum.includes(role), `openclaw.plugin.json role enum should include ${role}`);
-    assert.ok(localRoleEnum.includes(role), `openclaw.plugin.json localRoles enum should include ${role}`);
     assert.ok(provisionRoleEnum.includes(role), `openclaw.plugin.json workerProvisioningRoles enum should include ${role}`);
   }
 
   assert.match(
     siteSource,
-    />17<\/strong>\s*<span>available role types<\/span>/,
+    />10<\/strong>\s*<span>available role types<\/span>/,
     "GitHub Pages site should reflect the expanded role count",
   );
 

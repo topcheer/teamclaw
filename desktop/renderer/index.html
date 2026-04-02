@@ -4,141 +4,101 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TeamClaw Desktop</title>
+  <link rel="icon" href="./assets/teamclaw-app-icon.png" type="image/png">
   <link rel="stylesheet" href="./style.css">
 </head>
 <body>
   <div class="app-shell">
     <aside class="left-rail">
-      <div class="brand-card glass-card">
-        <div class="brand-mark">TC</div>
-        <div>
-          <div class="brand-title">TeamClaw Desktop</div>
-          <div class="brand-subtitle">Controller-first desktop workspace</div>
-        </div>
+      <div class="brand-card">
+        <img class="brand-mark" src="./assets/teamclaw-app-icon.png" alt="TeamClaw logo">
+        <div class="brand-title">TeamClaw</div>
       </div>
 
-      <section class="glass-card section-card">
+      <section id="connection-card" class="panel connection-card">
         <div class="section-head compact">
           <div>
-            <div class="section-kicker">Connection</div>
             <h2>Controller</h2>
+            <div id="connection-summary" class="detail-subtitle">Not connected</div>
           </div>
-          <div id="connection-pill" class="pill pill-disconnected">Disconnected</div>
+          <div class="head-actions">
+            <div id="connection-pill" class="pill pill-disconnected">Disconnected</div>
+            <button id="connection-edit-btn" class="mini-btn" type="button">Edit</button>
+          </div>
         </div>
-        <label class="field">
-          <span>Controller URL</span>
-          <input id="controller-url" type="text" placeholder="http://127.0.0.1:9527">
-        </label>
-        <div class="row-actions">
-          <button id="connect-btn" class="btn btn-primary" type="button">Connect</button>
-          <button id="refresh-btn" class="btn" type="button">Refresh</button>
+        <div id="connection-body" class="connection-body">
+          <input id="controller-url" class="compact-input" type="text" placeholder="http://127.0.0.1:9527">
+          <div class="row-actions">
+            <button id="connect-btn" class="btn btn-primary" type="button">Connect</button>
+            <button id="refresh-btn" class="btn" type="button">Refresh</button>
+          </div>
         </div>
-        <div id="connection-meta" class="meta-note">Desktop only speaks to the controller API + WebSocket.</div>
       </section>
 
-      <section class="glass-card section-card">
-        <div class="section-head compact">
-          <div>
-            <div class="section-kicker">Local mode</div>
-            <h2>Controller launcher</h2>
-          </div>
-          <div id="local-pill" class="pill">Idle</div>
-        </div>
-        <label class="field">
-          <span>Launch command</span>
-          <input id="local-command" type="text" placeholder="openclaw gateway run">
-        </label>
-        <label class="field">
-          <span>Working directory</span>
-          <input id="local-cwd" type="text" placeholder="Optional">
-        </label>
-        <label class="field">
-          <span>Expected URL</span>
-          <input id="local-url" type="text" placeholder="http://127.0.0.1:9527">
-        </label>
-        <div class="row-actions">
-          <button id="start-local-btn" class="btn btn-primary" type="button">Start local</button>
-          <button id="stop-local-btn" class="btn" type="button">Stop</button>
-        </div>
-        <div id="local-log" class="log-box">No local controller activity yet.</div>
-      </section>
-
-      <nav class="glass-card nav-card">
-        <button class="nav-btn active" data-view="mission" type="button">Mission Control</button>
-        <button class="nav-btn" data-view="planning" type="button">Planning</button>
-        <button class="nav-btn" data-view="tasks" type="button">Tasks</button>
-        <button class="nav-btn" data-view="clarifications" type="button">Clarifications</button>
-        <button class="nav-btn" data-view="workspace" type="button">Workspace</button>
-        <button class="nav-btn" data-view="reports" type="button">Reports</button>
+      <nav class="panel nav-card">
+        <button class="nav-btn active" data-view="mission" type="button"><span class="nav-label">Mission</span><span class="nav-signal is-hidden" data-nav-signal="mission"></span></button>
+        <button class="nav-btn" data-view="planning" type="button"><span class="nav-label">Planning</span><span class="nav-signal is-hidden" data-nav-signal="planning"></span></button>
+        <button class="nav-btn" data-view="tasks" type="button"><span class="nav-label">Tasks</span><span class="nav-signal is-hidden" data-nav-signal="tasks"></span></button>
+        <button class="nav-btn" data-view="clarifications" type="button"><span class="nav-label">Clarifications</span><span class="nav-signal is-hidden" data-nav-signal="clarifications"></span></button>
+        <button class="nav-btn" data-view="workspace" type="button"><span class="nav-label">Workspace</span><span class="nav-signal is-hidden" data-nav-signal="workspace"></span></button>
+        <button class="nav-btn" data-view="reports" type="button"><span class="nav-label">Reports</span><span class="nav-signal is-hidden" data-nav-signal="reports"></span></button>
       </nav>
     </aside>
 
     <main class="center-stage">
-      <header class="stage-header glass-card">
+      <header class="stage-header panel">
         <div>
+          <div class="header-inline-tools">
+            <button id="language-toggle" class="mini-btn" type="button">中文</button>
+            <button id="worker-install-toggle" class="mini-btn" type="button" hidden>Add worker</button>
+          </div>
           <div id="status-line" class="status-line">Waiting for a controller connection…</div>
           <div id="summary-line" class="summary-line">No controller summary yet.</div>
         </div>
         <div class="header-actions">
           <button id="compose-focus-btn" class="btn" type="button">New requirement</button>
+          <button id="notice-toggle" class="btn notice-toggle" type="button">Notifications <span id="notice-badge" class="notice-badge">0</span></button>
         </div>
       </header>
 
+      <div id="runtime-alert" class="panel runtime-alert hidden"></div>
+      <section id="external-worker-install" class="panel worker-install-card hidden"></section>
+
       <section id="view-mission" class="stage-view active">
         <div class="view-grid mission-grid">
-          <section class="glass-card large-card">
-            <div class="section-head">
-              <div>
-                <div class="section-kicker">Human → controller</div>
-                <h2>Requirement composer</h2>
-              </div>
-            </div>
+          <section class="panel large-card">
+            <div class="section-head"><h2>Requirement</h2></div>
             <div class="composer-box">
-              <textarea id="composer-input" placeholder="Describe the requirement. The desktop client sends it directly to /api/v1/controller/intake."></textarea>
+              <textarea id="composer-input" placeholder="What should TeamClaw do?"></textarea>
               <div class="row-actions">
-                <button id="composer-send" class="btn btn-primary" type="button">Send to controller</button>
+                <button id="composer-send" class="btn btn-primary" type="button">Send</button>
               </div>
             </div>
           </section>
 
-          <section class="glass-card large-card">
-            <div class="section-head">
-              <div>
-                <div class="section-kicker">Live summary</div>
-                <h2>Flow radar</h2>
-              </div>
-            </div>
+          <section class="panel large-card">
+            <div class="section-head"><h2>Summary</h2></div>
             <div id="summary-grid" class="summary-grid">
               <div class="empty-state">Connect to a controller to load team state.</div>
             </div>
           </section>
         </div>
 
-        <section class="glass-card large-card conversation-card">
-          <div class="section-head">
-            <div>
-              <div class="section-kicker">Controller conversation</div>
-              <h2>Recent interaction</h2>
-            </div>
-          </div>
+        <section class="panel large-card conversation-card">
+          <div class="section-head"><h2>Recent interaction</h2></div>
           <div id="conversation-list" class="conversation-list">
-            <div class="empty-state">No controller conversation yet.</div>
+            <div class="empty-state">No conversation yet.</div>
           </div>
         </section>
       </section>
 
       <section id="view-planning" class="stage-view">
         <div class="view-grid planning-grid">
-          <section class="glass-card side-list-card">
-            <div class="section-head compact">
-              <div>
-                <div class="section-kicker">Kickoff sessions</div>
-                <h2>Planning runs</h2>
-              </div>
-            </div>
+          <section class="panel side-list-card">
+            <div class="section-head compact"><h2>Planning runs</h2></div>
             <div id="planning-list" class="side-list"></div>
           </section>
-          <section class="glass-card detail-card">
+          <section class="panel detail-card">
             <div id="planning-detail" class="detail-scroll">
               <div class="empty-state">Select a planning run to inspect the kickoff discussion.</div>
             </div>
@@ -147,7 +107,7 @@
       </section>
 
       <section id="view-tasks" class="stage-view">
-        <div class="toolbar glass-card">
+        <div class="toolbar panel">
           <div class="filter-row">
             <button class="filter-btn active" data-task-filter="all" type="button">All</button>
             <button class="filter-btn" data-task-filter="pending" type="button">Pending</button>
@@ -159,10 +119,10 @@
           </div>
         </div>
         <div class="view-grid tasks-grid">
-          <section class="glass-card side-list-card">
+          <section class="panel side-list-card">
             <div id="task-list" class="side-list"></div>
           </section>
-          <section class="glass-card detail-card">
+          <section class="panel detail-card">
             <div id="task-detail" class="detail-scroll">
               <div class="empty-state">Select a task to inspect its timeline and execution.</div>
             </div>
@@ -171,29 +131,19 @@
       </section>
 
       <section id="view-clarifications" class="stage-view">
-        <section class="glass-card large-card">
-          <div class="section-head">
-            <div>
-              <div class="section-kicker">Human loop</div>
-              <h2>Clarification inbox</h2>
-            </div>
-          </div>
+        <section class="panel large-card">
+          <div class="section-head"><h2>Clarifications</h2></div>
           <div id="clarification-list" class="clarification-list"></div>
         </section>
       </section>
 
       <section id="view-workspace" class="stage-view">
         <div class="view-grid workspace-grid">
-          <section class="glass-card side-list-card">
-            <div class="section-head compact">
-              <div>
-                <div class="section-kicker">Repository</div>
-                <h2>Workspace tree</h2>
-              </div>
-            </div>
+          <section class="panel side-list-card">
+            <div class="section-head compact"><h2>Workspace tree</h2></div>
             <div id="workspace-tree" class="tree-list"></div>
           </section>
-          <section class="glass-card detail-card">
+          <section class="panel detail-card">
             <div class="workspace-detail-head">
               <div>
                 <div id="workspace-file-name" class="detail-title">Select a file</div>
@@ -212,42 +162,115 @@
       </section>
 
       <section id="view-reports" class="stage-view">
-        <section class="glass-card large-card">
-          <div class="section-head">
-            <div>
-              <div class="section-kicker">Deliveries</div>
-              <h2>Completion reports</h2>
-            </div>
-          </div>
+        <section class="panel large-card">
+          <div class="section-head"><h2>Reports</h2></div>
           <div id="report-list" class="report-list"></div>
         </section>
       </section>
     </main>
+  </div>
 
-    <aside class="right-rail">
-      <section class="glass-card section-card command-deck">
-        <div class="section-head">
-          <div>
-            <div class="section-kicker">Desktop differentiator</div>
-            <h2>Notification command deck</h2>
+  <aside id="notice-drawer" class="notice-drawer is-collapsed">
+    <section class="panel command-deck">
+      <div class="section-head compact">
+        <div>
+          <h2>Notifications</h2>
+          <div class="detail-subtitle">Action inbox</div>
+        </div>
+        <button id="notice-close" class="mini-btn" type="button">Hide</button>
+      </div>
+      <div class="deck-summary">
+        <div class="summary-chip"><span class="summary-label">Attention</span><strong id="attention-count">0</strong></div>
+        <div class="summary-chip"><span class="summary-label">Active</span><strong id="active-count">0</strong></div>
+        <div class="summary-chip"><span class="summary-label">Done</span><strong id="delivery-count">0</strong></div>
+      </div>
+      <div class="deck-filters">
+        <button class="deck-filter active" data-notice-filter="all" type="button">All</button>
+        <button class="deck-filter" data-notice-filter="attention" type="button">Needs attention</button>
+        <button class="deck-filter" data-notice-filter="active" type="button">In flight</button>
+        <button class="deck-filter" data-notice-filter="delivery" type="button">Delivery</button>
+      </div>
+      <div id="notification-list" class="notification-list">
+        <div class="empty-state">Connect to a controller to populate notifications.</div>
+      </div>
+    </section>
+  </aside>
+
+  <div id="clarification-modal" class="clarification-modal is-hidden" aria-hidden="true">
+    <div class="clarification-modal-backdrop" data-clarification-modal-dismiss="backdrop"></div>
+    <div class="clarification-modal-dialog panel">
+      <div id="clarification-modal-content"></div>
+    </div>
+  </div>
+
+  <div id="bootstrap-overlay" class="bootstrap-overlay hidden" aria-hidden="true">
+    <section class="bootstrap-panel">
+      <div class="bootstrap-hero">
+        <div class="bootstrap-kicker">TeamClaw Desktop</div>
+        <h1 id="bootstrap-title">TeamClaw is unavailable on this machine.</h1>
+        <p id="bootstrap-subtitle" class="bootstrap-subtitle">We'll first try to connect to the local controller. If it isn't running yet, you can install TeamClaw here, start it, or point this app at another controller.</p>
+      </div>
+
+      <div class="bootstrap-grid">
+        <section class="bootstrap-card">
+          <div class="bootstrap-card-head">
+            <div>
+              <div id="bootstrap-status-label" class="bootstrap-label">Startup status</div>
+              <div id="bootstrap-status-detail" class="bootstrap-status-detail">Couldn't reach the local TeamClaw controller.</div>
+            </div>
+            <div id="local-pill" class="pill pill-stopped">Stopped</div>
           </div>
-        </div>
-        <div class="deck-summary">
-          <div class="summary-chip"><span class="summary-label">Attention</span><strong id="attention-count">0</strong></div>
-          <div class="summary-chip"><span class="summary-label">Active</span><strong id="active-count">0</strong></div>
-          <div class="summary-chip"><span class="summary-label">Deliveries</span><strong id="delivery-count">0</strong></div>
-        </div>
-        <div class="deck-filters">
-          <button class="deck-filter active" data-notice-filter="all" type="button">All</button>
-          <button class="deck-filter" data-notice-filter="attention" type="button">Needs attention</button>
-          <button class="deck-filter" data-notice-filter="active" type="button">In flight</button>
-          <button class="deck-filter" data-notice-filter="delivery" type="button">Delivery</button>
-        </div>
-        <div id="notification-list" class="notification-list">
-          <div class="empty-state">Connect to a controller to populate the command deck.</div>
-        </div>
-      </section>
-    </aside>
+        </section>
+
+        <section id="bootstrap-mode-card" class="bootstrap-card">
+          <div id="bootstrap-mode-label" class="bootstrap-label">Install mode</div>
+          <label class="bootstrap-mode">
+            <input type="radio" name="bootstrap-mode" data-bootstrap-mode="controller-manual">
+            <span>
+              <strong id="bootstrap-mode-manual-title">Local quickstart</strong>
+              <small id="bootstrap-mode-manual-hint">Runs the controller here and launches local worker processes on demand with controller-decided defaults.</small>
+            </span>
+          </label>
+          <label class="bootstrap-mode">
+            <input type="radio" name="bootstrap-mode" data-bootstrap-mode="controller-process" checked>
+            <span>
+              <strong id="bootstrap-mode-process-title">Local multi-process</strong>
+              <small id="bootstrap-mode-process-hint">Runs the controller here and provisions local worker processes on demand. Uses more CPU and memory.</small>
+            </span>
+          </label>
+          <p id="bootstrap-mode-warning" class="bootstrap-warning">This mode uses more resources on the current machine, but gives local workers stronger process isolation.</p>
+        </section>
+
+        <section class="bootstrap-card bootstrap-command-card">
+          <div id="bootstrap-command-label" class="bootstrap-label">One-line install command</div>
+          <pre class="worker-install-command bootstrap-command"><code id="bootstrap-install-command"></code></pre>
+          <div class="bootstrap-actions">
+            <button class="btn" type="button" data-bootstrap-copy-install="true">Copy install command</button>
+            <button id="bootstrap-install-btn" class="btn btn-primary" type="button" data-bootstrap-install="true">Install now</button>
+          </div>
+        </section>
+
+        <section id="bootstrap-openclaw-quickstart-card" class="bootstrap-card">
+          <div id="bootstrap-start-command-label" class="bootstrap-label">OpenClaw guided quickstart command</div>
+          <pre class="worker-install-command bootstrap-command"><code id="bootstrap-start-command">openclaw onboard --flow quickstart --install-daemon</code></pre>
+        </section>
+
+        <section class="bootstrap-card">
+          <div id="bootstrap-remote-title" class="bootstrap-label">Or connect to another controller</div>
+          <p id="bootstrap-remote-hint" class="bootstrap-subcopy">You can still point this desktop app at a remote TeamClaw controller.</p>
+          <label for="bootstrap-controller-url" id="bootstrap-remote-url-label" class="bootstrap-inline-label">Controller URL</label>
+          <input id="bootstrap-controller-url" class="compact-input" type="text" placeholder="http://127.0.0.1:9527">
+          <div class="bootstrap-actions">
+            <button class="btn" type="button" data-bootstrap-connect="true">Connect to this controller</button>
+          </div>
+        </section>
+
+        <section id="bootstrap-openclaw-components-card" class="bootstrap-card bootstrap-log-card">
+          <div id="bootstrap-logs-label" class="bootstrap-label">Component install command</div>
+          <pre id="bootstrap-local-log" class="worker-install-command bootstrap-log">npm install -g openclaw@latest</pre>
+        </section>
+      </div>
+    </section>
   </div>
 
   <script src="./app.js"></script>

@@ -5,11 +5,12 @@ TeamClaw is an **OpenClaw plugin** that turns one or more OpenClaw instances int
 It supports:
 
 - `controller` / `worker` modes
-- single-instance `controller + localRoles`
+- controller + externally registered workers
+- adaptive kickoff planning for medium/complex work, with per-role assessments before execution
 - clarification-driven task blocking and resume
 - Git-backed workspace collaboration
 - on-demand worker provisioning with `process`, `docker`, and `kubernetes`
-- a built-in Web UI for team state, tasks, clarifications, workspace, and messages
+- a built-in controller UI and desktop client for planning runs, tasks, clarifications, workspace browsing, and delivery reports
 
 **Website:** <https://topcheer.github.io/teamclaw/>
 
@@ -17,18 +18,17 @@ It supports:
 
 TeamClaw is currently **validated end-to-end** on the feasible benchmark topologies:
 
-- single instance + `localRoles`
-- distributed workers
+- external workers
 - `process` provisioning
 - `docker` provisioning
-
-`kubernetes` provisioning is implemented and documented, but it was **not benchmark-validated** in the `ssh13` environment because `kubectl` was not available there.
+- `kubernetes` provisioning
 
 ## Documentation map
 
 - Installation guide: [`INSTALL.md`](./INSTALL.md)
 - Design and architecture notes: [`DESIGN.md`](./DESIGN.md)
 - Package-facing README: [`src/README.md`](./src/README.md)
+- Desktop packaging and release commands: [`INSTALL.md#desktop-app-packaging-macos`](./INSTALL.md#desktop-app-packaging-macos)
 - Public marketing site: <https://topcheer.github.io/teamclaw/>
 
 ## How TeamClaw flows work
@@ -51,15 +51,16 @@ flowchart LR
 
 The key design constraint is that TeamClaw creates **execution-ready work**, not an entire speculative backlog up front. The controller keeps the flow moving stage by stage, using clarifications when a role is missing required product, technical, or infrastructure decisions.
 
+For requirements that look medium or complex, TeamClaw can also run a **team kickoff meeting** before execution. The controller provisions candidate roles, gathers lightweight kickoff assessments from each role, and then synthesizes those assessments into a clearer task plan, dependency view, and risk summary that is visible in the UI.
+
 ## Topology overview
 
 | Topology | What it is | Best first use | Current status |
 | --- | --- | --- | --- |
-| `controller + localRoles` | One OpenClaw instance hosts the controller and several local worker roles | First-time setup and fast iteration | Validated |
-| distributed workers | One controller, multiple separately launched workers | Multi-machine role separation | Validated |
-| `process` provisioning | Controller launches same-host worker processes on demand | First on-demand topology to try | Validated |
+| `external workers` | One controller, multiple separately launched workers | Multi-machine role separation | Validated |
+| `process` provisioning | Controller launches same-host worker processes on demand | Best first same-host setup | Validated |
 | `docker` provisioning | Controller launches container workers on demand | Isolated worker runtime image | Validated |
-| `kubernetes` provisioning | Controller launches worker pods with `kubectl` | Cluster-native deployments | Implemented, not benchmark-validated on `ssh13` |
+| `kubernetes` provisioning | Controller launches worker pods with `kubectl` | Cluster-native deployments | Validated |
 
 ## Developer quick start
 
@@ -125,27 +126,9 @@ Minimal controller configuration:
 }
 ```
 
-### Controller + localRoles
-
-For first-time use, this is the safest path:
-
-```json
-{
-  "mode": "controller",
-  "port": 9527,
-  "teamName": "my-team",
-  "taskTimeoutMs": 1800000,
-  "gitEnabled": true,
-  "gitDefaultBranch": "main",
-  "localRoles": ["architect", "developer", "qa"]
-}
-```
-
-`localRoles` are managed as controller-launched local worker processes. They keep isolated state directories and ports, but they continue to share the same TeamClaw workspace and routing flow.
-
 ### On-demand worker provisioning
 
-If you want workers to appear only when needed, set `workerProvisioningType` on the controller:
+If you want workers to appear only when needed, set `workerProvisioningType` on the controller. This is now the recommended same-host deployment path:
 
 - `process`: launch same-host worker processes
 - `docker`: launch container workers through the Docker API
@@ -156,6 +139,7 @@ Example `process` provisioning configuration:
 ```json
 {
   "mode": "controller",
+  "processModel": "multi",
   "port": 9527,
   "teamName": "my-team",
   "workerProvisioningType": "process",
@@ -188,6 +172,24 @@ Example `docker` provisioning configuration:
 }
 ```
 
+### External worker nodes
+
+If you want to run workers on separate machines or long-lived hosts, use `mode: "worker"` and point each worker at the controller:
+
+```json
+{
+  "mode": "worker",
+  "processModel": "multi",
+  "port": 9528,
+  "role": "developer",
+  "teamName": "my-team",
+  "controllerUrl": "http://YOUR_CONTROLLER_HOST:9527",
+  "taskTimeoutMs": 1800000,
+  "gitEnabled": true,
+  "gitDefaultBranch": "main"
+}
+```
+
 ## Clarifications are a first-class part of the flow
 
 When a role cannot safely continue because a requirement, decision, credential, or infrastructure dependency is missing, it should raise a clarification instead of guessing.
@@ -200,7 +202,7 @@ This is especially important for infra and DevOps work: TeamClaw should not pret
 
 TeamClaw uses **git** as the default collaboration layer.
 
-- In single-instance / `localRoles` mode, the controller initializes a repository inside the shared workspace.
+- The controller initializes a repository inside the shared workspace.
 - In distributed mode, workers can sync from controller-hosted **git bundle** endpoints even when you do not have an external Git service.
 - If `gitRemoteUrl` is configured and the controller can push to it, distributed workers switch to standard `clone / pull / push` behavior.
 
@@ -255,7 +257,6 @@ node tests/test-controller-intake.mjs
 bash tests/run-tests.sh
 bash tests/run-tests.sh --skip-build
 bash tests/run-tests.sh --keep
-bash tests/run-tests.sh --single-instance
 ```
 
 `tests/test-api.sh` also covers the clarification loop (`blocked -> answered -> resumed`) and verifies the clarifications tab in the Web UI.
@@ -266,7 +267,34 @@ If you want the integration container to provision additional external dependenc
 TEAMCLAW_TEST_HOST_PROVISIONING=1 \
 TEAMCLAW_TEST_DOCKER_SOCK=/var/run/docker.sock \
 TEAMCLAW_TEST_KUBECONFIG=$HOME/.kube/config \
-bash tests/run-tests.sh --single-instance
+ bash tests/run-tests.sh --skip-build
+```
+
+## Release
+
+TeamClaw release is split intentionally:
+
+- **npm** uses GitHub Actions trusted publishing via `.github/workflows/teamclaw-plugin-npm-release.yml`
+- **ClawHub package + skills** use the local CLI
+
+Maintainer checklist:
+
+```bash
+node scripts/sync-teamclaw-plugin-manifest.mjs src
+node scripts/teamclaw-package-check.mjs src
+bash scripts/teamclaw-clawhub-release.sh --dry-run
+```
+
+Before the real ClawHub push, bump `version:` in each changed `src/skills/*/SKILL.md`.
+
+When the preview looks right:
+
+```bash
+git tag v$(node -p "require('./src/package.json').version")
+git push origin main --tags
+
+clawhub login
+bash scripts/teamclaw-clawhub-release.sh --publish
 ```
 
 ## Repository layout

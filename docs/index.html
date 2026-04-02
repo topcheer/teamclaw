@@ -59,12 +59,13 @@
               <h1>Coordinate a virtual software team without losing visibility.</h1>
               <p class="hero-lead">
                 TeamClaw turns OpenClaw into a coordinated product, architecture, development,
-                QA, release, and operations workflow — with task routing, Git-backed
-                collaboration, model-backed execution, and a web UI built for clear handoffs.
+                QA, release, and operations workflow — with kickoff planning for complex work,
+                task routing, Git-backed collaboration, model-backed execution, and controller +
+                desktop UI surfaces built for clear handoffs.
               </p>
               <div class="hero-actions">
                 <a class="button button-primary" href="#install">Install TeamClaw</a>
-                <a class="button button-ghost" href="https://github.com/topcheer/teamclaw/releases/tag/v2026.3.26-2" target="_blank" rel="noreferrer">Release v2026.3.26-2</a>
+                <a class="button button-ghost" href="https://github.com/topcheer/teamclaw/releases" target="_blank" rel="noreferrer">Latest releases</a>
               </div>
               <div class="hero-note">
                 Follow the controller view, role handoffs, and completed delivery paths below.
@@ -221,28 +222,28 @@
               <span class="eyebrow">Deployment range</span>
               <h2>Start simple. Scale into isolation only when it helps.</h2>
               <p>
-                TeamClaw is comfortable in a single OpenClaw instance, but it also grows into process,
-                distributed, and containerized worker topologies without abandoning the same delivery model.
+                TeamClaw starts well on one host with dynamic process workers, then grows into external,
+                Docker, and Kubernetes worker topologies without abandoning the same delivery model.
               </p>
             </div>
 
             <div class="topology-grid">
               <article class="topology-card topology-card-wide">
                 <span class="pill pill-strong">Validated</span>
-                <h3>Single instance + localRoles is the fastest path to first value.</h3>
+                <h3>Process provisioning is the fastest path to first value.</h3>
                 <p>
-                  Start with one controller and local worker roles in one OpenClaw instance, then expand only when you need harder isolation.
+                  Start with one controller and on-demand same-host workers, then expand only when you need harder isolation.
                 </p>
                 <div class="chip-row">
-                  <span>localRoles</span>
+                  <span>On-demand process workers</span>
                   <span>Shared workspace</span>
                   <span>Live UI</span>
                 </div>
               </article>
               <article class="topology-card">
                 <span class="pill pill-strong">Validated</span>
-                <h3>Distributed workers</h3>
-                <p>Separate roles across machines while preserving one visible controller-led flow.</p>
+                <h3>External workers</h3>
+                <p>Register dedicated worker nodes across machines while preserving one visible controller-led flow.</p>
               </article>
               <article class="topology-card">
                 <span class="pill pill-strong">Validated</span>
@@ -255,9 +256,9 @@
                 <p>Run on-demand container workers with the published TeamClaw runtime image.</p>
               </article>
               <article class="topology-card">
-                <span class="pill">Supported</span>
-                <h3>Kubernetes ready</h3>
-                <p>Provisioning hooks, Helm support, and persistent workspace paths are already part of the product surface.</p>
+                <span class="pill pill-strong">Validated</span>
+                <h3>Kubernetes provisioning</h3>
+                <p>Provision worker pods with Helm-compatible config, image propagation, and shared workspace support.</p>
               </article>
             </div>
           </div>
@@ -279,8 +280,8 @@
                 <div class="icon-wrap">
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3H7a3 3 0 0 1-3-3z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
                 </div>
-                <h3>Task routing with controller visibility.</h3>
-                <p>Task assignment, clarifications, worker state, and completion history stay observable instead of disappearing into a single long prompt.</p>
+                <h3>Planning, routing, and controller visibility.</h3>
+                <p>Kickoff planning runs, task assignment, clarifications, worker state, and completion history stay observable instead of disappearing into a single long prompt.</p>
               </article>
               <article class="bento-card">
                 <div class="icon-wrap">
@@ -294,7 +295,7 @@
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>
                 </div>
                 <h3>Release-aware product surface.</h3>
-                <p>GitHub Releases, npm packaging, ClawHub package publishing, and a setup skill are part of the shipping story.</p>
+                <p>GitHub Releases, npm packaging, ClawHub package publishing, desktop installers, and a setup skill are part of the shipping story.</p>
               </article>
               <article class="bento-card">
                 <div class="icon-wrap">
@@ -308,7 +309,7 @@
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18"/><path d="M3 12h18"/><circle cx="12" cy="12" r="8"/></svg>
                 </div>
                 <h3>Model-backed workflows.</h3>
-                <p>Built for OpenClaw model configurations across planning, implementation, QA, release, and ops work.</p>
+                <p>Built for OpenClaw model configurations across kickoff planning, implementation, QA, release, and ops work.</p>
               </article>
             </div>
           </div>
@@ -321,7 +322,7 @@
                 <span class="eyebrow">Install</span>
                 <h2>Choose the path that matches how close you are to “first useful run.”</h2>
                 <p>
-                  Use the guided installer if you're just getting started. Use npm or ClawHub package install if you're already comfortable shaping your OpenClaw environment.
+                  Use the guided installer if you're just getting started. Use npm or ClawHub package install if you're already comfortable shaping your OpenClaw environment and want direct control.
                 </p>
               </div>
               <div class="install-note">
@@ -341,14 +342,14 @@
                   <h3>Install from npm</h3>
                   <button class="copy-button" type="button" data-copy-target="install-npm">Copy</button>
                 </div>
-                <pre><code id="install-npm">openclaw plugins install @teamclaws/teamclaw</code></pre>
+                <pre><code id="install-npm">openclaw plugins install --dangerously-force-unsafe-install @teamclaws/teamclaw</code></pre>
               </article>
               <article class="install-card">
                 <div class="install-header">
                   <h3>Install from ClawHub</h3>
                   <button class="copy-button" type="button" data-copy-target="install-clawhub">Copy</button>
                 </div>
-                <pre><code id="install-clawhub">openclaw plugins install clawhub:@teamclaws/teamclaw</code></pre>
+                <pre><code id="install-clawhub">openclaw plugins install --dangerously-force-unsafe-install clawhub:@teamclaws/teamclaw</code></pre>
               </article>
               <article class="install-card install-card-wide">
                 <div class="install-header">
@@ -357,11 +358,14 @@
                 </div>
                 <pre><code id="install-config">{
   "mode": "controller",
+  "processModel": "multi",
   "port": 9527,
   "teamName": "my-team",
   "gitEnabled": true,
   "taskTimeoutMs": 1800000,
-  "localRoles": ["architect", "developer", "qa"]
+  "workerProvisioningType": "process",
+  "workerProvisioningRoles": [],
+  "workerProvisioningMaxPerRole": 2
 }</code></pre>
               </article>
             </div>
@@ -374,14 +378,14 @@
               <span class="eyebrow eyebrow-dark">Ready to try it</span>
               <h2>Use TeamClaw when you want orchestration that keeps handoffs visible.</h2>
               <p>
-                The runtime image, release line, ClawHub package, and setup skill are already
-                available, so you can get from install to a working team without stitching together
-                the basics yourself.
+                The runtime image, release line, ClawHub package, desktop client, and setup skill
+                are already available, so you can get from install to a working team without
+                stitching together the basics yourself.
               </p>
             </div>
             <div class="cta-actions">
               <a class="button button-primary" href="https://github.com/topcheer/teamclaw" target="_blank" rel="noreferrer">Explore the repo</a>
-              <a class="button button-ghost" href="https://github.com/topcheer/teamclaw/releases/tag/v2026.3.26-2" target="_blank" rel="noreferrer">Read the release</a>
+              <a class="button button-ghost" href="https://github.com/topcheer/teamclaw/releases" target="_blank" rel="noreferrer">Browse releases</a>
             </div>
           </div>
         </section>

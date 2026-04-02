@@ -1,13 +1,13 @@
 import type { PluginConfig, TeamState } from "../types.js";
 
 export function hasOnDemandWorkerProvisioning(
-  config: Pick<PluginConfig, "workerProvisioningType" | "processModel">,
+  config: Pick<PluginConfig, "workerProvisioningType" | "workerProvisioningDisabled" | "processModel">,
 ): boolean {
-  return config.workerProvisioningType !== "none";
+  return config.workerProvisioningType !== "none" && config.workerProvisioningDisabled !== true;
 }
 
 export function shouldBlockControllerWithoutWorkers(
-  config: Pick<PluginConfig, "workerProvisioningType" | "processModel">,
+  config: Pick<PluginConfig, "workerProvisioningType" | "workerProvisioningDisabled" | "processModel">,
   state: TeamState | null,
 ): boolean {
   return !!state && Object.keys(state.workers).length === 0 && !hasOnDemandWorkerProvisioning(config);

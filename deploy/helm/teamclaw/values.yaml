@@ -98,6 +98,7 @@ config:
             workerProvisioningType: none
             workerProvisioningKubernetesNamespace: default
             workerProvisioningKubernetesServiceAccount: ""
+            workerProvisioningKubernetesImagePullSecrets: []
 
 controller:
   env: []

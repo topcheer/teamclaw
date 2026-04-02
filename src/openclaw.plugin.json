@@ -2,7 +2,7 @@
   "id": "teamclaw",
   "name": "TeamClaw",
   "description": "Virtual team collaboration - multiple OpenClaw instances form a virtual software company with role-based task routing.",
-  "version": "2026.4.2-2",
+  "version": "2026.4.2-3",
   "skills": [
     "./skills"
   ],
@@ -61,7 +61,7 @@
     },
     "processModel": {
       "label": "Process Model",
-      "help": "TeamClaw runs workers as separate gateway processes"
+      "help": "TeamClaw runs workers as local or provisioned gateway processes"
     },
     "workerProvisioningType": {
       "label": "On-demand Worker Provider",
@@ -234,7 +234,7 @@
           "multi"
         ],
         "default": "multi",
-        "description": "Worker execution model: TeamClaw runs workers as separate gateway processes"
+        "description": "Worker execution model: TeamClaw runs workers as local or provisioned gateway processes"
       },
       "workerProvisioningType": {
         "type": "string",
@@ -284,7 +284,7 @@
       },
       "workerProvisioningMaxPerRole": {
         "type": "number",
-        "default": 3,
+        "default": 10,
         "description": "Maximum on-demand workers to launch per role"
       },
       "workerProvisioningIdleTtlMs": {

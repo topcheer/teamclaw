@@ -6,7 +6,8 @@ It supports:
 
 - `controller` / `worker` modes
 - externally registered workers
-- clarifications, workspace browsing, and Web UI
+- adaptive kickoff planning for medium/complex work, with per-role assessments before task creation
+- clarifications, workspace browsing, controller UI visibility, and a matching desktop client
 - Git-based collaboration
 - on-demand worker provisioning with `process`, `docker`, and `kubernetes`
 
@@ -25,9 +26,12 @@ This installer can:
 - install/update the TeamClaw plugin in OpenClaw
 - detect your local `openclaw.json`
 - let you choose the installation mode
+- support dedicated worker-only installs with `--install-mode worker`
 - let you choose a model from the models already defined in OpenClaw
 - let you choose the OpenClaw workspace directory
 - default TeamClaw to a dedicated `teamclaw` agent/workspace instead of reusing `main`
+- copy the effective host model into the dedicated TeamClaw agent config when independent mode is used
+- bootstrap TeamClaw auth profiles from the host OpenClaw auth store when available
 - prefill Docker/Kubernetes provisioning with the published TeamClaw runtime image
 - prefill Docker workspace persistence with a named volume and Kubernetes persistence with a PVC name
 
@@ -35,6 +39,8 @@ By default, guided install now uses an independent TeamClaw agent/workspace layo
 
 - `agent:teamclaw:*` sessions
 - sibling workspace such as `~/.openclaw/workspace-teamclaw`
+
+In practice, this means TeamClaw keeps its own agent state, workspace, and auth-profile copy instead of reusing the host `main` agent. Use this default unless you explicitly need legacy compatibility with a shared `main` workspace.
 
 For advanced compatibility only, you can force the legacy shared-`main` layout:
 

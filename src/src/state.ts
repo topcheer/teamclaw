@@ -20,6 +20,7 @@ function resolvePluginStateDir(): string {
 }
 
 const STATE_DIR = resolvePluginStateDir();
+const writeQueues = new Map<string, Promise<void>>();
 
 function createEmptyProvisioningState(): TeamProvisioningState {
   return {
@@ -61,6 +62,25 @@ function normalizeStartupReadiness(value: unknown): StartupProvisioningReadiness
 
 async function ensureDir(dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
+}
+
+async function writeFileAtomically(filePath: string, contents: string): Promise<void> {
+  const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+  await fs.writeFile(tmpPath, contents, "utf8");
+  await fs.rename(tmpPath, filePath);
+}
+
+function enqueueAtomicWrite(filePath: string, contents: string): Promise<void> {
+  const previous = writeQueues.get(filePath) ?? Promise.resolve();
+  const next = previous
+    .catch(() => {})
+    .then(() => writeFileAtomically(filePath, contents));
+  writeQueues.set(filePath, next);
+  return next.finally(() => {
+    if (writeQueues.get(filePath) === next) {
+      writeQueues.delete(filePath);
+    }
+  });
 }
 
 async function loadTeamState(teamName: string): Promise<TeamState | null> {
@@ -116,7 +136,7 @@ async function saveTeamState(state: TeamState): Promise<void> {
   state.controllerRuns = state.controllerRuns && typeof state.controllerRuns === "object"
     ? state.controllerRuns
     : {};
-  await fs.writeFile(filePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  await enqueueAtomicWrite(filePath, `${JSON.stringify(state, null, 2)}\n`);
 }
 
 async function loadWorkerIdentity(): Promise<WorkerIdentity | null> {
@@ -141,7 +161,7 @@ async function loadWorkerIdentity(): Promise<WorkerIdentity | null> {
 async function saveWorkerIdentity(identity: WorkerIdentity): Promise<void> {
   await ensureDir(STATE_DIR);
   const filePath = path.join(STATE_DIR, "worker-identity.json");
-  await fs.writeFile(filePath, `${JSON.stringify(identity, null, 2)}\n`, "utf8");
+  await enqueueAtomicWrite(filePath, `${JSON.stringify(identity, null, 2)}\n`);
 }
 
 async function clearWorkerIdentity(): Promise<void> {

@@ -10,10 +10,27 @@ import {
   normalizeWorkerTaskResultContract,
   renderWorkerProgressText,
 } from "../interaction-contracts.js";
+import { loadWorkerIdentity } from "../state.js";
 import type { PluginConfig, WorkerIdentity } from "../types.js";
 import { normalizeClarificationQuestionSchema } from "../controller/orchestration-manifest.js";
 
 const ALLOWED_PROGRESS_STATUSES = new Set(["in_progress", "review"]);
+
+function normalizeProgressText(params: Record<string, unknown>): string {
+  if (typeof params.progress === "string" && params.progress.trim()) {
+    return params.progress.trim();
+  }
+  if (typeof params.summary === "string" && params.summary.trim()) {
+    return params.summary.trim();
+  }
+  if (typeof params.currentStep === "string" && params.currentStep.trim()) {
+    return params.currentStep.trim();
+  }
+  if (typeof params.message === "string" && params.message.trim()) {
+    return params.message.trim();
+  }
+  return "";
+}
 
 export type WorkerToolsDeps = {
   config: PluginConfig;
@@ -22,6 +39,10 @@ export type WorkerToolsDeps = {
 
 export function createWorkerTools(deps: WorkerToolsDeps) {
   const { config, getIdentity } = deps;
+
+  async function resolveIdentity(): Promise<WorkerIdentity | null> {
+    return getIdentity() ?? await loadWorkerIdentity();
+  }
 
   return [
     {
@@ -38,7 +59,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
         references: Type.Optional(Type.Array(Type.String({ description: "Relevant task IDs, file paths, or artifact references" }))),
       }),
       async execute(_id: string, params: Record<string, unknown>) {
-        const identity = getIdentity();
+        const identity = await resolveIdentity();
         if (!identity) {
           return { content: [{ type: "text" as const, text: "Not registered with a team. Cannot send messages." }] };
         }
@@ -101,7 +122,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
         references: Type.Optional(Type.Array(Type.String({ description: "Relevant task IDs, file paths, or artifact references" }))),
       }),
       async execute(_id: string, params: Record<string, unknown>) {
-        const identity = getIdentity();
+        const identity = await resolveIdentity();
         if (!identity) {
           return { content: [{ type: "text" as const, text: "Not registered with a team." }] };
         }
@@ -158,7 +179,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
         references: Type.Optional(Type.Array(Type.String({ description: "Relevant file paths, artifacts, or checks to review" }))),
       }),
       async execute(_id: string, params: Record<string, unknown>) {
-        const identity = getIdentity();
+        const identity = await resolveIdentity();
         if (!identity) {
           return { content: [{ type: "text" as const, text: "Not registered with a team." }] };
         }
@@ -219,7 +240,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
         artifacts: Type.Optional(Type.Array(Type.String({ description: "Files, task IDs, or artifacts the next role should inspect first" }))),
       }),
       async execute(_id: string, params: Record<string, unknown>) {
-        const identity = getIdentity();
+        const identity = await resolveIdentity();
         if (!identity) {
           return { content: [{ type: "text" as const, text: "Not registered with a team." }] };
         }
@@ -298,7 +319,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
         notes: Type.Optional(Type.String({ description: "Optional extra delivery notes" })),
       }),
       async execute(_id: string, params: Record<string, unknown>) {
-        const identity = getIdentity();
+        const identity = await resolveIdentity();
         if (!identity) {
           return { content: [{ type: "text" as const, text: "Not registered with a team." }] };
         }
@@ -345,6 +366,68 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
       },
     },
     {
+      name: "teamclaw_request_parallel_help",
+      label: "Request Parallel Help",
+      description: "Ask the controller to spawn more same-role or target-role workers for parallel work on this requirement",
+      parameters: Type.Object({
+        taskId: Type.String({ description: "Current task ID" }),
+        reason: Type.String({ description: "Why this task should be split across more workers now" }),
+        requestedWorkerCount: Type.Optional(Type.Number({ description: "Desired total worker count for this role after expansion" })),
+        targetRole: Type.Optional(Type.String({ description: "Role that should receive more workers; defaults to the current worker role" })),
+        suggestedWorkstreams: Type.Optional(Type.Array(Type.String({ description: "Concrete parallel workstreams or module slices the controller should fan out" }))),
+      }),
+      async execute(_id: string, params: Record<string, unknown>) {
+        const identity = await resolveIdentity();
+        if (!identity) {
+          return { content: [{ type: "text" as const, text: "Not registered with a team." }] };
+        }
+
+        const taskId = String(params.taskId ?? "");
+        const reason = String(params.reason ?? "").trim();
+        const targetRole = typeof params.targetRole === "string" && params.targetRole.trim()
+          ? params.targetRole.trim()
+          : identity.role;
+        const requestedWorkerCount = typeof params.requestedWorkerCount === "number"
+          ? Math.max(2, Math.min(10, Math.floor(params.requestedWorkerCount)))
+          : undefined;
+        const suggestedWorkstreams = Array.isArray(params.suggestedWorkstreams)
+          ? params.suggestedWorkstreams.map((entry) => String(entry ?? "").trim()).filter(Boolean)
+          : [];
+
+        if (!taskId || !reason) {
+          return { content: [{ type: "text" as const, text: "taskId and reason are required." }] };
+        }
+
+        try {
+          const res = await fetch(`${identity.controllerUrl}/api/v1/tasks/${taskId}/parallel-help`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              requestedBy: identity.workerId,
+              requestedByRole: identity.role,
+              targetRole,
+              reason,
+              requestedWorkerCount,
+              suggestedWorkstreams,
+            }),
+          });
+
+          if (!res.ok) {
+            return { content: [{ type: "text" as const, text: `Failed to request parallel help: ${res.status}` }] };
+          }
+
+          return {
+            content: [{
+              type: "text" as const,
+              text: `Parallel help requested for ${taskId}${requestedWorkerCount ? ` (target ${targetRole} workers: ${requestedWorkerCount})` : ""}.`,
+            }],
+          };
+        } catch (err) {
+          return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+        }
+      },
+    },
+    {
       name: "teamclaw_request_clarification",
       label: "Request Clarification",
       description: "Block the current task and send an explicit clarification question to the controller/human",
@@ -372,7 +455,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
         })),
       }),
       async execute(_id: string, params: Record<string, unknown>) {
-        const identity = getIdentity();
+        const identity = await resolveIdentity();
         if (!identity) {
           return { content: [{ type: "text" as const, text: "Not registered with a team." }] };
         }
@@ -419,7 +502,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
       description: "Get current team status including all workers and tasks",
       parameters: Type.Object({}),
       async execute(_id: string) {
-        const identity = getIdentity();
+        const identity = await resolveIdentity();
         if (!identity) {
           return { content: [{ type: "text" as const, text: "Not registered with a team." }] };
         }
@@ -443,6 +526,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
       parameters: Type.Object({
         taskId: Type.String({ description: "Task ID" }),
         progress: Type.Optional(Type.String({ description: "Progress update message" })),
+        message: Type.Optional(Type.String({ description: "Alias for progress when the runtime sends a generic message field" })),
         status: Type.Optional(Type.String({ description: "Optional non-terminal status: in_progress or review. Do not use completed or failed here." })),
         summary: Type.Optional(Type.String({ description: "Short structured progress summary" })),
         currentStep: Type.Optional(Type.String({ description: "What the worker is doing right now" })),
@@ -450,19 +534,19 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
         blockers: Type.Optional(Type.Array(Type.String({ description: "Any blockers slowing progress" }))),
       }),
       async execute(_id: string, params: Record<string, unknown>) {
-        const identity = getIdentity();
+        const identity = await resolveIdentity();
         if (!identity) {
           return { content: [{ type: "text" as const, text: "Not registered with a team." }] };
         }
 
         const taskId = String(params.taskId ?? "");
-        const progress = typeof params.progress === "string" ? params.progress : "";
+        const progress = normalizeProgressText(params);
         const status = typeof params.status === "string" ? params.status : undefined;
 
         if (!taskId) {
           return { content: [{ type: "text" as const, text: "taskId is required." }] };
         }
-        if (!progress && typeof params.summary !== "string") {
+        if (!progress) {
           return { content: [{ type: "text" as const, text: "progress or summary is required." }] };
         }
         if (status && !ALLOWED_PROGRESS_STATUSES.has(status)) {

@@ -79,7 +79,7 @@ function buildConfigSchema() {
           type: "string" as const,
           enum: ["multi"],
           default: "multi",
-          description: "Worker execution model: TeamClaw runs workers as separate gateway processes",
+          description: "Worker execution model: TeamClaw runs workers as local or provisioned gateway processes",
         },
         workerProvisioningType: {
           type: "string" as const,
@@ -113,7 +113,7 @@ function buildConfigSchema() {
         },
         workerProvisioningMaxPerRole: {
           type: "number" as const,
-          default: 3,
+          default: 10,
           description: "Maximum on-demand workers to launch per role",
         },
         workerProvisioningIdleTtlMs: {
@@ -253,7 +253,7 @@ function buildConfigSchema() {
       },
       processModel: {
         label: "Process Model",
-        help: "TeamClaw runs workers as separate gateway processes",
+        help: "TeamClaw runs workers as local or provisioned gateway processes",
       },
       workerProvisioningType: {
         label: "On-demand Worker Provider",

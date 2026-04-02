@@ -20,6 +20,8 @@ Also point them to:
 http://127.0.0.1:9527/ui
 ```
 
+If the user prefers the desktop app, the same planning/tasks/clarifications/workspace/reporting surface is also available from the TeamClaw Desktop client.
+
 ## First smoke-test task
 
 Recommend a tiny requirement before any large SDLC workflow:
@@ -29,6 +31,8 @@ Create a minimal static site in the workspace with README.md, index.html, and st
 ```
 
 This checks controller intake, task routing, worker execution, workspace writes, and UI visibility with minimal risk.
+
+For medium or complex requirements, remind the user that TeamClaw may create a kickoff planning run first, gather role assessments, and only then emit execution tasks.
 
 ## Timeout guidance
 
@@ -41,7 +45,7 @@ If OpenClaw times out first, users often think TeamClaw is broken when the real 
 
 ## Common failure checks
 
-### localRoles or process
+### process provisioning
 
 - confirm the chosen model already works in plain OpenClaw
 - confirm `agents.defaults.workspace` points to a writable path

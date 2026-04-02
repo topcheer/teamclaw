@@ -1,39 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ============================================================
-# TeamClaw Docker Integration Test Runner
-# ============================================================
-# Builds the Docker image with teamclaw extension, starts the
-# test cluster (1 Controller + 3 Workers), runs API tests,
-# and cleans up.
-#
-# Usage:
-#   bash tests/run-tests.sh                # full cycle
-#   bash tests/run-tests.sh --skip-build   # reuse existing image
-#   bash tests/run-tests.sh --keep         # don't tear down after tests
-#   bash tests/run-tests.sh --single-instance  # controller + local roles in one container
-# ============================================================
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-OPENCLAW_DIR="${PROJECT_ROOT}/openclaw"
 COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.test.yml"
 IMAGE_NAME="registry.iot2.win/openclaw:teamclaw-test"
 SKIP_BUILD=false
 KEEP_CONTAINERS=false
-TOPOLOGY="distributed"
-TEAMCLAW_SINGLE_CONFIG_DIR=""
+EXPECTED_E2E_WORKERS=3
+E2E_REQUIREMENT_FILE="${TEAMCLAW_E2E_REQUIREMENT_FILE:-${SCRIPT_DIR}/requirements/s3-markdown-blog.md}"
+E2E_TIMEOUT="${TEAMCLAW_E2E_TIMEOUT:-900}"
 TEAMCLAW_DISTRIBUTED_CONFIG_DIR=""
 TEAMCLAW_CONTROLLER_CONFIG_DIR="${SCRIPT_DIR}/config/controller"
 TEAMCLAW_DEV_CONFIG_DIR="${SCRIPT_DIR}/config/worker-dev"
 TEAMCLAW_QA_CONFIG_DIR="${SCRIPT_DIR}/config/worker-qa"
 TEAMCLAW_ARCH_CONFIG_DIR="${SCRIPT_DIR}/config/worker-arch"
-OPENCLAW_PLATFORM="${OPENCLAW_PLATFORM:-linux/amd64}"
-HOST_CONTROLLER_PORT="${CONTROLLER_PORT:-9527}"
-BASE_URL="http://localhost:${HOST_CONTROLLER_PORT}"
-HEALTH_SERVICE="teamclaw-controller"
-PRIMARY_CONTAINER="tc-controller"
 BUILD_CONTEXT_ROOT=""
 BUILD_CONTEXT_DIR=""
 BUILD_CONTEXT_SUMMARY=""
@@ -44,9 +25,20 @@ TEAMCLAW_TEST_KUBECONFIG="${TEAMCLAW_TEST_KUBECONFIG:-}"
 TEAMCLAW_TEST_KUBE_CONTEXT="${TEAMCLAW_TEST_KUBE_CONTEXT:-}"
 HOST_PROVISIONING_ENABLED=false
 COMPOSE_OVERRIDE_FILE=""
-COMPOSE_ARGS=()
+COMPOSE_ARGS=(-f "$COMPOSE_FILE")
 
-# Colors
+if [ -n "${OPENCLAW_PLATFORM:-}" ]; then
+  OPENCLAW_PLATFORM="${OPENCLAW_PLATFORM}"
+elif [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
+  OPENCLAW_PLATFORM="linux/arm64"
+else
+  OPENCLAW_PLATFORM="linux/amd64"
+fi
+
+HOST_CONTROLLER_PORT="${CONTROLLER_PORT:-9527}"
+BASE_URL="http://localhost:${HOST_CONTROLLER_PORT}"
+PRIMARY_CONTAINER="tc-controller"
+
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[0;33m'
@@ -54,18 +46,15 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
 
-# Parse arguments
 for arg in "$@"; do
   case "$arg" in
     --skip-build) SKIP_BUILD=true ;;
     --keep) KEEP_CONTAINERS=true ;;
-    --single-instance) TOPOLOGY="single-instance" ;;
     --help)
-      echo "Usage: bash tests/run-tests.sh [--skip-build] [--keep] [--single-instance]"
+      echo "Usage: bash tests/run-tests.sh [--skip-build] [--keep]"
       echo ""
       echo "  --skip-build  Reuse existing Docker image (skip build)"
       echo "  --keep        Keep containers running after tests"
-      echo "  --single-instance  Run controller + local roles in one OpenClaw container"
       echo ""
       echo "Environment:"
       echo "  TEAMCLAW_TEST_HOST_PROVISIONING=1   Run TeamClaw test containers as root+privileged"
@@ -80,12 +69,6 @@ for arg in "$@"; do
       ;;
   esac
 done
-
-if [ "$TOPOLOGY" = "single-instance" ]; then
-  COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.single.test.yml"
-  HEALTH_SERVICE="teamclaw-single"
-  PRIMARY_CONTAINER="tc-single"
-fi
 
 is_truthy() {
   case "$1" in
@@ -102,38 +85,6 @@ if [ "$HOST_PROVISIONING_ENABLED" = true ] && [ -z "$TEAMCLAW_TEST_DOCKER_SOCK" 
   TEAMCLAW_TEST_DOCKER_SOCK="/var/run/docker.sock"
 fi
 
-COMPOSE_ARGS=(-f "$COMPOSE_FILE")
-
-prepare_single_instance_config() {
-  TEAMCLAW_SINGLE_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/teamclaw-single-config.XXXXXX")"
-  cp -R "${SCRIPT_DIR}/config/controller/." "${TEAMCLAW_SINGLE_CONFIG_DIR}/"
-  rm -rf "${TEAMCLAW_SINGLE_CONFIG_DIR}/plugins/teamclaw"
-
-  python3 - "${TEAMCLAW_SINGLE_CONFIG_DIR}/openclaw.json" <<'PY'
-import json
-import pathlib
-import sys
-
-config_path = pathlib.Path(sys.argv[1])
-data = json.loads(config_path.read_text())
-teamclaw = (
-    data.setdefault("plugins", {})
-        .setdefault("entries", {})
-        .setdefault("teamclaw", {})
-        .setdefault("config", {})
-)
-
-teamclaw["mode"] = "controller"
-teamclaw["port"] = 9527
-teamclaw["heartbeatIntervalMs"] = 5000
-teamclaw["localRoles"] = ["developer", "qa", "architect"]
-teamclaw.pop("role", None)
-teamclaw.pop("controllerUrl", None)
-
-config_path.write_text(json.dumps(data, indent=2) + "\n")
-PY
-}
-
 prepare_distributed_configs() {
   TEAMCLAW_DISTRIBUTED_CONFIG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/teamclaw-distributed-config.XXXXXX")"
 
@@ -149,13 +100,11 @@ prepare_distributed_configs() {
   TEAMCLAW_QA_CONFIG_DIR="${TEAMCLAW_DISTRIBUTED_CONFIG_DIR}/worker-qa"
   TEAMCLAW_ARCH_CONFIG_DIR="${TEAMCLAW_DISTRIBUTED_CONFIG_DIR}/worker-arch"
 
-  # Strip worker-provisioning fields from controller config for distributed topology
-  # (S3 uses standalone compose containers, not managed provisioning)
   node -e "
 const fs = require('fs');
 const cfg = JSON.parse(fs.readFileSync('${TEAMCLAW_CONTROLLER_CONFIG_DIR}/openclaw.json', 'utf8'));
 const tc = (cfg.plugins?.entries?.teamclaw?.config) ?? {};
-Object.keys(tc).filter(k => k.startsWith('workerProvisioning')).forEach(k => delete tc[k]);
+Object.keys(tc).filter((k) => k.startsWith('workerProvisioning')).forEach((k) => delete tc[k]);
 fs.writeFileSync('${TEAMCLAW_CONTROLLER_CONFIG_DIR}/openclaw.json', JSON.stringify(cfg, null, 2) + '\n');
 "
 }
@@ -167,22 +116,16 @@ prepare_runtime_build_context() {
   node "${PROJECT_ROOT}/scripts/prepare-teamclaw-runtime-context.mjs" --output-dir "${BUILD_CONTEXT_ROOT}" > "${BUILD_CONTEXT_SUMMARY}"
 
   BUILD_CONTEXT_DIR="$(python3 - "${BUILD_CONTEXT_SUMMARY}" <<'PY'
-import json
-import pathlib
-import sys
-
+import json, pathlib, sys
 summary = json.loads(pathlib.Path(sys.argv[1]).read_text())
-print(summary["contextDir"])
+print(summary['contextDir'])
 PY
 )"
 
   BUILD_DOCKERFILE="$(python3 - "${BUILD_CONTEXT_SUMMARY}" <<'PY'
-import json
-import pathlib
-import sys
-
+import json, pathlib, sys
 summary = json.loads(pathlib.Path(sys.argv[1]).read_text())
-print(summary["dockerfilePath"])
+print(summary['dockerfilePath'])
 PY
 )"
 }
@@ -204,22 +147,13 @@ prepare_host_provisioning_override() {
 
   COMPOSE_OVERRIDE_FILE="$(mktemp "${TMPDIR:-/tmp}/teamclaw-provisioning-compose.XXXXXX")"
 
-  python3 - "$COMPOSE_OVERRIDE_FILE" "$TOPOLOGY" "$TEAMCLAW_TEST_DOCKER_SOCK" "$TEAMCLAW_TEST_KUBECONFIG" "$TEAMCLAW_TEST_KUBE_CONTEXT" <<'PY'
-import json
-import pathlib
-import sys
-
+  python3 - "$COMPOSE_OVERRIDE_FILE" "$TEAMCLAW_TEST_DOCKER_SOCK" "$TEAMCLAW_TEST_KUBECONFIG" "$TEAMCLAW_TEST_KUBE_CONTEXT" <<'PY'
+import json, pathlib, sys
 out_path = pathlib.Path(sys.argv[1])
-topology = sys.argv[2]
-docker_sock = sys.argv[3]
-kubeconfig = sys.argv[4]
-kube_context = sys.argv[5]
-services = ["teamclaw-single"] if topology == "single-instance" else [
-    "teamclaw-controller",
-    "teamclaw-dev",
-    "teamclaw-qa",
-    "teamclaw-arch",
-]
+docker_sock = sys.argv[2]
+kubeconfig = sys.argv[3]
+kube_context = sys.argv[4]
+services = ["teamclaw-controller", "teamclaw-dev", "teamclaw-qa", "teamclaw-arch"]
 
 def q(value: str) -> str:
     return json.dumps(value)
@@ -246,7 +180,6 @@ for service in services:
         lines.append("    volumes:")
         for volume in volumes:
             lines.append(f"      - {q(volume)}")
-
 out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 PY
 
@@ -256,7 +189,6 @@ PY
 docker_compose() {
   OPENCLAW_PLATFORM="$OPENCLAW_PLATFORM" \
     TEST_ENV_FILE="${SCRIPT_DIR}/.env" \
-    TEAMCLAW_SINGLE_CONFIG_DIR="$TEAMCLAW_SINGLE_CONFIG_DIR" \
     TEAMCLAW_CONTROLLER_CONFIG_DIR="$TEAMCLAW_CONTROLLER_CONFIG_DIR" \
     TEAMCLAW_DEV_CONFIG_DIR="$TEAMCLAW_DEV_CONFIG_DIR" \
     TEAMCLAW_QA_CONFIG_DIR="$TEAMCLAW_QA_CONFIG_DIR" \
@@ -274,43 +206,34 @@ cleanup() {
   else
     echo ""
     echo -e "${YELLOW}Containers kept running. To clean up manually:${NC}"
-    if [ -n "${COMPOSE_OVERRIDE_FILE}" ]; then
-      echo "  docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_OVERRIDE_FILE} down -v"
+    if [ -n "$COMPOSE_OVERRIDE_FILE" ]; then
+      echo "  OPENCLAW_PLATFORM=${OPENCLAW_PLATFORM} docker compose -f ${COMPOSE_FILE} -f ${COMPOSE_OVERRIDE_FILE} down -v"
     else
-      echo "  docker compose -f ${COMPOSE_FILE} down -v"
+      echo "  OPENCLAW_PLATFORM=${OPENCLAW_PLATFORM} docker compose -f ${COMPOSE_FILE} down -v"
     fi
   fi
-  if [ -n "${TEAMCLAW_SINGLE_CONFIG_DIR}" ] && [ -d "${TEAMCLAW_SINGLE_CONFIG_DIR}" ]; then
+
+  if [ -n "$TEAMCLAW_DISTRIBUTED_CONFIG_DIR" ] && [ -d "$TEAMCLAW_DISTRIBUTED_CONFIG_DIR" ]; then
     if [ "$KEEP_CONTAINERS" = false ]; then
-      rm -rf "${TEAMCLAW_SINGLE_CONFIG_DIR}"
-    else
-      echo "  single-instance config preserved at: ${TEAMCLAW_SINGLE_CONFIG_DIR}"
-    fi
-  fi
-  if [ -n "${TEAMCLAW_DISTRIBUTED_CONFIG_DIR}" ] && [ -d "${TEAMCLAW_DISTRIBUTED_CONFIG_DIR}" ]; then
-    if [ "$KEEP_CONTAINERS" = false ]; then
-      rm -rf "${TEAMCLAW_DISTRIBUTED_CONFIG_DIR}"
+      rm -rf "$TEAMCLAW_DISTRIBUTED_CONFIG_DIR"
     else
       echo "  distributed configs preserved at: ${TEAMCLAW_DISTRIBUTED_CONFIG_DIR}"
     fi
   fi
-  if [ -n "${BUILD_CONTEXT_ROOT}" ] && [ -d "${BUILD_CONTEXT_ROOT}" ]; then
+  if [ -n "$BUILD_CONTEXT_ROOT" ] && [ -d "$BUILD_CONTEXT_ROOT" ]; then
     if [ "$KEEP_CONTAINERS" = false ]; then
-      rm -rf "${BUILD_CONTEXT_ROOT}"
+      rm -rf "$BUILD_CONTEXT_ROOT"
     else
       echo "  runtime build context preserved at: ${BUILD_CONTEXT_ROOT}"
     fi
   fi
-  if [ -n "${COMPOSE_OVERRIDE_FILE}" ] && [ -f "${COMPOSE_OVERRIDE_FILE}" ]; then
+  if [ -n "$COMPOSE_OVERRIDE_FILE" ] && [ -f "$COMPOSE_OVERRIDE_FILE" ]; then
     if [ "$KEEP_CONTAINERS" = false ]; then
-      rm -f "${COMPOSE_OVERRIDE_FILE}"
+      rm -f "$COMPOSE_OVERRIDE_FILE"
     else
       echo "  compose override preserved at: ${COMPOSE_OVERRIDE_FILE}"
     fi
   fi
-  # Kill any stray openclaw processes left on the controller port
-  # (e.g. orphaned openclaw-gateway from S1/S2 process provisioner).
-  # Only target openclaw processes to avoid killing Docker daemon.
   if command -v lsof &>/dev/null; then
     for pid in $(lsof -i :"${HOST_CONTROLLER_PORT}" -t 2>/dev/null); do
       cmd=$(ps -p "$pid" -o command= 2>/dev/null || echo "")
@@ -323,32 +246,25 @@ cleanup() {
 }
 
 prepare_host_provisioning_override
-
 trap cleanup EXIT
 
-# ============================================================
 echo -e "${BOLD}${CYAN}"
 echo "╔══════════════════════════════════════════╗"
 echo "║    TeamClaw Docker Integration Tests    ║"
 echo "╚══════════════════════════════════════════╝"
 echo -e "${NC}"
 echo "  Project root:  ${PROJECT_ROOT}"
-echo "  OpenClaw dir:  ${OPENCLAW_DIR}"
 echo "  Compose file:  ${COMPOSE_FILE}"
 echo "  Image:         ${IMAGE_NAME}"
 echo "  Skip build:    ${SKIP_BUILD}"
 echo "  Keep containers: ${KEEP_CONTAINERS}"
-echo "  Topology:      ${TOPOLOGY}"
+echo "  Topology:      distributed external workers"
 echo "  Platform:      ${OPENCLAW_PLATFORM}"
 echo "  Base URL:      ${BASE_URL}"
 echo "  Host provisioning: ${HOST_PROVISIONING_ENABLED}"
-echo "  Docker socket: ${TEAMCLAW_TEST_DOCKER_SOCK:-disabled}"
-echo "  Kubeconfig:    ${TEAMCLAW_TEST_KUBECONFIG:-disabled}"
+echo "  E2E requirement: $(basename "${E2E_REQUIREMENT_FILE}")"
 echo ""
 
-# ============================================================
-# Step 1: Run installer/controller/worker regression
-# ============================================================
 echo -e "${BOLD}[1/5]${NC} Running installer/controller/worker regression smoke..."
 node "${SCRIPT_DIR}/test-installer.mjs"
 node "${SCRIPT_DIR}/test-controller-intake.mjs"
@@ -356,160 +272,116 @@ node "${SCRIPT_DIR}/test-worker-contracts.mjs"
 node "${SCRIPT_DIR}/test-ui-contracts.mjs"
 echo -e "${GREEN}  Installer regression passed.${NC}"
 
-# ============================================================
-# Step 2: Build Docker image
-# ============================================================
 echo ""
 if [ "$SKIP_BUILD" = false ]; then
-  echo -e "${BOLD}[2/5]${NC} Preparing teamclaw extension for Docker build..."
-
-  if [ "$TOPOLOGY" = "single-instance" ]; then
-    prepare_single_instance_config
-  fi
-
+  echo -e "${BOLD}[2/5]${NC} Preparing TeamClaw runtime build context..."
   prepare_runtime_build_context
-
-  if [ ! -f "${BUILD_DOCKERFILE}" ]; then
-    echo -e "${RED}ERROR: generated Dockerfile not found at ${BUILD_DOCKERFILE}${NC}"
-    exit 1
-  fi
-
-  echo -e "${BOLD}[2/5]${NC} Building Docker image with teamclaw extension..."
-  echo -e "  Runtime build context: ${BUILD_CONTEXT_DIR}"
-
+  echo -e "${BOLD}[2/5]${NC} Building Docker image with TeamClaw extension..."
   docker build \
     --platform "${OPENCLAW_PLATFORM}" \
     --build-arg OPENCLAW_EXTENSIONS="teamclaw" \
     -t "$IMAGE_NAME" \
     -f "${BUILD_DOCKERFILE}" \
     "${BUILD_CONTEXT_DIR}"
-
   echo -e "${GREEN}  Image built successfully.${NC}"
 else
   echo -e "${BOLD}[2/5]${NC} ${YELLOW}Skipping build (reusing existing image).${NC}"
 fi
 
-# ============================================================
-# Step 3: Start test cluster
-# ============================================================
 echo ""
-if [ "$TOPOLOGY" = "single-instance" ]; then
-  echo -e "${BOLD}[3/5]${NC} Starting single-instance cluster (1 Controller + local roles)..."
-else
-  echo -e "${BOLD}[3/5]${NC} Starting test cluster (1 Controller + 3 Workers)..."
-fi
-
-if [ "$TOPOLOGY" = "single-instance" ] && [ -z "$TEAMCLAW_SINGLE_CONFIG_DIR" ]; then
-  prepare_single_instance_config
-fi
-if [ "$TOPOLOGY" != "single-instance" ] && [ -z "$TEAMCLAW_DISTRIBUTED_CONFIG_DIR" ]; then
-  prepare_distributed_configs
-fi
-
-# Ensure clean state
+echo -e "${BOLD}[3/5]${NC} Starting distributed Docker cluster (1 controller + 3 external workers)..."
+prepare_distributed_configs
 docker_compose --progress=quiet down -v 2>/dev/null || true
-
-# Kill any stray openclaw processes occupying the controller port
-# (e.g. orphaned openclaw-gateway from S1/S2 process provisioner).
-# IMPORTANT: Only kill processes whose command line contains "openclaw"
-# to avoid killing OrbStack Docker daemon or other unrelated processes.
 if command -v lsof &>/dev/null; then
   for pid in $(lsof -i :"${HOST_CONTROLLER_PORT}" -t 2>/dev/null); do
     cmd=$(ps -p "$pid" -o command= 2>/dev/null || echo "")
     case "$cmd" in
-      *openclaw*)
-        echo -e "  ${YELLOW}WARNING: Killing stray openclaw process PID ${pid} occupying port ${HOST_CONTROLLER_PORT}${NC}"
-        kill "$pid" 2>/dev/null || true
-        ;;
-      *)
-        echo -e "  ${YELLOW}WARNING: Port ${HOST_CONTROLLER_PORT} occupied by non-openclaw process PID ${pid} (${cmd:0:60}); skipping${NC}"
-        ;;
+      *openclaw*) kill "$pid" 2>/dev/null || true ;;
+      *) echo -e "  ${YELLOW}WARNING: Port ${HOST_CONTROLLER_PORT} occupied by non-openclaw process PID ${pid}; skipping${NC}" ;;
     esac
   done
   sleep 1
 fi
-
 OPENCLAW_IMAGE="$IMAGE_NAME" docker_compose up -d
 
-echo -e "${GREEN}  Containers started.${NC}"
-
-# ============================================================
-# Step 4: Wait for Controller healthy + Workers to register
-# ============================================================
 echo ""
-echo -e "${BOLD}[4/5]${NC} Waiting for Controller to become healthy..."
-
+echo -e "${BOLD}[4/5]${NC} Waiting for controller + workers..."
 for i in $(seq 1 60); do
   HEALTH_STATUS="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$PRIMARY_CONTAINER" 2>/dev/null || echo unknown)"
   if [ "$HEALTH_STATUS" = "healthy" ] || curl -sf --max-time 3 "${BASE_URL}/api/v1/health" > /dev/null 2>&1; then
     echo -e "${GREEN}  Controller is healthy.${NC}"
     break
   fi
-  if [ "$HEALTH_STATUS" = "exited" ] || [ "$HEALTH_STATUS" = "dead" ]; then
-    echo -e "${RED}  Controller exited before becoming healthy!${NC}"
-    echo -e "${YELLOW}  Dumping controller logs:${NC}"
-    docker logs "$PRIMARY_CONTAINER" --tail 80 2>/dev/null || true
-    exit 1
-  fi
   if [ "$i" -eq 60 ]; then
     echo -e "${RED}  Controller did not become healthy!${NC}"
-    echo -e "${YELLOW}  Dumping controller logs:${NC}"
     docker logs "$PRIMARY_CONTAINER" --tail 80 2>/dev/null || true
     exit 1
   fi
   sleep 2
 done
 
-# Show container status
-echo ""
-echo -e "${CYAN}Container status:${NC}"
-docker_compose --progress=quiet ps 2>/dev/null || docker ps --filter "name=tc-" --format "  {{.Names}}: {{.Status}}" 2>/dev/null || true
+for i in $(seq 1 30); do
+  WORKER_COUNT="$(curl -sf --max-time 5 "${BASE_URL}/api/v1/team/status" 2>/dev/null | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('workers', [])))" 2>/dev/null || echo 0)"
+  if [ "${WORKER_COUNT:-0}" -ge 3 ]; then
+    echo -e "${GREEN}  ${WORKER_COUNT} workers registered.${NC}"
+    break
+  fi
+  if [ "$i" -eq 30 ]; then
+    echo -e "${RED}  Timed out waiting for workers.${NC}"
+    docker logs "$PRIMARY_CONTAINER" --tail 80 2>/dev/null || true
+    exit 1
+  fi
+  sleep 2
+done
 
-# ============================================================
-# Step 5: Run API tests
-# ============================================================
 echo ""
-echo -e "${BOLD}[5/6]${NC} Running API tests..."
-echo ""
+echo -e "${BOLD}[5/5]${NC} Running API tests..."
+bash "${SCRIPT_DIR}/test-api.sh" "${BASE_URL}" "distributed"
 
-bash "${SCRIPT_DIR}/test-api.sh" "${BASE_URL}" "${TOPOLOGY}"
-TEST_EXIT=$?
-
-# ============================================================
-# Step 6: Run E2E delivery test (LLM-powered)
-# ============================================================
 echo ""
 echo -e "${BOLD}[6/6]${NC} Running E2E delivery test..."
-echo ""
+echo -e "${CYAN}  Resetting Docker cluster before E2E to avoid carried state...${NC}"
+docker_compose --progress=quiet down -v 2>/dev/null || true
+rm -rf "$TEAMCLAW_DISTRIBUTED_CONFIG_DIR"
+TEAMCLAW_DISTRIBUTED_CONFIG_DIR=""
+prepare_distributed_configs
+OPENCLAW_IMAGE="$IMAGE_NAME" docker_compose up -d
 
-REQUIREMENT_FILE="${SCRIPT_DIR}/requirements/s3-edu-platform.md"
-if [ -f "${SCRIPT_DIR}/test-e2e-delivery.sh" ] && [ -f "$REQUIREMENT_FILE" ]; then
-  bash "${SCRIPT_DIR}/test-e2e-delivery.sh" "${BASE_URL}" "$REQUIREMENT_FILE" "${TOPOLOGY}" 900
-  E2E_EXIT=$?
-else
-  echo -e "${YELLOW}SKIP: test-e2e-delivery.sh or requirement file not found${NC}"
-  E2E_EXIT=0
-fi
-
-TEST_EXIT=$((TEST_EXIT | E2E_EXIT))
-
-echo ""
-if [ $TEST_EXIT -eq 0 ]; then
-  echo -e "${BOLD}${GREEN}All tests passed!${NC}"
-else
-  echo -e "${BOLD}${RED}Some tests failed!${NC}"
-  echo ""
-  echo -e "${YELLOW}Controller logs (last 30 lines):${NC}"
-  docker logs "$PRIMARY_CONTAINER" --tail 30 2>/dev/null || true
-  if [ "$TOPOLOGY" != "single-instance" ]; then
-    echo ""
-    echo -e "${YELLOW}Worker logs (last 15 lines each):${NC}"
-    for c in tc-worker-dev tc-worker-qa tc-worker-arch; do
-      echo -e "  --- ${c} ---"
-      docker logs "$c" --tail 15 2>/dev/null || echo "  (not found)"
-      echo ""
-    done
+for i in $(seq 1 60); do
+  HEALTH_STATUS="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$PRIMARY_CONTAINER" 2>/dev/null || echo unknown)"
+  if [ "$HEALTH_STATUS" = "healthy" ] || curl -sf --max-time 3 "${BASE_URL}/api/v1/health" > /dev/null 2>&1; then
+    echo -e "${GREEN}  Fresh controller is healthy for E2E.${NC}"
+    break
   fi
+  if [ "$i" -eq 60 ]; then
+    echo -e "${RED}  Controller did not become healthy before E2E!${NC}"
+    docker logs "$PRIMARY_CONTAINER" --tail 80 2>/dev/null || true
+    exit 1
+  fi
+  sleep 2
+done
+
+for i in $(seq 1 30); do
+  WORKER_COUNT="$(curl -sf --max-time 5 "${BASE_URL}/api/v1/team/status" 2>/dev/null | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('workers', [])))" 2>/dev/null || echo 0)"
+  if [ "${WORKER_COUNT:-0}" -ge "$EXPECTED_E2E_WORKERS" ]; then
+    echo -e "${GREEN}  ${WORKER_COUNT} worker(s) registered for E2E.${NC}"
+    break
+  fi
+  if [ "$i" -eq 30 ]; then
+    echo -e "${RED}  Timed out waiting for workers before E2E.${NC}"
+    docker logs "$PRIMARY_CONTAINER" --tail 80 2>/dev/null || true
+    exit 1
+  fi
+  sleep 2
+done
+
+REPO_BODY="$(curl -sf --max-time 10 "${BASE_URL}/api/v1/repo" 2>/dev/null || echo "{}")"
+REPO_ENABLED="$(echo "$REPO_BODY" | python3 -c "import sys,json; print('true' if json.load(sys.stdin).get('repo',{}).get('enabled') else 'false')" 2>/dev/null || echo "false")"
+REPO_BRANCH="$(echo "$REPO_BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('repo',{}).get('defaultBranch',''))" 2>/dev/null || echo "")"
+if [ "$REPO_ENABLED" != "true" ] || [ -z "$REPO_BRANCH" ]; then
+  echo -e "${RED}  Git repo bootstrap failed before E2E.${NC}"
+  echo "$REPO_BODY"
+  exit 1
 fi
 
-exit $TEST_EXIT
+bash "${SCRIPT_DIR}/test-e2e-delivery.sh" "${BASE_URL}" "${E2E_REQUIREMENT_FILE}" "distributed" "${E2E_TIMEOUT}"

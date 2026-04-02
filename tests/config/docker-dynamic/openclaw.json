@@ -15,6 +15,7 @@
         "enabled": true,
         "config": {
           "mode": "controller",
+          "processModel": "multi",
           "port": 9527,
           "teamName": "calc-project",
           "gitEnabled": true,

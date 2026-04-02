@@ -92,12 +92,25 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- $entries := default (dict) (get $plugins "entries") -}}
 {{- $teamclaw := default (dict) (get $entries "teamclaw") -}}
 {{- $teamclawCfg := default (dict) (get $teamclaw "config") -}}
+{{- $workerPullSecrets := list -}}
+{{- range .Values.imagePullSecrets }}
+{{- $secretName := default "" (get . "name") -}}
+{{- if $secretName -}}
+{{- $workerPullSecrets = append $workerPullSecrets $secretName -}}
+{{- end -}}
+{{- end -}}
 {{- $_ := set $teamclawCfg "port" (int .Values.service.targetPort) -}}
 {{- if and (eq (default "controller" (get $teamclawCfg "mode")) "controller") (eq (default "" (get $teamclawCfg "workerProvisioningType")) "kubernetes") (eq (default "" (get $teamclawCfg "workerProvisioningControllerUrl")) "") -}}
 {{- $_ := set $teamclawCfg "workerProvisioningControllerUrl" (printf "http://%s.%s.svc.cluster.local:%v" (include "teamclaw.fullname" .) .Release.Namespace .Values.service.port) -}}
 {{- end -}}
+{{- if and (eq (default "controller" (get $teamclawCfg "mode")) "controller") (eq (default "" (get $teamclawCfg "workerProvisioningType")) "kubernetes") (eq (default "" (get $teamclawCfg "workerProvisioningImage")) "") -}}
+{{- $_ := set $teamclawCfg "workerProvisioningImage" (printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.AppVersion)) -}}
+{{- end -}}
 {{- if and (eq (default "controller" (get $teamclawCfg "mode")) "controller") (eq (default "" (get $teamclawCfg "workerProvisioningType")) "kubernetes") (eq (default "" (get $teamclawCfg "workerProvisioningKubernetesServiceAccount")) "") -}}
 {{- $_ := set $teamclawCfg "workerProvisioningKubernetesServiceAccount" (include "teamclaw.workerServiceAccountName" .) -}}
+{{- end -}}
+{{- if and (eq (default "controller" (get $teamclawCfg "mode")) "controller") (eq (default "" (get $teamclawCfg "workerProvisioningType")) "kubernetes") (eq (len (default (list) (get $teamclawCfg "workerProvisioningKubernetesImagePullSecrets"))) 0) (gt (len $workerPullSecrets) 0) -}}
+{{- $_ := set $teamclawCfg "workerProvisioningKubernetesImagePullSecrets" $workerPullSecrets -}}
 {{- end -}}
 {{- if and .Values.workspace.enabled (eq (default "" (get $teamclawCfg "workerProvisioningType")) "kubernetes") (eq (default "" (get $teamclawCfg "workerProvisioningKubernetesWorkspacePersistentVolumeClaim")) "") -}}
 {{- $_ := set $teamclawCfg "workerProvisioningKubernetesWorkspacePersistentVolumeClaim" (include "teamclaw.workspaceClaimName" .) -}}

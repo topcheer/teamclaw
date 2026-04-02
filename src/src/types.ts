@@ -562,7 +562,7 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
     ? raw.heartbeatIntervalMs
     : 10000;
 
-  const processModel: ProcessModel = "multi";
+  const processModel = parseProcessModel(raw.processModel);
 
   const taskTimeoutMs = typeof raw.taskTimeoutMs === "number" && raw.taskTimeoutMs >= 1000
     ? raw.taskTimeoutMs
@@ -715,6 +715,12 @@ function parseProvisioningType(raw: unknown): WorkerProvisioningType {
   return typeof raw === "string" && VALID_PROVISIONING_TYPES.includes(raw as WorkerProvisioningType)
     ? raw as WorkerProvisioningType
     : "none";
+}
+
+function parseProcessModel(raw: unknown): ProcessModel {
+  return typeof raw === "string" && raw.trim() === "multi"
+    ? "multi"
+    : "multi";
 }
 
 function parseStringArray(raw: unknown): string[] {

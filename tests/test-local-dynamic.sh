@@ -19,6 +19,8 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PLUGIN_SRC="${PROJECT_ROOT}/src"
 OPENCLAW_BIN="$(command -v openclaw)"
 PORT="${TEAMCLAW_TEST_PORT:-9527}"
+E2E_REQUIREMENT_FILE="${TEAMCLAW_E2E_REQUIREMENT_FILE:-${SCRIPT_DIR}/requirements/s2-logistics-wms.md}"
+E2E_TIMEOUT="${TEAMCLAW_E2E_TIMEOUT:-900}"
 CONTROLLER_PID=""
 TEMP_DIR=""
 
@@ -148,6 +150,7 @@ PY
 echo "  Config:     ${CONFIG_DIR}/openclaw.json"
 echo "  Plugin src: ${PLUGIN_SRC}"
 echo "  Port:       ${PORT}"
+echo "  Requirement: $(basename "${E2E_REQUIREMENT_FILE}")"
 echo ""
 
 # ----------------------------------------------------------
@@ -284,28 +287,27 @@ else
 fi
 
 # ----------------------------------------------------------
-# Step 6: Run full API test suite
+# Step 6: Run E2E delivery test (LLM-powered)
 # ----------------------------------------------------------
 echo ""
-echo -e "${BOLD}[6/7]${NC} Run full API test suite..."
+echo -e "${BOLD}[6/7]${NC} Run E2E delivery test..."
+
+if [ -f "${SCRIPT_DIR}/test-e2e-delivery.sh" ] && [ -f "$E2E_REQUIREMENT_FILE" ]; then
+  bash "${SCRIPT_DIR}/test-e2e-delivery.sh" "${BASE_URL}" "$E2E_REQUIREMENT_FILE" "distributed" "${E2E_TIMEOUT}"
+else
+  log_skip "test-e2e-delivery.sh or requirement file not found, skipping E2E delivery test"
+fi
+
+# ----------------------------------------------------------
+# Step 7: Run full API test suite
+# ----------------------------------------------------------
+echo ""
+echo -e "${BOLD}[7/7]${NC} Run full API test suite..."
 
 if [ -f "${SCRIPT_DIR}/test-api.sh" ]; then
   bash "${SCRIPT_DIR}/test-api.sh" "${BASE_URL}" "distributed"
 else
   log_skip "test-api.sh not found, skipping full suite"
-fi
-
-# ----------------------------------------------------------
-# Step 7: Run E2E delivery test (LLM-powered)
-# ----------------------------------------------------------
-echo ""
-echo -e "${BOLD}[7/7]${NC} Run E2E delivery test..."
-
-REQUIREMENT_FILE="${SCRIPT_DIR}/requirements/s2-logistics-wms.md"
-if [ -f "${SCRIPT_DIR}/test-e2e-delivery.sh" ] && [ -f "$REQUIREMENT_FILE" ]; then
-  bash "${SCRIPT_DIR}/test-e2e-delivery.sh" "${BASE_URL}" "$REQUIREMENT_FILE" "distributed" 900
-else
-  log_skip "test-e2e-delivery.sh or requirement file not found, skipping E2E delivery test"
 fi
 
 # ----------------------------------------------------------

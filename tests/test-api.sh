@@ -167,8 +167,7 @@ TASK_SKILL_COUNT=$(echo "$TASK_RESPONSE" | python3 -c "import sys,json; print(le
 if [ -n "$TASK_ID" ] && [ "$TASK_STATUS" = "assigned" ] && [ "$TASK_SKILL_COUNT" -ge 1 ]; then
   log_pass "Task created with recommended skills and auto-assigned, status=${TASK_STATUS}, id=${TASK_ID:0:20}..."
 elif [ -n "$TASK_ID" ] && [ "$TASK_STATUS" = "pending" ] && [ "$TASK_SKILL_COUNT" -ge 1 ]; then
-  # In single-instance mode, the developer may be busy from a pre-existing task
-  # (e.g. S1 Step 4 submits a task before test-api.sh runs).
+  # A busy worker pool can legitimately leave the task pending for a short time.
   log_pass "Task created with recommended skills, status=${TASK_STATUS} (no idle developer worker), id=${TASK_ID:0:20}..."
 else
   log_fail "Task creation issue: status='${TASK_STATUS}', id='${TASK_ID}', recommendedSkills=${TASK_SKILL_COUNT}"
@@ -313,7 +312,7 @@ if [ -n "$TASK_ID" ]; then
         ]
       }
     }' 2>/dev/null || echo "{}")
-  RESULT_CONTRACT_OK=$(echo "$RESULT_CONTRACT_RESPONSE" | python3 -c "import sys,json; task=json.load(sys.stdin).get('task',{}); contract=task.get('resultContract') or {}; print('yes' if contract.get('summary') and contract.get('deliverables') else 'no')" 2>/dev/null || echo "no")
+  RESULT_CONTRACT_OK=$(echo "$RESULT_CONTRACT_RESPONSE" | python3 -c "import sys,json; task=json.load(sys.stdin).get('task',{}); contract=task.get('resultContract') or {}; print('yes' if contract.get('summary') and contract.get('outcome') else 'no')" 2>/dev/null || echo "no")
 
   RESULT_RESPONSE=$(curl -sf -X POST "${BASE_URL}/api/v1/tasks/${TASK_ID}/result" \
     -H "Content-Type: application/json" \
@@ -322,7 +321,7 @@ if [ -n "$TASK_ID" ]; then
     }' 2>/dev/null || echo "{}")
 
   RESULT_STATUS=$(echo "$RESULT_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('task',{}).get('status',''))" 2>/dev/null || echo "")
-  RESULT_HAS_CONTRACT=$(echo "$RESULT_RESPONSE" | python3 -c "import sys,json; task=json.load(sys.stdin).get('task',{}); contract=task.get('resultContract') or {}; print('yes' if contract.get('summary') and contract.get('deliverables') else 'no')" 2>/dev/null || echo "no")
+  RESULT_HAS_CONTRACT=$(echo "$RESULT_RESPONSE" | python3 -c "import sys,json; task=json.load(sys.stdin).get('task',{}); contract=task.get('resultContract') or {}; print('yes' if contract.get('summary') and contract.get('outcome') else 'no')" 2>/dev/null || echo "no")
 
   if [ "$RESULT_STATUS" = "completed" ] && [ "$RESULT_CONTRACT_OK" = "yes" ] && [ "$RESULT_HAS_CONTRACT" = "yes" ]; then
     log_pass "Task completed, status=${RESULT_STATUS}"
@@ -413,9 +412,7 @@ fi
 # ----------------------------------------------------------
 echo -e "${CYAN}[13/18]${NC} Worker heartbeat timeout detection"
 
-if [ "$TOPOLOGY" = "single-instance" ]; then
-  log_skip "Single-instance mode uses controller-managed local workers; heartbeat timeout test skipped"
-elif [ "$WORKER_COUNT" -gt 0 ]; then
+if [ "$WORKER_COUNT" -gt 0 ]; then
   # Get first worker ID
   WORKER_ID=$(echo "$WORKERS_BODY" | python3 -c "
 import sys, json
@@ -600,27 +597,38 @@ UI_HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" "${BASE_URL}/ui" 2>/dev/n
 UI_APP_JS=$(curl -sf "${BASE_URL}/ui/app.js" 2>/dev/null || echo "")
 UI_STYLE_CSS=$(curl -sf "${BASE_URL}/ui/style.css" 2>/dev/null || echo "")
 
-if [ "$UI_HTTP_CODE" = "200" ] && \
-   echo "$UI_HTML" | grep -q 'id="controller-runs"' && \
-   echo "$UI_HTML" | grep -q 'id="task-recommended-skills"' && \
-   echo "$UI_HTML" | grep -q 'data-tab="clarifications"' && \
-   echo "$UI_HTML" | grep -q 'id="task-detail-modal"' && \
-   echo "$UI_HTML" | grep -q 'data-task-detail-tab="timeline"' && \
-   echo "$UI_APP_JS" | grep -q 'renderControllerRuns' && \
-    echo "$UI_APP_JS" | grep -q 'renderControllerManifestCard' && \
-    echo "$UI_APP_JS" | grep -q 'renderResultContractCard' && \
-    echo "$UI_APP_JS" | grep -q 'renderTeamMessageContractCard' && \
-    echo "$UI_APP_JS" | grep -q 'controller:run' && \
-    echo "$UI_APP_JS" | grep -q 'message-content markdown-body' && \
-    echo "$UI_APP_JS" | grep -q 'task-output-body markdown-body' && \
-    echo "$UI_STYLE_CSS" | grep -Fq '.markdown-body' && \
-    echo "$UI_STYLE_CSS" | grep -Fq '.controller-run-card' && \
-    echo "$UI_STYLE_CSS" | grep -Fq '.skill-pill' && \
-    echo "$UI_STYLE_CSS" | grep -Fq '.contract-card' && \
-    echo "$UI_STYLE_CSS" | grep -Fq '.contract-chip'; then
+UI_MISSING_CHECKS=""
+check_ui_literal() {
+  local name="$1"
+  local body="$2"
+  local literal="$3"
+  if ! grep -Fq "$literal" <<<"$body"; then
+    UI_MISSING_CHECKS="${UI_MISSING_CHECKS}${name},"
+  fi
+}
+
+check_ui_literal "html-controller-runs" "$UI_HTML" 'id="controller-runs"'
+check_ui_literal "html-task-recommended-skills" "$UI_HTML" 'id="task-recommended-skills"'
+check_ui_literal "html-clarifications-tab" "$UI_HTML" 'data-tab="clarifications"'
+check_ui_literal "html-task-detail-modal" "$UI_HTML" 'id="task-detail-modal"'
+check_ui_literal "html-task-detail-tab" "$UI_HTML" 'data-task-detail-tab="timeline"'
+check_ui_literal "js-renderControllerRuns" "$UI_APP_JS" 'renderControllerRuns'
+check_ui_literal "js-renderControllerManifestCard" "$UI_APP_JS" 'renderControllerManifestCard'
+check_ui_literal "js-renderResultContractCard" "$UI_APP_JS" 'renderResultContractCard'
+check_ui_literal "js-renderTeamMessageContractCard" "$UI_APP_JS" 'renderTeamMessageContractCard'
+check_ui_literal "js-controller-run" "$UI_APP_JS" 'controller:run'
+check_ui_literal "js-message-markdown" "$UI_APP_JS" 'message-content markdown-body'
+check_ui_literal "js-task-result-section" "$UI_APP_JS" 'task-detail-section"><h3>Result</h3>'
+check_ui_literal "css-markdown" "$UI_STYLE_CSS" '.markdown-body'
+check_ui_literal "css-controller-run-card" "$UI_STYLE_CSS" '.controller-run-card'
+check_ui_literal "css-skill-pill" "$UI_STYLE_CSS" '.skill-pill'
+check_ui_literal "css-contract-card" "$UI_STYLE_CSS" '.contract-card'
+check_ui_literal "css-contract-chip" "$UI_STYLE_CSS" '.contract-chip'
+
+if [ "$UI_HTTP_CODE" = "200" ] && [ -z "$UI_MISSING_CHECKS" ]; then
   log_pass "Web UI returned HTTP 200 and includes task detail, controller activity, contract cards, skills, and markdown rendering hooks"
 else
-  log_fail "Web UI returned HTTP ${UI_HTTP_CODE} or missing task detail / controller activity / contract UI / markdown hooks"
+  log_fail "Web UI returned HTTP ${UI_HTTP_CODE}; missing checks=${UI_MISSING_CHECKS:-none}"
 fi
 
 # ----------------------------------------------------------
@@ -628,9 +636,7 @@ fi
 # ----------------------------------------------------------
 echo -e "${CYAN}[18/18]${NC} Worker removal"
 
-if [ "$TOPOLOGY" = "single-instance" ]; then
-  log_skip "Single-instance mode uses controller-managed local workers; removal test skipped"
-elif [ -n "$WORKER_ID" ]; then
+if [ -n "$WORKER_ID" ]; then
   REMOVE_RESPONSE=$(curl -sf -X DELETE "${BASE_URL}/api/v1/workers/${WORKER_ID}" 2>/dev/null || echo "{}")
   REMOVE_STATUS=$(echo "$REMOVE_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status',''))" 2>/dev/null || echo "")
 

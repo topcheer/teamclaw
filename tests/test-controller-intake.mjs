@@ -9,15 +9,17 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, "..");
 const httpServerPath = path.join(projectRoot, "src", "src", "controller", "http-server.ts");
 const promptInjectorPath = path.join(projectRoot, "src", "src", "controller", "prompt-injector.ts");
+const promptPolicyPath = path.join(projectRoot, "src", "src", "prompt-policy.ts");
 const controllerToolsPath = path.join(projectRoot, "src", "src", "controller", "controller-tools.ts");
 const controllerCapacityPath = path.join(projectRoot, "src", "src", "controller", "controller-capacity.ts");
 const orchestrationManifestPath = path.join(projectRoot, "src", "src", "controller", "orchestration-manifest.ts");
 const workerProvisioningPath = path.join(projectRoot, "src", "src", "controller", "worker-provisioning.ts");
 
 async function runControllerIntakePromptSmoke() {
-  const [httpServerSource, promptInjectorSource, controllerToolsSource, controllerCapacitySource, orchestrationManifestSource, workerProvisioningSource] = await Promise.all([
+  const [httpServerSource, promptInjectorSource, promptPolicySource, controllerToolsSource, controllerCapacitySource, orchestrationManifestSource, workerProvisioningSource] = await Promise.all([
     fs.readFile(httpServerPath, "utf8"),
     fs.readFile(promptInjectorPath, "utf8"),
+    fs.readFile(promptPolicyPath, "utf8"),
     fs.readFile(controllerToolsPath, "utf8"),
     fs.readFile(controllerCapacityPath, "utf8"),
     fs.readFile(orchestrationManifestPath, "utf8"),
@@ -41,23 +43,23 @@ async function runControllerIntakePromptSmoke() {
   );
   assert.match(
     promptInjectorSource,
-    /## Controller Workflow/,
-    "controller prompt injector should explicitly describe the role-selection and orchestration workflow",
+    /parts\.push\(\.\.\.buildControllerWorkflowRules\(\)\);/,
+    "controller prompt injector should include the shared role-selection and orchestration workflow rules",
   );
   assert.match(
     promptInjectorSource,
-    /## Structured Orchestration Contract/,
-    "controller prompt injector should require a structured orchestration contract for intake runs",
+    /parts\.push\(\.\.\.buildControllerStructuredContractRules\(\)\);/,
+    "controller prompt injector should include the shared structured orchestration contract rules",
   );
   assert.match(
-    promptInjectorSource,
+    promptPolicySource,
     /teamclaw_submit_manifest/,
-    "controller prompt injector should explicitly require the manifest submission tool",
+    "controller prompt policy should explicitly require the manifest submission tool",
   );
   assert.match(
-    promptInjectorSource,
+    promptPolicySource,
     /Do not personally perform specialist work/,
-    "controller prompt injector should explicitly forbid the controller from doing specialist worker work itself",
+    "controller prompt policy should explicitly forbid the controller from doing specialist worker work itself",
   );
   assert.match(
     promptInjectorSource,
@@ -201,7 +203,7 @@ async function runControllerIntakePromptSmoke() {
   );
   assert.match(
     httpServerSource,
-    /const deadline = Date\.now\(\) \+ deps\.config\.taskTimeoutMs/,
+    /nextProbeAt:\s*Date\.now\(\) \+ deps\.config\.taskTimeoutMs|nextProbeAt = Date\.now\(\) \+ deps\.config\.taskTimeoutMs|nextProbeAt = now \+ deps\.config\.taskTimeoutMs/,
     "controller intake should still honor the configured TeamClaw task timeout even when it polls the run in shorter slices",
   );
   assert.match(
@@ -235,9 +237,9 @@ async function runControllerIntakePromptSmoke() {
     "controller result handling should attempt workflow continuation for controller tasks even when the direct session link must be recovered lazily",
   );
   assert.match(
-    promptInjectorSource,
+    promptPolicySource,
     /including a deliberately reused existing TeamClaw task/i,
-    "controller prompt should allow createdTasks to include a deliberately reused execution-ready task so the workflow can bind it without duplication",
+    "controller prompt policy should allow createdTasks to include a deliberately reused execution-ready task so the workflow can bind it without duplication",
   );
   assert.match(
     orchestrationManifestSource,
@@ -246,8 +248,43 @@ async function runControllerIntakePromptSmoke() {
   );
   assert.match(
     controllerCapacitySource,
-    /workerProvisioningType !== "none"/,
-    "controller capacity guard should still allow the on-demand provisioning path",
+    /workerProvisioningType !== "none" && config\.workerProvisioningDisabled !== true/,
+    "controller capacity guard should only allow the on-demand provisioning path when provisioning is not explicitly disabled",
+  );
+  assert.match(
+    workerProvisioningSource,
+    /this\.baseConfigPromise = loadOpenClawConfig\(resolveDefaultOpenClawConfigPath\(\)\);/,
+    "worker provisioning should load its base OpenClaw config from the same default controller config path before launching any managed worker",
+  );
+  assert.match(
+    workerProvisioningSource,
+    /const config = cloneJson\(baseConfig\);/,
+    "provisioned worker config should be cloned from the controller base config instead of rebuilding a separate worker-only config tree",
+  );
+  assert.match(
+    workerProvisioningSource,
+    /const agentDefaults = ensureRecord\(agents\.defaults\);[\s\S]*delete agentDefaults\.repoRoot;[\s\S]*(?:agentDefaults\.workspace = spec\.workspaceDir;|delete agentDefaults\.workspace;)/,
+    "provisioned worker config should only override repoRoot and workspace inside agents.defaults so controller model settings stay inherited",
+  );
+  assert.doesNotMatch(
+    workerProvisioningSource,
+    /delete agentDefaults\.(?:model|models)\b/,
+    "provisioned worker config should never delete inherited model settings from agents.defaults",
+  );
+  assert.match(
+    workerProvisioningSource,
+    /await fs\.writeFile\(configPath,\s*spec\.configJson,\s*"utf8"\);/,
+    "process-provisioned workers should boot from the exact generated worker config JSON payload",
+  );
+  assert.match(
+    workerProvisioningSource,
+    /TEAMCLAW_BOOTSTRAP_CONFIG_B64:\s*Buffer\.from\(spec\.configJson,\s*"utf8"\)\.toString\("base64"\)/,
+    "containerized provisioned workers should receive the exact same generated worker config payload via bootstrap env transport",
+  );
+  assert.match(
+    workerProvisioningSource,
+    /teamclawConfig\.mode = "worker";[\s\S]*teamclawConfig\.controllerUrl = spec\.controllerUrl;[\s\S]*teamclawConfig\.workerProvisioningType = "none";/,
+    "all provisioned workers should share one derived config and only override worker-specific TeamClaw runtime fields",
   );
   assert.match(
     workerProvisioningSource,
@@ -356,7 +393,7 @@ async function runControllerIntakePromptSmoke() {
   );
   assert.match(
     httpServerSource,
-    /executionSessionKey: `teamclaw-task-\$\{taskId\}-\$\{attemptId\}`|executionSessionKey: `teamclaw-task-\$\{task\.id\}-\$\{attemptId\}`/,
+    /executionSessionKey:\s*buildTeamClawAgentSessionKey\(`teamclaw-task-\$\{taskId\}-\$\{attemptId\}`\)/,
     "controller dispatch should generate a fresh execution session key for each task assignment attempt",
   );
   assert.match(

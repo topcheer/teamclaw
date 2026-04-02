@@ -5,15 +5,26 @@
   "type": "module",
   "description": "Cross-platform TeamClaw desktop client",
   "author": "Junjun Zhang <topcheer@me.com>",
+  "homepage": "https://topcheer.github.io/teamclaw/",
   "main": "main.mjs",
   "scripts": {
     "dev": "electron .",
     "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac dmg zip",
+    "dist:mac:x64": "electron-builder --mac dmg zip --x64",
+    "dist:mac:arm64": "electron-builder --mac dmg zip --arm64",
+    "dist:mac:universal": "electron-builder --mac dmg zip --universal",
+    "dist:linux": "electron-builder --linux AppImage deb",
+    "dist:linux:x64": "electron-builder --linux AppImage deb --x64",
+    "dist:linux:arm64": "electron-builder --linux AppImage deb --arm64",
+    "dist:win": "electron-builder --win nsis",
+    "dist:win:x64": "electron-builder --win nsis --x64",
+    "dist:win:arm64": "electron-builder --win nsis --arm64",
     "dist:dir": "electron-builder --dir",
     "smoke": "node --check main.mjs && node --check preload.mjs && node --check renderer/app.js"
   },
   "build": {
-    "appId": "com.teamclaw.desktop",
+    "appId": "gg.ai.teamclaw",
     "productName": "TeamClaw Desktop",
     "files": [
       "main.mjs",
@@ -25,15 +36,23 @@
       "buildResources": "build"
     },
     "mac": {
+      "icon": "build/icon.icns",
       "category": "public.app-category.developer-tools",
-      "identity": null
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "hardenedRuntime": true,
+      "notarize": true
     },
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         "nsis"
       ]
     },
     "linux": {
+      "icon": "build/icon.png",
       "target": [
         "AppImage",
         "deb"

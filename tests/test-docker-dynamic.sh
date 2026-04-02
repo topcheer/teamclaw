@@ -21,8 +21,18 @@ CONFIG_DIR="${PROJECT_ROOT}/tests/config/docker-dynamic"
 IMAGE_NAME="${OPENCLAW_IMAGE:-registry.iot2.win/openclaw:teamclaw-test}"
 SKIP_BUILD=false
 PORT="${CONTROLLER_PORT:-9527}"
+E2E_REQUIREMENT_FILE="${TEAMCLAW_E2E_REQUIREMENT_FILE:-${SCRIPT_DIR}/requirements/s4-hospital-system.md}"
+E2E_TIMEOUT="${TEAMCLAW_E2E_TIMEOUT:-900}"
 BASE_URL="http://localhost:${PORT}"
 CONTROLLER_NAME="tc-s4-controller"
+
+if [ -n "${OPENCLAW_PLATFORM:-}" ]; then
+  OPENCLAW_PLATFORM="${OPENCLAW_PLATFORM}"
+elif [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
+  OPENCLAW_PLATFORM="linux/arm64"
+else
+  OPENCLAW_PLATFORM="linux/amd64"
+fi
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -60,7 +70,7 @@ fi
 
 # ----------------------------------------------------------
 docker_compose() {
-  OPENCLAW_PLATFORM="${OPENCLAW_PLATFORM:-linux/arm64}" \
+  OPENCLAW_PLATFORM="${OPENCLAW_PLATFORM}" \
   OPENCLAW_IMAGE="$IMAGE_NAME" \
   TEAMCLAW_CONTROLLER_CONFIG_DIR="$CONFIG_DIR" \
   TEST_ENV_FILE="${SCRIPT_DIR}/.env" \
@@ -109,6 +119,7 @@ echo "  Compose:    ${COMPOSE_FILE}"
 echo "  Config:     ${CONFIG_DIR}"
 echo "  Image:      ${IMAGE_NAME}"
 echo "  Port:       ${PORT}"
+echo "  Requirement: $(basename "${E2E_REQUIREMENT_FILE}")"
 echo ""
 
 # ----------------------------------------------------------
@@ -117,7 +128,7 @@ echo ""
 if [ "$SKIP_BUILD" != true ]; then
   echo -e "${BOLD}[1/7]${NC} Building Docker image..."
   docker build \
-    --platform "${OPENCLAW_PLATFORM:-linux/amd64}" \
+    --platform "${OPENCLAW_PLATFORM}" \
     -t "$IMAGE_NAME" \
     -f "$DOCKERFILE" \
     "$PROJECT_ROOT"
@@ -324,10 +335,26 @@ else
 fi
 
 # ----------------------------------------------------------
-# Step 7: Run full API test suite
+# Step 7: Run E2E delivery test (LLM-powered)
 # ----------------------------------------------------------
 echo ""
-echo -e "${BOLD}[7/8]${NC} Run full API test suite..."
+echo -e "${BOLD}[7/8]${NC} Run E2E delivery test..."
+
+if [ "$WORKERS_READY" = true ] && [ -f "${SCRIPT_DIR}/test-e2e-delivery.sh" ] && [ -f "$E2E_REQUIREMENT_FILE" ]; then
+  bash "${SCRIPT_DIR}/test-e2e-delivery.sh" "${BASE_URL}" "$E2E_REQUIREMENT_FILE" "distributed" "${E2E_TIMEOUT}"
+else
+  if [ "$WORKERS_READY" != true ]; then
+    log_warn "Skipping E2E delivery test (workers not ready)"
+  else
+    log_warn "test-e2e-delivery.sh or requirement file not found"
+  fi
+fi
+
+# ----------------------------------------------------------
+# Step 8: Run full API test suite
+# ----------------------------------------------------------
+echo ""
+echo -e "${BOLD}[8/8]${NC} Run full API test suite..."
 
 if [ "$WORKERS_READY" = true ] && [ -f "${SCRIPT_DIR}/test-api.sh" ]; then
   bash "${SCRIPT_DIR}/test-api.sh" "${BASE_URL}" "distributed"
@@ -336,23 +363,6 @@ else
     log_warn "Skipping API tests (workers not ready)"
   else
     log_warn "test-api.sh not found"
-  fi
-fi
-
-# ----------------------------------------------------------
-# Step 8: Run E2E delivery test (LLM-powered)
-# ----------------------------------------------------------
-echo ""
-echo -e "${BOLD}[8/8]${NC} Run E2E delivery test..."
-
-REQUIREMENT_FILE="${SCRIPT_DIR}/requirements/s4-hospital-system.md"
-if [ "$WORKERS_READY" = true ] && [ -f "${SCRIPT_DIR}/test-e2e-delivery.sh" ] && [ -f "$REQUIREMENT_FILE" ]; then
-  bash "${SCRIPT_DIR}/test-e2e-delivery.sh" "${BASE_URL}" "$REQUIREMENT_FILE" "distributed" 900
-else
-  if [ "$WORKERS_READY" != true ]; then
-    log_warn "Skipping E2E delivery test (workers not ready)"
-  else
-    log_warn "test-e2e-delivery.sh or requirement file not found"
   fi
 fi
 

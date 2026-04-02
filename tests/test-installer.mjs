@@ -115,6 +115,12 @@ async function runInstallerSmoke() {
     };
 
     await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(path.join(stateDir, "agents", "main", "agent"), { recursive: true });
+    await fs.writeFile(
+      path.join(stateDir, "agents", "main", "agent", "auth-profiles.json"),
+      JSON.stringify({ profiles: [{ id: "host-auth", provider: "zai" }] }, null, 2),
+      "utf8",
+    );
     await fs.writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf8");
 
     const result = spawnSync(
@@ -153,19 +159,178 @@ async function runInstallerSmoke() {
       workspacePath,
       "installer should preserve the existing workspace when --yes keeps defaults",
     );
+    assert.equal(
+      updated.agents?.list?.[0]?.model?.primary ?? updated.agents?.list?.[0]?.model,
+      initialConfig.agents.defaults.model.primary,
+      "installer should copy the effective host model into the dedicated TeamClaw agent config",
+    );
     assert.equal(updated.plugins?.entries?.teamclaw?.enabled, true, "installer should enable the TeamClaw plugin entry");
     assert.equal(
       updated.plugins?.entries?.teamclaw?.config?.mode,
       "controller",
-      "installer should configure the default controller mode for single-local installs",
+      "installer should configure the default controller mode for recommended same-host installs",
+    );
+    assert.equal(
+      updated.plugins?.entries?.teamclaw?.config?.processModel,
+      "multi",
+      "installer should configure multi-process execution for supported controller deployments",
+    );
+    assert.equal(
+      updated.plugins?.entries?.teamclaw?.config?.workerProvisioningType,
+      "process",
+      "installer should default to on-demand process provisioning for first installs",
+    );
+    assert.equal(
+      updated.plugins?.entries?.teamclaw?.config?.workerProvisioningDisabled,
+      false,
+      "installer should keep same-host controller installs provisionable by default",
+    );
+    assert.equal(
+      updated.tools?.exec?.security,
+      "full",
+      "installer should configure full host exec security by default for TeamClaw when unset",
+    );
+    assert.equal(
+      updated.tools?.exec?.ask,
+      "off",
+      "installer should disable repeated exec approvals by default for TeamClaw when unset",
+    );
+    assert.equal(
+      updated.commands?.restart,
+      true,
+      "installer should enable gateway restart commands when the host config does not set a value",
+    );
+    assert.equal(
+      updated.commands?.native,
+      "auto",
+      "installer should enable native command dispatch defaults when unset",
+    );
+    assert.equal(
+      updated.commands?.nativeSkills,
+      "auto",
+      "installer should enable native skill dispatch defaults when unset",
     );
     assert.deepEqual(
-      updated.plugins?.entries?.teamclaw?.config?.localRoles,
-      ["architect", "developer", "qa"],
-      "installer should keep the default single-local role set",
+      updated.plugins?.entries?.teamclaw?.config?.workerProvisioningRoles,
+      [],
+      "installer should default to controller-decided on-demand roles",
+    );
+    const teamclawAuthProfiles = JSON.parse(
+      await fs.readFile(path.join(stateDir, "agents", "teamclaw", "agent", "auth-profiles.json"), "utf8"),
+    );
+    assert.equal(
+      teamclawAuthProfiles.profiles?.[0]?.id,
+      "host-auth",
+      "installer should bootstrap TeamClaw auth from the host agent auth store",
+    );
+    console.log("Installer model-preservation smoke passed.");
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
+async function runInstallerHostExecPreservationSmoke() {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "teamclaw-installer-host-exec-test-"));
+  try {
+    const stateDir = path.join(tempRoot, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const workspacePath = path.join(tempRoot, "workspace");
+    const initialConfig = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5",
+                name: "GPT-5",
+              },
+            ],
+          },
+        },
+      },
+      gateway: {
+        mode: "local",
+        port: 18789,
+        bind: "lan",
+      },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5",
+          workspace: workspacePath,
+        },
+      },
+      tools: {
+        exec: {
+          security: "allowlist",
+          ask: "on-miss",
+        },
+      },
+      commands: {
+        native: "auto",
+        nativeSkills: "auto",
+        restart: false,
+      },
+      plugins: {
+        enabled: true,
+        entries: {},
+      },
+    };
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf8");
+
+    const result = spawnSync(
+      "node",
+      [cliPath, "install", "--config", configPath, "--yes", "--skip-plugin-install"],
+      {
+        cwd: projectRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: tempRoot,
+        },
+      },
     );
 
-    console.log("Installer model-preservation smoke passed.");
+    if (result.status !== 0) {
+      throw new Error(
+        `Installer host-exec preservation smoke failed with status ${result.status}.\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`,
+      );
+    }
+
+    const updated = JSON.parse(await fs.readFile(configPath, "utf8"));
+    assert.equal(
+      updated.tools?.exec?.security,
+      "allowlist",
+      "installer should preserve an explicit host exec security policy instead of overwriting it",
+    );
+    assert.equal(
+      updated.tools?.exec?.ask,
+      "on-miss",
+      "installer should preserve an explicit host exec approval policy instead of overwriting it",
+    );
+    assert.equal(
+      updated.commands?.restart,
+      false,
+      "installer should preserve an explicit restart policy instead of forcing it on",
+    );
+    assert.match(
+      result.stdout,
+      /Warning: tools\.exec\.security is set to "allowlist"/,
+      "installer summary should warn when a stricter host exec security setting may block TeamClaw tasks",
+    );
+    assert.match(
+      result.stdout,
+      /Warning: tools\.exec\.ask is set to "on-miss"/,
+      "installer summary should warn when host exec approvals may continue prompting during TeamClaw tasks",
+    );
+    assert.match(
+      result.stdout,
+      /Warning: commands\.restart is disabled/,
+      "installer summary should warn when automatic gateway restart remains disabled",
+    );
+
+    console.log("Installer host-exec preservation smoke passed.");
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
@@ -255,11 +420,19 @@ exit 0
     }
 
     const updated = JSON.parse(await fs.readFile(configPath, "utf8"));
-    const expectedWorkspacePath = path.join(stateDir, "teamclaw-workspaces", "default");
+    const expectedWorkspacePath = path.join(stateDir, "workspace-teamclaw");
     assert.equal(
       updated.agents?.defaults?.workspace,
+      sharedWorkspacePath,
+      "installer should preserve the shared OpenClaw default workspace while independent TeamClaw mode uses a dedicated agent workspace",
+    );
+    const teamclawAgentEntry = Array.isArray(updated.agents?.list)
+      ? updated.agents.list.find((entry) => entry?.id === "teamclaw")
+      : null;
+    assert.equal(
+      teamclawAgentEntry?.workspace,
       expectedWorkspacePath,
-      "installer should default to a dedicated TeamClaw workspace instead of reusing the existing shared OpenClaw workspace",
+      "installer should configure a dedicated TeamClaw agent workspace in independent mode",
     );
     assert.equal(
       updated.plugins?.entries?.teamclaw?.config?.workerProvisioningDockerWorkspaceVolume,
@@ -459,18 +632,18 @@ exit 0
       .filter(Boolean);
     assert.equal(capturedArgs[0], "plugins");
     assert.equal(capturedArgs[1], "install");
-    assert.match(
+    assert.equal(
       capturedArgs[2] || "",
-      /\.tgz$/,
-      "installer should prefer a local tarball during plugin install",
+      "--dangerously-force-unsafe-install",
+      "installer should always pass the break-glass install flag during plugin install",
     );
-    assert.match(
-      path.basename(capturedArgs[2] || ""),
-      new RegExp(`${packageMetadata.version.replace(/\./g, "\\.")}.*\\.tgz$`),
-      "installer tarball should include the current TeamClaw version",
+    assert.equal(
+      path.resolve(capturedArgs[3] || ""),
+      path.resolve(projectRoot, "src"),
+      "installer should prefer the local package directory during plugin install",
     );
 
-    console.log("Installer tarball-first plugin-install smoke passed.");
+    console.log("Installer local-directory plugin-install smoke passed.");
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
@@ -484,6 +657,7 @@ async function runInstallerExactVersionFallbackSmoke() {
     const workspacePath = path.join(tempRoot, "workspace");
     const binDir = path.join(tempRoot, "bin");
     const capturePath = path.join(tempRoot, "openclaw-args.txt");
+    const expectedLocalPackageDir = path.resolve(projectRoot, "src");
     const packageMetadata = await readPackageMetadata();
     const expectedInstallSpec = `${packageMetadata.name}@${packageMetadata.version}`;
     const initialConfig = {
@@ -523,7 +697,12 @@ async function runInstallerExactVersionFallbackSmoke() {
       path.join(binDir, "openclaw"),
       `#!/bin/sh
 if [ "$1" = "plugins" ] && [ "$2" = "install" ]; then
-  printf '%s\n' "$@" > "$TEAMCLAW_CAPTURE_FILE"
+  printf '%s\n' "$@" >> "$TEAMCLAW_CAPTURE_FILE"
+  printf '%s\n' '---' >> "$TEAMCLAW_CAPTURE_FILE"
+  if [ "$4" = "$TEAMCLAW_EXPECTED_LOCAL_DIR" ]; then
+    echo "simulated local-directory install failure" >&2
+    exit 1
+  fi
   exit 0
 fi
 if [ "$1" = "gateway" ] && [ "$2" = "restart" ]; then
@@ -536,12 +715,8 @@ exit 0
     await writeExecutable(
       path.join(binDir, "npm"),
       `#!/bin/sh
-if [ "$1" = "pack" ]; then
-  echo "simulated npm pack failure" >&2
-  exit 1
-fi
-echo "unexpected npm invocation: $*" >&2
-exit 99
+echo "simulated npm fallback failure: $*" >&2
+exit 1
 `,
     );
 
@@ -556,6 +731,7 @@ exit 99
           HOME: tempRoot,
           PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
           TEAMCLAW_CAPTURE_FILE: capturePath,
+          TEAMCLAW_EXPECTED_LOCAL_DIR: expectedLocalPackageDir,
         },
       },
     );
@@ -566,13 +742,14 @@ exit 99
       );
     }
 
-    const capturedArgs = (await fs.readFile(capturePath, "utf8"))
-      .split(/\r?\n/)
-      .filter(Boolean);
+    const capturedInvocations = (await fs.readFile(capturePath, "utf8"))
+      .split(/\r?\n---\r?\n/)
+      .map((chunk) => chunk.split(/\r?\n/).filter(Boolean))
+      .filter((chunk) => chunk.length > 0);
     assert.deepEqual(
-      capturedArgs,
-      ["plugins", "install", expectedInstallSpec],
-      "installer should fall back to the exact TeamClaw package version when local packing fails",
+      capturedInvocations.at(-1),
+      ["plugins", "install", "--dangerously-force-unsafe-install", expectedInstallSpec],
+      "installer should fall back to the exact TeamClaw package version when local-directory install commands fail",
     );
 
     console.log("Installer exact-version fallback smoke passed.");
@@ -700,6 +877,7 @@ async function runInstallerExistingPluginUpgradeSmoke() {
     const binDir = path.join(tempRoot, "bin");
     const pluginCapturePath = path.join(tempRoot, "plugin-ops.txt");
     const existingPluginDir = path.join(stateDir, "extensions", "teamclaw");
+    const expectedLocalPackageDir = path.resolve(projectRoot, "src");
     const initialConfig = {
       models: {
         providers: {
@@ -747,7 +925,7 @@ if [ "$1" = "plugins" ] && [ "$2" = "uninstall" ]; then
   exit 0
 fi
 if [ "$1" = "plugins" ] && [ "$2" = "install" ]; then
-  printf 'install %s\n' "$3" >> "$TEAMCLAW_PLUGIN_CAPTURE_FILE"
+  printf 'install %s %s\n' "$3" "$4" >> "$TEAMCLAW_PLUGIN_CAPTURE_FILE"
   exit 0
 fi
 if [ "$1" = "gateway" ] && [ "$2" = "restart" ]; then
@@ -783,10 +961,10 @@ exit 0
       .split(/\r?\n/)
       .filter(Boolean);
     assert.equal(operations[0], "uninstall teamclaw --force", "installer should uninstall an older TeamClaw plugin before reinstalling");
-    assert.match(
+    assert.equal(
       operations[1] || "",
-      /^install .+\.tgz$/,
-      "installer should reinstall TeamClaw from a local tarball after removing the older plugin",
+      `install --dangerously-force-unsafe-install ${expectedLocalPackageDir}`,
+      "installer should reinstall TeamClaw from the local package directory after removing the older plugin",
     );
 
     console.log("Installer existing-plugin upgrade smoke passed.");
@@ -942,7 +1120,258 @@ exit 0
   }
 }
 
+async function runInstallerMissingModelWarningSmoke() {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "teamclaw-installer-missing-model-test-"));
+  try {
+    const stateDir = path.join(tempRoot, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({ gateway: { mode: "local", port: 18789, bind: "lan" }, plugins: { enabled: true, entries: {} } }, null, 2)}\n`,
+      "utf8",
+    );
+
+    const result = spawnSync(
+      "node",
+      [cliPath, "install", "--config", configPath, "--yes", "--skip-plugin-install"],
+      {
+        cwd: projectRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: tempRoot,
+        },
+      },
+    );
+
+    if (result.status !== 0) {
+      throw new Error(
+        `Installer missing-model warning smoke failed with status ${result.status}.\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`,
+      );
+    }
+
+    assert.match(
+      result.stdout,
+      /Warning: TeamClaw has no effective model configured yet/,
+      "installer summary should warn when TeamClaw has no usable model configured",
+    );
+    assert.match(
+      result.stdout,
+      /Warning: No existing OpenClaw auth-profiles\.json was found/,
+      "installer summary should warn when TeamClaw auth could not be bootstrapped",
+    );
+
+    console.log("Installer missing-model warning smoke passed.");
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
+async function runInstallerWorkerManualControllerSmoke() {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "teamclaw-installer-worker-manual-test-"));
+  try {
+    const stateDir = path.join(tempRoot, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const workspacePath = path.join(tempRoot, "workspace");
+    const initialConfig = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5",
+          workspace: workspacePath,
+        },
+      },
+      plugins: {
+        enabled: true,
+        entries: {},
+      },
+    };
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf8");
+
+    const result = spawnSync(
+      "node",
+      [
+        cliPath,
+        "install",
+        "--config",
+        configPath,
+        "--yes",
+        "--skip-plugin-install",
+        "--install-mode",
+        "worker",
+        "--team-name",
+        "ops-team",
+        "--worker-role",
+        "qa",
+        "--controller-url",
+        "http://controller.example:9527",
+      ],
+      {
+        cwd: projectRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: tempRoot,
+        },
+      },
+    );
+
+    if (result.status !== 0) {
+      throw new Error(
+        `Installer worker manual-controller smoke failed with status ${result.status}.\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`,
+      );
+    }
+
+    const updated = JSON.parse(await fs.readFile(configPath, "utf8"));
+    assert.equal(updated.plugins?.entries?.teamclaw?.config?.mode, "worker", "installer should support explicit worker-only mode");
+    assert.equal(updated.plugins?.entries?.teamclaw?.config?.teamName, "ops-team", "worker install should honor --team-name");
+    assert.equal(updated.plugins?.entries?.teamclaw?.config?.role, "qa", "worker install should honor --worker-role");
+    assert.equal(updated.plugins?.entries?.teamclaw?.config?.controllerUrl, "http://controller.example:9527", "worker install should persist an explicit controller URL override");
+    assert.equal(updated.plugins?.entries?.teamclaw?.config?.workerProvisioningDisabled, true, "worker installs should explicitly disable controller-managed provisioning");
+    assert.match(result.stdout, /Controller URL: http:\/\/controller\.example:9527/, "installer summary should show the manual controller URL for worker installs");
+
+    console.log("Installer worker manual-controller smoke passed.");
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
+async function runInstallerLocalQuickstartSmoke() {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "teamclaw-installer-local-quickstart-test-"));
+  try {
+    const stateDir = path.join(tempRoot, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const workspacePath = path.join(tempRoot, "workspace");
+    const initialConfig = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5",
+          workspace: workspacePath,
+        },
+      },
+      plugins: {
+        enabled: true,
+        entries: {},
+      },
+    };
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf8");
+
+    const result = spawnSync(
+      "node",
+      [
+        cliPath,
+        "install",
+        "--config",
+        configPath,
+        "--yes",
+        "--skip-plugin-install",
+        "--install-mode",
+        "controller-manual",
+      ],
+      {
+        cwd: projectRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: tempRoot,
+        },
+      },
+    );
+
+    if (result.status !== 0) {
+      throw new Error(
+        `Installer local quickstart smoke failed with status ${result.status}.\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`,
+      );
+    }
+
+    const updated = JSON.parse(await fs.readFile(configPath, "utf8"));
+    assert.equal(updated.plugins?.entries?.teamclaw?.config?.mode, "controller", "local quickstart should still configure controller mode");
+    assert.equal(updated.plugins?.entries?.teamclaw?.config?.processModel, "multi", "local quickstart should keep the supported multi-process runtime model");
+    assert.equal(updated.plugins?.entries?.teamclaw?.config?.workerProvisioningType, "process", "local quickstart should keep same-host process provisioning enabled");
+    assert.equal(updated.plugins?.entries?.teamclaw?.config?.workerProvisioningDisabled, false, "local quickstart should not explicitly disable on-demand provisioning");
+    assert.equal(updated.plugins?.entries?.teamclaw?.config?.workerProvisioningMaxPerRole, 1, "local quickstart should keep a lean local worker pool by default");
+    assert.match(result.stdout, /On-demand roles: all TeamClaw roles \(controller decides at runtime\)/, "installer summary should explain that local quickstart still provisions local workers on demand");
+
+    console.log("Installer local quickstart smoke passed.");
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
+async function runInstallerWorkerMdnsDefaultSmoke() {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "teamclaw-installer-worker-mdns-test-"));
+  try {
+    const stateDir = path.join(tempRoot, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const workspacePath = path.join(tempRoot, "workspace");
+    const initialConfig = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5",
+          workspace: workspacePath,
+        },
+      },
+      plugins: {
+        enabled: true,
+        entries: {},
+      },
+    };
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf8");
+
+    const result = spawnSync(
+      "node",
+      [
+        cliPath,
+        "install",
+        "--config",
+        configPath,
+        "--yes",
+        "--skip-plugin-install",
+        "--install-mode",
+        "worker",
+        "--team-name",
+        "lan-team",
+        "--worker-role",
+        "designer",
+      ],
+      {
+        cwd: projectRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: tempRoot,
+        },
+      },
+    );
+
+    if (result.status !== 0) {
+      throw new Error(
+        `Installer worker mDNS-default smoke failed with status ${result.status}.\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`,
+      );
+    }
+
+    const updated = JSON.parse(await fs.readFile(configPath, "utf8"));
+    assert.equal(updated.plugins?.entries?.teamclaw?.config?.mode, "worker", "installer should support worker-only mode under --yes");
+    assert.equal(updated.plugins?.entries?.teamclaw?.config?.teamName, "lan-team", "worker mDNS mode should honor --team-name");
+    assert.equal(updated.plugins?.entries?.teamclaw?.config?.role, "designer", "worker mDNS mode should honor --worker-role");
+    assert.equal(updated.plugins?.entries?.teamclaw?.config?.controllerUrl, "", "worker install without an explicit controller URL should preserve mDNS auto-discovery");
+    assert.equal(updated.plugins?.entries?.teamclaw?.config?.workerProvisioningDisabled, true, "worker mDNS installs should explicitly disable controller-managed provisioning");
+    assert.match(result.stdout, /Controller discovery: mDNS auto-registration/, "installer summary should explain that worker mode will use mDNS auto-registration when no manual controller URL is set");
+
+    console.log("Installer worker mDNS-default smoke passed.");
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
 await runInstallerSmoke();
+await runInstallerHostExecPreservationSmoke();
 await runInstallerDedicatedWorkspaceDefaultSmoke();
 await runInstallerExplicitProvisioningRolesSmoke();
 await runInstallerExactPluginVersionSmoke();
@@ -950,3 +1379,7 @@ await runInstallerExactVersionFallbackSmoke();
 await runInstallerExistingPluginSkipSmoke();
 await runInstallerExistingPluginUpgradeSmoke();
 await runInstallerRestartAndHealthSmoke();
+await runInstallerMissingModelWarningSmoke();
+await runInstallerLocalQuickstartSmoke();
+await runInstallerWorkerManualControllerSmoke();
+await runInstallerWorkerMdnsDefaultSmoke();

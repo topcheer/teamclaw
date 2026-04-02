@@ -3,44 +3,6 @@ kind: Namespace
 metadata:
   name: teamclaw
 ---
-# Controller config for S5 (single pod, localRoles)
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: teamclaw-single-config
-  namespace: teamclaw
-data:
-  openclaw.json: |
-    {
-      "agents": {
-        "defaults": {
-          "model": { "primary": "zai/glm-5-turbo" }
-        }
-      },
-      "commands": { "native": "auto", "nativeSkills": "auto", "restart": true, "ownerDisplay": "raw" },
-      "gateway": {
-        "auth": { "mode": "token", "token": "47989963b032656bbfe24aee1f459531402cbd90a34fc83d" }
-      },
-      "plugins": {
-        "enabled": true,
-        "entries": {
-          "teamclaw": {
-            "enabled": true,
-            "config": {
-              "mode": "controller",
-              "port": 9527,
-              "teamName": "calc-project",
-              "gitEnabled": false,
-              "heartbeatIntervalMs": 5000,
-              "taskTimeoutMs": 300000,
-              "localRoles": ["developer", "qa", "architect"]
-            }
-          }
-        }
-      }
-    }
----
-# Controller config for S6 (dynamic k8s provision)
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -65,6 +27,7 @@ data:
             "enabled": true,
             "config": {
               "mode": "controller",
+              "processModel": "multi",
               "port": 9527,
               "teamName": "calc-project",
               "gitEnabled": true,

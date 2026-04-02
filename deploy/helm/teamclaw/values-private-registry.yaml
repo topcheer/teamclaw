@@ -1,0 +1,16 @@
+image:
+  repository: registry.example.com/teamclaw/teamclaw-openclaw
+  tag: latest
+
+imagePullSecrets:
+  - name: regcred
+
+config:
+  openclaw:
+    plugins:
+      entries:
+        teamclaw:
+          config:
+            workerProvisioningType: kubernetes
+            workerProvisioningPassEnv:
+              - ZAI_API_KEY
