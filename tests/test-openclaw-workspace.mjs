@@ -473,7 +473,7 @@ assert.match(
 
 assert.match(
   controllerHttpServerSource,
-  /const explicitProjectName = typeof body\.projectName === "string"[\s\S]*const projectId = inheritedProject\?\.projectId \?\? explicitProjectName \|\| undefined[\s\S]*task\.projectId = project\.projectId;/,
+  /const explicitProjectName = typeof body\.projectName === "string"[\s\S]*const projectId = inheritedProject\?\.projectId \?\? \(explicitProjectName \|\| undefined\)[\s\S]*task\.projectId = project\.projectId;/,
   "controller task creation should preserve stable project identity across sessions and explicit project names",
 );
 

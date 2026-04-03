@@ -1379,7 +1379,7 @@ async function createControllerManagedTask(
     ? resolveProjectIdentityForSession(normalizedSessionKey, deps.getTeamState())
     : undefined;
   const explicitProjectId = deriveStableProjectKey(input.projectName ?? "");
-  const projectId = inheritedProject?.projectId ?? explicitProjectId || undefined;
+  const projectId = inheritedProject?.projectId ?? (explicitProjectId || undefined);
   const projectDir = inheritedProject?.projectDir ?? projectId ?? deriveProjectSlug(input.title);
 
   const normalizedRecommendedSkills = normalizeRecommendedSkills(input.recommendedSkills ?? []);
@@ -4064,7 +4064,7 @@ async function handleRequest(
     const inheritedProject = controllerSessionKey
       ? resolveProjectIdentityForSession(controllerSessionKey, getTeamState())
       : undefined;
-    const projectId = inheritedProject?.projectId ?? explicitProjectName || undefined;
+    const projectId = inheritedProject?.projectId ?? (explicitProjectName || undefined);
     const projectDir = inheritedProject?.projectDir ?? projectId ?? deriveProjectSlug(title);
 
     const task: TaskInfo = {
