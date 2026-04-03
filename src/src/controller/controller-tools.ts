@@ -10,6 +10,7 @@ import type {
 import { buildControllerNoWorkersMessage, hasOnDemandWorkerProvisioning, shouldBlockControllerWithoutWorkers } from "./controller-capacity.js";
 import {
   normalizeClarificationQuestionSchemas,
+  normalizeManifestCompletionOpportunities,
   normalizeManifestCreatedTasks,
   normalizeManifestDeferredTasks,
   normalizeManifestRoleList,
@@ -130,6 +131,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
         description: Type.String({ description: "Execution-ready task description with scope, expected deliverable, constraints, resolved clarifications, and no unmet predecessor dependency" }),
         priority: Type.Optional(Type.String({ description: "Priority: low, medium, high, critical" })),
         assignedRole: Type.Optional(Type.String({ description: "Exact target role ID (pm, architect, developer, qa, release-engineer, infra-engineer, devops, security-engineer, designer, marketing)" })),
+        projectName: Type.Optional(Type.String({ description: "Stable project key to reuse or create for this task (for example: ggcode, todo-rest-api)." })),
         recommendedSkills: Type.Optional(
           Type.Array(
             Type.String({
@@ -184,6 +186,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
               description,
               priority: params.priority ?? "medium",
               assignedRole: params.assignedRole ?? undefined,
+              projectName: typeof params.projectName === "string" ? params.projectName : undefined,
               recommendedSkills: Array.isArray(params.recommendedSkills) ? params.recommendedSkills : undefined,
               createdBy: "controller",
               controllerSessionKey: normalizedSessionKey || undefined,
@@ -277,6 +280,15 @@ export function createControllerTools(deps: ControllerToolsDeps) {
         ),
         handoffPlan: Type.Optional(Type.String({ description: "Brief note about how workers should report progress/handoffs across this flow" })),
         notes: Type.Optional(Type.String({ description: "Additional orchestration notes for the human/controller log" })),
+        completionOpportunities: Type.Optional(
+          Type.Array(
+            Type.Object({
+              title: Type.String({ description: "Human-facing label for an adjacent optional next step after delivery" }),
+              value: Type.String({ description: "Stable option value for this next step" }),
+              summary: Type.String({ description: "What TeamClaw could continue doing if selected" }),
+            }),
+          ),
+        ),
         requirementFullyComplete: Type.Optional(Type.Boolean({ description: "Set to true when the entire human requirement is fully satisfied — all tasks completed, no deferred tasks remaining, no follow-ups needed" })),
       }),
       async execute(_id: string, params: Record<string, unknown>) {
@@ -309,6 +321,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
           deferredTasks: normalizeManifestDeferredTasks(params.deferredTasks),
           handoffPlan: normalizeOptionalManifestText(params.handoffPlan),
           notes: normalizeOptionalManifestText(params.notes),
+          completionOpportunities: normalizeManifestCompletionOpportunities(params.completionOpportunities),
           requirementFullyComplete: Boolean(params.requirementFullyComplete),
         };
 

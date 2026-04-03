@@ -53,6 +53,7 @@
     clarificationPromptOpen: false,
     activeClarificationId: "",
     dismissedClarificationIds: [],
+    clarificationDrafts: {},
     externalWorkerRole: 'developer',
     externalWorkerDiscoveryMode: 'mdns',
     externalWorkerInstallVisible: false,
@@ -573,6 +574,58 @@
     return html;
   }
 
+  function splitMarkdownTableRow(line) {
+    const trimmed = String(line || "").trim().replace(/^\|/, "").replace(/\|$/, "");
+    return trimmed.split("|").map((cell) => cell.trim());
+  }
+
+  function isMarkdownTableDivider(line) {
+    const cells = splitMarkdownTableRow(line);
+    if (!cells.length) return false;
+    return cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+  }
+
+  function isMarkdownTableStart(lines, index) {
+    const headerLine = String(lines[index] || "");
+    const dividerLine = String(lines[index + 1] || "");
+    if (!headerLine.includes("|") || !dividerLine.includes("|")) return false;
+    const headerCells = splitMarkdownTableRow(headerLine);
+    const dividerCells = splitMarkdownTableRow(dividerLine);
+    if (headerCells.length < 2 || headerCells.length !== dividerCells.length) return false;
+    return isMarkdownTableDivider(dividerLine);
+  }
+
+  function markdownTableAlignment(cell) {
+    if (/^:-{3,}:$/.test(cell)) return "center";
+    if (/^:-{3,}$/.test(cell)) return "left";
+    if (/^-{3,}:$/.test(cell)) return "right";
+    return "";
+  }
+
+  function renderMarkdownTable(lines, startIndex) {
+    const headerCells = splitMarkdownTableRow(lines[startIndex]);
+    const dividerCells = splitMarkdownTableRow(lines[startIndex + 1]);
+    const alignments = dividerCells.map((cell) => markdownTableAlignment(cell));
+    const bodyRows = [];
+    let index = startIndex + 2;
+    while (index < lines.length) {
+      const line = String(lines[index] || "");
+      if (!line.trim() || !line.includes("|")) break;
+      const cells = splitMarkdownTableRow(line);
+      if (cells.length !== headerCells.length) break;
+      bodyRows.push(cells);
+      index += 1;
+    }
+    const headerHtml = `<thead><tr>${headerCells.map((cell, idx) => `<th${alignments[idx] ? ` style="text-align:${alignments[idx]}"` : ""}>${renderMarkdownInline(cell)}</th>`).join("")}</tr></thead>`;
+    const bodyHtml = bodyRows.length
+      ? `<tbody>${bodyRows.map((row) => `<tr>${row.map((cell, idx) => `<td${alignments[idx] ? ` style="text-align:${alignments[idx]}"` : ""}>${renderMarkdownInline(cell)}</td>`).join("")}</tr>`).join("")}</tbody>`
+      : "";
+    return {
+      html: `<div class="markdown-table-wrap"><table>${headerHtml}${bodyHtml}</table></div>`,
+      nextIndex: index - 1,
+    };
+  }
+
   function renderMarkdown(text) {
     const source = String(text || "").replace(/\r\n/g, "\n").trim();
     if (!source) return "";
@@ -610,7 +663,8 @@
       codeLines = null;
     }
 
-    for (const rawLine of lines) {
+    for (let index = 0; index < lines.length; index += 1) {
+      const rawLine = lines[index];
       const line = rawLine.replace(/\t/g, "  ");
 
       if (/^```/.test(line.trim())) {
@@ -627,6 +681,16 @@
 
       if (codeLines) {
         codeLines.push(rawLine);
+        continue;
+      }
+
+      if (isMarkdownTableStart(lines, index)) {
+        flushParagraph();
+        flushList();
+        flushQuote();
+        const table = renderMarkdownTable(lines, index);
+        html.push(table.html);
+        index = table.nextIndex;
         continue;
       }
 
@@ -692,15 +756,10 @@
     const schema = item && item.questionSchema ? item.questionSchema : null;
     const id = String(item && item.id || "");
     const scope = String(scopeKey || "inline");
-    if (!schema || !schema.kind) {
-      return (
-        `<textarea data-clarification-answer="${escapeHtml(id)}" placeholder="${escapeHtml(t("clarification.answerPlaceholder"))}"></textarea>` +
-        `<div class="inline-actions"><button class="inline-action" type="button" data-clarification-submit="${escapeHtml(id)}">Send answer</button></div>`
-      );
-    }
-
     let controlHtml = "";
-    if (schema.kind === "single-select" || schema.kind === "multi-select") {
+    if (!schema || !schema.kind) {
+      controlHtml = `<textarea data-clarification-answer="${escapeHtml(id)}" placeholder="${escapeHtml(t("clarification.answerPlaceholder"))}"></textarea>`;
+    } else if (schema.kind === "single-select" || schema.kind === "multi-select") {
       const inputType = schema.kind === "single-select" ? "radio" : "checkbox";
       const name = `clarification-choice-${scope}-${id}`;
       const options = Array.isArray(schema.options) ? schema.options : [];
@@ -736,10 +795,10 @@
       controlHtml = `<textarea data-clarification-answer="${escapeHtml(id)}" placeholder="${escapeHtml(schema.placeholder || t("clarification.answerPlaceholder"))}"></textarea>`;
     }
 
-    const commentPlaceholder = schema.kind === "text"
+    const commentPlaceholder = schema && schema.kind === "text"
       ? "Additional context (optional)"
       : "Optional note or extra context";
-    const commentField = schema.kind === "text"
+    const commentField = schema && schema.kind === "text"
       ? ""
       : `<textarea data-clarification-comment="${escapeHtml(id)}" placeholder="${escapeHtml(commentPlaceholder)}"></textarea>`;
     return (
@@ -750,6 +809,60 @@
       `<div class="inline-actions"><button class="inline-action" type="button" data-clarification-submit="${escapeHtml(id)}">Send answer</button></div>` +
       `</div>`
     );
+  }
+
+  function getClarificationPromptSignature(item) {
+    if (!item || !item.id) return "";
+    return JSON.stringify({
+      id: item.id,
+      updatedAt: item.updatedAt || item.createdAt || 0,
+      status: item.status || "",
+      question: item.question || "",
+      blockingReason: item.blockingReason || "",
+      context: item.context || "",
+      schema: item.questionSchema || null,
+      language: state.language,
+    });
+  }
+
+  function rememberClarificationDraft(id, root) {
+    if (!id || !(root instanceof Element || root instanceof Document)) return;
+    const key = CSS.escape(id);
+    const answer = root.querySelector(`[data-clarification-answer="${key}"]`);
+    const comment = root.querySelector(`[data-clarification-comment="${key}"]`);
+    const other = root.querySelector(`[data-clarification-other="${key}"]`);
+    const number = root.querySelector(`[data-clarification-number="${key}"]`);
+    const choices = Array.from(root.querySelectorAll(`input[data-clarification-choice="${key}"]:checked`)).map((input) => input.value);
+    const draft = {
+      answer: answer ? answer.value : "",
+      comment: comment ? comment.value : "",
+      other: other ? other.value : "",
+      number: number ? number.value : "",
+      choices,
+    };
+    if (draft.answer || draft.comment || draft.other || draft.number || draft.choices.length > 0) {
+      state.clarificationDrafts[id] = draft;
+    } else {
+      delete state.clarificationDrafts[id];
+    }
+  }
+
+  function restoreClarificationDraft(id, root) {
+    if (!id || !(root instanceof Element || root instanceof Document)) return;
+    const draft = state.clarificationDrafts[id];
+    if (!draft) return;
+    const key = CSS.escape(id);
+    const answer = root.querySelector(`[data-clarification-answer="${key}"]`);
+    const comment = root.querySelector(`[data-clarification-comment="${key}"]`);
+    const other = root.querySelector(`[data-clarification-other="${key}"]`);
+    const number = root.querySelector(`[data-clarification-number="${key}"]`);
+    if (answer) answer.value = draft.answer || "";
+    if (comment) comment.value = draft.comment || "";
+    if (other) other.value = draft.other || "";
+    if (number) number.value = draft.number || "";
+    Array.from(root.querySelectorAll(`input[data-clarification-choice="${key}"]`)).forEach((input) => {
+      input.checked = Array.isArray(draft.choices) && draft.choices.includes(input.value);
+    });
   }
 
   function renderSourceWithLineNumbers(content) {
@@ -835,6 +948,17 @@
 
   async function apiGet(path) {
     const response = await fetch(controllerApi(path));
+    if (!response.ok) {
+      throw new Error(`GET ${path} failed (${response.status})`);
+    }
+    return response.json();
+  }
+
+  async function apiGetOptional(path, fallbackValue) {
+    const response = await fetch(controllerApi(path));
+    if (response.status === 404) {
+      return fallbackValue;
+    }
     if (!response.ok) {
       throw new Error(`GET ${path} failed (${response.status})`);
     }
@@ -1139,7 +1263,6 @@
       drawer.classList.toggle("is-collapsed", !state.noticeDrawerOpen);
     }
     renderActivitySignals();
-    renderClarificationPrompt();
     renderUnavailableScreen();
   }
 
@@ -1277,7 +1400,19 @@
     if (!state.clarificationPromptOpen || !active) {
       modal.classList.add("is-hidden");
       modal.setAttribute("aria-hidden", "true");
+      delete content.dataset.clarificationId;
+      delete content.dataset.promptSignature;
       content.innerHTML = "";
+      return;
+    }
+
+    const promptSignature = getClarificationPromptSignature(active);
+    if (
+      content.dataset.clarificationId === active.id
+      && content.dataset.promptSignature === promptSignature
+    ) {
+      modal.classList.remove("is-hidden");
+      modal.setAttribute("aria-hidden", "false");
       return;
     }
 
@@ -1319,6 +1454,9 @@
       `<div class="row-actions">${openContextAction}<button class="btn" type="button" data-clarification-switch-view="clarifications">Open clarifications page</button></div>` +
       `</div>`
     );
+    content.dataset.clarificationId = active.id;
+    content.dataset.promptSignature = promptSignature;
+    restoreClarificationDraft(active.id, content);
     modal.classList.remove("is-hidden");
     modal.setAttribute("aria-hidden", "false");
   }
@@ -2212,7 +2350,9 @@
     switch (payload.type) {
       case "controller:run":
         upsertControllerRunState(data);
+        renderMissionSummary();
         renderPlanning();
+        renderChrome();
         break;
       case "clarification:requested":
         upsertClarificationState(data);
@@ -2381,7 +2521,7 @@
   }
 
   async function refreshReports() {
-    const data = await apiGet("/reports");
+    const data = await apiGetOptional("/reports", { reports: [] });
     state.reports = normalizeArray(data.reports).sort((a, b) => (b.generatedAt || 0) - (a.generatedAt || 0));
     renderReports();
   }
@@ -2400,7 +2540,7 @@
       const [statusData, runsData, reportsData, workspaceTreeData] = await Promise.all([
         apiGet("/team/status"),
         apiGet("/controller/runs"),
-        apiGet("/reports"),
+        apiGetOptional("/reports", { reports: [] }),
         apiGet("/workspace/tree"),
       ]);
       state.teamStatus = {
@@ -2485,17 +2625,26 @@
       || document.querySelector(`#clarification-modal [data-clarification-card="${CSS.escape(id)}"]`)
       || document.querySelector(`[data-clarification-card="${CSS.escape(id)}"]`)
       || document;
+    const getScopedField = (selector) => {
+      return card.querySelector(selector) || document.querySelector(selector);
+    };
     const submitButton = sourceElement instanceof HTMLButtonElement ? sourceElement : null;
     const originalLabel = submitButton ? submitButton.textContent : "";
     const body = { answeredBy: 'human-desktop' };
     if (!schema || !schema.kind) {
-      const textarea = document.querySelector(`[data-clarification-answer="${CSS.escape(id)}"]`);
+      const textarea = getScopedField(`[data-clarification-answer="${CSS.escape(id)}"]`);
       const answer = textarea ? textarea.value.trim() : '';
-      if (!answer) return;
+      if (!answer) {
+        setStatusLine('Please provide an answer before submitting.');
+        return;
+      }
       body.answer = answer;
     } else if (schema.kind === 'single-select') {
       const selected = card.querySelector(`input[data-clarification-choice="${CSS.escape(id)}"]:checked`);
-      if (!selected) return;
+      if (!selected) {
+        setStatusLine('Please choose an answer before submitting.');
+        return;
+      }
       if (selected.value === '__other__') {
         const other = card.querySelector(`[data-clarification-other="${CSS.escape(id)}"]`);
         body.answerValue = other ? other.value.trim() : '';
@@ -2504,7 +2653,10 @@
       }
       const comment = card.querySelector(`[data-clarification-comment="${CSS.escape(id)}"]`);
       if (comment && comment.value.trim()) body.answerComment = comment.value.trim();
-      if (!body.answerValue && !body.answerComment) return;
+      if (!body.answerValue && !body.answerComment) {
+        setStatusLine('Please choose an answer before submitting.');
+        return;
+      }
     } else if (schema.kind === 'multi-select') {
       const values = Array.from(card.querySelectorAll(`input[data-clarification-choice="${CSS.escape(id)}"]:checked`)).map((entry) => entry.value);
       const normalizedValues = values.filter((entry) => entry !== '__other__');
@@ -2515,7 +2667,10 @@
       if (normalizedValues.length) body.answerValues = normalizedValues;
       const comment = card.querySelector(`[data-clarification-comment="${CSS.escape(id)}"]`);
       if (comment && comment.value.trim()) body.answerComment = comment.value.trim();
-      if (!body.answerValues && !body.answerComment) return;
+      if (!body.answerValues && !body.answerComment) {
+        setStatusLine('Please choose at least one answer before submitting.');
+        return;
+      }
     } else if (schema.kind === 'number') {
       const numberInput = card.querySelector(`[data-clarification-number="${CSS.escape(id)}"]`);
       const raw = numberInput ? numberInput.value.trim() : '';
@@ -2525,11 +2680,17 @@
       }
       const comment = card.querySelector(`[data-clarification-comment="${CSS.escape(id)}"]`);
       if (comment && comment.value.trim()) body.answerComment = comment.value.trim();
-      if (body.answerNumber == null && !body.answerComment) return;
+      if (body.answerNumber == null && !body.answerComment) {
+        setStatusLine('Please provide a number or note before submitting.');
+        return;
+      }
     } else {
-      const textarea = document.querySelector(`[data-clarification-answer="${CSS.escape(id)}"]`);
+      const textarea = getScopedField(`[data-clarification-answer="${CSS.escape(id)}"]`);
       const answer = textarea ? textarea.value.trim() : '';
-      if (!answer) return;
+      if (!answer) {
+        setStatusLine('Please provide an answer before submitting.');
+        return;
+      }
       body.answer = answer;
     }
     try {
@@ -2542,6 +2703,7 @@
       if (data.clarification) {
         upsertClarificationState(data.clarification);
         upsertTaskDetailClarification(data.clarification);
+        delete state.clarificationDrafts[id];
       }
       if (data.task) {
         upsertTaskState(data.task);
@@ -2569,7 +2731,17 @@
         submitButton.disabled = false;
         submitButton.textContent = originalLabel || 'Send answer';
       }
-      setStatusLine(error instanceof Error ? error.message : 'Failed to answer clarification');
+      const message = error instanceof Error ? error.message : 'Failed to answer clarification';
+      if (
+        typeof message === 'string'
+        && (
+          message.includes('already answered')
+          || message.includes('not found')
+        )
+      ) {
+        refreshAll(true).catch(() => {});
+      }
+      setStatusLine(message);
     }
   }
 
@@ -2959,6 +3131,13 @@
   document.addEventListener('change', function (event) {
     const target = event.target instanceof Element ? event.target : null;
     if (!target) return;
+    const clarificationCard = target.closest('[data-clarification-card]');
+    if (clarificationCard) {
+      const clarificationId = clarificationCard.getAttribute('data-clarification-card') || '';
+      if (clarificationId) {
+        rememberClarificationDraft(clarificationId, clarificationCard);
+      }
+    }
     if (target.matches('[data-worker-install-role]')) {
       state.externalWorkerRole = target.value || state.externalWorkerRole;
       renderExternalWorkerInstallCard();
@@ -2973,6 +3152,16 @@
       state.externalWorkerDiscoveryMode = target.value === 'manual' ? 'manual' : 'mdns';
       renderExternalWorkerInstallCard();
     }
+  });
+
+  document.addEventListener('input', function (event) {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) return;
+    const clarificationCard = target.closest('[data-clarification-card]');
+    if (!clarificationCard) return;
+    const clarificationId = clarificationCard.getAttribute('data-clarification-card') || '';
+    if (!clarificationId) return;
+    rememberClarificationDraft(clarificationId, clarificationCard);
   });
 
   applyStaticTranslations();

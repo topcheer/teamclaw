@@ -100,6 +100,9 @@ async function loadTeamState(teamName: string): Promise<TeamState | null> {
     if (!parsed.controllerRuns || typeof parsed.controllerRuns !== "object") {
       parsed.controllerRuns = {};
     }
+    if (!parsed.projects || typeof parsed.projects !== "object") {
+      parsed.projects = {};
+    }
     if (!Array.isArray(parsed.messages)) {
       parsed.messages = [];
     }
@@ -135,6 +138,9 @@ async function saveTeamState(state: TeamState): Promise<void> {
   state.provisioning.startupReadiness = normalizeStartupReadiness(state.provisioning.startupReadiness);
   state.controllerRuns = state.controllerRuns && typeof state.controllerRuns === "object"
     ? state.controllerRuns
+    : {};
+  state.projects = state.projects && typeof state.projects === "object"
+    ? state.projects
     : {};
   await enqueueAtomicWrite(filePath, `${JSON.stringify(state, null, 2)}\n`);
 }

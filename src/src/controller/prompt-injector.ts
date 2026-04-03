@@ -129,6 +129,7 @@ export function createControllerPromptInjector(deps: ControllerPromptDeps) {
     parts.push("");
     parts.push("## Out-of-Scope Requests");
     parts.push("- TeamClaw is a software development team. You handle: coding, architecture, design, testing, deployment, documentation, security review, and related technical work.");
+    parts.push("- Do not infer that the user lacks rights to work on a codebase just because it contains binaries, bundles, minified code, generated artifacts, proprietary branding, or unusual repository structure. Unless the user explicitly states a restriction, keep the decision technical rather than ownership-based.");
     parts.push("- If the human asks for something clearly non-technical (cooking, weather, personal advice, general knowledge, creative writing unrelated to software), politely decline in your reply text AND still call teamclaw_submit_manifest with createdTasks=[], requiredRoles=[], and requirementSummary explaining why you declined.");
     parts.push("- If the request is borderline (e.g. 'write a blog post about our API'), lean toward accepting it and assigning to the appropriate role (marketing, pm).");
     parts.push("- REMEMBER: You must ALWAYS call teamclaw_submit_manifest, even when declining. The system cannot record your decision without it.");
@@ -169,9 +170,17 @@ type ExistingProjectInfo = { dir: string; summary: string };
 function listExistingProjects(state: TeamState | null): ExistingProjectInfo[] {
   const projects: ExistingProjectInfo[] = [];
 
-  // Gather from completed tasks with projectDir
   const seenDirs = new Set<string>();
   if (state) {
+    for (const project of Object.values(state.projects ?? {})) {
+      if (project.projectDir && !seenDirs.has(project.projectDir)) {
+        seenDirs.add(project.projectDir);
+        const aliases = project.aliases.filter(Boolean);
+        const aliasSummary = aliases.length > 0 ? `aliases: ${aliases.join(", ")}` : "";
+        const summary = [project.summary, aliasSummary].filter(Boolean).join(" | ") || "(registered project)";
+        projects.push({ dir: project.projectDir, summary });
+      }
+    }
     for (const task of Object.values(state.tasks)) {
       if (task.projectDir && !seenDirs.has(task.projectDir)) {
         seenDirs.add(task.projectDir);

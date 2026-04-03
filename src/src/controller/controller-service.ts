@@ -70,6 +70,7 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
           workers: {},
           tasks: {},
           controllerRuns: {},
+          projects: {},
           messages: [],
           clarifications: {},
           repo: repoState ?? undefined,

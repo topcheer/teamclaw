@@ -438,13 +438,17 @@ export function buildTeamClawProjectAgentRelativePath(
  *
  * Example: "Build a payment system with Stripe" → "build-a-payment-system-with-stripe-k3f9m2"
  */
-export function deriveProjectSlug(text: string): string {
-  const slug = text
+export function deriveStableProjectKey(text: string): string {
+  return text
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 50)
-    .replace(/-+$/, "");
+    .replace(/-+$/g, "");
+}
+
+export function deriveProjectSlug(text: string): string {
+  const slug = deriveStableProjectKey(text);
   const suffix = randomSuffix(6);
   return slug ? `${slug}-${suffix}` : suffix;
 }

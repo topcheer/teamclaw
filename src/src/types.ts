@@ -110,6 +110,7 @@ export type TaskInfo = {
   createdBy: string;
   recommendedSkills?: string[];
   controllerSessionKey?: string;
+  projectId?: string;
   projectDir?: string;
   createdAt: number;
   updatedAt: number;
@@ -147,6 +148,18 @@ export type TaskAssignmentPayload = {
   executionSessionKey?: string;
   executionIdempotencyKey?: string;
   repo?: RepoSyncInfo;
+  teamContext?: {
+    requirementSummary?: string;
+    projectName?: string;
+    requiredRoles?: RoleId[];
+    activeTasks?: Array<{ id: string; title: string; assignedRole?: RoleId; status: TaskStatus; summary?: string }>;
+    blockedTasks?: Array<{ id: string; title: string; assignedRole?: RoleId; status: TaskStatus; summary?: string }>;
+    recentCompletedTasks?: Array<{ id: string; title: string; assignedRole?: RoleId; status: TaskStatus; summary?: string }>;
+    pendingClarifications?: Array<{ question: string; blockingReason?: string }>;
+    handoffPlan?: string;
+    notes?: string;
+    kickoffSummary?: string;
+  };
 };
 
 export type ControllerRunSource = "human" | "task_follow_up";
@@ -274,6 +287,12 @@ export type ControllerManifestDeferredTask = {
   whenReady: string;
 };
 
+export type ControllerManifestCompletionOpportunity = {
+  title: string;
+  value: string;
+  summary: string;
+};
+
 export type ClarificationQuestionKind = "single-select" | "multi-select" | "number" | "text";
 
 export type ClarificationQuestionOption = {
@@ -309,6 +328,7 @@ export type ControllerOrchestrationManifest = {
   deferredTasks: ControllerManifestDeferredTask[];
   handoffPlan?: string;
   notes?: string;
+  completionOpportunities?: ControllerManifestCompletionOpportunity[];
   /** Controller signals that the entire human requirement is fully satisfied — no more tasks or follow-ups needed. */
   requirementFullyComplete?: boolean;
   /** Team kickoff plan — populated when controller uses collaborative planning. */
@@ -326,6 +346,7 @@ export type ControllerRunInfo = {
   request: string;
   reply?: string;
   error?: string;
+  projectId?: string;
   projectDir?: string;
   createdTaskIds: string[];
   manifest?: ControllerOrchestrationManifest;
@@ -492,6 +513,7 @@ export type TeamState = {
   workers: Record<string, WorkerInfo>;
   tasks: Record<string, TaskInfo>;
   controllerRuns: Record<string, ControllerRunInfo>;
+  projects: Record<string, TeamProjectInfo>;
   messages: TeamMessage[];
   clarifications: Record<string, ClarificationRequest>;
   repo?: GitRepoState;
@@ -500,6 +522,16 @@ export type TeamState = {
   reports?: Record<string, DeliveryReportRecord>;
   createdAt: number;
   updatedAt: number;
+};
+
+export type TeamProjectInfo = {
+  id: string;
+  projectDir: string;
+  aliases: string[];
+  summary?: string;
+  createdAt: number;
+  updatedAt: number;
+  lastUsedAt: number;
 };
 
 export type DeliveryReportRecord = {

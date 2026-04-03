@@ -63,6 +63,7 @@ import {
   resolveTeamClawAgentWorkspaceRootDir,
   resolveTeamClawWorkspaceDir,
   resolveTeamClawProjectsDir,
+  deriveStableProjectKey,
   deriveProjectSlug,
 } from "../openclaw-workspace.js";
 import { resolvePreferredLanAddress } from "../networking.js";
@@ -92,6 +93,7 @@ const CONTROLLER_INTAKE_SESSION_PREFIX = "teamclaw-controller-web:";
 const CONTROLLER_INTAKE_AGENT_SESSION_RE = /^agent:[^:]+:(teamclaw-controller-web:[a-zA-Z0-9:_-]{1,120})$/;
 const CONTROLLER_RUN_WAIT_SLICE_MS = 30_000;
 const EXISTING_PROJECT_REUSE_HINT_RE = /\b(existing|optimi(?:s|z)e|optimi(?:s|z)ation|improvement|enhanc(?:e|ement)|follow[- ]?up|extend|update|bugfix|bug fix)\b/iu;
+const GENERIC_PROJECT_FOLLOW_UP_RE = /\b(continue|continuing|next step|what else|what's next|follow[- ]?up|more|remaining)\b|继续|接下来|下一步|还有哪些|还可以做什么/u;
 const PROJECT_MATCH_STOPWORDS = new Set([
   "a",
   "an",
@@ -459,15 +461,19 @@ function createControllerRun(
 ): ControllerRunInfo {
   const now = Date.now();
   const existingState = deps.getTeamState();
-  const inheritedProjectDir = options?.sourceTaskId
-    ? existingState?.tasks[options.sourceTaskId]?.projectDir
-    : resolveProjectDirForSession(sessionKey, existingState)
-      ?? resolveExistingProjectDirFromMessage(message, existingState);
+  const inheritedProject = options?.sourceTaskId
+    ? resolveProjectIdentityForTaskId(options.sourceTaskId, existingState)
+    : resolveProjectIdentityForSession(sessionKey, existingState)
+      ?? resolveExistingProjectIdentityFromMessage(message, existingState);
+  const explicitProjectId = extractExplicitProjectNameHint(message);
+  const projectId = inheritedProject?.projectId ?? explicitProjectId;
+  const projectDir = inheritedProject?.projectDir ?? projectId ?? deriveProjectSlug(message);
   const run: ControllerRunInfo = {
     id: generateId(),
     title: buildControllerRunTitle(message, options?.source ?? "human", options?.sourceTaskTitle),
     sessionKey,
-    projectDir: inheritedProjectDir ?? deriveProjectSlug(message),
+    projectId: projectId || undefined,
+    projectDir,
     source: options?.source ?? "human",
     sourceTaskId: options?.sourceTaskId,
     sourceTaskTitle: options?.sourceTaskTitle,
@@ -479,6 +485,13 @@ function createControllerRun(
   };
 
   const state = deps.updateTeamState((teamState) => {
+    syncProjectRegistryEntry(teamState, {
+      projectId: run.projectId,
+      projectDir: run.projectDir,
+      aliases: [run.projectId, extractExplicitProjectNameHint(message)],
+      summary: run.title,
+      updatedAt: now,
+    });
     teamState.controllerRuns[run.id] = run;
     trimControllerRuns(teamState);
   });
@@ -487,20 +500,17 @@ function createControllerRun(
   return createdRun;
 }
 
-function resolveExistingProjectDirFromMessage(
+function resolveExistingProjectIdentityFromMessage(
   message: string,
   state: TeamState | null,
-): string | undefined {
-  if (!EXISTING_PROJECT_REUSE_HINT_RE.test(message)) {
-    return undefined;
-  }
+): { projectId?: string; projectDir?: string } | undefined {
   const normalizedMessage = normalizeProjectMatchingText(message);
   if (!normalizedMessage) {
     return undefined;
   }
-  const explicitAlias = normalizeProjectMatchingText(extractProjectAliasFromText(message) ?? "");
+  const explicitAlias = normalizeProjectMatchingText(extractExplicitProjectNameHint(message) ?? "");
 
-  let best: { projectDir: string; score: number; updatedAt: number } | null = null;
+  let best: { projectId?: string; projectDir: string; score: number; updatedAt: number } | null = null;
   const candidates = collectExistingProjectCandidates(state);
   for (const candidate of candidates) {
     const normalizedAliases = Array.from(candidate.aliases)
@@ -532,27 +542,47 @@ function resolveExistingProjectDirFromMessage(
     }
     if (!best || totalScore > best.score || (totalScore === best.score && candidate.updatedAt > best.updatedAt)) {
       best = {
+        projectId: candidate.projectId,
         projectDir: candidate.projectDir,
         score: totalScore,
         updatedAt: candidate.updatedAt,
       };
     }
   }
-  return best?.projectDir;
+  if (best) {
+    return { projectId: best.projectId, projectDir: best.projectDir };
+  }
+  if ((EXISTING_PROJECT_REUSE_HINT_RE.test(message) || GENERIC_PROJECT_FOLLOW_UP_RE.test(message)) && candidates.length === 1) {
+    return {
+      projectId: candidates[0]?.projectId,
+      projectDir: candidates[0]?.projectDir,
+    };
+  }
+  return undefined;
 }
 
 function collectExistingProjectCandidates(state: TeamState | null): Array<{
+  projectId?: string;
   projectDir: string;
   aliases: Set<string>;
   searchText: string;
   updatedAt: number;
 }> {
-  const byProjectDir = new Map<string, { aliases: Set<string>; texts: string[]; updatedAt: number }>();
-  const addCandidate = (projectDir: string | undefined, text: string | undefined, updatedAt: number, alias?: string | null) => {
+  const byProjectDir = new Map<string, { projectId?: string; aliases: Set<string>; texts: string[]; updatedAt: number }>();
+  const addCandidate = (
+    projectDir: string | undefined,
+    text: string | undefined,
+    updatedAt: number,
+    alias?: string | null,
+    projectId?: string,
+  ) => {
     if (!projectDir) {
       return;
     }
-    const entry = byProjectDir.get(projectDir) ?? { aliases: new Set<string>(), texts: [], updatedAt: 0 };
+    const entry = byProjectDir.get(projectDir) ?? { projectId, aliases: new Set<string>(), texts: [], updatedAt: 0 };
+    if (!entry.projectId && projectId) {
+      entry.projectId = projectId;
+    }
     if (text && text.trim()) {
       entry.texts.push(text);
     }
@@ -563,22 +593,143 @@ function collectExistingProjectCandidates(state: TeamState | null): Array<{
     byProjectDir.set(projectDir, entry);
   };
 
+  for (const project of Object.values(state?.projects ?? {})) {
+    addCandidate(project.projectDir, project.summary, project.updatedAt, project.id, project.id);
+    for (const alias of project.aliases ?? []) {
+      addCandidate(project.projectDir, alias, project.updatedAt, alias, project.id);
+    }
+  }
   for (const run of Object.values(state?.controllerRuns ?? {})) {
-    addCandidate(run.projectDir, run.request, run.updatedAt, extractProjectAliasFromText(run.request));
-    addCandidate(run.projectDir, run.title, run.updatedAt, extractProjectAliasFromText(run.title));
+    addCandidate(run.projectDir, run.request, run.updatedAt, extractProjectAliasFromText(run.request), run.projectId);
+    addCandidate(run.projectDir, run.title, run.updatedAt, extractProjectAliasFromText(run.title), run.projectId);
+    addCandidate(run.projectDir, run.manifest?.projectName, run.updatedAt, run.manifest?.projectName, run.projectId);
   }
   for (const task of Object.values(state?.tasks ?? {})) {
-    addCandidate(task.projectDir, task.title, task.updatedAt, extractProjectAliasFromText(task.title));
-    addCandidate(task.projectDir, task.description, task.updatedAt, extractProjectAliasFromText(task.description));
-    addCandidate(task.projectDir, task.resultContract?.summary, task.updatedAt);
+    addCandidate(task.projectDir, task.title, task.updatedAt, extractProjectAliasFromText(task.title), task.projectId);
+    addCandidate(task.projectDir, task.description, task.updatedAt, extractProjectAliasFromText(task.description), task.projectId);
+    addCandidate(task.projectDir, task.resultContract?.summary, task.updatedAt, null, task.projectId);
   }
 
   return Array.from(byProjectDir.entries()).map(([projectDir, entry]) => ({
+    projectId: entry.projectId,
     projectDir,
     aliases: entry.aliases,
     searchText: entry.texts.join("\n"),
     updatedAt: entry.updatedAt,
   }));
+}
+
+function extractExplicitProjectNameHint(text: string | undefined): string | undefined {
+  const value = String(text ?? "");
+  const namedMatch = value.match(/(?:品牌|brand|project\s*name|产品名|名字)\s*[:：]?\s*[`"'“”]?([a-z][a-z0-9_-]{1,39})[`"'“”]?/iu);
+  if (namedMatch?.[1]) {
+    return deriveStableProjectKey(namedMatch[1]);
+  }
+  const inlineNames = Array.from(value.matchAll(/`([a-z][a-z0-9_-]{1,39})`/giu))
+    .map((match) => deriveStableProjectKey(match[1]))
+    .filter(Boolean);
+  return inlineNames.length === 1 ? inlineNames[0] : undefined;
+}
+
+function findProjectRecordByDir(state: TeamState | null, projectDir: string | undefined) {
+  if (!state || !projectDir) {
+    return undefined;
+  }
+  return Object.values(state.projects ?? {}).find((project) => project.projectDir === projectDir);
+}
+
+function syncProjectRegistryEntry(
+  state: TeamState,
+  input: {
+    projectId?: string;
+    projectDir?: string;
+    aliases?: Array<string | undefined | null>;
+    summary?: string;
+    updatedAt: number;
+  },
+): { projectId?: string; projectDir?: string } {
+  state.projects = state.projects && typeof state.projects === "object" ? state.projects : {};
+  let normalizedProjectId = deriveStableProjectKey(input.projectId ?? "");
+  let existing = normalizedProjectId ? state.projects[normalizedProjectId] : undefined;
+  const byDir = findProjectRecordByDir(state, input.projectDir);
+  if (!existing && byDir) {
+    existing = byDir;
+  }
+  if (!existing && input.projectDir) {
+    normalizedProjectId = normalizedProjectId || deriveStableProjectKey(input.projectDir);
+    if (normalizedProjectId) {
+      existing = {
+        id: normalizedProjectId,
+        projectDir: input.projectDir,
+        aliases: [],
+        createdAt: input.updatedAt,
+        updatedAt: input.updatedAt,
+        lastUsedAt: input.updatedAt,
+      };
+      state.projects[normalizedProjectId] = existing;
+    }
+  }
+  if (!existing) {
+    return { projectId: normalizedProjectId || undefined, projectDir: input.projectDir };
+  }
+  if (normalizedProjectId && existing.id !== normalizedProjectId && !state.projects[normalizedProjectId]) {
+    delete state.projects[existing.id];
+    existing.id = normalizedProjectId;
+    state.projects[normalizedProjectId] = existing;
+  }
+  if (!existing.projectDir && input.projectDir) {
+    existing.projectDir = input.projectDir;
+  }
+  const aliasSet = new Set(existing.aliases ?? []);
+  aliasSet.add(existing.id);
+  if (existing.projectDir) {
+    aliasSet.add(existing.projectDir);
+  }
+  for (const alias of input.aliases ?? []) {
+    const normalizedAlias = deriveStableProjectKey(String(alias ?? ""));
+    if (normalizedAlias) {
+      aliasSet.add(normalizedAlias);
+    }
+  }
+  existing.aliases = Array.from(aliasSet);
+  existing.summary = input.summary || existing.summary;
+  existing.updatedAt = Math.max(existing.updatedAt || 0, input.updatedAt);
+  existing.lastUsedAt = Math.max(existing.lastUsedAt || 0, input.updatedAt);
+  return { projectId: existing.id, projectDir: existing.projectDir };
+}
+
+function resolveProjectIdentityForSession(
+  sessionKey: string,
+  state: TeamState | null,
+): { projectId?: string; projectDir?: string } | undefined {
+  const runId = findLatestControllerRunIdForSession(sessionKey, state, { preferActive: true });
+  if (!runId) {
+    return undefined;
+  }
+  const run = state?.controllerRuns[runId];
+  if (!run) {
+    return undefined;
+  }
+  const project = findProjectRecordByDir(state, run.projectDir);
+  return {
+    projectId: run.projectId ?? project?.id,
+    projectDir: run.projectDir ?? project?.projectDir,
+  };
+}
+
+function resolveProjectIdentityForTaskId(
+  taskId: string,
+  state: TeamState | null,
+): { projectId?: string; projectDir?: string } | undefined {
+  const task = state?.tasks?.[taskId];
+  if (!task) {
+    return undefined;
+  }
+  const project = findProjectRecordByDir(state, task.projectDir);
+  return {
+    projectId: task.projectId ?? project?.id,
+    projectDir: task.projectDir ?? project?.projectDir,
+  };
 }
 
 function extractProjectAliasFromText(text: string | undefined): string | null {
@@ -946,8 +1097,7 @@ function resolveProjectDirForSession(
   sessionKey: string,
   state: TeamState | null,
 ): string | undefined {
-  const runId = findLatestControllerRunIdForSession(sessionKey, state, { preferActive: true });
-  return runId ? state?.controllerRuns[runId]?.projectDir : undefined;
+  return resolveProjectIdentityForSession(sessionKey, state)?.projectDir;
 }
 
 function resolveControllerWorkflowSessionKey(task: TaskInfo, state: TeamState | null): string | undefined {
@@ -1121,15 +1271,16 @@ function buildBackfilledControllerManifest(
   for (const roleId of inferManifestRolesFromText(request)) {
     inferredRoles.add(roleId);
   }
-  // When no roles could be inferred at all (model didn't call the tool and didn't
-  // mention any role names), fall back to "developer" as the most general purpose role
-  // so that the intake run still has usable machine-readable state.
+  // When no roles could be inferred at all, default the first-pass requirement analysis
+  // to architect rather than developer. This keeps repository analysis, feasibility
+  // assessment, and technical decomposition out of implementation-only developer tasks.
   if (inferredRoles.size === 0) {
-    inferredRoles.add("developer");
+    inferredRoles.add("architect");
   }
   const clarificationQuestions = inferClarificationQuestionsFromReply(rawReply);
   return {
     version: "1.0",
+    projectName: actualCreatedTasks.find((task) => task.projectId)?.projectId,
     requirementSummary: request.replace(/\s+/g, " ").trim() || "Controller requirement summary unavailable.",
     requiredRoles: Array.from(inferredRoles),
     clarificationsNeeded: clarificationQuestions.length > 0 && actualCreatedTasks.length === 0,
@@ -1158,6 +1309,30 @@ function looksLikeSoftwareRequirement(request: string): boolean {
   return /(api|backend|frontend|fastapi|react|vue|node|python|typescript|javascript|sql|database|service|app|web|mobile|docker|kubernetes|deploy|测试|系统|平台|接口|服务|数据库|应用|前端|后端)/.test(normalized);
 }
 
+function isArchitectureFirstRequirement(request: string): boolean {
+  const normalized = request.toLowerCase();
+  return /(analy[sz]e|analysis|assess|feasibility|architecture|architect|design|plan|decompose|migration|port|rewrite|refactor|audit|review|repo|repository|codebase|golang|go\b|typescript|可行性|评估|架构|设计|分析|拆分|迁移|移植|重写|审计|仓库|代码库)/.test(normalized);
+}
+
+function chooseFallbackAssignedRole(manifest: ControllerOrchestrationManifest, request: string): RoleId {
+  const requiredRoles = manifest.requiredRoles;
+  if (requiredRoles.length === 0) {
+    return isArchitectureFirstRequirement(request) ? "architect" : "developer";
+  }
+  if (isArchitectureFirstRequirement(request)) {
+    if (requiredRoles.includes("architect")) {
+      return "architect";
+    }
+    if (requiredRoles.includes("pm")) {
+      return "pm";
+    }
+  }
+  if (requiredRoles.includes("developer") && requiredRoles.length === 1) {
+    return "developer";
+  }
+  return requiredRoles[0] ?? (isArchitectureFirstRequirement(request) ? "architect" : "developer");
+}
+
 function buildFallbackControllerTaskTitle(request: string, assignedRole?: RoleId): string {
   const firstMeaningfulLine = request
     .split(/\n+/)
@@ -1172,6 +1347,9 @@ function buildFallbackControllerTaskTitle(request: string, assignedRole?: RoleId
         : `Implement ${capped}`;
     }
   }
+  if (assignedRole === "architect") {
+    return "Analyze the repository and produce an architecture/feasibility plan";
+  }
   return assignedRole === "developer"
     ? "Implement the requested software deliverable"
     : `Perform the requested ${assignedRole || "software"} work`;
@@ -1185,6 +1363,7 @@ async function createControllerManagedTask(
     assignedRole?: RoleId;
     createdBy: string;
     controllerSessionKey?: string;
+    projectName?: string;
     recommendedSkills?: string[];
   },
   deps: ControllerHttpDeps,
@@ -1196,15 +1375,12 @@ async function createControllerManagedTask(
     ? normalizeControllerIntakeSessionKey(input.controllerSessionKey)
     : undefined;
 
-  let projectDir: string | undefined;
-  if (normalizedSessionKey) {
-    const runId = findLatestControllerRunIdForSession(normalizedSessionKey, deps.getTeamState(), { preferActive: true });
-    const parentRun = runId ? deps.getTeamState()?.controllerRuns[runId] : undefined;
-    projectDir = parentRun?.projectDir;
-  }
-  if (!projectDir) {
-    projectDir = deriveProjectSlug(input.title);
-  }
+  const inheritedProject = normalizedSessionKey
+    ? resolveProjectIdentityForSession(normalizedSessionKey, deps.getTeamState())
+    : undefined;
+  const explicitProjectId = deriveStableProjectKey(input.projectName ?? "");
+  const projectId = inheritedProject?.projectId ?? explicitProjectId || undefined;
+  const projectDir = inheritedProject?.projectDir ?? projectId ?? deriveProjectSlug(input.title);
 
   const normalizedRecommendedSkills = normalizeRecommendedSkills(input.recommendedSkills ?? []);
   const task: TaskInfo = {
@@ -1217,12 +1393,22 @@ async function createControllerManagedTask(
     createdBy: input.createdBy,
     recommendedSkills: normalizedRecommendedSkills.length > 0 ? normalizedRecommendedSkills : undefined,
     controllerSessionKey: normalizedSessionKey,
+    projectId,
     projectDir,
     createdAt: now,
     updatedAt: now,
   };
 
   deps.updateTeamState((state) => {
+    const project = syncProjectRegistryEntry(state, {
+      projectId: task.projectId,
+      projectDir: task.projectDir,
+      aliases: [input.projectName, task.projectId],
+      summary: task.title,
+      updatedAt: now,
+    });
+    task.projectId = project.projectId;
+    task.projectDir = project.projectDir;
     state.tasks[taskId] = task;
   });
   recordTaskExecutionEvent(taskId, {
@@ -1283,9 +1469,7 @@ async function maybeBackfillExecutionReadyTask(
     return [];
   }
 
-  const assignedRole = manifest.requiredRoles.includes("developer")
-    ? "developer"
-    : manifest.requiredRoles[0];
+  const assignedRole = chooseFallbackAssignedRole(manifest, request);
   const task = await createControllerManagedTask({
     title: buildFallbackControllerTaskTitle(request, assignedRole),
     description: request,
@@ -1528,17 +1712,43 @@ function normalizeComparableText(value: string): string {
 function buildManifestClarificationEntries(
   manifest: ControllerOrchestrationManifest,
 ): Array<{ question: string; questionSchema?: ClarificationRequest["questionSchema"] }> {
+  const opportunities = Array.isArray(manifest.completionOpportunities)
+    ? manifest.completionOpportunities.filter((entry) => entry.title && entry.value && entry.summary)
+    : [];
+  const completionEntries = manifest.requirementFullyComplete && opportunities.length > 0
+    ? [{
+      question: "Would you like TeamClaw to continue with one of these adjacent next steps?",
+      questionSchema: {
+        kind: "single-select" as const,
+        title: "What should TeamClaw do next?",
+        description: opportunities.map((entry) => `- ${entry.title}: ${entry.summary}`).join("\n"),
+        required: false,
+        options: opportunities.map((entry) => ({
+          value: entry.value,
+          label: entry.title,
+          hint: entry.summary,
+        })),
+        allowOther: true,
+      },
+    }]
+    : [];
   const normalizedQuestions = manifest.clarificationQuestions
     .map((entry) => String(entry || "").trim())
     .filter(Boolean);
   const schemas = Array.isArray(manifest.clarificationSchemas) ? manifest.clarificationSchemas : [];
   if (schemas.length > 0) {
-    return schemas.map((schema, index) => ({
-      question: normalizedQuestions[index] || schema.title,
-      questionSchema: schema,
-    }));
+    return [
+      ...schemas.map((schema, index) => ({
+        question: normalizedQuestions[index] || schema.title,
+        questionSchema: schema,
+      })),
+      ...completionEntries,
+    ];
   }
-  return normalizedQuestions.map((question) => ({ question }));
+  return [
+    ...normalizedQuestions.map((question) => ({ question })),
+    ...completionEntries,
+  ];
 }
 
 function syncControllerRunClarifications(
@@ -1548,18 +1758,32 @@ function syncControllerRunClarifications(
   deps: ControllerHttpDeps,
 ): ClarificationRequest[] {
   const entries = buildManifestClarificationEntries(manifest);
-  if (entries.length === 0) {
-    return [];
-  }
-
   const created: ClarificationRequest[] = [];
+  const superseded: ClarificationRequest[] = [];
   const now = Date.now();
   deps.updateTeamState((state) => {
+    const desiredQuestionKeys = new Set(
+      entries.map((entry) => normalizeComparableText(entry.question)),
+    );
     const existingQuestions = new Map(
       Object.values(state.clarifications)
         .filter((item) => item.controllerRunId === controllerRunId)
         .map((item) => [normalizeComparableText(item.question), item]),
     );
+
+    for (const [key, clarification] of existingQuestions.entries()) {
+      if (
+        clarification.status === "pending"
+        && !desiredQuestionKeys.has(key)
+      ) {
+        clarification.status = "answered";
+        clarification.answer = "Automatically superseded by the latest controller clarification set.";
+        clarification.answeredBy = "system";
+        clarification.answeredAt = now;
+        clarification.updatedAt = now;
+        superseded.push({ ...clarification });
+      }
+    }
 
     for (const entry of entries) {
       const key = normalizeComparableText(entry.question);
@@ -1588,6 +1812,9 @@ function syncControllerRunClarifications(
   for (const clarification of created) {
     deps.wsServer.broadcastUpdate({ type: "clarification:requested", data: clarification });
   }
+  for (const clarification of superseded) {
+    deps.wsServer.broadcastUpdate({ type: "clarification:answered", data: clarification });
+  }
   return created;
 }
 
@@ -1597,6 +1824,7 @@ function reconcileControllerClarifications(deps: ControllerHttpDeps): TeamState 
     return null;
   }
 
+  const superseded: ClarificationRequest[] = [];
   deps.updateTeamState((draft) => {
     const runsBySession = new Map<string, ControllerRunInfo[]>();
     for (const run of Object.values(draft.controllerRuns)) {
@@ -1627,8 +1855,13 @@ function reconcileControllerClarifications(deps: ControllerHttpDeps): TeamState 
       clar.answeredBy = "system";
       clar.answeredAt = supersedingRun.updatedAt;
       clar.updatedAt = supersedingRun.updatedAt;
+      superseded.push({ ...clar });
     }
   });
+
+  for (const clarification of superseded) {
+    deps.wsServer.broadcastUpdate({ type: "clarification:answered", data: clarification });
+  }
 
   for (const run of Object.values(state.controllerRuns)) {
     if (!run.manifest?.clarificationsNeeded) {
@@ -2261,6 +2494,49 @@ function buildRecommendedSkillsContext(task: TaskInfo): string {
     "- Before starting, search/install missing recommended skills in the current workspace when the runtime supports it.",
     "- Prefer exact ClawHub/OpenClaw skill slugs over vague descriptions whenever possible.",
   ].join("\n");
+}
+
+function buildTaskContextSnapshot(task: TaskInfo, state: TeamState | null): TaskAssignmentPayload["teamContext"] | undefined {
+  if (!state || !task.controllerSessionKey) {
+    return undefined;
+  }
+  const normalizedSessionKey = normalizeControllerIntakeSessionKey(task.controllerSessionKey);
+  const summarize = (candidate: TaskInfo) => ({
+    id: candidate.id,
+    title: candidate.title,
+    assignedRole: candidate.assignedRole,
+    status: candidate.status,
+    summary: summarizeTaskForAssignment(candidate),
+  });
+  const sameSessionTasks = Object.values(state.tasks)
+    .filter((candidate) => candidate.id !== task.id)
+    .filter((candidate) => normalizeControllerIntakeSessionKey(candidate.controllerSessionKey) === normalizedSessionKey);
+  const latestRun = Object.values(state.controllerRuns)
+    .filter((run) => normalizeControllerIntakeSessionKey(run.sessionKey) === normalizedSessionKey)
+    .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+  return {
+    requirementSummary: latestRun?.manifest?.requirementSummary || latestRun?.request,
+    projectName: latestRun?.manifest?.projectName,
+    requiredRoles: latestRun?.manifest?.requiredRoles,
+    activeTasks: sameSessionTasks.filter((candidate) => candidate.status === "assigned" || candidate.status === "in_progress").slice(0, 8).map(summarize),
+    blockedTasks: sameSessionTasks.filter((candidate) => candidate.status === "blocked").slice(0, 6).map(summarize),
+    recentCompletedTasks: sameSessionTasks
+      .filter((candidate) => candidate.status === "completed")
+      .sort((a, b) => (b.completedAt ?? b.updatedAt) - (a.completedAt ?? a.updatedAt))
+      .slice(0, 8)
+      .map(summarize),
+    pendingClarifications: Object.values(state.clarifications)
+      .filter((clarification) => clarification.status === "pending")
+      .filter((clarification) => normalizeControllerIntakeSessionKey(clarification.controllerSessionKey) === normalizedSessionKey)
+      .slice(0, 5)
+      .map((clarification) => ({
+        question: clarification.question,
+        blockingReason: clarification.blockingReason,
+      })),
+    handoffPlan: latestRun?.manifest?.handoffPlan,
+    notes: latestRun?.manifest?.notes,
+    kickoffSummary: latestRun?.manifest?.kickoffPlan?.summary,
+  };
 }
 
 function buildTaskAssignmentDescription(task: TaskInfo, state: TeamState | null, repoInfo?: RepoSyncInfo): string {
@@ -3326,6 +3602,7 @@ async function dispatchTaskToWorker(
     executionSessionKey: executionIdentity.executionSessionKey,
     executionIdempotencyKey: executionIdentity.executionIdempotencyKey,
     repo: repoInfo,
+    teamContext: buildTaskContextSnapshot(task, state ?? null),
   };
 
   const res = await fetch(`${worker.url}/api/v1/tasks/assign`, {
@@ -3757,6 +4034,9 @@ async function handleRequest(
     const controllerSessionKey = createdBy === "controller" && typeof body.controllerSessionKey === "string" && body.controllerSessionKey.trim()
       ? normalizeControllerIntakeSessionKey(body.controllerSessionKey)
       : undefined;
+    const explicitProjectName = typeof body.projectName === "string" && body.projectName.trim()
+      ? deriveStableProjectKey(body.projectName)
+      : undefined;
     const recommendedSkills = normalizeRecommendedSkills(
       Array.isArray(body.recommendedSkills) ? body.recommendedSkills.map((entry) => String(entry ?? "")) : [],
     );
@@ -3781,16 +4061,11 @@ async function handleRequest(
     const now = Date.now();
     const repoState = await refreshControllerRepoState(deps);
 
-    // Resolve project directory: inherit from parent run, or generate from title
-    let projectDir: string | undefined;
-    if (controllerSessionKey) {
-      const runId = findLatestControllerRunIdForSession(controllerSessionKey, getTeamState(), { preferActive: true });
-      const parentRun = runId ? getTeamState()?.controllerRuns[runId] : undefined;
-      projectDir = parentRun?.projectDir;
-    }
-    if (!projectDir) {
-      projectDir = deriveProjectSlug(title);
-    }
+    const inheritedProject = controllerSessionKey
+      ? resolveProjectIdentityForSession(controllerSessionKey, getTeamState())
+      : undefined;
+    const projectId = inheritedProject?.projectId ?? explicitProjectName || undefined;
+    const projectDir = inheritedProject?.projectDir ?? projectId ?? deriveProjectSlug(title);
 
     const task: TaskInfo = {
       id: taskId,
@@ -3802,12 +4077,22 @@ async function handleRequest(
       createdBy,
       recommendedSkills: recommendedSkills.length > 0 ? recommendedSkills : undefined,
       controllerSessionKey,
+      projectId,
       projectDir,
       createdAt: now,
       updatedAt: now,
     };
 
     updateTeamState((s) => {
+      const project = syncProjectRegistryEntry(s, {
+        projectId: task.projectId,
+        projectDir: task.projectDir,
+        aliases: [explicitProjectName, task.projectId],
+        summary: task.title,
+        updatedAt: now,
+      });
+      task.projectId = project.projectId;
+      task.projectDir = project.projectDir;
       s.tasks[taskId] = task;
     });
     recordTaskExecutionEvent(taskId, {
@@ -4409,14 +4694,31 @@ async function handleRequest(
 
     const updatedRun = updateControllerRun(runId, deps, (run) => {
       run.manifest = manifest;
+      const state = deps.getTeamState();
+      if (state) {
+        const project = syncProjectRegistryEntry(state, {
+          projectId: manifest.projectName ?? run.projectId,
+          projectDir: run.projectDir ?? manifest.projectName,
+          aliases: [manifest.projectName, run.projectId],
+          summary: manifest.requirementSummary,
+          updatedAt: Date.now(),
+        });
+        run.projectId = project.projectId;
+        run.projectDir = project.projectDir;
+      }
 
       if (run.projectDir) {
         const state = deps.getTeamState();
         if (state) {
           for (const taskId of run.createdTaskIds) {
             const task = state.tasks[taskId];
-            if (task && !task.projectDir) {
-              task.projectDir = run.projectDir;
+            if (task) {
+              if (!task.projectDir) {
+                task.projectDir = run.projectDir;
+              }
+              if (!task.projectId) {
+                task.projectId = run.projectId;
+              }
             }
           }
         }

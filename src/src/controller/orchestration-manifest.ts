@@ -1,11 +1,13 @@
 import type {
   ClarificationQuestionOption,
   ClarificationQuestionSchema,
+  ControllerManifestCompletionOpportunity,
   ControllerManifestCreatedTask,
   ControllerManifestDeferredTask,
   ControllerOrchestrationManifest,
   RoleId,
 } from "../types.js";
+import { deriveStableProjectKey } from "../openclaw-workspace.js";
 
 const TEAMCLAW_ROLE_IDS = new Set<RoleId>([
   "pm",
@@ -145,6 +147,20 @@ export function normalizeManifestDeferredTasks(raw: unknown): ControllerManifest
     .filter((entry) => entry.title && entry.blockedBy && entry.whenReady);
 }
 
+export function normalizeManifestCompletionOpportunities(raw: unknown): ControllerManifestCompletionOpportunity[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  return raw
+    .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object")
+    .map((entry) => ({
+      title: typeof entry.title === "string" ? entry.title.trim() : "",
+      value: typeof entry.value === "string" ? entry.value.trim() : "",
+      summary: typeof entry.summary === "string" ? entry.summary.trim() : "",
+    }))
+    .filter((entry) => entry.title && entry.value && entry.summary);
+}
+
 export function normalizeControllerManifest(raw: unknown): ControllerOrchestrationManifest | null {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -158,7 +174,9 @@ export function normalizeControllerManifest(raw: unknown): ControllerOrchestrati
   const clarificationQuestions = normalizeManifestStringList(input.clarificationQuestions);
   return {
     version: typeof input.version === "string" && input.version.trim() ? input.version.trim() : "1.0",
-    projectName: typeof input.projectName === "string" && input.projectName.trim() ? input.projectName.trim() : undefined,
+    projectName: typeof input.projectName === "string" && input.projectName.trim()
+      ? (deriveStableProjectKey(input.projectName.trim()) || input.projectName.trim())
+      : undefined,
     requirementSummary,
     requiredRoles: normalizeManifestRoleList(input.requiredRoles),
     clarificationsNeeded: Boolean(input.clarificationsNeeded),
@@ -168,6 +186,7 @@ export function normalizeControllerManifest(raw: unknown): ControllerOrchestrati
     deferredTasks: normalizeManifestDeferredTasks(input.deferredTasks),
     handoffPlan: normalizeOptionalManifestText(input.handoffPlan),
     notes: normalizeOptionalManifestText(input.notes),
+    completionOpportunities: normalizeManifestCompletionOpportunities(input.completionOpportunities),
     requirementFullyComplete: Boolean(input.requirementFullyComplete),
   };
 }

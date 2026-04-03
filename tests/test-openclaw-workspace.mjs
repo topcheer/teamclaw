@@ -24,6 +24,8 @@ const workerToolsPath = path.join(projectRoot, "src", "src", "worker", "tools.ts
 const statePath = path.join(projectRoot, "src", "src", "state.ts");
 const configPath = path.join(projectRoot, "src", "src", "config.ts");
 const promptPolicyPath = path.join(projectRoot, "src", "src", "prompt-policy.ts");
+const controllerPromptInjectorPath = path.join(projectRoot, "src", "src", "controller", "prompt-injector.ts");
+const controllerToolsPath = path.join(projectRoot, "src", "src", "controller", "controller-tools.ts");
 
 const [
   workspaceSource,
@@ -43,6 +45,8 @@ const [
   stateSource,
   configSource,
   promptPolicySource,
+  controllerPromptInjectorSource,
+  controllerToolsSource,
 ] = await Promise.all([
   fs.readFile(workspaceSourcePath, "utf8"),
   fs.readFile(workerProvisioningPath, "utf8"),
@@ -61,7 +65,15 @@ const [
   fs.readFile(statePath, "utf8"),
   fs.readFile(configPath, "utf8"),
   fs.readFile(promptPolicyPath, "utf8"),
+  fs.readFile(controllerPromptInjectorPath, "utf8"),
+  fs.readFile(controllerToolsPath, "utf8"),
 ]);
+
+assert.match(
+  workspaceSource,
+  /export function deriveStableProjectKey\(text: string\): string \{[\s\S]*replace\(\/\[\^a-z0-9\]\+\/g, "-"\)/,
+  "openclaw-workspace should expose a stable project key normalizer for registry-backed reuse",
+);
 
 assert.match(
   workspaceSource,
@@ -358,6 +370,60 @@ assert.match(
 );
 
 assert.match(
+  desktopRendererSource,
+  /case "controller:run":[\s\S]*upsertControllerRunState\(data\);[\s\S]*renderMissionSummary\(\);[\s\S]*renderPlanning\(\);[\s\S]*renderChrome\(\);/,
+  "desktop renderer should fully refresh mission and planning chrome when controller run websocket updates arrive",
+);
+
+assert.match(
+  desktopRendererSource,
+  /const getScopedField = \(selector\) => \{[\s\S]*card\.querySelector\(selector\) \|\| document\.querySelector\(selector\);[\s\S]*const textarea = getScopedField\(`\[data-clarification-answer="\$\{CSS\.escape\(id\)\}"\]`\);[\s\S]*setStatusLine\('Please provide an answer before submitting\.'\);/,
+  "desktop clarification submit should read answers from the active modal card before falling back to the page list and should surface empty-answer guidance",
+);
+
+assert.match(
+  desktopRendererSource,
+  /function renderClarificationAnswerForm\(item, scopeKey\) \{[\s\S]*controlHtml = `<textarea data-clarification-answer="\$\{escapeHtml\(id\)\}"[\s\S]*`<div class="clarification-form" data-clarification-card="\$\{escapeHtml\(id\)\}">`/,
+  "desktop clarification forms should wrap even plain-text answers in a scoped clarification card so modal submits read the active prompt inputs",
+);
+
+assert.match(
+  desktopRendererSource,
+  /async function apiGetOptional\(path, fallbackValue\) \{[\s\S]*response\.status === 404[\s\S]*return fallbackValue;[\s\S]*async function refreshReports\(\) \{[\s\S]*apiGetOptional\("\/reports", \{ reports: \[\] \}\)[\s\S]*Promise\.all\(\[[\s\S]*apiGetOptional\("\/reports", \{ reports: \[\] \}\)/,
+  "desktop renderer should treat /reports as an optional capability instead of marking the controller unavailable on 404",
+);
+
+assert.match(
+  desktopRendererSource,
+  /function renderChrome\(\) \{[\s\S]*renderActivitySignals\(\);[\s\S]*renderUnavailableScreen\(\);[\s\S]*\}/,
+  "desktop chrome rendering should stay lightweight and avoid rebuilding the clarification modal on every status refresh",
+);
+
+assert.match(
+  desktopRendererSource,
+  /function getClarificationPromptSignature\(item\)[\s\S]*state\.clarificationDrafts\[id\] = draft;[\s\S]*restoreClarificationDraft\(active\.id, content\);/,
+  "desktop clarification modal should preserve active drafts across the remaining prompt rerenders that are actually needed",
+);
+
+assert.match(
+  desktopRendererSource,
+  /function splitMarkdownTableRow\(line\)[\s\S]*function isMarkdownTableStart\(lines, index\)[\s\S]*function renderMarkdownTable\(lines, startIndex\)[\s\S]*markdown-table-wrap/,
+  "desktop renderer markdown parser should recognize and render GitHub-style pipe tables",
+);
+
+assert.match(
+  desktopStyleSource,
+  /\.markdown-table-wrap\s*\{[\s\S]*overflow-x:\s*auto;[\s\S]*\.markdown-body table\s*\{[\s\S]*border-collapse:\s*collapse;[\s\S]*\.markdown-body th,[\s\S]*\.markdown-body td\s*\{/,
+  "desktop markdown styles should include scrollable, bordered table presentation",
+);
+
+assert.match(
+  desktopStyleSource,
+  /\.task-group-title\s*\{[\s\S]*overflow:\s*hidden;[\s\S]*-webkit-line-clamp:\s*2;[\s\S]*word-break:\s*break-word;/,
+  "desktop task group titles should clamp long project names instead of expanding indefinitely",
+);
+
+assert.match(
   workerToolsSource,
   /const progress = normalizeProgressText\(params\);[\s\S]*if \(!progress\) \{/,
   "worker progress tool should use normalized progress text before rejecting an update",
@@ -367,6 +433,54 @@ assert.match(
   workerToolsSource,
   /name: "teamclaw_request_parallel_help"[\s\S]*requestedWorkerCount[\s\S]*suggestedWorkstreams[\s\S]*fetch\(`\$\{identity\.controllerUrl\}\/api\/v1\/tasks\/\$\{taskId\}\/parallel-help`/,
   "worker tools should expose a controller-backed parallel-help request tool for scale-out",
+);
+
+assert.match(
+  stateSource,
+  /if \(!parsed\.projects \|\| typeof parsed\.projects !== "object"\) \{[\s\S]*parsed\.projects = \{\};[\s\S]*state\.projects = state\.projects && typeof state\.projects === "object"/,
+  "team state persistence should normalize a projects registry for stable project identity reuse",
+);
+
+assert.match(
+  controllerToolsSource,
+  /projectName: Type\.Optional\(Type\.String\({ description: "Stable project key to reuse or create for this task/,
+  "controller create-task tool should allow passing an explicit stable project name",
+);
+
+assert.match(
+  controllerPromptInjectorSource,
+  /for \(const project of Object\.values\(state\.projects \?\? \{\}\)\)[\s\S]*aliases: /,
+  "controller prompt injector should surface registered projects and aliases before falling back to task-derived directories",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /const GENERIC_PROJECT_FOLLOW_UP_RE =[\s\S]*function syncProjectRegistryEntry\([\s\S]*function resolveProjectIdentityForSession\(/,
+  "controller http server should maintain a stable project registry and resolve project identity beyond session inheritance",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /createControllerRun\([\s\S]*resolveExistingProjectIdentityFromMessage\(message, existingState\)[\s\S]*projectId: projectId \|\| undefined,[\s\S]*syncProjectRegistryEntry\(teamState,/,
+  "controller intake should register and reuse stable project identity when creating runs",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /projectName: actualCreatedTasks\.find\(\(task\) => task\.projectId\)\?\.projectId/,
+  "backfilled controller manifests should preserve the created task project identity",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /const explicitProjectName = typeof body\.projectName === "string"[\s\S]*const projectId = inheritedProject\?\.projectId \?\? explicitProjectName \|\| undefined[\s\S]*task\.projectId = project\.projectId;/,
+  "controller task creation should preserve stable project identity across sessions and explicit project names",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /run\.manifest = manifest;[\s\S]*projectId: manifest\.projectName \?\? run\.projectId,[\s\S]*run\.projectId = project\.projectId;[\s\S]*if \(!task\.projectId\) \{\s*task\.projectId = run\.projectId;/,
+  "controller manifest submission should sync canonical project identity back onto runs and created tasks",
 );
 
 assert.match(
@@ -391,6 +505,12 @@ assert.match(
   controllerHttpServerSource,
   /const supersedingRun = sessionRuns\.find\(\(run\) =>[\s\S]*run\.manifest\?\.createdTasks\.length[\s\S]*run\.manifest\?\.requirementFullyComplete[\s\S]*\),/,
   "controller clarification superseding should require real downstream progress instead of any completed follow-up run",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /const desiredQuestionKeys = new Set\([\s\S]*entries\.map\(\(entry\) => normalizeComparableText\(entry\.question\)\)[\s\S]*clarification\.status === "pending"[\s\S]*!desiredQuestionKeys\.has\(key\)[\s\S]*Automatically superseded by the latest controller clarification set\./,
+  "controller clarification sync should retire stale pending questions when a newer run replaces the clarification set",
 );
 
 assert.doesNotMatch(
@@ -431,6 +551,12 @@ assert.match(
 
 assert.match(
   controllerHttpServerSource,
+  /if \(inferredRoles\.size === 0\) \{[\s\S]*inferredRoles\.add\("architect"\);[\s\S]*function isArchitectureFirstRequirement\(request: string\)[\s\S]*function chooseFallbackAssignedRole\(manifest: ControllerOrchestrationManifest, request: string\): RoleId[\s\S]*const assignedRole = chooseFallbackAssignedRole\(manifest, request\);/,
+  "controller fallback intake routing should default architecture-first requirements to architect instead of blindly preferring developer",
+);
+
+assert.match(
+  controllerHttpServerSource,
   /POST \/api\/v1\/tasks\/:id\/parallel-help[\s\S]*recordTaskExecutionEvent\([\s\S]*parallel_help_requested[\s\S]*runControllerIntake\([\s\S]*buildControllerParallelHelpMessage\(/,
   "controller should accept worker parallel-help requests, log an execution event, and trigger a follow-up orchestration run",
 );
@@ -467,6 +593,36 @@ assert.match(
 
 assert.match(
   promptPolicySource,
+  /Route repository analysis, architecture design, feasibility assessment, migration planning, and large rewrite decomposition to architect first\./,
+  "controller intake rules should explicitly route architecture-first and migration-analysis work to architect before developer",
+);
+
+assert.match(
+  promptPolicySource,
+  /Do not infer ownership, license scope, or lack of user authorization from technical characteristics such as proprietary branding, bundled assets, binary files, minified code, or repository layout\./,
+  "role operating rules should forbid ownership judgments based on repository technical characteristics",
+);
+
+assert.match(
+  promptPolicySource,
+  /Do not infer that the user lacks rights to inspect, modify, port, rename, or rebrand code merely because a repository contains bundled, binary, generated, minified, or vendor-branded material\./,
+  "task execution rules should keep workers focused on technical work instead of guessing authorization from code shape",
+);
+
+assert.match(
+  promptPolicySource,
+  /Do not reject, moralize, or speculate about ownership merely because code appears bundled, binary-adjacent, generated, minified, vendor-branded, or otherwise unusual\./,
+  "controller intake rules should forbid ownership speculation from unusual codebase structure",
+);
+
+assert.match(
+  controllerPromptInjectorSource,
+  /Do not infer that the user lacks rights to work on a codebase just because it contains binaries, bundles, minified code, generated artifacts, proprietary branding, or unusual repository structure\./,
+  "controller prompt injection should remind TeamClaw to stay technical instead of making ownership judgments",
+);
+
+assert.match(
+  promptPolicySource,
   /Do not create new tasks, parallel workstreams, or extra backlog items on your own\.[\s\S]*ask the controller to expand parallel help instead of silently carrying the whole backlog alone/,
   "worker prompt policy should forbid self-created task trees while explicitly allowing controller-mediated parallel-help requests",
 );
@@ -475,6 +631,30 @@ assert.match(
   promptPolicySource,
   /Do NOT create new tasks, duplicate an existing task, or start a parallel task tree\.[\s\S]*use the controller-facing parallel-help tool instead of silently continuing as one giant serial task/,
   "worker session rules should direct large same-role decomposition requests through the parallel-help tool",
+);
+
+assert.match(
+  promptPolicySource,
+  /Default to completing implementation work in your current worker session\.[\s\S]*Only use a helper coding agent when there is a concrete capability gap[\s\S]*Never ask a helper coding agent to take over the whole TeamClaw task\./,
+  "worker execution rules should strongly constrain nested coding-agent delegation",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /function buildTaskContextSnapshot\([\s\S]*requirementSummary:[\s\S]*recentCompletedTasks:[\s\S]*kickoffSummary:/,
+  "controller should build a richer same-session context snapshot for worker assignments",
+);
+
+assert.match(
+  taskExecutorSource,
+  /teamContext: assignment\.teamContext[\s\S]*function buildTaskMessage\([\s\S]*## TeamClaw Requirement Context/,
+  "task executor should include packed TeamClaw requirement context in worker task prompts",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /Would you like TeamClaw to continue with one of these adjacent next steps\?/,
+  "controller should surface completion opportunities as a structured next-step clarification prompt",
 );
 
 assert.match(
