@@ -21,11 +21,14 @@ const desktopPreloadPath = path.join(projectRoot, "desktop", "preload.mjs");
 const pluginEntryPath = path.join(projectRoot, "src", "index.ts");
 const openClawWorkspacePath = path.join(projectRoot, "src", "src", "openclaw-workspace.ts");
 const workerToolsPath = path.join(projectRoot, "src", "src", "worker", "tools.ts");
+const workerServicePath = path.join(projectRoot, "src", "src", "worker", "worker-service.ts");
 const statePath = path.join(projectRoot, "src", "src", "state.ts");
 const configPath = path.join(projectRoot, "src", "src", "config.ts");
 const promptPolicyPath = path.join(projectRoot, "src", "src", "prompt-policy.ts");
 const controllerPromptInjectorPath = path.join(projectRoot, "src", "src", "controller", "prompt-injector.ts");
 const controllerToolsPath = path.join(projectRoot, "src", "src", "controller", "controller-tools.ts");
+const websocketPath = path.join(projectRoot, "src", "src", "controller", "websocket.ts");
+const gitCollaborationPath = path.join(projectRoot, "src", "src", "git-collaboration.ts");
 
 const [
   workspaceSource,
@@ -42,11 +45,14 @@ const [
   pluginEntrySource,
   openClawWorkspaceSource,
   workerToolsSource,
+  workerServiceSource,
   stateSource,
   configSource,
   promptPolicySource,
   controllerPromptInjectorSource,
   controllerToolsSource,
+  websocketSource,
+  gitCollaborationSource,
 ] = await Promise.all([
   fs.readFile(workspaceSourcePath, "utf8"),
   fs.readFile(workerProvisioningPath, "utf8"),
@@ -62,12 +68,17 @@ const [
   fs.readFile(pluginEntryPath, "utf8"),
   fs.readFile(openClawWorkspacePath, "utf8"),
   fs.readFile(workerToolsPath, "utf8"),
+  fs.readFile(workerServicePath, "utf8"),
   fs.readFile(statePath, "utf8"),
   fs.readFile(configPath, "utf8"),
   fs.readFile(promptPolicyPath, "utf8"),
   fs.readFile(controllerPromptInjectorPath, "utf8"),
   fs.readFile(controllerToolsPath, "utf8"),
+  fs.readFile(websocketPath, "utf8"),
+  fs.readFile(gitCollaborationPath, "utf8"),
 ]);
+
+const desktopAppSource = desktopRendererSource;
 
 assert.match(
   workspaceSource,
@@ -91,6 +102,24 @@ assert.match(
   workspaceSource,
   /export function getTeamClawModelReadiness\([\s\S]*resolveConfiguredTeamClawModelValue[\s\S]*auth-profiles\.json/,
   "openclaw-workspace should expose TeamClaw model/auth readiness inspection",
+);
+
+assert.match(
+  configSource,
+  /taskTimeoutMs:[\s\S]*default: 600000/,
+  "default task stall threshold should be 10 minutes so LLM inactivity probes trigger promptly",
+);
+
+assert.match(
+  workerProvisioningSource,
+  /teamclawConfig\.taskTimeoutMs = controllerConfig\.taskTimeoutMs/,
+  "provisioned workers should inherit the controller task stall threshold for consistent probe timing",
+);
+
+assert.match(
+  workerServiceSource,
+  /let consecutiveHeartbeatFailures = 0;[\s\S]*if \(!res\.ok\) \{[\s\S]*consecutiveHeartbeatFailures \+= 1;[\s\S]*identityManager\.clear\(\)[\s\S]*await startServer\(\)[\s\S]*\} else \{[\s\S]*consecutiveHeartbeatFailures = 0;[\s\S]*\}[\s\S]*catch \(err\) \{[\s\S]*consecutiveHeartbeatFailures \+= 1;[\s\S]*identityManager\.clear\(\)[\s\S]*await startServer\(\)/,
+  "worker heartbeat logic should force identity reset and re-registration after repeated controller heartbeat failures",
 );
 
 assert.match(
@@ -223,6 +252,114 @@ assert.match(
   desktopRendererSource,
   /function activateView\(view\)[\s\S]*function renderPlanning\(\)[\s\S]*function renderTasks\([\s\S]*async function renderTaskDetail\(taskId\)[\s\S]*function renderWorkspaceTree\(\)[\s\S]*async function loadWorkspaceFile\(relativePath\)/,
   "desktop renderer should keep core mission, planning, task, and workspace render functions defined",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /if \(req\.method === "GET" && pathname === "\/api\/v1\/workspace\/project-path"\) \{[\s\S]*resolveSafeProjectDirectory\(projectDir\)[\s\S]*absolutePath[\s\S]*sendJson\(res, 200, \{[\s\S]*absolutePath,/,
+  "controller should expose a safe local project-path endpoint for desktop shell integrations",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /function looksLikeSoftwareRequirement\(request: string\): boolean \{[\s\S]*stderr[\s\S]*stdout[\s\S]*日志[\s\S]*输出[\s\S]*配置[\s\S]*文件/,
+  "controller should treat common code-change requests like logging, output, config, and file behavior as software requirements",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /if \(requiredRoles\.length === 1 && requiredRoles\[0\] === "architect" && implementationLikeRequest\) \{[\s\S]*return "developer";/,
+  "fallback role selection should prefer developer when a backfilled architect-only manifest actually describes implementation work",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /const likelyTechnicalRequest = looksLikeSoftwareRequirement\(request\)[\s\S]*manifest\.requiredRoles\.length > 0[\s\S]*日志\|输出\|文件\|配置\|命令\|修复\|实现\|修改[\s\S]*if \(!likelyTechnicalRequest\) \{/,
+  "fallback task creation should still trigger for simple technical requests even when the original manifest was backfilled",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /function looksLikeManualExecutionClarification\(question: string\): boolean \{[\s\S]*git pull[\s\S]*go build[\s\S]*still crash/,
+  "controller should recognize manual run/rebuild/repro clarification prompts as execution candidates",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /async function maybeConvertControllerClarificationToExecutionTask\([\s\S]*manifest\.clarificationsNeeded = false;[\s\S]*phase: "clarification_converted_to_task"/,
+  "controller should convert manual-action clarifications into execution-ready tasks instead of blocking on human input",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /const convertedClarificationTaskIds = await maybeConvertControllerClarificationToExecutionTask\([\s\S]*syncControllerRunClarifications\(controllerRun\.id, sessionKey, recordedManifest, deps\);/,
+  "controller intake should convert manual-action clarifications before syncing pending clarification state",
+);
+
+assert.match(
+  promptPolicySource,
+  /Never ask the human to manually run an obvious machine step such as rebuild\/retest\/repro\/verification[\s\S]*git pull[\s\S]*go build[\s\S]*TeamClaw can create an execution task and do that work itself\./,
+  "controller discipline should forbid escalating obvious execution steps into human clarifications",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /answeredClarifications: Object\.values\(state\.clarifications\)[\s\S]*clarification\.status === "answered" && clarification\.answer[\s\S]*clarification\.taskId === task\.id[\s\S]*answer: clarification\.answer \|\| ""/,
+  "task context snapshot should include recent answered clarifications for resumed work",
+);
+
+assert.match(
+  taskExecutorSource,
+  /Recently answered clarifications \(treat these as authoritative and do not ask the same question again unless the answer is still objectively missing or invalid\):[\s\S]*A: \$\{clarification\.answer\}/,
+  "task executor prompt should show answered clarification history so workers do not re-ask the same question",
+);
+
+assert.match(
+  desktopMainSource,
+  /ipcMain\.handle\("shell:openPath", async \(_event, targetPath\) => \{[\s\S]*shell\.openPath\(String\(targetPath \|\| ""\)\)/,
+  "desktop main process should expose a shell.openPath bridge for opening local project folders",
+);
+
+assert.match(
+  desktopPreloadSource,
+  /openPath: \(targetPath\) => ipcRenderer\.invoke\("shell:openPath", targetPath\)/,
+  "desktop preload should expose openPath to the renderer",
+);
+
+assert.match(
+  desktopRendererSource,
+  /function canOpenProjectInFinder\(\) \{[\s\S]*isLoopbackControllerUrl\(state\.controllerUrl\)[\s\S]*async function openProjectInFinder\(projectDir, sourceLabel\) \{[\s\S]*\/workspace\/project-path\?projectDir=\$\{encodeURIComponent\(projectDir\)\}[\s\S]*desktop\.openPath\(data\.absolutePath \|\| ""\)/,
+  "desktop renderer should only offer Finder opening for local controllers and resolve the project path via the controller before opening it",
+);
+
+assert.match(
+  desktopRendererSource,
+  /data-open-project-finder="[\s\S]*Finder[\s\S]*target\.closest\('\[data-open-project-finder\]'\)/,
+  "desktop workspace tree should render a Finder action for local project directories and wire its click handler",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /const progressSnapshot:[\s\S]*fingerprints:[\s\S]*latestMessages:[\s\S]*const syncControllerSessionProgress = async \(\): Promise<void> => \{[\s\S]*getSessionMessages\({[\s\S]*buildSessionProgressEntries\(progressSnapshot\.latestMessages, message\)[\s\S]*recordControllerRunEvent\(controllerRun\.id, \{/,
+  "controller intake should summarize LLM session messages into planning timeline progress events",
+);
+
+assert.match(
+  desktopRendererSource,
+  /function renderExecutionEventTitle\(event\) \{[\s\S]*event && event\.stream === "assistant"[\s\S]*event && event\.stream === "tool"[\s\S]*renderPlanningExecutionEventEntry\(event\) \{[\s\S]*renderExecutionEventTitle\(event\)/,
+  "desktop planning timeline should label assistant and tool session events distinctly",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /if \(source === "task_follow_up"\) \{[\s\S]*compactSourceTitle[\s\S]*Controller follow-up after \$\{compactSourceTitle\}/,
+  "controller follow-up run titles should compact the source task title instead of letting long text dominate the visible label",
+);
+
+assert.match(
+  desktopRendererSource,
+  /const detailTitle = selectedRun\.source === "task_follow_up"[\s\S]*selectedRun\.title \|\| manifest\.requirementSummary[\s\S]*<div class="detail-title">\$\{escapeHtml\(detailTitle\)\}<\/div>/,
+  "desktop planning detail should prefer the compact follow-up run title over the full requirement summary for follow-up runs",
 );
 
 assert.match(
@@ -559,6 +696,162 @@ assert.match(
   controllerHttpServerSource,
   /POST \/api\/v1\/tasks\/:id\/parallel-help[\s\S]*recordTaskExecutionEvent\([\s\S]*parallel_help_requested[\s\S]*runControllerIntake\([\s\S]*buildControllerParallelHelpMessage\(/,
   "controller should accept worker parallel-help requests, log an execution event, and trigger a follow-up orchestration run",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /async function deleteTaskCascade\([\s\S]*cancelTaskExecution\(taskId, existingTask\.assignedWorkerId, "cleanup deletion", deps\)[\s\S]*stopTaskPreviews\(taskId, "task deleted during cleanup"\)[\s\S]*delete state\.tasks\[taskId\][\s\S]*clarification\.taskId === taskId[\s\S]*message\.taskId === taskId/,
+  "task cleanup should cascade through active execution, previews, clarifications, messages, and the task record itself",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /function resolveSafeProjectDirectory\([\s\S]*segment === "\.\."[\s\S]*path\.resolve\(projectsRoot, normalized\)[\s\S]*relative\.startsWith\("\.\."\)/,
+  "project cleanup should reject path traversal and constrain deletions to the TeamClaw projects root",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /async function deleteProjectDirectoryIfUnused\([\s\S]*stillReferencedByTask[\s\S]*stillReferencedByRun[\s\S]*removeTrackedWorkspaceSubtree\(deps\.config, deps\.logger, safeProjectPath\)[\s\S]*fs\.promises\.rm\(safeProjectPath, \{ recursive: true, force: true \}\)[\s\S]*deletedProjectDirs\.push\(projectDir\)/,
+  "project cleanup should only remove unused project directories and confirm the deletion",
+);
+
+assert.match(
+  gitCollaborationSource,
+  /export async function removeTrackedWorkspaceSubtree\([\s\S]*path\.relative\(workspaceDir, targetPath\)[\s\S]*relative\.startsWith\("\.\."\)[\s\S]*tryGit\(\["ls-files", "--", relative\][\s\S]*runGit\(\["rm", "-r", "--ignore-unmatch", "--", relative\]/,
+  "git collaboration should remove tracked workspace files only for safe in-workspace project subtrees before filesystem cleanup",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /async function deleteProjectCascade\([\s\S]*deleteControllerRunCascade\(runId, deps\)[\s\S]*deleteTaskCascade\(taskId, deps, summary\)[\s\S]*deleteProjectDirectoryIfUnused\(projectDir, deps, summary\)[\s\S]*type: "project:deleted"/,
+  "project delete should cascade through related runs and tasks before removing the project directory",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /DELETE \/api\/v1\/tasks\/:id[\s\S]*const stillExists = !!getTeamState\(\)\?\.tasks\[taskId\];[\s\S]*Task cleanup could not be confirmed/,
+  "task delete API should confirm the task is really gone before returning success",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /async function deleteControllerRunCascade\([\s\S]*const linkedTaskIds = new Set<string>\(run\.createdTaskIds\)[\s\S]*task\.controllerRunId === run\.id[\s\S]*await deleteTaskCascade\(taskId, deps, summary\)[\s\S]*delete state\.controllerRuns\[runId\]/,
+  "planning-run cleanup should only cascade into tasks explicitly owned by that run before removing it",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /function canAutoDeleteStaleControllerRun\([\s\S]*task\.controllerRunId === run\.id[\s\S]*clarification\.controllerRunId === run\.id[\s\S]*return !hasPendingClarification;/,
+  "stale planning run cleanup should only auto-delete orphaned runs that have no active owned tasks or pending clarifications",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /function tagControllerCreatedTasks\([\s\S]*task\.controllerRunId = controllerRunId/,
+  "controller-created tasks should be bound to a specific controller run to avoid session-wide delete mistakes",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /function reconcileControllerManifestTaskBindings\([\s\S]*matchedTask\.controllerRunId = controllerRunId/,
+  "manifest-linked tasks should also be rebound to the specific controller run that owns them",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /function looksLikeSupplementalHumanContextUpdate\([\s\S]*function getActiveTasksForSupplementalHumanContext\([\s\S]*function forwardSupplementalHumanContextToActiveTasks\([\s\S]*intent: "update"[\s\S]*message:new/,
+  "controller should detect supplemental human context updates and forward them to active tasks as direct update messages",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /async function maybeBackfillExecutionReadyTask\([\s\S]*const forwardedTaskIds = await forwardSupplementalHumanContextToActiveTasks\([\s\S]*if \(forwardedTaskIds\.length > 0\) \{\s*return \[\];/,
+  "controller fallback task synthesis should stop and avoid creating a new execution task when the intake can be routed as supplemental context to active work",
+);
+
+assert.match(
+  controllerHttpServerSource,
+  /DELETE \/api\/v1\/controller\/runs\/:id[\s\S]*const stillExists = !!getTeamState\(\)\?\.controllerRuns\[runId\];[\s\S]*Planning run cleanup could not be confirmed/,
+  "planning-run delete API should confirm the run is really gone before returning success",
+);
+
+assert.match(
+  websocketSource,
+  /controller:run_deleted[\s\S]*task:deleted[\s\S]*clarification:deleted[\s\S]*message:deleted[\s\S]*project:deleted/,
+  "websocket contract should include deletion events for runs, tasks, clarifications, messages, and projects",
+);
+
+assert.match(
+  desktopAppSource,
+  /async function deleteTaskWithConfirmation\([\s\S]*window\.confirm\(`Delete task[\s\S]*await apiDelete\(`\/tasks\/\$\{encodeURIComponent\(taskId\)\}`\)[\s\S]*apiGetOptional\(`\/tasks\/\$\{encodeURIComponent\(taskId\)\}`/,
+  "desktop task cleanup should require confirmation, call the delete API, and re-read the task to confirm removal",
+);
+
+assert.match(
+  desktopAppSource,
+  /async function deletePlanningRunWithConfirmation\([\s\S]*window\.confirm\(`Delete planning run[\s\S]*await apiDelete\(`\/controller\/runs\/\$\{encodeURIComponent\(runId\)\}`\)[\s\S]*apiGetOptional\(`\/controller\/runs`/,
+  "desktop planning-run cleanup should require confirmation, call the delete API, and re-read controller runs to confirm removal",
+);
+
+assert.match(
+  desktopAppSource,
+  /async function deleteProjectWithConfirmation\([\s\S]*window\.confirm\(`Delete project[\s\S]*await apiDelete\(`\/projects\/\$\{encodeURIComponent\(projectDir\)\}`\)[\s\S]*await refreshAll\(true\)/,
+  "desktop project cleanup should require confirmation and call the dedicated project delete API",
+);
+
+assert.match(
+  desktopAppSource,
+  /const executionEvents = normalizeArray\(\(selectedRun\.execution && selectedRun\.execution\.events\) \|\| \[\]\);[\s\S]*Planning timeline[\s\S]*renderPlanningTimeline\(executionEvents\)/,
+  "planning detail should render a timeline from controller run execution events",
+);
+
+assert.match(
+  desktopAppSource,
+  /data-delete-project=/,
+  "workspace tree should expose direct delete actions for top-level project directories",
+);
+
+assert.match(
+  desktopAppSource,
+  /const treeDir = target\.closest\('\[data-tree-dir\]'\);[\s\S]*const node = row\.closest\('\.tree-node'\);[\s\S]*const container = node \? node\.querySelector\(':scope > \.tree-children'\) : null;/,
+  "workspace tree directory toggles should resolve children from the tree node wrapper after adding row action buttons",
+);
+
+assert.match(
+  desktopAppSource,
+  /case "controller:run_deleted":[\s\S]*removeControllerRunState\(data\.runId\)/,
+  "desktop websocket handling should evict deleted planning runs from local state",
+);
+
+assert.match(
+  desktopAppSource,
+  /case "task:deleted":[\s\S]*removeTaskState\(data\.taskId\)/,
+  "desktop websocket handling should evict deleted tasks from local state",
+);
+
+assert.match(
+  desktopAppSource,
+  /case "clarification:deleted":[\s\S]*removeClarificationState\(data\.clarificationId\)/,
+  "desktop websocket handling should evict deleted clarifications from local state",
+);
+
+assert.match(
+  desktopAppSource,
+  /case "message:deleted":[\s\S]*removeMessageState\(data\.messageId\)/,
+  "desktop websocket handling should evict deleted runs, tasks, clarifications, and messages from local state",
+);
+
+assert.match(
+  desktopAppSource,
+  /case "project:deleted":[\s\S]*refreshAll\(true\)\.catch\(\(\) => \{\}\)/,
+  "desktop websocket handling should refresh state when a project is deleted",
+);
+
+assert.match(
+  desktopAppSource,
+  /function pruneClarificationNotifications\([\s\S]*item\.id\.startsWith\('clarification:'\)[\s\S]*pendingIds\.has\(item\.id\)[\s\S]*case "clarification:answered":[\s\S]*pruneClarificationNotifications\(\)[\s\S]*case "clarification:deleted":[\s\S]*pruneClarificationNotifications\(\)/,
+  "desktop notifications should drop answered or deleted clarification alerts so the drawer stays in sync with the clarification list",
 );
 
 assert.match(

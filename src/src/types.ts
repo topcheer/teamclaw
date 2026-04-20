@@ -109,6 +109,7 @@ export type TaskInfo = {
   assignedWorkerId?: string;
   createdBy: string;
   recommendedSkills?: string[];
+  controllerRunId?: string;
   controllerSessionKey?: string;
   projectId?: string;
   projectDir?: string;
@@ -156,6 +157,7 @@ export type TaskAssignmentPayload = {
     blockedTasks?: Array<{ id: string; title: string; assignedRole?: RoleId; status: TaskStatus; summary?: string }>;
     recentCompletedTasks?: Array<{ id: string; title: string; assignedRole?: RoleId; status: TaskStatus; summary?: string }>;
     pendingClarifications?: Array<{ question: string; blockingReason?: string }>;
+    answeredClarifications?: Array<{ question: string; answer: string; answeredBy?: string; blockingReason?: string }>;
     handoffPlan?: string;
     notes?: string;
     kickoffSummary?: string;
@@ -598,7 +600,7 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
 
   const taskTimeoutMs = typeof raw.taskTimeoutMs === "number" && raw.taskTimeoutMs >= 1000
     ? raw.taskTimeoutMs
-    : 1_800_000;
+    : 600_000;
 
   const gitEnabled = typeof raw.gitEnabled === "boolean" ? raw.gitEnabled : true;
 

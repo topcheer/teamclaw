@@ -6,13 +6,18 @@ export type WsEvent =
   | { type: "worker:online"; data: unknown }
   | { type: "worker:offline"; data: unknown }
   | { type: "controller:run"; data: unknown }
+  | { type: "controller:run_deleted"; data: unknown }
   | { type: "task:created"; data: unknown }
   | { type: "task:updated"; data: unknown }
   | { type: "task:completed"; data: unknown }
+  | { type: "task:deleted"; data: unknown }
   | { type: "task:execution"; data: unknown }
   | { type: "message:new"; data: unknown }
   | { type: "clarification:requested"; data: unknown }
   | { type: "clarification:answered"; data: unknown }
+  | { type: "clarification:deleted"; data: unknown }
+  | { type: "message:deleted"; data: unknown }
+  | { type: "project:deleted"; data: unknown }
   | { type: "requirement:complete"; data: unknown }
   | { type: "report:ready"; data: unknown };
 

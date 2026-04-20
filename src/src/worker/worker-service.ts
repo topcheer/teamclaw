@@ -31,6 +31,7 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
   let activeTaskId: string | undefined;
   const activeTaskSessionKeys = new Map<string, string>();
   const cancelledTaskIds = new Set<string>();
+  let consecutiveHeartbeatFailures = 0;
 
   const taskExecutor = externalTaskExecutor
     ? async (assignment: TaskAssignmentPayload): Promise<{ text: string; contract?: Record<string, unknown> }> => {
@@ -208,10 +209,30 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
           });
 
           if (!res.ok) {
+            consecutiveHeartbeatFailures += 1;
             logger.warn(`Worker: heartbeat failed (${res.status})`);
+            if (consecutiveHeartbeatFailures >= 3) {
+              logger.warn("Worker: controller heartbeat failed repeatedly; clearing identity and forcing re-registration");
+              await identityManager.clear();
+              controllerUrl = null;
+              workerId = null;
+              consecutiveHeartbeatFailures = 0;
+              await startServer();
+            }
+          } else {
+            consecutiveHeartbeatFailures = 0;
           }
         } catch (err) {
+          consecutiveHeartbeatFailures += 1;
           logger.warn(`Worker: heartbeat error: ${err instanceof Error ? err.message : String(err)}`);
+          if (consecutiveHeartbeatFailures >= 3) {
+            logger.warn("Worker: controller heartbeat errored repeatedly; clearing identity and forcing re-registration");
+            await identityManager.clear();
+            controllerUrl = null;
+            workerId = null;
+            consecutiveHeartbeatFailures = 0;
+            await startServer();
+          }
         }
       }, config.heartbeatIntervalMs);
 

@@ -38,7 +38,13 @@ import {
 } from "../protocol.js";
 import { listWorkspaceTree, listWorkspaceSubtree, readWorkspaceFile, readWorkspaceRawFile } from "../workspace-browser.js";
 import { ROLES, normalizeRecommendedSkills, resolveRecommendedSkillsForRole } from "../roles.js";
-import { buildRepoSyncInfo, ensureControllerGitRepo, exportControllerGitBundle, importControllerGitBundle } from "../git-collaboration.js";
+import {
+  buildRepoSyncInfo,
+  ensureControllerGitRepo,
+  exportControllerGitBundle,
+  importControllerGitBundle,
+  removeTrackedWorkspaceSubtree,
+} from "../git-collaboration.js";
 import { TaskRouter } from "./task-router.js";
 import { MessageRouter } from "./message-router.js";
 import { TeamWebSocketServer } from "./websocket.js";
@@ -92,6 +98,10 @@ const MAX_TASK_CONTEXT_SUMMARY_CHARS = 500;
 const CONTROLLER_INTAKE_SESSION_PREFIX = "teamclaw-controller-web:";
 const CONTROLLER_INTAKE_AGENT_SESSION_RE = /^agent:[^:]+:(teamclaw-controller-web:[a-zA-Z0-9:_-]{1,120})$/;
 const CONTROLLER_RUN_WAIT_SLICE_MS = 30_000;
+const CONTROLLER_SESSION_PROGRESS_MESSAGE_LIMIT = 200;
+const MAX_SESSION_PROGRESS_MESSAGE_CHARS = 4000;
+const TOOL_CALL_BLOCK_TYPES = new Set(["tool_use", "toolcall", "tool_call"]);
+const TOOL_RESULT_BLOCK_TYPES = new Set(["tool_result", "tool_result_error"]);
 const EXISTING_PROJECT_REUSE_HINT_RE = /\b(existing|optimi(?:s|z)e|optimi(?:s|z)ation|improvement|enhanc(?:e|ement)|follow[- ]?up|extend|update|bugfix|bug fix)\b/iu;
 const GENERIC_PROJECT_FOLLOW_UP_RE = /\b(continue|continuing|next step|what else|what's next|follow[- ]?up|more|remaining)\b|继续|接下来|下一步|还有哪些|还可以做什么/u;
 const PROJECT_MATCH_STOPWORDS = new Set([
@@ -404,6 +414,328 @@ function trimControllerRuns(state: TeamState): void {
   }
 }
 
+type TaskCleanupSummary = {
+  deletedTaskIds: string[];
+  deletedClarificationIds: string[];
+  deletedMessageIds: string[];
+  stoppedPreviewIds: string[];
+  deletedReportIds: string[];
+  deletedProjectDirs: string[];
+};
+
+function buildEmptyTaskCleanupSummary(): TaskCleanupSummary {
+  return {
+    deletedTaskIds: [],
+    deletedClarificationIds: [],
+    deletedMessageIds: [],
+    stoppedPreviewIds: [],
+    deletedReportIds: [],
+    deletedProjectDirs: [],
+  };
+}
+
+function resolveSafeProjectDirectory(projectDir: string | undefined): string | null {
+  const normalized = String(projectDir ?? "").trim().replace(/^\/+|\/+$/gu, "");
+  if (!normalized || normalized === "." || normalized === "..") {
+    return null;
+  }
+  if (normalized.split("/").some((segment) => !segment || segment === "." || segment === "..")) {
+    return null;
+  }
+  const projectsRoot = path.resolve(resolveTeamClawProjectsDir());
+  const projectPath = path.resolve(projectsRoot, normalized);
+  const relative = path.relative(projectsRoot, projectPath);
+  if (!relative || relative === "" || relative === "." || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return null;
+  }
+  return projectPath;
+}
+
+async function deleteProjectDirectoryIfUnused(
+  projectDir: string | undefined,
+  deps: ControllerHttpDeps,
+  summary: TaskCleanupSummary,
+): Promise<void> {
+  if (!projectDir) {
+    return;
+  }
+  const state = deps.getTeamState();
+  const stillReferencedByTask = Object.values(state?.tasks ?? {}).some((task) => task.projectDir === projectDir);
+  const stillReferencedByRun = Object.values(state?.controllerRuns ?? {}).some((run) => run.projectDir === projectDir);
+  if (stillReferencedByTask || stillReferencedByRun) {
+    return;
+  }
+
+  const safeProjectPath = resolveSafeProjectDirectory(projectDir);
+  if (!safeProjectPath) {
+    deps.logger.warn(`Controller: skipped unsafe project directory cleanup for ${String(projectDir)}`);
+    return;
+  }
+  if (!fs.existsSync(safeProjectPath)) {
+    return;
+  }
+  await removeTrackedWorkspaceSubtree(deps.config, deps.logger, safeProjectPath);
+  await fs.promises.rm(safeProjectPath, { recursive: true, force: true });
+  if (fs.existsSync(safeProjectPath)) {
+    throw new Error(`Project directory cleanup could not be confirmed for ${projectDir}`);
+  }
+
+  deps.updateTeamState((stateDraft) => {
+    const projectRecord = findProjectRecordByDir(stateDraft, projectDir);
+    if (projectRecord) {
+      delete stateDraft.projects[projectRecord.id];
+    }
+  });
+  summary.deletedProjectDirs.push(projectDir);
+}
+
+function isTaskTerminalForCleanup(task: TaskInfo | undefined): boolean {
+  if (!task) {
+    return true;
+  }
+  return task.status === "completed" || task.status === "failed";
+}
+
+function canAutoDeleteStaleControllerRun(
+  run: ControllerRunInfo,
+  state: TeamState | null,
+  now: number,
+  staleAfterMs: number,
+): boolean {
+  if (run.status !== "pending" && run.status !== "running") {
+    return false;
+  }
+  const lastActivityAt = run.execution?.lastUpdatedAt ?? run.updatedAt ?? run.createdAt ?? 0;
+  if (!lastActivityAt || now - lastActivityAt < staleAfterMs) {
+    return false;
+  }
+  const ownedTasks = Object.values(state?.tasks ?? {}).filter((task) => task.controllerRunId === run.id);
+  if (ownedTasks.some((task) => !isTaskTerminalForCleanup(task))) {
+    return false;
+  }
+  const hasPendingClarification = Object.values(state?.clarifications ?? {}).some((clarification) =>
+    clarification.controllerRunId === run.id && clarification.status === "pending",
+  );
+  return !hasPendingClarification;
+}
+
+async function pruneStaleControllerRuns(
+  deps: ControllerHttpDeps,
+  options?: { excludeRunId?: string },
+): Promise<void> {
+  const state = deps.getTeamState();
+  const now = Date.now();
+  const staleAfterMs = deps.config.taskTimeoutMs * 2;
+  const staleRunIds = Object.values(state?.controllerRuns ?? {})
+    .filter((run) => run.id !== options?.excludeRunId)
+    .filter((run) => canAutoDeleteStaleControllerRun(run, state, now, staleAfterMs))
+    .sort((left, right) => left.updatedAt - right.updatedAt)
+    .map((run) => run.id);
+  for (const staleRunId of staleRunIds) {
+    await deleteControllerRunCascade(staleRunId, deps, { preserveSessionArtifacts: true });
+  }
+}
+
+async function deleteProjectCascade(
+  projectDir: string,
+  deps: ControllerHttpDeps,
+): Promise<{ deleted: boolean; summary: TaskCleanupSummary & { projectDir?: string } }> {
+  const safeProjectPath = resolveSafeProjectDirectory(projectDir);
+  if (!safeProjectPath) {
+    return { deleted: false, summary: { ...buildEmptyTaskCleanupSummary(), projectDir: undefined } };
+  }
+
+  const summary: TaskCleanupSummary & { projectDir?: string } = {
+    ...buildEmptyTaskCleanupSummary(),
+    projectDir,
+  };
+  const state = deps.getTeamState();
+  const runIds = Object.values(state?.controllerRuns ?? {})
+    .filter((run) => run.projectDir === projectDir)
+    .map((run) => run.id);
+  const taskIds = Object.values(state?.tasks ?? {})
+    .filter((task) => task.projectDir === projectDir)
+    .map((task) => task.id);
+
+  for (const runId of runIds) {
+    const result = await deleteControllerRunCascade(runId, deps);
+    if (!result.deleted) {
+      continue;
+    }
+    summary.deletedTaskIds.push(...result.summary.deletedTaskIds);
+    summary.deletedClarificationIds.push(...result.summary.deletedClarificationIds);
+    summary.deletedMessageIds.push(...result.summary.deletedMessageIds);
+    summary.stoppedPreviewIds.push(...result.summary.stoppedPreviewIds);
+    summary.deletedReportIds.push(...result.summary.deletedReportIds);
+    summary.deletedProjectDirs.push(...result.summary.deletedProjectDirs);
+  }
+
+  for (const taskId of taskIds) {
+    await deleteTaskCascade(taskId, deps, summary);
+  }
+
+  await deleteProjectDirectoryIfUnused(projectDir, deps, summary);
+  if (!summary.deletedProjectDirs.includes(projectDir) && !fs.existsSync(safeProjectPath)) {
+    summary.deletedProjectDirs.push(projectDir);
+  }
+
+  if (summary.deletedProjectDirs.includes(projectDir)) {
+    deps.wsServer.broadcastUpdate({ type: "project:deleted", data: { projectDir } });
+  }
+
+  return { deleted: summary.deletedProjectDirs.includes(projectDir), summary };
+}
+
+async function deleteTaskCascade(
+  taskId: string,
+  deps: ControllerHttpDeps,
+  summary: TaskCleanupSummary,
+): Promise<boolean> {
+  const existingTask = deps.getTeamState()?.tasks[taskId];
+  if (!existingTask) {
+    return false;
+  }
+
+  await cancelTaskExecution(taskId, existingTask.assignedWorkerId, "cleanup deletion", deps);
+  await deps.previewManager?.stopTaskPreviews(taskId, "task deleted during cleanup");
+
+  const previewIds = Object.values(deps.getTeamState()?.previews ?? {})
+    .filter((preview) => preview.taskId === taskId)
+    .map((preview) => preview.id);
+
+  const deletedClarificationIds: string[] = [];
+  const deletedMessageIds: string[] = [];
+  const deletedReportIds: string[] = [];
+  const normalizedSessionKey = existingTask.controllerSessionKey
+    ? normalizeControllerIntakeSessionKey(existingTask.controllerSessionKey)
+    : undefined;
+
+  deps.updateTeamState((state) => {
+    delete state.tasks[taskId];
+
+    for (const clarification of Object.values(state.clarifications)) {
+      if (clarification.taskId === taskId) {
+        deletedClarificationIds.push(clarification.id);
+        delete state.clarifications[clarification.id];
+      }
+    }
+
+    if (state.messages.length > 0) {
+      const keptMessages: TeamMessage[] = [];
+      for (const message of state.messages) {
+        if (message.taskId === taskId) {
+          deletedMessageIds.push(message.id);
+          continue;
+        }
+        keptMessages.push(message);
+      }
+      state.messages = keptMessages;
+    }
+
+    if (normalizedSessionKey && state.reports) {
+      for (const report of Object.values(state.reports)) {
+        if (normalizeControllerIntakeSessionKey(report.sessionKey) === normalizedSessionKey) {
+          deletedReportIds.push(report.id);
+          delete state.reports[report.id];
+        }
+      }
+    }
+
+    for (const run of Object.values(state.controllerRuns)) {
+      if (run.sourceTaskId === taskId) {
+        delete run.sourceTaskId;
+      }
+      if (run.createdTaskIds.includes(taskId)) {
+        run.createdTaskIds = run.createdTaskIds.filter((id) => id !== taskId);
+        run.updatedAt = Date.now();
+      }
+    }
+  });
+
+  summary.deletedTaskIds.push(taskId);
+  summary.deletedClarificationIds.push(...deletedClarificationIds);
+  summary.deletedMessageIds.push(...deletedMessageIds);
+  summary.stoppedPreviewIds.push(...previewIds);
+  summary.deletedReportIds.push(...deletedReportIds);
+  await deleteProjectDirectoryIfUnused(existingTask.projectDir, deps, summary);
+
+  deps.wsServer.broadcastUpdate({ type: "task:deleted", data: { taskId } });
+  for (const clarificationId of deletedClarificationIds) {
+    deps.wsServer.broadcastUpdate({ type: "clarification:deleted", data: { clarificationId, taskId } });
+  }
+  for (const messageId of deletedMessageIds) {
+    deps.wsServer.broadcastUpdate({ type: "message:deleted", data: { messageId, taskId } });
+  }
+
+  return true;
+}
+
+async function deleteControllerRunCascade(
+  runId: string,
+  deps: ControllerHttpDeps,
+  options?: {
+    preserveSessionArtifacts?: boolean;
+  },
+): Promise<{
+  deleted: boolean;
+  summary: TaskCleanupSummary & { deletedRunId?: string };
+}> {
+  const run = deps.getTeamState()?.controllerRuns[runId];
+  if (!run) {
+    return { deleted: false, summary: { ...buildEmptyTaskCleanupSummary() } };
+  }
+
+  const summary: TaskCleanupSummary & { deletedRunId?: string } = {
+    ...buildEmptyTaskCleanupSummary(),
+    deletedRunId: undefined,
+  };
+
+  const linkedTaskIds = new Set<string>(run.createdTaskIds);
+  for (const task of Object.values(deps.getTeamState()?.tasks ?? {})) {
+    if (task.controllerRunId === run.id) {
+      linkedTaskIds.add(task.id);
+    }
+  }
+
+  for (const taskId of linkedTaskIds) {
+    await deleteTaskCascade(taskId, deps, summary);
+  }
+
+  const deletedClarificationIds: string[] = [];
+  const deletedReportIds: string[] = [];
+  deps.updateTeamState((state) => {
+    delete state.controllerRuns[runId];
+    summary.deletedRunId = runId;
+
+    for (const clarification of Object.values(state.clarifications)) {
+      if (clarification.controllerRunId === runId) {
+        deletedClarificationIds.push(clarification.id);
+        delete state.clarifications[clarification.id];
+      }
+    }
+
+    if (state.reports) {
+      const normalizedSessionKey = normalizeControllerIntakeSessionKey(run.sessionKey);
+      for (const report of Object.values(state.reports)) {
+        if (!options?.preserveSessionArtifacts && normalizeControllerIntakeSessionKey(report.sessionKey) === normalizedSessionKey) {
+          deletedReportIds.push(report.id);
+          delete state.reports[report.id];
+        }
+      }
+    }
+  });
+
+  summary.deletedClarificationIds.push(...deletedClarificationIds);
+  summary.deletedReportIds.push(...deletedReportIds);
+
+  deps.wsServer.broadcastUpdate({ type: "controller:run_deleted", data: { runId } });
+  for (const clarificationId of deletedClarificationIds) {
+    deps.wsServer.broadcastUpdate({ type: "clarification:deleted", data: { clarificationId, controllerRunId: runId } });
+  }
+
+  return { deleted: true, summary };
+}
+
 function serializeControllerRun(run?: ControllerRunInfo, includeExecutionEvents = true): Record<string, unknown> | undefined {
   if (!run) {
     return undefined;
@@ -434,9 +766,14 @@ function buildControllerRunTitle(
   sourceTaskTitle?: string,
 ): string {
   if (source === "task_follow_up") {
-    return sourceTaskTitle
-      ? `Controller follow-up after ${sourceTaskTitle}`
-      : "Controller workflow follow-up";
+    const normalizedSourceTitle = String(sourceTaskTitle || "").replace(/\s+/g, " ").trim();
+    if (normalizedSourceTitle) {
+      const compactSourceTitle = normalizedSourceTitle.length <= 72
+        ? normalizedSourceTitle
+        : `${normalizedSourceTitle.slice(0, 72).trimEnd()}…`;
+      return `Controller follow-up after ${compactSourceTitle}`;
+    }
+    return "Controller workflow follow-up";
   }
 
   const normalized = message.replace(/\s+/g, " ").trim();
@@ -850,8 +1187,207 @@ function extractLastAssistantText(messages: unknown[]): string {
 
   const lastAssistant = assistantMessages[assistantMessages.length - 1];
   if (!lastAssistant) {
+  return "";
+}
+
+type SessionProgressEntry = {
+  fingerprint: string;
+  message: string;
+  phase: string;
+  stream: string;
+  isRateLimit: boolean;
+};
+
+function normalizeSessionRole(value: unknown): string {
+  if (typeof value !== "string") {
     return "";
   }
+  const normalized = value.trim().toLowerCase().replace(/[-\s]+/g, "_");
+  if (normalized === "toolresult") {
+    return "tool_result";
+  }
+  return normalized;
+}
+
+function normalizeBlockType(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  return value.trim().toLowerCase();
+}
+
+function truncateProgressMessage(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (trimmed.length <= MAX_SESSION_PROGRESS_MESSAGE_CHARS) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, MAX_SESSION_PROGRESS_MESSAGE_CHARS)}\n… (truncated)`;
+}
+
+function normalizeComparableText(value: string): string {
+  return value.trim().replace(/\r\n/g, "\n");
+}
+
+function safeJsonStringify(value: unknown): string {
+  try {
+    return typeof value === "string" ? value : JSON.stringify(value);
+  } catch (_err) {
+    return String(value);
+  }
+}
+
+function renderSessionMessage(message: Record<string, unknown>, role: string): { message: string; stream: string } {
+  const content = message.content;
+  if (typeof content === "string") {
+    return {
+      message: truncateProgressMessage(content),
+      stream: role,
+    };
+  }
+
+  if (Array.isArray(content)) {
+    const textParts: string[] = [];
+    const toolCalls: string[] = [];
+    let toolResultCount = 0;
+    let toolResultErrors = 0;
+
+    for (const entry of content) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+
+      const block = entry as Record<string, unknown>;
+      const type = normalizeBlockType(block.type);
+      if (type === "text") {
+        const text = typeof block.text === "string" ? block.text.trim() : "";
+        if (text) {
+          textParts.push(text);
+        }
+        continue;
+      }
+
+      if (TOOL_CALL_BLOCK_TYPES.has(type)) {
+        const name = typeof block.name === "string" ? block.name.trim() : "";
+        if (name) {
+          toolCalls.push(name);
+        }
+        continue;
+      }
+
+      if (TOOL_RESULT_BLOCK_TYPES.has(type)) {
+        toolResultCount += 1;
+        if (block.is_error === true) {
+          toolResultErrors += 1;
+        }
+      }
+    }
+
+    const parts: string[] = [];
+    if (textParts.length > 0) {
+      parts.push(textParts.join("\n"));
+    }
+    if (toolCalls.length > 0) {
+      parts.push(`[tool call] ${toolCalls.join(", ")}`);
+    }
+    if (toolResultCount > 0) {
+      parts.push(`[tool result] ${toolResultCount}${toolResultErrors > 0 ? ` (${toolResultErrors} error)` : ""}`);
+    }
+
+    if (parts.length > 0) {
+      return {
+        message: truncateProgressMessage(parts.join("\n")),
+        stream: textParts.length > 0 ? role : "tool",
+      };
+    }
+  }
+
+  const fallbackToolName = typeof message.toolName === "string"
+    ? message.toolName.trim()
+    : (typeof message.tool_name === "string" ? message.tool_name.trim() : "");
+  if (fallbackToolName) {
+    return {
+      message: `[tool call] ${fallbackToolName}`,
+      stream: "tool",
+    };
+  }
+
+  return {
+    message: truncateProgressMessage(safeJsonStringify(message)),
+    stream: role || "session",
+  };
+}
+
+function buildSessionProgressEntries(messages: unknown[], controllerMessage: string): SessionProgressEntry[] {
+  const entries: SessionProgressEntry[] = [];
+  const normalizedControllerMessage = normalizeComparableText(controllerMessage);
+
+  for (const rawMessage of messages) {
+    if (!rawMessage || typeof rawMessage !== "object") {
+      continue;
+    }
+
+    const message = rawMessage as Record<string, unknown>;
+    const role = normalizeSessionRole(message.role);
+    if (!role) {
+      continue;
+    }
+
+    const rendered = renderSessionMessage(message, role);
+    if (!rendered.message) {
+      continue;
+    }
+
+    const comparableMessage = normalizeComparableText(rendered.message);
+    if (role === "user" && normalizedControllerMessage && comparableMessage.includes(normalizedControllerMessage)) {
+      continue;
+    }
+
+    entries.push({
+      fingerprint: `${rendered.stream}:${comparableMessage}`,
+      message: rendered.message,
+      phase: rendered.stream,
+      stream: rendered.stream,
+      isRateLimit: isRateLimitMessage(rendered.message),
+    });
+  }
+
+  return entries;
+}
+
+function getNewSessionProgressEntries(
+  entries: SessionProgressEntry[],
+  previousFingerprints: string[],
+): SessionProgressEntry[] {
+  if (entries.length === 0) {
+    return [];
+  }
+  if (previousFingerprints.length === 0) {
+    return entries;
+  }
+
+  const currentFingerprints = entries.map((entry) => entry.fingerprint);
+  const maxOverlap = Math.min(previousFingerprints.length, currentFingerprints.length);
+  let overlap = 0;
+
+  for (let size = maxOverlap; size > 0; size -= 1) {
+    let matches = true;
+    for (let index = 0; index < size; index += 1) {
+      if (previousFingerprints[previousFingerprints.length - size + index] !== currentFingerprints[index]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      overlap = size;
+      break;
+    }
+  }
+
+  return entries.slice(overlap);
+}
 
   if (typeof lastAssistant.content === "string") {
     return lastAssistant.content;
@@ -989,6 +1525,7 @@ function scoreControllerTaskBindingCandidate(task: TaskInfo): number {
 }
 
 function reconcileControllerManifestTaskBindings(
+  controllerRunId: string,
   sessionKey: string,
   createdTaskIds: string[],
   manifest: ControllerOrchestrationManifest | undefined,
@@ -1028,6 +1565,7 @@ function reconcileControllerManifestTaskBindings(
       if (matchedTask.controllerSessionKey !== normalizedSessionKey) {
         matchedTask.controllerSessionKey = normalizedSessionKey;
       }
+      matchedTask.controllerRunId = controllerRunId;
       if (!usedTaskIds.has(matchedTask.id)) {
         usedTaskIds.add(matchedTask.id);
         linkedTaskIds.push(matchedTask.id);
@@ -1043,6 +1581,7 @@ function reconcileControllerManifestTaskBindings(
 
 function tagControllerCreatedTasks(
   taskIdsBeforeRun: Set<string>,
+  controllerRunId: string,
   sessionKey: string,
   deps: ControllerHttpDeps,
 ): string[] {
@@ -1056,6 +1595,7 @@ function tagControllerCreatedTasks(
       if (task.createdBy !== "controller") {
         continue;
       }
+      task.controllerRunId = controllerRunId;
       if (!task.controllerSessionKey) {
         task.controllerSessionKey = normalizedSessionKey;
       }
@@ -1306,7 +1846,25 @@ function buildBackfilledControllerManifest(
 
 function looksLikeSoftwareRequirement(request: string): boolean {
   const normalized = request.toLowerCase();
-  return /(api|backend|frontend|fastapi|react|vue|node|python|typescript|javascript|sql|database|service|app|web|mobile|docker|kubernetes|deploy|测试|系统|平台|接口|服务|数据库|应用|前端|后端)/.test(normalized);
+  return /(api|backend|frontend|fastapi|react|vue|node|python|typescript|javascript|sql|database|service|app|web|mobile|docker|kubernetes|deploy|stderr|stdout|logging|logger|log file|config|yaml|json|cli|command|build|test|compile|bug|fix|output|file|repo|repository|code|测试|系统|平台|接口|服务|数据库|应用|前端|后端|日志|输出|文件|配置|命令|编译|构建|修复|代码|仓库)/.test(normalized);
+}
+
+function looksLikeManualExecutionClarification(question: string): boolean {
+  const normalized = question.toLowerCase();
+  return /(请先|请运行|请执行|请重试|请重新编译|请复现|run\b|rerun\b|retry\b|rebuild\b|recompile\b|git pull\b|go build\b|npm test\b|pnpm test\b|yarn test\b|pytest\b|cargo test\b|是否仍然|does it still|still crash|still fail)/i.test(normalized);
+}
+
+function extractExecutableFollowUpFromClarification(question: string): string | null {
+  const trimmed = String(question || "").trim();
+  if (!trimmed || !looksLikeManualExecutionClarification(trimmed)) {
+    return null;
+  }
+  const normalized = trimmed.replace(/\s+/g, " ").trim();
+  return [
+    "Continue the same requirement by executing the obvious validation or rebuild step yourself instead of asking the human to run it manually.",
+    `Requested follow-up verification: ${normalized}`,
+    "Run the needed build/test/repro steps inside the project workspace, inspect the real outcome, and then either fix the issue or report the verified blocker with concrete evidence.",
+  ].join("\n\n");
 }
 
 function isArchitectureFirstRequirement(request: string): boolean {
@@ -1316,6 +1874,10 @@ function isArchitectureFirstRequirement(request: string): boolean {
 
 function chooseFallbackAssignedRole(manifest: ControllerOrchestrationManifest, request: string): RoleId {
   const requiredRoles = manifest.requiredRoles;
+  const implementationLikeRequest = looksLikeSoftwareRequirement(request) && !isArchitectureFirstRequirement(request);
+  if (requiredRoles.length === 1 && requiredRoles[0] === "architect" && implementationLikeRequest) {
+    return "developer";
+  }
   if (requiredRoles.length === 0) {
     return isArchitectureFirstRequirement(request) ? "architect" : "developer";
   }
@@ -1355,6 +1917,116 @@ function buildFallbackControllerTaskTitle(request: string, assignedRole?: RoleId
     : `Perform the requested ${assignedRole || "software"} work`;
 }
 
+function looksLikeSupplementalHumanContextUpdate(request: string): boolean {
+  const normalized = request.toLowerCase();
+  const hasEndpointOrCredentialHint = /(apikey|api key|token|credential|endpoint|base url|provider|model list|models接口|连接信息|兼容接口|供应商|可用模型)/i.test(request);
+  const urlCount = (request.match(/https?:\/\//gi) || []).length;
+  const looksLikeFreshImplementationAsk = /(implement|build|create|write|develop|fix|refactor|design|架构|设计|实现|开发|修复|重构|创建)/i.test(normalized);
+  return !looksLikeFreshImplementationAsk && (hasEndpointOrCredentialHint || urlCount >= 2);
+}
+
+function getActiveTasksForSupplementalHumanContext(
+  controllerRunId: string,
+  sessionKey: string,
+  manifest: ControllerOrchestrationManifest,
+  state: TeamState | null,
+): TaskInfo[] {
+  const normalizedSessionKey = normalizeControllerIntakeSessionKey(sessionKey);
+  const runProjectDir = state?.controllerRuns?.[controllerRunId]?.projectDir;
+  const requiredRoles = new Set(manifest.requiredRoles);
+  return Object.values(state?.tasks ?? {})
+    .filter((task) => task.status === "assigned" || task.status === "in_progress" || task.status === "review")
+    .filter((task) => normalizeControllerIntakeSessionKey(task.controllerSessionKey) === normalizedSessionKey)
+    .filter((task) => !runProjectDir || task.projectDir === runProjectDir)
+    .filter((task) => requiredRoles.size === 0 || (task.assignedRole ? requiredRoles.has(task.assignedRole) : false))
+    .sort((left, right) => {
+      const leftScore = left.status === "in_progress" ? 2 : left.status === "assigned" ? 1 : 0;
+      const rightScore = right.status === "in_progress" ? 2 : right.status === "assigned" ? 1 : 0;
+      if (leftScore !== rightScore) {
+        return rightScore - leftScore;
+      }
+      return right.updatedAt - left.updatedAt;
+    });
+}
+
+async function forwardSupplementalHumanContextToActiveTasks(
+  controllerRunId: string,
+  sessionKey: string,
+  request: string,
+  manifest: ControllerOrchestrationManifest,
+  deps: ControllerHttpDeps,
+): Promise<string[]> {
+  if (!looksLikeSupplementalHumanContextUpdate(request)) {
+    return [];
+  }
+  const state = deps.getTeamState();
+  const targetTasks = getActiveTasksForSupplementalHumanContext(controllerRunId, sessionKey, manifest, state);
+  if (targetTasks.length === 0) {
+    return [];
+  }
+
+  const createdAt = Date.now();
+  const messages: TeamMessage[] = targetTasks.map((task) => ({
+    id: generateId(),
+    from: "human-intake",
+    to: task.assignedWorkerId,
+    toRole: task.assignedRole,
+    type: "direct",
+    content: request,
+    contract: ensureTeamMessageContract(null, {
+      type: "direct",
+      content: request,
+      toRole: task.assignedRole,
+      taskId: task.id,
+      intent: "update",
+      needsResponse: false,
+    }),
+    taskId: task.id,
+    createdAt,
+  }));
+
+  deps.updateTeamState((teamState) => {
+    teamState.messages.push(...messages);
+  });
+
+  for (const message of messages) {
+    recordTaskExecutionEvent(message.taskId!, {
+      type: "progress",
+      phase: "human_context_forwarded",
+      source: "controller",
+      status: "running",
+      message: "Human provided supplemental context for this task. Review task messages for the new details.",
+    }, deps);
+    deps.wsServer.broadcastUpdate({ type: "message:new", data: message });
+    if (message.to) {
+      const worker = deps.getTeamState()?.workers?.[message.to];
+      if (worker && worker.status !== "offline") {
+        try {
+          await deliverMessageToWorker(worker, message, deps);
+        } catch (err) {
+          deps.logger.warn(`Controller: failed to forward supplemental context to ${worker.id}: ${String(err)}`);
+        }
+      }
+    }
+  }
+
+  manifest.notes = manifest.notes
+    ? `${manifest.notes} TeamClaw forwarded this human intake as supplemental context to active task(s): ${targetTasks.map((task) => task.id).join(", ")}.`
+    : `TeamClaw forwarded this human intake as supplemental context to active task(s): ${targetTasks.map((task) => task.id).join(", ")}.`;
+  updateControllerRun(controllerRunId, deps, (run) => {
+    run.manifest = manifest;
+    appendControllerRunEvent(run, {
+      type: "warning",
+      phase: "context_forwarded",
+      source: "controller",
+      status: "running",
+      sessionKey,
+      message: `Forwarded supplemental human context to active task(s): ${targetTasks.map((task) => task.id).join(", ")}`,
+    });
+  });
+  return targetTasks.map((task) => task.id);
+}
+
 async function createControllerManagedTask(
   input: {
     title: string;
@@ -1362,6 +2034,7 @@ async function createControllerManagedTask(
     priority?: TaskPriority;
     assignedRole?: RoleId;
     createdBy: string;
+    controllerRunId?: string;
     controllerSessionKey?: string;
     projectName?: string;
     recommendedSkills?: string[];
@@ -1392,6 +2065,7 @@ async function createControllerManagedTask(
     assignedRole: input.assignedRole,
     createdBy: input.createdBy,
     recommendedSkills: normalizedRecommendedSkills.length > 0 ? normalizedRecommendedSkills : undefined,
+    controllerRunId: input.createdBy === "controller" ? input.controllerRunId : undefined,
     controllerSessionKey: normalizedSessionKey,
     projectId,
     projectDir,
@@ -1465,7 +2139,20 @@ async function maybeBackfillExecutionReadyTask(
   if (options?.source === "task_follow_up") {
     return [];
   }
-  if (!looksLikeSoftwareRequirement(request)) {
+  const likelyTechnicalRequest = looksLikeSoftwareRequirement(request)
+    || manifest.requiredRoles.length > 0
+    || /code|repo|repository|日志|输出|文件|配置|命令|修复|实现|修改/.test(request.toLowerCase());
+  if (!likelyTechnicalRequest) {
+    return [];
+  }
+  const forwardedTaskIds = await forwardSupplementalHumanContextToActiveTasks(
+    controllerRunId,
+    sessionKey,
+    request,
+    manifest,
+    deps,
+  );
+  if (forwardedTaskIds.length > 0) {
     return [];
   }
 
@@ -1475,6 +2162,7 @@ async function maybeBackfillExecutionReadyTask(
     description: request,
     assignedRole,
     createdBy: "controller",
+    controllerRunId,
     controllerSessionKey: sessionKey,
     recommendedSkills: resolveRecommendedSkillsForRole(assignedRole, []),
   }, deps);
@@ -1749,6 +2437,59 @@ function buildManifestClarificationEntries(
     ...normalizedQuestions.map((question) => ({ question })),
     ...completionEntries,
   ];
+}
+
+async function maybeConvertControllerClarificationToExecutionTask(
+  controllerRunId: string,
+  sessionKey: string,
+  manifest: ControllerOrchestrationManifest,
+  deps: ControllerHttpDeps,
+): Promise<string[]> {
+  const candidateQuestion = (manifest.clarificationQuestions || []).find((entry) => looksLikeManualExecutionClarification(entry));
+  const followUpDescription = candidateQuestion ? extractExecutableFollowUpFromClarification(candidateQuestion) : null;
+  if (!candidateQuestion || !followUpDescription) {
+    return [];
+  }
+
+  const assignedRole = chooseFallbackAssignedRole(manifest, followUpDescription);
+  const task = await createControllerManagedTask({
+    title: buildFallbackControllerTaskTitle(candidateQuestion, assignedRole),
+    description: followUpDescription,
+    assignedRole,
+    createdBy: "controller",
+    controllerRunId,
+    controllerSessionKey: sessionKey,
+    recommendedSkills: resolveRecommendedSkillsForRole(assignedRole, []),
+  }, deps);
+  if (!task) {
+    return [];
+  }
+
+  manifest.createdTasks = [{
+    title: task.title,
+    assignedRole: task.assignedRole,
+    expectedOutcome: summarizeManifestExpectedOutcome(task),
+  }];
+  manifest.clarificationsNeeded = false;
+  manifest.clarificationQuestions = manifest.clarificationQuestions.filter((entry) => entry !== candidateQuestion);
+  if (Array.isArray(manifest.clarificationSchemas)) {
+    manifest.clarificationSchemas = manifest.clarificationSchemas.filter((schema) => schema.title !== candidateQuestion);
+  }
+  manifest.notes = manifest.notes
+    ? `${manifest.notes} TeamClaw converted a manual-action clarification into execution task ${task.id} so the team can perform the validation itself.`
+    : `TeamClaw converted a manual-action clarification into execution task ${task.id} so the team can perform the validation itself.`;
+  updateControllerRun(controllerRunId, deps, (run) => {
+    run.manifest = manifest;
+    appendControllerRunEvent(run, {
+      type: "warning",
+      phase: "clarification_converted_to_task",
+      source: "controller",
+      status: "running",
+      sessionKey,
+      message: `Controller converted a manual-action clarification into execution task ${task.id}.`,
+    });
+  });
+  return [task.id];
 }
 
 function syncControllerRunClarifications(
@@ -2066,6 +2807,15 @@ async function runControllerIntakeUnlocked(
     nextProbeAt: Date.now() + deps.config.taskTimeoutMs,
     probeCount: 0,
   };
+  const progressSnapshot: {
+    fingerprints: string[];
+    latestMessages: unknown[];
+    lastActivityAt: number;
+  } = {
+    fingerprints: [],
+    latestMessages: [],
+    lastActivityAt: Date.now(),
+  };
 
   const markRateLimitWaiting = async (): Promise<void> => {
     if (rateLimitState.active) {
@@ -2093,9 +2843,46 @@ async function runControllerIntakeUnlocked(
   };
 
   const noteObservedControllerActivity = (): void => {
+    progressSnapshot.lastActivityAt = Date.now();
     inactivityState.active = false;
     inactivityState.visibleAt = undefined;
     inactivityState.nextProbeAt = Date.now() + deps.config.taskTimeoutMs;
+  };
+
+  const syncControllerSessionProgress = async (): Promise<void> => {
+    const sessionMessages = await deps.runtime.subagent.getSessionMessages({
+      sessionKey,
+      limit: CONTROLLER_SESSION_PROGRESS_MESSAGE_LIMIT,
+    });
+    progressSnapshot.latestMessages = Array.isArray(sessionMessages.messages) ? sessionMessages.messages : [];
+    const entries = buildSessionProgressEntries(progressSnapshot.latestMessages, message);
+    const newEntries = getNewSessionProgressEntries(entries, progressSnapshot.fingerprints);
+    progressSnapshot.fingerprints = entries.map((entry) => entry.fingerprint);
+    if (newEntries.length > 0) {
+      noteObservedControllerActivity();
+    }
+    for (const entry of newEntries) {
+      if (entry.isRateLimit) {
+        await markRateLimitWaiting();
+        continue;
+      }
+      if (rateLimitState.active && isStillWaitingResponse(entry.message)) {
+        continue;
+      }
+      if (rateLimitState.active) {
+        clearRateLimitWaiting();
+      }
+      recordControllerRunEvent(controllerRun.id, {
+        type: "progress",
+        phase: entry.phase,
+        source: "subagent",
+        stream: entry.stream,
+        status: "running",
+        sessionKey,
+        runId: runResult.runId,
+        message: entry.message,
+      }, deps);
+    }
   };
 
   const extractSessionAssistantReply = async (): Promise<string> => {
@@ -2242,6 +3029,12 @@ async function runControllerIntakeUnlocked(
       timeoutMs: CONTROLLER_RUN_WAIT_SLICE_MS,
     });
 
+    try {
+      await syncControllerSessionProgress();
+    } catch (err) {
+      deps.logger.debug?.(`Controller: failed to sync planning session progress for ${controllerRun.id}: ${String(err)}`);
+    }
+
     if (waitResult.status === "ok") {
       clearRateLimitWaiting();
       noteObservedControllerActivity();
@@ -2257,7 +3050,7 @@ async function runControllerIntakeUnlocked(
   }
   if (waitResult.status !== "ok") {
     const errorMessage = waitResult.error || "Controller intake failed";
-    const createdTaskIds = tagControllerCreatedTasks(taskIdsBeforeRun, sessionKey, deps);
+    const createdTaskIds = tagControllerCreatedTasks(taskIdsBeforeRun, controllerRun.id, sessionKey, deps);
     updateControllerRun(controllerRun.id, deps, (run) => {
       run.createdTaskIds = createdTaskIds;
       run.error = errorMessage;
@@ -2274,7 +3067,13 @@ async function runControllerIntakeUnlocked(
     throw new Error(errorMessage);
   }
 
-  let createdTaskIds = tagControllerCreatedTasks(taskIdsBeforeRun, sessionKey, deps);
+  let createdTaskIds = tagControllerCreatedTasks(taskIdsBeforeRun, controllerRun.id, sessionKey, deps);
+
+  try {
+    await syncControllerSessionProgress();
+  } catch (err) {
+    deps.logger.debug?.(`Controller: failed final planning session sync for ${controllerRun.id}: ${String(err)}`);
+  }
 
   const rawReply = completionOverride || await extractSessionAssistantReply()
     || "Controller completed the intake run but did not return any text.";
@@ -2297,8 +3096,17 @@ async function runControllerIntakeUnlocked(
   if (fallbackTaskIds.length > 0) {
     createdTaskIds = Array.from(new Set([...createdTaskIds, ...fallbackTaskIds]));
   }
+  const convertedClarificationTaskIds = await maybeConvertControllerClarificationToExecutionTask(
+    controllerRun.id,
+    sessionKey,
+    recordedManifest,
+    deps,
+  );
+  if (convertedClarificationTaskIds.length > 0) {
+    createdTaskIds = Array.from(new Set([...createdTaskIds, ...convertedClarificationTaskIds]));
+  }
   syncControllerRunClarifications(controllerRun.id, sessionKey, recordedManifest, deps);
-  const reconciledTasks = reconcileControllerManifestTaskBindings(sessionKey, createdTaskIds, recordedManifest, deps);
+  const reconciledTasks = reconcileControllerManifestTaskBindings(controllerRun.id, sessionKey, createdTaskIds, recordedManifest, deps);
 
   // ── Automatic Team Kickoff ────────────────────────────────────────────
   // For complex projects (3+ roles), automatically run a kickoff meeting
@@ -2417,6 +3225,8 @@ async function runControllerIntakeUnlocked(
     });
   });
 
+  await pruneStaleControllerRuns(deps, { excludeRunId: controllerRun.id });
+
   return {
     sessionKey,
     runId: runResult.runId,
@@ -2531,6 +3341,20 @@ function buildTaskContextSnapshot(task: TaskInfo, state: TeamState | null): Task
       .slice(0, 5)
       .map((clarification) => ({
         question: clarification.question,
+        blockingReason: clarification.blockingReason,
+      })),
+    answeredClarifications: Object.values(state.clarifications)
+      .filter((clarification) => clarification.status === "answered" && clarification.answer)
+      .filter((clarification) =>
+        clarification.taskId === task.id
+        || normalizeControllerIntakeSessionKey(clarification.controllerSessionKey) === normalizedSessionKey,
+      )
+      .sort((a, b) => (b.answeredAt ?? b.updatedAt ?? 0) - (a.answeredAt ?? a.updatedAt ?? 0))
+      .slice(0, 5)
+      .map((clarification) => ({
+        question: clarification.question,
+        answer: clarification.answer || "",
+        answeredBy: clarification.answeredBy,
         blockingReason: clarification.blockingReason,
       })),
     handoffPlan: latestRun?.manifest?.handoffPlan,
@@ -3873,6 +4697,28 @@ async function handleRequest(
     return;
   }
 
+  if (req.method === "GET" && pathname === "/api/v1/workspace/project-path") {
+    const projectDir = requestUrl.searchParams.get("projectDir") ?? "";
+    if (!projectDir) {
+      sendError(res, 400, "projectDir is required");
+      return;
+    }
+    const absolutePath = resolveSafeProjectDirectory(projectDir);
+    if (!absolutePath) {
+      sendError(res, 400, "Invalid projectDir");
+      return;
+    }
+    if (!fs.existsSync(absolutePath)) {
+      sendError(res, 404, "Project directory not found");
+      return;
+    }
+    sendJson(res, 200, {
+      projectDir,
+      absolutePath,
+    });
+    return;
+  }
+
   if (req.method === "GET" && pathname.startsWith("/api/v1/workspace/raw/")) {
     const rawPathname = pathname.slice("/api/v1/workspace/raw/".length);
     if (!rawPathname) {
@@ -4067,18 +4913,19 @@ async function handleRequest(
     const projectId = inheritedProject?.projectId ?? (explicitProjectName || undefined);
     const projectDir = inheritedProject?.projectDir ?? projectId ?? deriveProjectSlug(title);
 
-    const task: TaskInfo = {
-      id: taskId,
-      title,
-      description,
+  const task: TaskInfo = {
+    id: taskId,
+    title,
+    description,
       status: "pending",
       priority,
-      assignedRole,
-      createdBy,
-      recommendedSkills: recommendedSkills.length > 0 ? recommendedSkills : undefined,
-      controllerSessionKey,
-      projectId,
-      projectDir,
+    assignedRole,
+    createdBy,
+    recommendedSkills: recommendedSkills.length > 0 ? recommendedSkills : undefined,
+    controllerRunId: undefined,
+    controllerSessionKey,
+    projectId,
+    projectDir,
       createdAt: now,
       updatedAt: now,
     };
@@ -4152,6 +4999,29 @@ async function handleRequest(
       return;
     }
     sendJson(res, 200, { task: serializeTask(task) });
+    return;
+  }
+
+  // DELETE /api/v1/tasks/:id
+  if (req.method === "DELETE" && pathname.match(/^\/api\/v1\/tasks\/[^/]+$/)) {
+    const taskId = pathname.split("/").pop()!;
+    const summary = buildEmptyTaskCleanupSummary();
+    const deleted = await deleteTaskCascade(taskId, deps, summary);
+    if (!deleted) {
+      sendError(res, 404, "Task not found");
+      return;
+    }
+    const stillExists = !!getTeamState()?.tasks[taskId];
+    if (stillExists) {
+      sendError(res, 409, "Task cleanup could not be confirmed");
+      return;
+    }
+    sendJson(res, 200, {
+      status: "deleted",
+      confirmed: true,
+      taskId,
+      cleanup: summary,
+    });
     return;
   }
 
@@ -4767,6 +5637,51 @@ async function handleRequest(
         .map((run) => serializeControllerRun(run))
       : [];
     sendJson(res, 200, { controllerRuns });
+    return;
+  }
+
+  // DELETE /api/v1/projects/:projectDir
+  if (req.method === "DELETE" && pathname.match(/^\/api\/v1\/projects\/[^/]+$/)) {
+    const projectDir = decodeURIComponent(pathname.split("/").pop()!);
+    const result = await deleteProjectCascade(projectDir, deps);
+    if (!result.deleted) {
+      sendError(res, 404, "Project not found or project cleanup could not be confirmed");
+      return;
+    }
+    const safeProjectPath = resolveSafeProjectDirectory(projectDir);
+    const stillExists = safeProjectPath ? fs.existsSync(safeProjectPath) : true;
+    if (stillExists) {
+      sendError(res, 409, "Project cleanup could not be confirmed");
+      return;
+    }
+    sendJson(res, 200, {
+      status: "deleted",
+      confirmed: true,
+      projectDir,
+      cleanup: result.summary,
+    });
+    return;
+  }
+
+  // DELETE /api/v1/controller/runs/:id
+  if (req.method === "DELETE" && pathname.match(/^\/api\/v1\/controller\/runs\/[^/]+$/)) {
+    const runId = pathname.split("/").pop()!;
+    const result = await deleteControllerRunCascade(runId, deps);
+    if (!result.deleted) {
+      sendError(res, 404, "Controller run not found");
+      return;
+    }
+    const stillExists = !!getTeamState()?.controllerRuns[runId];
+    if (stillExists) {
+      sendError(res, 409, "Planning run cleanup could not be confirmed");
+      return;
+    }
+    sendJson(res, 200, {
+      status: "deleted",
+      confirmed: true,
+      runId,
+      cleanup: result.summary,
+    });
     return;
   }
 

@@ -716,6 +716,11 @@ textarea { padding: 14px 16px; min-height: 188px; resize: vertical; line-height:
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: .04em;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  word-break: break-word;
 }
 .planning-run-card,
 .task-list-item {
@@ -948,9 +953,33 @@ textarea { padding: 14px 16px; min-height: 188px; resize: vertical; line-height:
 .markdown-body ul,
 .markdown-body ol,
 .markdown-body blockquote,
-.markdown-body pre { margin: 0 0 12px; }
+.markdown-body pre,
+.markdown-body .markdown-table-wrap { margin: 0 0 12px; }
 .markdown-body ul,
 .markdown-body ol { padding-left: 20px; }
+.markdown-table-wrap {
+  overflow-x: auto;
+}
+.markdown-body table {
+  width: 100%;
+  min-width: 320px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.markdown-body th,
+.markdown-body td {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  vertical-align: top;
+}
+.markdown-body th {
+  background: #f8fafc;
+  color: var(--text);
+  font-weight: 700;
+}
+.markdown-body tbody tr:nth-child(even) td {
+  background: rgba(148, 163, 184, 0.06);
+}
 .markdown-body blockquote {
   padding-left: 12px;
   border-left: 3px solid #c7d7f6;
@@ -1094,6 +1123,11 @@ textarea { padding: 14px 16px; min-height: 188px; resize: vertical; line-height:
 .preview-shell iframe { width: 100%; min-height: 620px; border: 0; border-radius: 10px; background: white; }
 .tree-root, .tree-children { list-style: none; margin: 0; padding-left: 0; }
 .tree-node { margin-bottom: 4px; }
+.tree-row-shell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .tree-row {
   display: flex;
   align-items: center;
@@ -1114,6 +1148,13 @@ textarea { padding: 14px 16px; min-height: 188px; resize: vertical; line-height:
 .tree-row:hover { background: var(--panel-2); }
 .tree-row.active,
 .tree-row.selected { background: #eef4ff; }
+.tree-action-btn {
+  flex: 0 0 auto;
+  opacity: .82;
+}
+.tree-action-btn:hover {
+  opacity: 1;
+}
 .tree-children { padding-left: 16px; margin-top: 4px; border-left: 1px solid rgba(23, 32, 51, .08); }
 .workspace-content > .file-shell,
 .workspace-content > .preview-shell,

@@ -452,6 +452,10 @@
     }
   }
 
+  function canOpenProjectInFinder() {
+    return isLoopbackControllerUrl(state.controllerUrl);
+  }
+
   function selectedLocalSetupMode() {
     const modes = normalizeArray(state.localSetupInfo && state.localSetupInfo.modes);
     return modes.find((entry) => entry.id === state.localSetupMode) || modes[0] || null;
@@ -803,7 +807,7 @@
       : `<textarea data-clarification-comment="${escapeHtml(id)}" placeholder="${escapeHtml(commentPlaceholder)}"></textarea>`;
     return (
       `<div class="clarification-form" data-clarification-card="${escapeHtml(id)}">` +
-      (schema.description ? `<div class="clarification-body"><strong>Input guidance</strong>${renderMarkdownBlock(schema.description)}</div>` : "") +
+      (schema && schema.description ? `<div class="clarification-body"><strong>Input guidance</strong>${renderMarkdownBlock(schema.description)}</div>` : "") +
       controlHtml +
       commentField +
       `<div class="inline-actions"><button class="inline-action" type="button" data-clarification-submit="${escapeHtml(id)}">Send answer</button></div>` +
@@ -900,6 +904,19 @@
     return Array.from(map.values());
   }
 
+  function pruneClarificationNotifications() {
+    const pendingIds = new Set(
+      normalizeArray(state.teamStatus.clarifications)
+        .filter((item) => !item.answer)
+        .map((item) => `clarification:${item.id}`),
+    );
+    state.notifications = state.notifications.filter((item) => {
+      if (!item || typeof item.id !== 'string') return false;
+      if (!item.id.startsWith('clarification:')) return true;
+      return pendingIds.has(item.id);
+    });
+  }
+
   function loadConversation() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -973,6 +990,23 @@
     });
     if (!response.ok) {
       let message = `POST ${path} failed (${response.status})`;
+      try {
+        const data = await response.json();
+        message = data.error || data.message || message;
+      } catch {
+        // ignore
+      }
+      throw new Error(message);
+    }
+    return response.json();
+  }
+
+  async function apiDelete(path) {
+    const response = await fetch(controllerApi(path), {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      let message = `DELETE ${path} failed (${response.status})`;
       try {
         const data = await response.json();
         message = data.error || data.message || message;
@@ -1478,6 +1512,19 @@
     state.teamStatus.tasks = sortTasks(tasks);
   }
 
+  function removeTaskState(taskId) {
+    if (!taskId) return;
+    state.teamStatus.tasks = sortTasks(normalizeArray(state.teamStatus.tasks).filter((task) => task.id !== taskId));
+    state.teamStatus.clarifications = sortClarifications(
+      normalizeArray(state.teamStatus.clarifications).filter((item) => item.taskId !== taskId),
+    );
+    state.teamStatus.messages = normalizeArray(state.teamStatus.messages).filter((message) => message.taskId !== taskId);
+    if (state.selectedTaskId === taskId) {
+      state.selectedTaskId = "";
+      state.taskDetailData = null;
+    }
+  }
+
   function upsertClarificationState(item) {
     if (!item || !item.id) return;
     const clarifications = normalizeArray(state.teamStatus.clarifications);
@@ -1500,6 +1547,39 @@
       runs.unshift(run);
     }
     state.teamStatus.controllerRuns = runs.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+  }
+
+  function removeControllerRunState(runId) {
+    if (!runId) return;
+    state.teamStatus.controllerRuns = normalizeArray(state.teamStatus.controllerRuns)
+      .filter((run) => run.id !== runId)
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    state.teamStatus.clarifications = sortClarifications(
+      normalizeArray(state.teamStatus.clarifications).filter((item) => item.controllerRunId !== runId),
+    );
+    if (state.selectedPlanningRunId === runId) {
+      state.selectedPlanningRunId = "";
+    }
+  }
+
+  function removeClarificationState(clarificationId) {
+    if (!clarificationId) return;
+    state.teamStatus.clarifications = sortClarifications(
+      normalizeArray(state.teamStatus.clarifications).filter((item) => item.id !== clarificationId),
+    );
+    if (state.taskDetailData) {
+      state.taskDetailData.clarifications = normalizeArray(state.taskDetailData.clarifications)
+        .filter((item) => item.id !== clarificationId);
+    }
+  }
+
+  function removeMessageState(messageId) {
+    if (!messageId) return;
+    state.teamStatus.messages = normalizeArray(state.teamStatus.messages).filter((message) => message.id !== messageId);
+    if (state.taskDetailData) {
+      state.taskDetailData.messages = normalizeArray(state.taskDetailData.messages)
+        .filter((message) => message.id !== messageId);
+    }
   }
 
   function getTaskProjectKey(task) {
@@ -1565,6 +1645,21 @@
 
   function renderTaskExecutionEventEntry(event) {
     return `<article class="timeline-entry live-event"><div class="timeline-head"><div class="task-event-title">${escapeHtml(humanize(event.type || event.phase || "event"))}</div><span class="entry-meta">${escapeHtml(formatDateTime(event.createdAt))}</span></div>${renderMarkdownBlock(event.message || "")}</article>`;
+  }
+
+  function renderExecutionEventTitle(event) {
+    if (event && event.stream === "assistant") return "Assistant";
+    if (event && event.stream === "tool") return "Tool";
+    if (event && event.phase === "user") return "Prompt";
+    return humanize((event && (event.phase || event.type)) || "event");
+  }
+
+  function renderPlanningExecutionEventEntry(event) {
+    return `<article class="timeline-entry"><div class="timeline-head"><div class="task-event-title">${escapeHtml(renderExecutionEventTitle(event))}</div><span class="entry-meta">${escapeHtml(formatDateTime(event.createdAt))}</span></div>${renderMarkdownBlock(event.message || "")}</article>`;
+  }
+
+  function renderPlanningTimeline(events) {
+    return `<div class="timeline">${events.length ? events.map((event) => renderPlanningExecutionEventEntry(event)).join("") : '<div class="empty-state">No planning timeline yet.</div>'}</div>`;
   }
 
   function appendLiveTaskExecution(event) {
@@ -1743,6 +1838,10 @@
       `<div class="list-headline"><div class="detail-title" data-task-detail-title>${escapeHtml(task.title || task.id || t("task.title"))}</div><div data-task-hero-status>${renderStatusTag(task.status || "unknown")}</div></div>` +
       `<div class="task-meta-row"><div data-task-detail-role>${task.assignedRole ? renderRoleChip(task.assignedRole) : `<span class="mini-pill">${escapeHtml(t("task.auto"))}</span>`}</div><div class="pill-row" data-task-detail-pills>${[task.priority, task.assignedWorkerId].filter(Boolean).map((v) => `<span class="mini-pill">${escapeHtml(v)}</span>`).join("")}</div></div>` +
       `<div class="detail-subtitle" data-task-live-meta>${escapeHtml(buildTaskLiveMeta(task))}</div>` +
+      `<div class="row-actions">` +
+      `<button class="btn" type="button" data-delete-task="${escapeHtml(task.id || "")}">Delete task</button>` +
+      (task.projectDir ? `<button class="btn" type="button" data-delete-project="${escapeHtml(task.projectDir)}" data-delete-project-label="${escapeHtml(task.projectDir)}">Delete project</button>` : "") +
+      `</div>` +
       `</section>` +
       `<div class="task-detail-tabs" data-task-detail-tabs></div>` +
       `<section class="task-detail-panel" data-task-detail-panel></section>` +
@@ -1845,14 +1944,22 @@
     const candidateRoles = normalizeArray(kickoffPlan.candidateRoles);
     const assessments = normalizeArray(kickoffPlan.assessments);
     const controllerOutput = selectedRun.output || selectedRun.reply || "";
+    const executionEvents = normalizeArray((selectedRun.execution && selectedRun.execution.events) || []);
     const roleCount = requiredRoles.length || candidateRoles.length;
+    const detailTitle = selectedRun.source === "task_follow_up"
+      ? (selectedRun.title || manifest.requirementSummary || selectedRun.id || t("planning.runFallback"))
+      : (manifest.requirementSummary || selectedRun.title || selectedRun.id || t("planning.runFallback"));
     const metaLine = [manifest.projectName, formatDateTime(selectedRun.updatedAt)].filter(Boolean).join(" • ");
     detail.innerHTML = (
       `<div class="planning-detail-shell">` +
       `<section class="planning-hero">` +
       `<div class="detail-kicker">${escapeHtml(t("planning.requirement"))}</div>` +
-      `<div class="detail-title">${escapeHtml(manifest.requirementSummary || selectedRun.title || selectedRun.id || t("planning.runFallback"))}</div>` +
+      `<div class="detail-title">${escapeHtml(detailTitle)}</div>` +
       `<div class="detail-subtitle">${escapeHtml(metaLine)}</div>` +
+      `<div class="row-actions">` +
+      `<button class="btn" type="button" data-delete-planning-run="${escapeHtml(selectedRun.id || "")}">Delete planning run</button>` +
+      (selectedRun.projectDir ? `<button class="btn" type="button" data-delete-project="${escapeHtml(selectedRun.projectDir)}" data-delete-project-label="${escapeHtml(selectedRun.projectDir)}">Delete project</button>` : "") +
+      `</div>` +
       (requiredRoles.length
         ? `<div class="role-chip-row">${requiredRoles.map((role) => renderRoleChip(role)).join("")}</div>`
         : "") +
@@ -1872,6 +1979,7 @@
         ? `<section class="subtle-card"><div class="detail-kicker">${escapeHtml(t("planning.assessments"))}</div>${renderPlanningAssessments(assessments)}</section>`
         : "") +
       `<section class="subtle-card"><div class="detail-kicker">${escapeHtml(t("planning.controllerOutput"))}</div>${renderMarkdownBlock(controllerOutput, t("planning.noControllerOutput"))}</section>` +
+      `<section class="subtle-card"><div class="detail-kicker">Planning timeline</div>${renderPlanningTimeline(executionEvents)}</section>` +
       `</div>` +
       `<div class="planning-side-column">` +
       (candidateRoles.length
@@ -2042,6 +2150,82 @@
     renderTaskDetailShell(state.taskDetailData);
   }
 
+  async function deleteTaskWithConfirmation(taskId) {
+    if (!taskId) return;
+    const task = normalizeArray(state.teamStatus.tasks).find((item) => item.id === taskId);
+    const label = task && task.title ? task.title : taskId;
+    if (!window.confirm(`Delete task "${label}" and all linked clarifications, messages, previews, and timeline data?`)) {
+      return;
+    }
+    setStatusLine(`Deleting task ${label}…`);
+    await apiDelete(`/tasks/${encodeURIComponent(taskId)}`);
+    const remaining = await apiGetOptional(`/tasks/${encodeURIComponent(taskId)}`, null);
+    if (remaining && remaining.task) {
+      throw new Error("Task cleanup could not be confirmed");
+    }
+    removeTaskState(taskId);
+    renderMissionSummary();
+    renderTasks();
+    renderClarifications();
+    await refreshWorkspaceTree();
+    setStatusLine(`Deleted task ${label}.`);
+  }
+
+  async function deletePlanningRunWithConfirmation(runId) {
+    if (!runId) return;
+    const run = normalizeArray(state.teamStatus.controllerRuns).find((item) => item.id === runId);
+    const label = run && (run.title || (run.manifest && run.manifest.requirementSummary)) ? (run.title || run.manifest.requirementSummary) : runId;
+    if (!window.confirm(`Delete planning run "${label}" and all related tasks plus their clarifications, messages, previews, and timeline data?`)) {
+      return;
+    }
+    setStatusLine(`Deleting planning run ${label}…`);
+    await apiDelete(`/controller/runs/${encodeURIComponent(runId)}`);
+    const remaining = await apiGetOptional(`/controller/runs`, { controllerRuns: [] });
+    const stillExists = normalizeArray(remaining.controllerRuns).some((item) => item.id === runId);
+    if (stillExists) {
+      throw new Error("Planning run cleanup could not be confirmed");
+    }
+    const linkedTaskIds = normalizeArray(state.teamStatus.tasks)
+      .filter((task) => task.controllerSessionKey && run && task.controllerSessionKey === run.sessionKey)
+      .map((task) => task.id);
+    linkedTaskIds.forEach(removeTaskState);
+    removeControllerRunState(runId);
+    renderMissionSummary();
+    renderPlanning();
+    renderTasks();
+    renderClarifications();
+    await refreshWorkspaceTree();
+    setStatusLine(`Deleted planning run ${label}.`);
+  }
+
+  async function deleteProjectWithConfirmation(projectDir, sourceLabel) {
+    if (!projectDir) return;
+    const label = sourceLabel || projectDir;
+    if (!window.confirm(`Delete project "${label}" and all related planning runs, tasks, clarifications, messages, previews, timeline data, and workspace files?`)) {
+      return;
+    }
+    setStatusLine(`Deleting project ${label}…`);
+    await apiDelete(`/projects/${encodeURIComponent(projectDir)}`);
+    await refreshAll(true);
+    const stillExists = normalizeArray(state.workspaceTree).some((entry) => (entry.path || '') === `projects/${projectDir}`);
+    if (stillExists) {
+      throw new Error("Project cleanup could not be confirmed");
+    }
+    setStatusLine(`Deleted project ${label}.`);
+  }
+
+  async function openProjectInFinder(projectDir, sourceLabel) {
+    if (!projectDir) return;
+    if (!canOpenProjectInFinder()) {
+      throw new Error("Open in Finder is only available when connected to a local controller.");
+    }
+    const label = sourceLabel || projectDir;
+    setStatusLine(`Opening project ${label} in Finder…`);
+    const data = await apiGet(`/workspace/project-path?projectDir=${encodeURIComponent(projectDir)}`);
+    await desktop.openPath(data.absolutePath || "");
+    setStatusLine(`Opened project ${label} in Finder.`);
+  }
+
   function renderClarifications() {
     const list = $("#clarification-list");
     if (!list) return;
@@ -2103,13 +2287,24 @@
     return `<ul class="${level === 0 ? "tree-root" : "tree-children"}">${
       normalizeArray(entries).map((entry) => {
         if (entry.type === "directory") {
+          const entryPath = entry.path || "";
+          const canDeleteProject = /^projects\/[^/]+$/.test(entryPath);
+          const canOpenFinder = canDeleteProject && canOpenProjectInFinder();
           const children = Array.isArray(entry.children) ? renderWorkspaceNodes(entry.children, level + 1) : '<ul class="tree-children" style="display:none"></ul>';
           return (
             `<li class="tree-node">` +
+            `<div class="tree-row-shell">` +
             `<button type="button" class="tree-row" data-tree-dir="${escapeHtml(entry.path || "")}" data-lazy="${entry.children ? "0" : "1"}">` +
             `<span>${entry.children ? "▾" : "▸"}</span>` +
             `<span>${escapeHtml(entry.name || entry.path || "directory")}</span>` +
             `</button>` +
+            (canOpenFinder
+              ? `<button type="button" class="mini-btn tree-action-btn" data-open-project-finder="${escapeHtml(entry.name || "")}" data-open-project-finder-label="${escapeHtml(entry.name || "")}" title="Open project in Finder">Finder</button>`
+              : "") +
+            (canDeleteProject
+              ? `<button type="button" class="mini-btn tree-action-btn" data-delete-project="${escapeHtml(entry.name || "")}" data-delete-project-label="${escapeHtml(entry.name || "")}" title="Delete project directory">Delete</button>`
+              : "") +
+            `</div>` +
             `${children}` +
             `</li>`
           );
@@ -2286,6 +2481,7 @@
   }
 
   function updateNotificationsFromStatus() {
+    pruneClarificationNotifications();
     normalizeArray(state.teamStatus.clarifications).filter((item) => !item.answer).forEach((item) => {
       upsertNotification({
         id: `clarification:${item.id}`,
@@ -2354,6 +2550,15 @@
         renderPlanning();
         renderChrome();
         break;
+      case "controller:run_deleted":
+        removeControllerRunState(data.runId);
+        renderMissionSummary();
+        renderPlanning();
+        renderChrome();
+        break;
+      case "project:deleted":
+        refreshAll(true).catch(() => {});
+        break;
       case "clarification:requested":
         upsertClarificationState(data);
         upsertTaskDetailClarification(data);
@@ -2383,6 +2588,8 @@
       case "clarification:answered":
         upsertClarificationState(data);
         upsertTaskDetailClarification(data);
+        pruneClarificationNotifications();
+        renderNotifications();
         renderMissionSummary();
         renderClarifications();
         syncClarificationPrompt();
@@ -2392,6 +2599,16 @@
           } else {
             renderTaskDetail(data.taskId).catch(() => {});
           }
+        }
+        break;
+      case "clarification:deleted":
+        removeClarificationState(data.clarificationId);
+        pruneClarificationNotifications();
+        renderNotifications();
+        renderMissionSummary();
+        renderClarifications();
+        if (state.currentView === "tasks" && state.selectedTaskDetailTab === "clarifications") {
+          renderTaskDetailContent();
         }
         break;
       case "task:execution": {
@@ -2440,6 +2657,12 @@
         }
         break;
       }
+      case "task:deleted":
+        removeTaskState(data.taskId);
+        renderMissionSummary();
+        renderTasks();
+        renderClarifications();
+        break;
       case "report:ready":
         upsertNotification({
           id: `report:${data.reportUrl || Date.now()}`,
@@ -2459,6 +2682,12 @@
         state.teamStatus.messages = [...normalizeArray(state.teamStatus.messages), data];
         appendTaskDetailMessage(data);
         if (data.taskId === state.selectedTaskId && state.currentView === "tasks" && state.selectedTaskDetailTab === "messages") {
+          renderTaskDetailContent();
+        }
+        break;
+      case "message:deleted":
+        removeMessageState(data.messageId);
+        if (state.currentView === "tasks" && state.selectedTaskDetailTab === "messages") {
           renderTaskDetailContent();
         }
         break;
@@ -3003,6 +3232,44 @@
       return;
     }
 
+    const deleteTaskButton = target.closest('[data-delete-task]');
+    if (deleteTaskButton) {
+      deleteTaskWithConfirmation(deleteTaskButton.dataset.deleteTask || '').catch((error) => {
+        setStatusLine(error instanceof Error ? error.message : 'Failed to delete task');
+      });
+      return;
+    }
+
+    const deletePlanningRunButton = target.closest('[data-delete-planning-run]');
+    if (deletePlanningRunButton) {
+      deletePlanningRunWithConfirmation(deletePlanningRunButton.dataset.deletePlanningRun || '').catch((error) => {
+        setStatusLine(error instanceof Error ? error.message : 'Failed to delete planning run');
+      });
+      return;
+    }
+
+    const deleteProjectButton = target.closest('[data-delete-project]');
+    if (deleteProjectButton) {
+      deleteProjectWithConfirmation(
+        deleteProjectButton.dataset.deleteProject || '',
+        deleteProjectButton.dataset.deleteProjectLabel || '',
+      ).catch((error) => {
+        setStatusLine(error instanceof Error ? error.message : 'Failed to delete project');
+      });
+      return;
+    }
+
+    const openProjectFinderButton = target.closest('[data-open-project-finder]');
+    if (openProjectFinderButton) {
+      openProjectInFinder(
+        openProjectFinderButton.dataset.openProjectFinder || '',
+        openProjectFinderButton.dataset.openProjectFinderLabel || '',
+      ).catch((error) => {
+        setStatusLine(error instanceof Error ? error.message : 'Failed to open project in Finder');
+      });
+      return;
+    }
+
     const submitClarification = target.closest('[data-clarification-submit]');
     if (submitClarification) {
       answerClarification(submitClarification.dataset.clarificationSubmit || '', submitClarification);
@@ -3072,12 +3339,13 @@
     const treeDir = target.closest('[data-tree-dir]');
     if (treeDir) {
       const row = treeDir;
-      const container = row.parentElement.querySelector(':scope > .tree-children');
+      const node = row.closest('.tree-node');
+      const container = node ? node.querySelector(':scope > .tree-children') : null;
       if (!container) return;
       const hidden = container.style.display === 'none';
       if (hidden) {
         container.style.display = '';
-        row.firstElementChild.textContent = '▾';
+        if (row.firstElementChild) row.firstElementChild.textContent = '▾';
         if (row.dataset.lazy === '1') {
           row.dataset.lazy = '0';
           container.innerHTML = '<li class="tree-node"><div class="empty-state">Loading…</div></li>';
@@ -3091,7 +3359,7 @@
         }
       } else {
         container.style.display = 'none';
-        row.firstElementChild.textContent = '▸';
+        if (row.firstElementChild) row.firstElementChild.textContent = '▸';
       }
       return;
     }

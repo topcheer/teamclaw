@@ -195,6 +195,13 @@ ipcMain.handle("openclaw:install-local", async (_event, options) => installOpenC
 ipcMain.handle("shell:openExternal", async (_event, url) => {
   await shell.openExternal(String(url || ""));
 });
+ipcMain.handle("shell:openPath", async (_event, targetPath) => {
+  const result = await shell.openPath(String(targetPath || ""));
+  if (result) {
+    throw new Error(result);
+  }
+  return { ok: true };
+});
 ipcMain.handle("notification:show", async (_event, payload) => {
   const title = String(payload?.title || "TeamClaw");
   const body = String(payload?.body || "");

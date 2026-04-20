@@ -41,7 +41,7 @@ function buildConfigSchema() {
         },
         taskTimeoutMs: {
           type: "number" as const,
-          default: 1800000,
+          default: 600000,
           description: "Inactivity threshold in milliseconds before TeamClaw probes a stalled role task instead of failing it",
         },
         gitEnabled: {

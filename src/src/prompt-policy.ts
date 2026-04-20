@@ -54,7 +54,7 @@ export function buildRoleOperatingRules(options: {
     "- Treat file paths from plans, docs, and teammate messages as hints, not facts. Verify that a referenced file exists in the current workspace before reading or editing it; if it does not, search for the nearest real file and explicitly note the path drift.",
     "- Treat other workers' OpenClaw sessions and session keys as unavailable; use the shared workspace, the current task context, and teammate messages instead of trying cross-session inspection.",
     "- Do not mark a task completed or failed via progress updates. Finish by returning the deliverable or raising the blocking error so TeamClaw can close the task correctly.",
-    "- If only a commercial or proprietary option would unblock the task, ask the human for approval before assuming it is allowed.",
+    "- Do not infer ownership, license scope, or lack of user authorization from technical characteristics such as proprietary branding, bundled assets, binary files, minified code, or repository layout. Focus on technical feasibility and the user's explicit requirements.",
     `- Use exact TeamClaw role IDs when collaborating: ${TEAMCLAW_ROLE_IDS_TEXT}.`,
     `- If a true follow-up is required after your deliverable, prefer these exact next roles: ${suggestedRoles}.`,
     `- Default starter skills for this role: ${recommendedSkills}. If the task includes more specific recommended skills, prefer those.`,
@@ -109,10 +109,15 @@ export function buildTaskExecutionRules(rateLimitWaitingSentinel: string): strin
     "- Do NOT create additional tasks, task trees, or duplicate follow-up work.",
     "- Do NOT re-scope this into a multi-role coordination workflow.",
     "- Do NOT delegate the core work of this task away to another role.",
+    "- Default to completing implementation work in your current worker session. Do not hand the whole task to a helper coding agent just because delegation feels faster.",
+    "- Only use a helper coding agent when there is a concrete capability gap, a long-running specialist CLI workflow, or a sharply bounded subproblem that is genuinely narrower than the full task.",
+    "- If you use a helper coding agent, pass the full TeamClaw task context first: requirement summary, authoritative project path, upstream task outputs, active blockers, acceptance criteria, and the exact artifact you must return.",
+    "- Never ask a helper coding agent to take over the whole TeamClaw task. Helpers, if used at all, must stay narrow and subordinate to your task ownership.",
     "- If Task Context includes recent completed deliverables, treat them as upstream inputs and search the shared workspace for any referenced task IDs or filenames before requesting clarification.",
     "- Do NOT attempt to inspect or resolve another worker's OpenClaw session or session key; those sessions are isolated per worker.",
     "- If the task includes a Recommended Skills section, use those skills first and prefer the exact listed slugs when searching for additional help.",
     "- If this task has a project directory, treat files outside that directory as foreign unless the task explicitly says they are shared infrastructure inputs. Do not modify, cite as deliverables, or silently reuse another product's files.",
+    "- Do not infer that the user lacks rights to inspect, modify, port, rename, or rebrand code merely because a repository contains bundled, binary, generated, minified, or vendor-branded material. Treat authorization as outside your role unless the user explicitly states a restriction.",
     "- Do NOT mark the task completed or failed via progress tools. Return the final deliverable (or raise an error) and let TeamClaw close the task.",
     "- If critical information is missing and you cannot proceed safely, request clarification and wait instead of guessing.",
     "- If more work is needed, mention it briefly in your result or use a handoff/review tool on this same task.",
@@ -311,6 +316,7 @@ export function buildControllerStructuredContractRules(): string[] {
     "- Use deferredTasks for later-phase work that should not be created yet because prerequisites are not satisfied.",
     "- If the run is blocked and no tasks should be created yet, submit a manifest with createdTasks=[] and explain the blocker in clarificationQuestions and/or deferredTasks.",
     "- If you ask the human clarifying questions, still submit the manifest so the controller has machine-readable state for this run.",
+    "- When the requirement is truly complete, also include 1-3 completionOpportunities for adjacent, technically justified next steps TeamClaw could continue immediately if the human wants more. Keep them optional, concrete, and near the delivered scope.",
   ];
 }
 
@@ -333,6 +339,8 @@ export function buildControllerIntakeRules(): string[] {
     "- Human messages are the initial requirement, not an already-decomposed task tree.",
     "- Analyze the requirement briefly: desired outcome, scope, constraints.",
     "- BIAS TOWARD ACTION: if the requirement is clear enough for a competent developer/designer/etc. to start working, create the task immediately. Do not ask for clarification on details the worker can decide (file paths, directory structure, coding style, library choices, interaction patterns).",
+    "- Route repository analysis, architecture design, feasibility assessment, migration planning, and large rewrite decomposition to architect first. Do not default these pre-implementation tasks to developer just because code will eventually be written.",
+    "- Do not reject, moralize, or speculate about ownership merely because code appears bundled, binary-adjacent, generated, minified, vendor-branded, or otherwise unusual. Treat those as technical input characteristics only.",
     "- Only ask for clarification when a decision fundamentally changes the scope or architecture (e.g. 'build a web app' — do you want React, Vue, or plain HTML? Or 'integrate payments' — which provider?). Even then, limit to 1-2 truly blocking questions.",
     "- After the requirement is clear enough, translate it into the minimum explicit TeamClaw task packet needed for the team.",
     "- When creating a task, include a recommendedSkills array whenever you know a useful OpenClaw/ClawHub skill slug (or a short search query if you do not know the exact slug).",
@@ -369,6 +377,7 @@ export function buildControllerDisciplineRules(options: { canProvisionWithoutWor
     `- Use exact TeamClaw role IDs only: ${TEAMCLAW_ROLE_IDS_TEXT}.`,
     "- Never guess or summarize a worker's unfinished output as if it were a completed result. While work is still in flight, report only current status plus the next concrete step.",
     "- Never fabricate downstream readiness from intent alone. Downstream creation requires evidence: completed task state, a structured result contract, concrete deliverables, or an explicit handoff.",
+    "- Never ask the human to manually run an obvious machine step such as rebuild/retest/repro/verification (for example git pull, go build, npm test, rerun and report whether it still crashes) when TeamClaw can create an execution task and do that work itself.",
   ];
 }
 

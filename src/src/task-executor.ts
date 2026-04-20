@@ -82,6 +82,7 @@ export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
     const taskMessage = buildTaskMessage(taskDescription, taskId, roleDef?.label ?? role, {
       inlineContract: true,
       projectDir: assignment.projectDir,
+      teamContext: assignment.teamContext,
     });
     const workspaceDir = resolveTeamClawWorkspaceDir();
     logger.info(`TeamClaw: executing task ${taskId} as ${role} via subagent`);
@@ -891,7 +892,7 @@ function buildTaskMessage(
   taskDescription: string,
   taskId: string,
   roleLabel: string,
-  options?: { inlineContract?: boolean; projectDir?: string },
+  options?: { inlineContract?: boolean; projectDir?: string; teamContext?: TaskAssignmentPayload["teamContext"] },
 ): string {
   const rules = [
     ...buildTaskExecutionRules(RATE_LIMIT_WAITING_SENTINEL),
@@ -923,6 +924,65 @@ function buildTaskMessage(
       "When the task references project-local files such as `ARCHITECTURE.md`, `README.md`, or `package.json`, resolve them inside this project directory first.",
       "Do NOT place files in the workspace root or any other project's directory.",
     );
+  }
+
+  if (options?.teamContext) {
+    const contextLines: string[] = [];
+    if (options.teamContext.requirementSummary) {
+      contextLines.push(`Requirement summary: ${options.teamContext.requirementSummary}`);
+    }
+    if (options.teamContext.projectName) {
+      contextLines.push(`Project name: ${options.teamContext.projectName}`);
+    }
+    if (options.teamContext.requiredRoles && options.teamContext.requiredRoles.length > 0) {
+      contextLines.push(`Required TeamClaw roles: ${options.teamContext.requiredRoles.join(", ")}`);
+    }
+    const appendTaskBucket = (
+      label: string,
+      entries: Array<{ id: string; title: string; assignedRole?: string; status: string; summary?: string }> | undefined,
+    ) => {
+      if (!entries || entries.length === 0) {
+        return;
+      }
+      contextLines.push("", label);
+      for (const entry of entries) {
+        const roleText = entry.assignedRole ? ` (${entry.assignedRole})` : "";
+        const summaryText = entry.summary ? `: ${entry.summary}` : "";
+        contextLines.push(`- [${entry.id}] ${entry.title}${roleText} [${entry.status}]${summaryText}`);
+      }
+    };
+    appendTaskBucket("Active same-requirement tasks:", options.teamContext.activeTasks);
+    appendTaskBucket("Blocked same-requirement tasks:", options.teamContext.blockedTasks);
+    appendTaskBucket("Recent completed upstream tasks:", options.teamContext.recentCompletedTasks);
+    if (options.teamContext.pendingClarifications && options.teamContext.pendingClarifications.length > 0) {
+      contextLines.push("", "Pending clarifications:");
+      for (const clarification of options.teamContext.pendingClarifications) {
+        contextLines.push(`- ${clarification.question}${clarification.blockingReason ? ` — ${clarification.blockingReason}` : ""}`);
+      }
+    }
+    if (options.teamContext.answeredClarifications && options.teamContext.answeredClarifications.length > 0) {
+      contextLines.push("", "Recently answered clarifications (treat these as authoritative and do not ask the same question again unless the answer is still objectively missing or invalid):");
+      for (const clarification of options.teamContext.answeredClarifications) {
+        const meta = [
+          clarification.answeredBy ? `answered by ${clarification.answeredBy}` : "",
+          clarification.blockingReason ? `was blocked by ${clarification.blockingReason}` : "",
+        ].filter(Boolean).join("; ");
+        contextLines.push(`- Q: ${clarification.question}`);
+        contextLines.push(`  A: ${clarification.answer}${meta ? ` (${meta})` : ""}`);
+      }
+    }
+    if (options.teamContext.kickoffSummary) {
+      contextLines.push("", "Team kickoff consensus:", options.teamContext.kickoffSummary);
+    }
+    if (options.teamContext.handoffPlan) {
+      contextLines.push("", `Current handoff plan: ${options.teamContext.handoffPlan}`);
+    }
+    if (options.teamContext.notes) {
+      contextLines.push("", `Controller notes: ${options.teamContext.notes}`);
+    }
+    if (contextLines.length > 0) {
+      sections.push("", "## TeamClaw Requirement Context", ...contextLines);
+    }
   }
 
   sections.push("", "## Execution Rules", ...rules);

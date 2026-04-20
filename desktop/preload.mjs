@@ -7,5 +7,6 @@ contextBridge.exposeInMainWorld("teamclawDesktop", {
   installLocalTeamClaw: (options) => ipcRenderer.invoke("controller:install-local", options),
   installOpenClaw: (options) => ipcRenderer.invoke("openclaw:install-local", options),
   openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url),
+  openPath: (targetPath) => ipcRenderer.invoke("shell:openPath", targetPath),
   showNotification: (payload) => ipcRenderer.invoke("notification:show", payload),
 });

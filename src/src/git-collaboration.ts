@@ -163,6 +163,39 @@ export async function exportControllerGitBundle(
   });
 }
 
+export async function removeTrackedWorkspaceSubtree(
+  config: PluginConfig,
+  logger: PluginLogger,
+  absoluteTargetPath: string,
+): Promise<void> {
+  const workspaceDir = resolveTeamClawWorkspaceDir();
+  return await withRepoLock(workspaceDir, async () => {
+    if (!config.gitEnabled) {
+      return;
+    }
+    if (!await pathExists(path.join(workspaceDir, ".git"))) {
+      return;
+    }
+
+    const targetPath = path.resolve(absoluteTargetPath);
+    const relative = path.relative(workspaceDir, targetPath);
+    if (!relative || relative === "." || relative.startsWith("..") || path.isAbsolute(relative)) {
+      throw new Error(`Refusing to remove tracked paths outside the TeamClaw workspace: ${absoluteTargetPath}`);
+    }
+
+    const trackedResult = await tryGit(["ls-files", "--", relative], { cwd: workspaceDir });
+    if (trackedResult.exitCode !== 0) {
+      throw new Error(formatCommandError(`git ls-files -- ${relative}`, trackedResult));
+    }
+    if (!trackedResult.stdout.trim()) {
+      return;
+    }
+
+    logger.info(`TeamClaw: removing tracked workspace paths under ${relative}`);
+    await runGit(["rm", "-r", "--ignore-unmatch", "--", relative], { cwd: workspaceDir });
+  });
+}
+
 export async function importControllerGitBundle(
   config: PluginConfig,
   logger: PluginLogger,
