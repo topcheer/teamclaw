@@ -6,6 +6,25 @@
   "activation": {
     "onStartup": true
   },
+  "contracts": {
+    "tools": [
+      "teamclaw_ask_peer",
+      "teamclaw_assign_task",
+      "teamclaw_broadcast",
+      "teamclaw_create_task",
+      "teamclaw_get_team_status",
+      "teamclaw_list_tasks",
+      "teamclaw_report_progress",
+      "teamclaw_request_clarification",
+      "teamclaw_request_kickoff",
+      "teamclaw_request_parallel_help",
+      "teamclaw_request_review",
+      "teamclaw_send_message",
+      "teamclaw_submit_manifest",
+      "teamclaw_submit_result_contract",
+      "teamclaw_suggest_handoff"
+    ]
+  },
   "skills": [
     "./skills"
   ],
