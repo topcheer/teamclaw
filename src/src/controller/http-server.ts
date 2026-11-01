@@ -52,6 +52,7 @@ import type { WorkerProvisioningManager } from "./worker-provisioning.js";
 import type { PreviewManager } from "./preview-manager.js";
 import { createControllerPromptInjector } from "./prompt-injector.js";
 import { getGithubAuthManager } from "./github-auth.js";
+import type { TeamAutoScheduler } from "../teamauto/scheduler.js";
 import { buildControllerNoWorkersMessage, shouldBlockControllerWithoutWorkers } from "./controller-capacity.js";
 import { generateDeliveryReport, isSessionComplete, renderReportHtml, type DeliveryReport } from "./delivery-report.js";
 import {
@@ -94,6 +95,8 @@ export type ControllerHttpDeps = {
   previewManager?: PreviewManager;
   /** Late-bound kickoff handler for automatic team kickoff on complex projects. */
   getKickoffHandler?: () => KickoffHandler | undefined;
+  /** Late-bound TeamAuto scheduler (autonomous repo collaboration). */
+  getTeamAutoScheduler?: () => TeamAutoScheduler | null;
 };
 
 const MAX_TASK_EXECUTION_EVENTS = 250;
@@ -4522,7 +4525,7 @@ async function assignTaskToWorker(
   return deps.getTeamState()?.tasks[taskId];
 }
 
-async function autoAssignPendingTasks(
+export async function autoAssignPendingTasks(
   deps: ControllerHttpDeps,
   preferredWorkerId?: string,
 ): Promise<TaskInfo[]> {
@@ -4700,6 +4703,13 @@ async function handleRequest(
     return;
   }
 
+  // TeamAuto management page (bind repos, schedules, sweep logs).
+  if (req.method === "GET" && (pathname === "/ui/teamauto" || pathname === "/ui/teamauto/")) {
+    const uiPath = path.join(import.meta.dirname, "..", "ui");
+    serveStaticFile(res, path.join(uiPath, "teamauto.html"), "text/html; charset=utf-8");
+    return;
+  }
+
   if (req.method === "GET" && pathname.startsWith("/ui/")) {
     const uiPath = path.join(import.meta.dirname, "..", "ui");
     const file = pathname.slice(4); // remove "/ui/"
@@ -4717,6 +4727,69 @@ async function handleRequest(
       serveStaticFile(res, path.join(uiPath, file), "application/octet-stream");
     }
     return;
+  }
+
+  // ==================== TeamAuto ====================
+
+  const teamAuto = deps.getTeamAutoScheduler?.() ?? null;
+
+  if (req.method === "GET" && pathname === "/api/v1/teamauto/repos") {
+    if (!teamAuto) { sendError(res, 503, "TeamAuto scheduler is not running"); return; }
+    try {
+      sendJson(res, 200, await teamAuto.getStatus());
+    } catch (err) {
+      sendError(res, 500, err instanceof Error ? err.message : "failed to read TeamAuto status");
+    }
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/v1/teamauto/repos") {
+    if (!teamAuto) { sendError(res, 503, "TeamAuto scheduler is not running"); return; }
+    let body: Record<string, unknown> = {};
+    try { body = await parseJsonBody(req); } catch { /* empty body */ }
+    const repo = typeof body.repo === "string" ? body.repo : "";
+    if (!repo) { sendError(res, 400, "repo (owner/name) is required"); return; }
+    try {
+      const created = await teamAuto.addRepo(repo, {
+        schedule: typeof body.schedule === "string" ? body.schedule : undefined,
+        keywordInclude: Array.isArray(body.keywordInclude) ? body.keywordInclude.filter((k): k is string => typeof k === "string") : undefined,
+        keywordExclude: Array.isArray(body.keywordExclude) ? body.keywordExclude.filter((k): k is string => typeof k === "string") : undefined,
+      });
+      sendJson(res, 201, created);
+    } catch (err) {
+      sendError(res, 400, err instanceof Error ? err.message : "failed to bind repo");
+    }
+    return;
+  }
+
+  if (pathname.startsWith("/api/v1/teamauto/repos/")) {
+    if (!teamAuto) { sendError(res, 503, "TeamAuto scheduler is not running"); return; }
+    const repoId = decodeURIComponent(pathname.slice("/api/v1/teamauto/repos/".length).replace(/\/sweep$/, ""));
+    const isSweep = pathname.endsWith("/sweep");
+    if (req.method === "DELETE" && !isSweep) {
+      try { await teamAuto.removeRepo(repoId); sendJson(res, 200, { ok: true }); }
+      catch (err) { sendError(res, 400, err instanceof Error ? err.message : "failed to unbind"); }
+      return;
+    }
+    if (req.method === "PATCH" && !isSweep) {
+      let body: Record<string, unknown> = {};
+      try { body = await parseJsonBody(req); } catch { /* empty */ }
+      try {
+        const updated = await teamAuto.updateRepo(repoId, {
+          schedule: typeof body.schedule === "string" ? body.schedule : undefined,
+          maxTasksPerSweep: typeof body.maxTasksPerSweep === "number" ? body.maxTasksPerSweep : undefined,
+          fullReview: body.fullReview === "off" || body.fullReview === "weekly" || body.fullReview === "daily" ? body.fullReview : undefined,
+          takeOwnership: typeof body.takeOwnership === "boolean" ? body.takeOwnership : undefined,
+        });
+        sendJson(res, 200, updated);
+      } catch (err) { sendError(res, 400, err instanceof Error ? err.message : "failed to update"); }
+      return;
+    }
+    if (req.method === "POST" && isSweep) {
+      try { sendJson(res, 200, { summary: await teamAuto.runSweepNow(repoId, true) }); }
+      catch (err) { sendError(res, 400, err instanceof Error ? err.message : "sweep failed"); }
+      return;
+    }
   }
 
   // ==================== GitHub Auth ====================

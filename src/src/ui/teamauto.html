@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TeamClaw - TeamAuto</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #0f1117; color: #e6e8ee; font-family: -apple-system, "system-ui", "PingFang SC", "Microsoft YaHei", sans-serif; padding: 32px 20px; }
+    main { max-width: 760px; margin: 0 auto; }
+    h1 { font-size: 22px; margin: 0 0 4px; }
+    .sub { color: #a8b0c0; font-size: 14px; margin: 0 0 22px; line-height: 1.6; }
+    .card { background: #161923; border: 1px solid #2a2f3a; border-radius: 12px; padding: 18px 20px; margin-bottom: 16px; }
+    .card-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .repo-name { font-weight: 600; font-size: 15px; word-break: break-all; }
+    .badge { font-size: 12px; border: 1px solid #3d4450; border-radius: 20px; padding: 2px 10px; color: #a8b0c0; }
+    .badge.on { color: #3fb950; border-color: #238636; }
+    .badge.warn { color: #d29922; border-color: #9e6a03; }
+    .meta { color: #a8b0c0; font-size: 12.5px; margin-top: 8px; line-height: 1.7; }
+    .row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+    .btn { appearance: none; border: 1px solid #2a2f3a; border-radius: 8px; background: #21262d; color: #e6e8ee; padding: 7px 14px; font-size: 13px; cursor: pointer; }
+    .btn:hover { background: #283040; }
+    .btn-primary { background: #238636; border-color: #2ea043; font-weight: 600; }
+    .btn-primary:hover { background: #2ea043; }
+    .btn-danger { border-color: #da3633; color: #f85149; }
+    .btn[disabled] { opacity: 0.5; cursor: default; }
+    input[type="text"] { background: #0d1117; border: 1px solid #30363d; color: #e6e8ee; border-radius: 8px; padding: 8px 10px; font-size: 13px; }
+    .add-form { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+    .add-form input#repo-input { flex: 1; min-width: 220px; }
+    .msg { font-size: 13px; margin-top: 8px; min-height: 18px; }
+    .msg.err { color: #f85149; }
+    .msg.ok { color: #3fb950; }
+    .empty { color: #6e7681; font-size: 14px; text-align: center; padding: 26px 0; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>TeamAuto</h1>
+    <p class="sub" id="t-sub">Bind your GitHub repositories. TeamClaw sweeps them on each repo's own schedule, autonomously reviews issues/PRs, takes ownership of unassigned issues, and posts results with teamclaw markers. Requires GitHub login.</p>
+
+    <div class="card">
+      <div class="add-form">
+        <input id="repo-input" type="text" placeholder="owner/repo (e.g. topcheer/teamclaw)" spellcheck="false">
+        <input id="sched-input" type="text" placeholder="*/30 * * * *" style="width:140px" spellcheck="false">
+        <button id="add-btn" class="btn btn-primary" type="button" id="t-add">Bind repo</button>
+      </div>
+      <div id="add-msg" class="msg"></div>
+    </div>
+
+    <div id="repo-list"><div class="empty" id="t-empty">No repos bound yet.</div></div>
+  </main>
+
+  <script>
+    (function () {
+      "use strict";
+      var zh = (navigator.language || "").toLowerCase().indexOf("zh") === 0;
+      var STR = zh ? {
+        sub: "绑定你的 GitHub 仓库。TeamClaw 按每个仓库自己的节奏定时扫描，自主 review issue/PR、认领未分配的 issue，并以 teamclaw 标识写回结果。需要先完成 GitHub 登录。",
+        bind: "绑定仓库",
+        empty: "尚未绑定仓库。",
+        on: "运行中",
+        off: "已停用",
+        paused: "已暂停",
+        sweep: "立即扫描",
+        disable: "停用",
+        enable: "启用",
+        unbind: "解绑",
+        last: "上次扫描",
+        sched: "节奏",
+        norm: "规范",
+        bound: "绑定成功",
+        removed: "已解绑",
+        sweepDone: "扫描完成",
+        confirmUnbind: "确定解绑该仓库？"
+      } : {
+        sub: "Bind your GitHub repositories. TeamClaw sweeps them on each repo's own schedule, autonomously reviews issues/PRs, takes ownership of unassigned issues, and posts results with teamclaw markers. Requires GitHub login.",
+        bind: "Bind repo",
+        empty: "No repos bound yet.",
+        on: "active",
+        off: "disabled",
+        paused: "paused",
+        sweep: "Sweep now",
+        disable: "Disable",
+        enable: "Enable",
+        unbind: "Unbind",
+        last: "Last sweep",
+        sched: "Schedule",
+        norm: "norms",
+        bound: "bound",
+        removed: "unbound",
+        sweepDone: "sweep finished",
+        confirmUnbind: "Unbind this repo?"
+      };
+      document.getElementById("t-sub").textContent = STR.sub;
+      document.getElementById("t-empty").textContent = STR.empty;
+      document.getElementById("t-add").textContent = STR.bind;
+
+      function esc(s) {
+        return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+      }
+      function setMsg(text, ok) {
+        var el = document.getElementById("add-msg");
+        el.textContent = text || "";
+        el.className = "msg" + (text ? (ok ? " ok" : " err") : "");
+      }
+
+      function render(status) {
+        var list = document.getElementById("repo-list");
+        if (!status.repos.length) {
+          list.innerHTML = '<div class="empty">' + esc(STR.empty) + "</div>";
+          return;
+        }
+        list.innerHTML = status.repos.map(function (r) {
+          var badge = !r.enabled
+            ? '<span class="badge">' + esc(STR.off) + "</span>"
+            : r.pausedReason
+              ? '<span class="badge warn" title="' + esc(r.pausedReason) + '">' + esc(STR.paused) + "</span>"
+              : '<span class="badge on">' + esc(STR.on) + "</span>";
+          var when = r.lastSweepAt ? new Date(r.lastSweepAt).toLocaleString() : "-";
+          var norms = r.norms ? esc(r.norms.commitStyle) : "learning...";
+          return '<div class="card" data-repo="' + esc(r.id) + '">' +
+            '<div class="card-head"><span class="repo-name">' + esc(r.id) + "</span>" + badge + "</div>" +
+            '<div class="meta">' + esc(STR.sched) + ": " + esc(r.schedule) + " | " + esc(STR.last) + ": " + esc(when) +
+            (r.lastSweepSummary ? " | " + esc(r.lastSweepSummary) : "") + "<br>" + esc(STR.norm) + ": " + norms +
+            (r.pausedReason ? '<br><span style="color:#d29922">' + esc(r.pausedReason) + "</span>" : "") + "</div>" +
+            '<div class="row">' +
+            '<button class="btn" data-act="sweep">' + esc(STR.sweep) + "</button>" +
+            '<button class="btn" data-act="toggle">' + esc(r.enabled ? STR.disable : STR.enable) + "</button>" +
+            '<button class="btn btn-danger" data-act="unbind">' + esc(STR.unbind) + "</button>" +
+            "</div></div>";
+        }).join("");
+      }
+
+      function refresh() {
+        fetch("/api/v1/teamauto/repos").then(function (r) { return r.json(); }).then(render).catch(function () {});
+      }
+
+      document.getElementById("add-btn").addEventListener("click", function () {
+        var btn = this;
+        var repo = document.getElementById("repo-input").value.trim();
+        var sched = document.getElementById("sched-input").value.trim();
+        if (!repo) { setMsg("owner/repo is required", false); return; }
+        btn.disabled = true;
+        setMsg("...");
+        fetch("/api/v1/teamauto/repos", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ repo: repo, schedule: sched || undefined }),
+        }).then(function (r) {
+          return r.json().then(function (body) { return { ok: r.ok, body: body }; });
+        }).then(function (result) {
+          if (!result.ok) { throw new Error(result.body && result.body.error || "bind failed"); }
+          setMsg(result.body.id + " " + STR.bound, true);
+          document.getElementById("repo-input").value = "";
+          refresh();
+        }).catch(function (err) {
+          setMsg(err instanceof Error ? err.message : String(err), false);
+        }).finally(function () { btn.disabled = false; });
+      });
+
+      document.getElementById("repo-list").addEventListener("click", function (event) {
+        var btn = event.target;
+        if (!(btn instanceof Element) || btn.tagName !== "BUTTON") { return; }
+        var card = btn.closest("[data-repo]");
+        if (!card) { return; }
+        var repoId = card.getAttribute("data-repo");
+        var act = btn.getAttribute("data-act");
+        var encoded = encodeURIComponent(repoId);
+        btn.disabled = true;
+        var action = Promise.resolve();
+        if (act === "sweep") {
+          action = fetch("/api/v1/teamauto/repos/" + encoded + "/sweep", { method: "POST" })
+            .then(function (r) { return r.json(); }).then(function (body) { setMsg((body.summary || STR.sweepDone), Boolean(body.summary && !body.summary.startsWith("error"))); });
+        } else if (act === "unbind") {
+          if (!window.confirm(STR.confirmUnbind)) { btn.disabled = false; return; }
+          action = fetch("/api/v1/teamauto/repos/" + encoded, { method: "DELETE" })
+            .then(function () { setMsg(repoId + " " + STR.removed, true); });
+        } else if (act === "toggle") {
+          var enabling = btn.textContent.trim() !== STR.disable;
+          action = fetch("/api/v1/teamauto/repos/" + encoded, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ enabled: enabling }),
+          }).then(function () { setMsg(repoId + (enabling ? " " + STR.on : " " + STR.off), true); });
+        }
+        action.catch(function (err) { setMsg(err instanceof Error ? err.message : String(err), false); })
+          .finally(function () { btn.disabled = false; refresh(); });
+      });
+
+      refresh();
+      setInterval(refresh, 10000);
+    })();
+  </script>
+</body>
+</html>

@@ -1280,6 +1280,23 @@
     }, 2500);
   }
 
+  let teamAutoBtnBound = false;
+  function setupTeamAutoButton() {
+    const btn = document.getElementById("teamauto-open-btn");
+    if (!btn || teamAutoBtnBound) return;
+    teamAutoBtnBound = true;
+    btn.hidden = false;
+    btn.addEventListener("click", () => {
+      const base = state.controllerUrl || "http://127.0.0.1:9527";
+      const url = base.replace(/\/+$/, "") + "/ui/teamauto";
+      if (desktop && typeof desktop.openExternal === "function") {
+        desktop.openExternal(url);
+      } else {
+        window.open(url, "_blank", "noopener");
+      }
+    });
+  }
+
   function bindGithubAuthControls() {
     const loginBtn = document.getElementById("ctl-gh-login");
     const logoutBtn = document.getElementById("ctl-gh-logout");
@@ -3821,6 +3838,7 @@
   setSummaryLine(t("connection.noSummary"));
   setConnectionPill("disconnected", t("connection.disconnected"));
   setupGithubCorner();
+  setupTeamAutoButton();
   connectSavedController();
   renderConversation();
   activateView('mission');
