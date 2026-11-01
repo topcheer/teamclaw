@@ -28,3 +28,6 @@ Thumbs.db
 # Test runtime workspaces (contain nested .git for simulation)
 tests/config/*/workspace/
 desktop/dist
+
+# Agent tooling runtime (multi-instance shared worktrees, memory, quarantine)
+.ggcode/
