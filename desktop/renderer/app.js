@@ -1102,7 +1102,7 @@
     const badge = document.getElementById("ctl-ws-default");
     if (!pathEl || !badge) return;
     try {
-      const data = await apiGet("/api/v1/workspace/status");
+      const data = await apiGet("/workspace/status");
       pathEl.textContent = data.workspaceDir || "(unknown)";
       badge.classList.toggle("is-hidden", data.isDefault !== true);
     } catch (err) {
@@ -1118,7 +1118,7 @@
     if (!defaultSelect || !rolesEl) return;
     let catalog;
     try {
-      catalog = await apiGet("/api/v1/models/config");
+      catalog = await apiGet("/models/config");
     } catch (err) {
       setControllerResult("ctl-models-result", t("ctl.models.failed"), true);
       return;
@@ -1164,7 +1164,7 @@
         });
         saveBtn.disabled = true;
         try {
-          await apiPost("/api/v1/models/config", payload);
+          await apiPost("/models/config", payload);
           setControllerResult("ctl-models-result", t("ctl.models.saved"), false);
         } catch (err) {
           setControllerResult("ctl-models-result", err instanceof Error ? err.message : t("ctl.models.failed"), true);
@@ -1184,7 +1184,7 @@
         }
         applyBtn.disabled = true;
         try {
-          await apiPost("/api/v1/workspace/change-dir", { workspaceDir: value });
+          await apiPost("/workspace/change-dir", { workspaceDir: value });
           setControllerResult("ctl-ws-result", t("ctl.ws.saved"), false);
           renderControllerWorkspaceCard();
         } catch (err) {
