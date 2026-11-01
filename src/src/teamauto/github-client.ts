@@ -222,6 +222,23 @@ export function createGithubClient(auth: GithubAuthManager) {
     async assignIssue(owner: string, repo: string, issueNumber: number, assignee: string): Promise<void> {
       await request("POST", `/repos/${owner}/${repo}/issues/${issueNumber}/assignees`, { body: { assignees: [assignee] } });
     },
+
+    /** Repos the logged-in user can select in the TeamAuto bind picker. */
+    async listUserRepos(): Promise<{ id: string; fullName: string; private: boolean; pushedAt: string | null }[]> {
+      const data = await getJson<unknown[]>("/user/repos?affiliation=owner,collaborator,organization_member&sort=pushed&per_page=100");
+      if (!data) {
+        return [];
+      }
+      return data.map((raw) => {
+        const item = raw as Record<string, unknown>;
+        return {
+          id: String(item.full_name ?? ""),
+          fullName: String(item.full_name ?? ""),
+          private: Boolean(item.private),
+          pushedAt: typeof item.pushed_at === "string" ? item.pushed_at : null,
+        };
+      }).filter((r) => r.id);
+    },
   };
 }
 

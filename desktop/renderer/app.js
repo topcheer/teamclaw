@@ -79,6 +79,30 @@
       "mission.title": "Mission",
       "tab.planning": "Planning",
       "tab.controller": "Controller",
+      "tab.teamauto": "TeamAuto",
+      "teamauto.refreshRepos": "Refresh repos",
+      "teamauto.bind": "Bind",
+      "teamauto.loginFirst": "Sign in to GitHub first (top-right Login).",
+      "teamauto.loadingRepos": "Loading your repos...",
+      "teamauto.noCandidates": "No selectable repos (check GitHub login)",
+      "teamauto.needRepo": "Select a repository first",
+      "teamauto.active": "active",
+      "teamauto.disabled": "disabled",
+      "teamauto.paused": "paused",
+      "teamauto.sweep": "Sweep now",
+      "teamauto.disable": "Disable",
+      "teamauto.enable": "Enable",
+      "teamauto.unbind": "Unbind",
+      "teamauto.save": "Save config",
+      "teamauto.saved": "Saved",
+      "teamauto.schedule": "Schedule",
+      "teamauto.maxPerSweep": "Max/sweep",
+      "teamauto.fullReview": "Full review",
+      "teamauto.takeOwnership": "Take ownership",
+      "teamauto.lastSweep": "Last sweep",
+      "teamauto.norms": "Norms",
+      "teamauto.confirmUnbind": "Unbind this repo?",
+      "teamauto.empty": "No repos bound yet. Pick one above and click Bind.",
       "ctl.models.title": "Team models",
       "ctl.models.hint": "Default model applies to the controller and every role; per-role selections override it for that role.",
       "ctl.models.default": "Default model",
@@ -252,6 +276,30 @@
       "mission.title": "任务台",
       "tab.planning": "规划",
       "tab.controller": "控制器",
+      "tab.teamauto": "TeamAuto",
+      "teamauto.refreshRepos": "刷新仓库",
+      "teamauto.bind": "绑定",
+      "teamauto.loginFirst": "请先登录 GitHub（右上角 Login）。",
+      "teamauto.loadingRepos": "正在加载你的仓库...",
+      "teamauto.noCandidates": "无可选仓库（请检查 GitHub 登录）",
+      "teamauto.needRepo": "请先选择一个仓库",
+      "teamauto.active": "运行中",
+      "teamauto.disabled": "已停用",
+      "teamauto.paused": "已暂停",
+      "teamauto.sweep": "立即扫描",
+      "teamauto.disable": "停用",
+      "teamauto.enable": "启用",
+      "teamauto.unbind": "解绑",
+      "teamauto.save": "保存配置",
+      "teamauto.saved": "已保存",
+      "teamauto.schedule": "节奏",
+      "teamauto.maxPerSweep": "每轮上限",
+      "teamauto.fullReview": "全量 review",
+      "teamauto.takeOwnership": "认领 issue",
+      "teamauto.lastSweep": "上次扫描",
+      "teamauto.norms": "协作规范",
+      "teamauto.confirmUnbind": "确定解绑该仓库？",
+      "teamauto.empty": "尚未绑定仓库。在上方选择后点击绑定。",
       "ctl.models.title": "团队模型",
       "ctl.models.hint": "默认模型作用于控制器与所有角色；按角色的选择会覆盖默认值。",
       "ctl.models.default": "默认模型",
@@ -461,6 +509,10 @@
       [".nav-btn[data-view='workspace'] .nav-label", "tab.workspace"],
       [".nav-btn[data-view='reports'] .nav-label", "tab.reports"],
       [".nav-btn[data-view='controller'] .nav-label", "tab.controller"],
+      [".nav-btn[data-view='teamauto'] .nav-label", "tab.teamauto"],
+      ["#teamauto-hint", "teamauto.hint"],
+      ["#ta-repos-refresh", "teamauto.refreshRepos"],
+      ["#ta-bind", "teamauto.bind"],
       ["#ctl-models-title", "ctl.models.title"],
       ["#ctl-models-hint", "ctl.models.hint"],
       ["#ctl-default-label", "ctl.models.default"],
@@ -1281,20 +1333,193 @@
   }
 
   let teamAutoBtnBound = false;
-  function setupTeamAutoButton() {
-    const btn = document.getElementById("teamauto-open-btn");
-    if (!btn || teamAutoBtnBound) return;
-    teamAutoBtnBound = true;
-    btn.hidden = false;
-    btn.addEventListener("click", () => {
-      const base = state.controllerUrl || "http://127.0.0.1:9527";
-      const url = base.replace(/\/+$/, "") + "/ui/teamauto";
-      if (desktop && typeof desktop.openExternal === "function") {
-        desktop.openExternal(url);
-      } else {
-        window.open(url, "_blank", "noopener");
-      }
+  let teamAutoCandidates = [];
+  let teamAutoCandidatesLoaded = false;
+
+  async function apiPatch(path, body) {
+    const response = await fetch(controllerApi(path), {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
     });
+    if (!response.ok) {
+      let message = `PATCH ${path} failed (${response.status})`;
+      try {
+        const data = await response.json();
+        message = data.error || data.message || message;
+      } catch { /* ignore */ }
+      throw new Error(message);
+    }
+    return response.json();
+  }
+
+  function taMsg(text, ok) {
+    const el = document.getElementById("ta-bind-msg");
+    if (!el) return;
+    el.textContent = text || "";
+    el.className = "teamauto-msg" + (text ? (ok ? " ok" : " err") : "");
+  }
+
+  async function loadTeamAutoCandidates(force) {
+    if (teamAutoCandidatesLoaded && !force) return;
+    const select = document.getElementById("ta-repo-select");
+    if (!select) return;
+    if (!state.connected) {
+      select.innerHTML = `<option>${t("teamauto.loginFirst")}</option>`;
+      return;
+    }
+    select.innerHTML = `<option>${t("teamauto.loadingRepos")}</option>`;
+    try {
+      const data = await apiGet("/teamauto/repo-candidates");
+      teamAutoCandidates = (data && data.candidates) || [];
+      teamAutoCandidatesLoaded = true;
+      select.innerHTML = teamAutoCandidates.length
+        ? teamAutoCandidates.map((r) => `<option value="${escapeHtml(r.id)}">${escapeHtml(r.id + (r.private ? " (private)" : ""))}</option>`).join("")
+        : `<option value="">${t("teamauto.noCandidates")}</option>`;
+    } catch (err) {
+      select.innerHTML = `<option value="">${t("teamauto.noCandidates")}</option>`;
+      taMsg(err instanceof Error ? err.message : String(err), false);
+    }
+  }
+
+  function renderTeamAutoRepos(status) {
+    const wrap = document.getElementById("ta-repos");
+    if (!wrap) return;
+    const repos = (status && status.repos) || [];
+    if (!repos.length) {
+      wrap.innerHTML = `<div class="empty-state">${t("teamauto.empty")}</div>`;
+      return;
+    }
+    wrap.innerHTML = repos.map((r) => {
+      const badge = !r.enabled
+        ? `<span class="teamauto-badge">${t("teamauto.disabled")}</span>`
+        : r.pausedReason
+          ? `<span class="teamauto-badge warn" title="${escapeHtml(r.pausedReason)}">${t("teamauto.paused")}</span>`
+          : `<span class="teamauto-badge on">${t("teamauto.active")}</span>`;
+      const when = r.lastSweepAt ? new Date(r.lastSweepAt).toLocaleString() : "-";
+      const norms = r.norms ? escapeHtml(r.norms.commitStyle) : "...";
+      const fr = r.policy.actions.fullReview;
+      return `<div class="teamauto-card" data-repo="${escapeHtml(r.id)}">` +
+        `<div class="teamauto-card-head"><span class="teamauto-repo-name">${escapeHtml(r.id)}</span>${badge}</div>` +
+        `<div class="teamauto-meta">${t("teamauto.schedule")}: <code>${escapeHtml(r.schedule)}</code> | ${t("teamauto.lastSweep")}: ${escapeHtml(when)}` +
+        (r.lastSweepSummary ? ` | ${escapeHtml(r.lastSweepSummary)}` : "") +
+        `<br>${t("teamauto.norms")}: ${norms}` +
+        (r.pausedReason ? `<br><span class="teamauto-warn-text">${escapeHtml(r.pausedReason)}</span>` : "") + "</div>" +
+        `<div class="teamauto-config-row">` +
+        `<label>${t("teamauto.schedule")} <input data-cfg="schedule" type="text" value="${escapeHtml(r.schedule)}" spellcheck="false"></label>` +
+        `<label>${t("teamauto.maxPerSweep")} <input data-cfg="maxTasksPerSweep" type="number" min="1" max="20" value="${r.policy.maxTasksPerSweep}"></label>` +
+        `<label>${t("teamauto.fullReview")} <select data-cfg="fullReview">` +
+        ["off", "weekly", "daily"].map((v) => `<option value="${v}"${fr === v ? " selected" : ""}>${v}</option>`).join("") + "</select></label>" +
+        `<label>${t("teamauto.takeOwnership")} <select data-cfg="takeOwnership">` +
+        `<option value="true"${r.policy.actions.takeOwnership ? " selected" : ""}>on</option>` +
+        `<option value="false"${!r.policy.actions.takeOwnership ? " selected" : ""}>off</option></select></label>` +
+        `<button class="btn btn-small" data-act="save">${t("teamauto.save")}</button>` +
+        "</div>" +
+        `<div class="teamauto-actions">` +
+        `<button class="btn btn-small" data-act="sweep">${t("teamauto.sweep")}</button>` +
+        `<button class="btn btn-small" data-act="toggle">${t(r.enabled ? "teamauto.disable" : "teamauto.enable")}</button>` +
+        `<button class="btn btn-small btn-danger" data-act="unbind">${t("teamauto.unbind")}</button>` +
+        "</div></div>";
+    }).join("");
+  }
+
+  let teamAutoBusy = false;
+  async function renderTeamAuto() {
+    if (!state.connected) {
+      const wrap = document.getElementById("ta-repos");
+      if (wrap) wrap.innerHTML = `<div class="empty-state">${t("ctl.notConnected")}</div>`;
+      return;
+    }
+    if (teamAutoBusy) return;
+    teamAutoBusy = true;
+    void loadTeamAutoCandidates(false);
+    try {
+      renderTeamAutoRepos(await apiGet("/teamauto/repos"));
+    } catch { /* scheduler offline */ } finally {
+      teamAutoBusy = false;
+    }
+  }
+
+  function bindTeamAutoControls() {
+    if (teamAutoBtnBound) return;
+    teamAutoBtnBound = true;
+    const bindBtn = document.getElementById("ta-bind");
+    if (bindBtn) {
+      bindBtn.addEventListener("click", async () => {
+        const select = document.getElementById("ta-repo-select");
+        const repo = select ? select.value.trim() : "";
+        if (!repo || !/^[\w.-]+\/[\w.-]+$/.test(repo)) {
+          taMsg(t("teamauto.needRepo"), false);
+          return;
+        }
+        const schedEl = document.getElementById("ta-schedule");
+        bindBtn.disabled = true;
+        taMsg("...");
+        try {
+          await apiPost("/teamauto/repos", {
+            repo,
+            schedule: schedEl && schedEl.value.trim() ? schedEl.value.trim() : undefined,
+          });
+          taMsg(`${repo} -> ${t("teamauto.active")}`, true);
+          renderTeamAuto();
+        } catch (err) {
+          taMsg(err instanceof Error ? err.message : String(err), false);
+        } finally {
+          bindBtn.disabled = false;
+        }
+      });
+    }
+    const refreshBtn = document.getElementById("ta-repos-refresh");
+    if (refreshBtn) {
+      refreshBtn.addEventListener("click", async () => {
+        refreshBtn.disabled = true;
+        await loadTeamAutoCandidates(true);
+        refreshBtn.disabled = false;
+      });
+    }
+    const wrap = document.getElementById("ta-repos");
+    if (wrap) {
+      wrap.addEventListener("click", async (event) => {
+        const btn = event.target;
+        if (!(btn instanceof Element) || btn.tagName !== "BUTTON") return;
+        const card = btn.closest("[data-repo]");
+        if (!card) return;
+        const repoId = card.getAttribute("data-repo") || "";
+        const encoded = encodeURIComponent(repoId);
+        const act = btn.getAttribute("data-act");
+        btn.disabled = true;
+        try {
+          if (act === "sweep") {
+            const body = await apiPost(`/teamauto/repos/${encoded}/sweep`, {});
+            taMsg((body && body.summary) || "sweep done", true);
+          } else if (act === "unbind") {
+            if (!window.confirm(t("teamauto.confirmUnbind"))) { btn.disabled = false; return; }
+            await apiDelete(`/teamauto/repos/${encoded}`);
+          } else if (act === "toggle") {
+            const enabling = btn.textContent.trim() !== t("teamauto.disable");
+            await apiPatch(`/teamauto/repos/${encoded}`, { enabled: enabling });
+          } else if (act === "save") {
+            const payload = {};
+            card.querySelectorAll("[data-cfg]").forEach((el) => {
+              const key = el.getAttribute("data-cfg");
+              if (key === "schedule") payload.schedule = el.value.trim();
+              if (key === "maxTasksPerSweep") payload.maxTasksPerSweep = Number(el.value) || undefined;
+              if (key === "fullReview") payload.fullReview = el.value;
+              if (key === "takeOwnership") payload.takeOwnership = el.value === "true";
+            });
+            await apiPatch(`/teamauto/repos/${encoded}`, payload);
+            taMsg(t("teamauto.saved"), true);
+          }
+        } catch (err) {
+          taMsg(err instanceof Error ? err.message : String(err), false);
+        } finally {
+          renderTeamAuto();
+        }
+      });
+    }
+    setInterval(() => {
+      if (state.currentView === "teamauto" && state.connected) renderTeamAuto();
+    }, 10000);
   }
 
   function bindGithubAuthControls() {
@@ -1697,7 +1922,7 @@
   }
 
   function activateView(view) {
-    const validViews = new Set(["mission", "planning", "tasks", "clarifications", "workspace", "reports", "controller"]);
+    const validViews = new Set(["mission", "planning", "tasks", "clarifications", "workspace", "reports", "teamauto", "controller"]);
     const nextView = validViews.has(view) ? view : "mission";
     state.currentView = nextView;
 
@@ -1719,6 +1944,8 @@
       renderWorkspaceContent();
     } else if (nextView === "reports") {
       renderReports();
+    } else if (nextView === "teamauto") {
+      renderTeamAuto();
     } else if (nextView === "controller") {
       renderControllerSettings();
     } else {
@@ -3838,7 +4065,7 @@
   setSummaryLine(t("connection.noSummary"));
   setConnectionPill("disconnected", t("connection.disconnected"));
   setupGithubCorner();
-  setupTeamAutoButton();
+  bindTeamAutoControls();
   connectSavedController();
   renderConversation();
   activateView('mission');
