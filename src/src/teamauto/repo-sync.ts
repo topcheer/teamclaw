@@ -61,7 +61,13 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
         await fs.stat(path.join(dir, ".git"));
       } catch {
         await fs.mkdir(path.dirname(dir), { recursive: true });
-        await fs.rename(legacy, dir);
+        try {
+          await fs.rename(legacy, dir);
+        } catch {
+          // Cross-device (EXDEV): copy then remove the original.
+          await fs.cp(legacy, dir, { recursive: true });
+          await fs.rm(legacy, { recursive: true, force: true });
+        }
       }
     } catch {
       // No legacy clone - normal path.
