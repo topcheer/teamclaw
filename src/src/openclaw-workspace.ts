@@ -430,6 +430,87 @@ export function resolveTeamClawWorkspaceDir(
 }
 
 /**
+ * True when the teamclaw workspace is still the implicit default (nothing
+ * explicitly configured) - the UI uses this to offer a one-time workspace
+ * relocation prompt on first load.
+ */
+export function teamClawWorkspaceIsDefault(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): boolean {
+  if (resolveExplicitTeamClawWorkspaceDir(env, homedir)) {
+    return false;
+  }
+  const entry = resolveConfiguredAgentEntry(TEAMCLAW_AGENT_ID, env, homedir);
+  return typeof (entry as { workspace?: unknown } | null)?.workspace !== "string";
+}
+
+/**
+ * Persist a new teamclaw workspace path into the host config, writing the
+ * 2026.10 keyed agents.entries shape (legacy agents.list folded + removed,
+ * ownership=explicit for multi-agent rosters). Legacy list-only hosts keep
+ * the array shape.
+ */
+export async function updateTeamClawWorkspaceDir(
+  workspaceDir: string,
+  logger?: { warn?: (message: string) => void },
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): Promise<{ configPath: string; agentEntryPath: string }> {
+  const normalized = path.resolve(expandUserPath(workspaceDir.trim(), homedir));
+  if (!workspaceDir.trim()) {
+    throw new Error("workspace path is required");
+  }
+  const configPath = resolveDefaultOpenClawConfigPath(env, homedir);
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON5.parse(await fs.readFile(configPath, "utf8")) as Record<string, unknown>;
+    if (!isRecord(parsed)) {
+      throw new Error("host config is not an object");
+    }
+  } catch (err) {
+    throw new Error(`failed to read host config at ${configPath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const agents = isRecord(parsed.agents) ? parsed.agents : {};
+  const patch: Record<string, unknown> = { workspace: normalized };
+
+  const legacyList = Array.isArray(agents.list) ? agents.list.filter(isRecord) : [];
+  if (isRecord(agents.entries) || legacyList.length === 0) {
+    const entries = isRecord(agents.entries) ? agents.entries : {};
+    for (const legacyEntry of legacyList) {
+      const legacyId = typeof legacyEntry.id === "string" ? legacyEntry.id : "";
+      if (!legacyId || isRecord(entries[legacyId])) {
+        continue;
+      }
+      const migrated = cloneJsonValue(legacyEntry);
+      delete migrated.id;
+      entries[legacyId] = migrated;
+    }
+    const existing = isRecord(entries[TEAMCLAW_AGENT_ID]) ? entries[TEAMCLAW_AGENT_ID] : {};
+    entries[TEAMCLAW_AGENT_ID] = { ...cloneJsonValue(existing), ...patch };
+    agents.entries = entries;
+    delete agents.list;
+    if (Object.keys(entries).length > 1 && agents.ownership !== "explicit") {
+      agents.ownership = "explicit";
+    }
+  } else {
+    const nextList = [...legacyList];
+    const index = nextList.findIndex((entry) => entry.id === TEAMCLAW_AGENT_ID);
+    if (index >= 0) {
+      nextList[index] = { ...cloneJsonValue(nextList[index]), ...patch };
+    } else {
+      nextList.push({ id: TEAMCLAW_AGENT_ID, ...patch });
+    }
+    agents.list = nextList;
+  }
+  parsed.agents = agents;
+  await fs.writeFile(configPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+  logger?.warn?.(`TeamClaw: workspace updated to ${normalized} (restart the gateway to apply)`);
+  return { configPath, agentEntryPath: normalized };
+}
+
+/**
  * Resolve the `projects/` root inside the TeamClaw workspace.
  * Each orchestration run or ad-hoc task gets its own subdirectory here.
  */
