@@ -42,6 +42,7 @@
         <button class="nav-btn" data-view="clarifications" type="button"><span class="nav-label">Clarifications</span><span class="nav-signal is-hidden" data-nav-signal="clarifications"></span></button>
         <button class="nav-btn" data-view="workspace" type="button"><span class="nav-label">Workspace</span><span class="nav-signal is-hidden" data-nav-signal="workspace"></span></button>
         <button class="nav-btn" data-view="reports" type="button"><span class="nav-label">Reports</span><span class="nav-signal is-hidden" data-nav-signal="reports"></span></button>
+        <button class="nav-btn" data-view="teamauto" type="button"><span class="nav-label">TeamAuto</span></button>
         <button class="nav-btn" data-view="controller" type="button"><span class="nav-label">Controller</span></button>
       </nav>
     </aside>
@@ -57,7 +58,6 @@
           <div id="summary-line" class="summary-line">No controller summary yet.</div>
         </div>
         <div class="header-actions">
-          <button id="teamauto-open-btn" class="btn" type="button" hidden>TeamAuto</button>
           <button id="gh-corner-login" class="btn" type="button" hidden>Login</button>
           <button id="gh-corner-user" class="btn gh-corner-user" type="button" hidden title="GitHub: click to sign out"><img id="gh-corner-avatar" class="gh-corner-avatar is-hidden" alt=""><span id="gh-corner-name">-</span></button>
           <button id="compose-focus-btn" class="btn" type="button">New requirement</button>
@@ -169,6 +169,21 @@
         <section class="panel large-card">
           <div class="section-head"><h2>Reports</h2></div>
           <div id="report-list" class="report-list"></div>
+        </section>
+      </section>
+
+      <section id="view-teamauto" class="stage-view">
+        <section class="panel large-card">
+          <div class="section-head"><h2 id="teamauto-title">TeamAuto</h2></div>
+          <p id="teamauto-hint" class="detail-subtitle">Pick one of your GitHub repositories. TeamClaw sweeps it on its own schedule, reviews issues/PRs, takes ownership of unassigned issues, and posts results with teamclaw markers.</p>
+          <div class="teamauto-bind-row">
+            <select id="ta-repo-select" class="teamauto-select"></select>
+            <button id="ta-repos-refresh" class="btn" type="button">Refresh repos</button>
+            <input id="ta-schedule" class="teamauto-schedule-input" type="text" placeholder="*/30 * * * *" spellcheck="false" />
+            <button id="ta-bind" class="btn btn-primary" type="button">Bind</button>
+          </div>
+          <div id="ta-bind-msg" class="teamauto-msg"></div>
+          <div id="ta-repos" class="teamauto-repos"></div>
         </section>
       </section>
 

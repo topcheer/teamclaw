@@ -16,9 +16,13 @@ const normsSrc = path.join(projectRoot, "src", "src", "teamauto", "norms.ts");
 const httpServerSrc = path.join(projectRoot, "src", "src", "controller", "http-server.ts");
 const serviceSrc = path.join(projectRoot, "src", "src", "controller", "controller-service.ts");
 const pagePath = path.join(projectRoot, "src", "src", "ui", "teamauto.html");
+const uiHtmlPath = path.join(projectRoot, "src", "src", "ui", "index.html");
+const uiAppSrcPath = path.join(projectRoot, "src", "src", "ui", "app.js");
+const desktopHtmlPath = path.join(projectRoot, "desktop", "renderer", "index.html");
+const desktopAppPath = path.join(projectRoot, "desktop", "renderer", "app.js");
 
 async function sourceContracts() {
-  const [scheduler, scanner, store, client, sync, norms, httpServer, service, page] = await Promise.all([
+  const [scheduler, scanner, store, client, sync, norms, httpServer, service, page, uiHtml, desktopHtml, desktopApp, uiAppSrc] = await Promise.all([
     fs.readFile(schedulerSrc, "utf8"),
     fs.readFile(scannerSrc, "utf8"),
     fs.readFile(storeSrc, "utf8"),
@@ -27,7 +31,11 @@ async function sourceContracts() {
     fs.readFile(normsSrc, "utf8"),
     fs.readFile(httpServerSrc, "utf8"),
     fs.readFile(serviceSrc, "utf8"),
-    fs.readFile(pagePath, "utf8"),
+    fs.readFile(pagePath, "utf8").catch(() => null),
+    fs.readFile(uiHtmlPath, "utf8"),
+    fs.readFile(desktopHtmlPath, "utf8"),
+    fs.readFile(desktopAppPath, "utf8"),
+    fs.readFile(uiAppSrcPath, "utf8"),
   ]);
 
   // Wiring: scheduler lifecycle is mounted in the controller service.
@@ -36,10 +44,11 @@ async function sourceContracts() {
   assert.match(service, /await teamAutoSchedulerRef\?\.stop\(\)/, "scheduler must stop with the service");
 
   // API surface.
-  for (const route of ["/api/v1/teamauto/repos"]) {
+  for (const route of ["/api/v1/teamauto/repos", "/api/v1/teamauto/repo-candidates"]) {
     assert.ok(httpServer.includes(`pathname === "${route}"`), `controller must route ${route}`);
   }
   assert.ok(httpServer.includes('"/api/v1/teamauto/repos/"'), "controller must route per-repo teamauto actions");
+  assert.ok(!httpServer.includes('"/ui/teamauto"'), "the standalone teamauto page route must be gone (tabbed UI)");
 
   // Autonomous identity markers on every write-back.
   assert.match(scheduler, /\[teamclaw:\$\{role\}\]/, "write-backs must carry the [teamclaw:role] marker");
@@ -59,8 +68,19 @@ async function sourceContracts() {
   assert.match(norms, /CONTRIBUTING/, "norms must read CONTRIBUTING.md");
   assert.match(scheduler, /renderNormsBlock/, "task descriptions must embed the repo norms block");
 
-  // Management page drives the API.
-  assert.match(page, /\/api\/v1\/teamauto\/repos/, "the teamauto page must call the API");
+  // Tabbed UI on both surfaces: repo picker, bound-repo list, closed-loop config.
+  assert.match(uiHtml, /data-tab="teamauto"/, "web UI must have a TeamAuto tab");
+  assert.match(uiHtml, /id="tab-teamauto"/, "web UI must render the TeamAuto panel");
+  assert.match(uiHtml, /id="teamauto-repo-select"/, "web UI must offer a repo picker");
+  assert.match(desktopHtml, /data-view="teamauto"/, "desktop must have a TeamAuto nav view");
+  assert.match(desktopHtml, /id="view-teamauto"/, "desktop must render the TeamAuto view");
+  assert.match(desktopHtml, /id="ta-repo-select"/, "desktop must offer a repo picker");
+  for (const surface of [uiHtml, desktopHtml]) {
+    void surface;
+  }
+  assert.match(uiAppSrc, /teamauto\/repo-candidates/, "web UI must load selectable repo candidates");
+  assert.match(desktopApp, /teamauto\/repo-candidates/, "desktop must load selectable repo candidates");
+  assert.match(desktopApp, /apiPatch\(`\/teamauto\/repos\/\$\{encoded\}`/, "desktop must support closed-loop config saves");
 }
 
 async function unitTests() {

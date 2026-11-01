@@ -52,6 +52,7 @@ import type { WorkerProvisioningManager } from "./worker-provisioning.js";
 import type { PreviewManager } from "./preview-manager.js";
 import { createControllerPromptInjector } from "./prompt-injector.js";
 import { getGithubAuthManager } from "./github-auth.js";
+import { createGithubClient } from "../teamauto/github-client.js";
 import type { TeamAutoScheduler } from "../teamauto/scheduler.js";
 import { buildControllerNoWorkersMessage, shouldBlockControllerWithoutWorkers } from "./controller-capacity.js";
 import { generateDeliveryReport, isSessionComplete, renderReportHtml, type DeliveryReport } from "./delivery-report.js";
@@ -4703,13 +4704,6 @@ async function handleRequest(
     return;
   }
 
-  // TeamAuto management page (bind repos, schedules, sweep logs).
-  if (req.method === "GET" && (pathname === "/ui/teamauto" || pathname === "/ui/teamauto/")) {
-    const uiPath = path.join(import.meta.dirname, "..", "ui");
-    serveStaticFile(res, path.join(uiPath, "teamauto.html"), "text/html; charset=utf-8");
-    return;
-  }
-
   if (req.method === "GET" && pathname.startsWith("/ui/")) {
     const uiPath = path.join(import.meta.dirname, "..", "ui");
     const file = pathname.slice(4); // remove "/ui/"
@@ -4739,6 +4733,18 @@ async function handleRequest(
       sendJson(res, 200, await teamAuto.getStatus());
     } catch (err) {
       sendError(res, 500, err instanceof Error ? err.message : "failed to read TeamAuto status");
+    }
+    return;
+  }
+
+  // Selectable repos for the bind picker (the logged-in GitHub account's).
+  if (req.method === "GET" && pathname === "/api/v1/teamauto/repo-candidates") {
+    try {
+      const auth = getGithubAuthManager(config, logger);
+      const candidates = await createGithubClient(auth).listUserRepos();
+      sendJson(res, 200, { candidates });
+    } catch (err) {
+      sendError(res, 400, err instanceof Error ? err.message : "failed to list repositories");
     }
     return;
   }

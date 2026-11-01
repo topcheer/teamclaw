@@ -62,6 +62,7 @@
           <span id="clarifications-tab-signal" class="tab-signal"></span>
         </button>
         <button class="tab" data-tab="messages"><span class="tab-label" data-i18n="tab.messages">Messages</span></button>
+        <button class="tab" data-tab="teamauto"><span class="tab-label" data-i18n="tab.teamauto">TeamAuto</span></button>
         <button class="tab" data-tab="create-task" data-i18n="tab.manualTask">Manual Task</button>
       </div>
 
@@ -184,6 +185,23 @@
         </div>
 
         <!-- Create Task Tab -->
+        <!-- TeamAuto Tab -->
+        <div id="tab-teamauto" class="tab-panel">
+          <div class="teamauto-wrap">
+            <div class="teamauto-bind card">
+              <div class="teamauto-bind-row">
+                <select id="teamauto-repo-select" class="teamauto-select"></select>
+                <button id="teamauto-repos-refresh" class="btn btn-small" type="button" data-i18n="teamauto.refreshRepos">Refresh repos</button>
+                <input id="teamauto-schedule" class="teamauto-schedule-input" type="text" placeholder="*/30 * * * *" spellcheck="false">
+                <button id="teamauto-bind" class="btn btn-primary btn-small" type="button" data-i18n="teamauto.bind">Bind</button>
+              </div>
+              <div id="teamauto-bind-msg" class="teamauto-msg"></div>
+              <p class="teamauto-hint" data-i18n="teamauto.hint">Pick one of your GitHub repositories. TeamClaw sweeps it on its own schedule, reviews issues/PRs, takes ownership of unassigned issues, and posts results with teamclaw markers.</p>
+            </div>
+            <div id="teamauto-repos" class="teamauto-repos"></div>
+          </div>
+        </div>
+
         <div id="tab-create-task" class="tab-panel">
           <div class="panel-note">
             <span data-i18n="manualTask.note">Raw human requirements should go to the controller conversation first. Use this form only for explicit manual task injection or testing.</span>
