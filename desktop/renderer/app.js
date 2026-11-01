@@ -94,6 +94,9 @@
       "ctl.gh.signedOut": "Not signed in",
       "ctl.gh.validUntil": "valid until",
       "ctl.gh.opened": "Authorization page opened in your browser. Finish there; this page updates automatically.",
+      "ctl.gh.deviceHint": "Open github.com/login/device and enter this code:",
+      "ctl.gh.deviceOpened": "Opened github.com/login/device. Enter the shown code if it is not prefilled; this page updates automatically.",
+      "ctl.gh.copied": "Copied",
       "ctl.gh.loggedOut": "Signed out.",
       "ctl.gh.noSecret": "GitHub Client Secret is not configured on the controller.",
       "ctl.gh.failed": "GitHub login failed",
@@ -268,6 +271,9 @@
       "ctl.gh.signedOut": "未登录",
       "ctl.gh.validUntil": "有效期至",
       "ctl.gh.opened": "已在浏览器中打开授权页面，完成后此处会自动更新。",
+      "ctl.gh.deviceHint": "打开 github.com/login/device 并输入此代码：",
+      "ctl.gh.deviceOpened": "已打开 github.com/login/device，若未自动填充请输入显示的代码，完成后此处会自动更新。",
+      "ctl.gh.copied": "已复制",
       "ctl.gh.loggedOut": "已退出登录。",
       "ctl.gh.noSecret": "控制器尚未配置 GitHub Client Secret。",
       "ctl.gh.failed": "GitHub 登录失败",
@@ -475,6 +481,7 @@
       ["#ctl-gh-title", "ctl.gh.title"],
       ["#ctl-gh-current-label", "ctl.gh.current"],
       ["#ctl-gh-hint", "ctl.gh.hint"],
+      ["#ctl-gh-device-hint", "ctl.gh.deviceHint"],
       ["#ctl-gh-login", "ctl.gh.login"],
       ["#ctl-gh-logout", "ctl.gh.logout"],
       ["#compose-focus-btn", "mission.newRequirement"],
@@ -1191,6 +1198,26 @@
       logoutBtn.hidden = true;
     }
     setControllerResult("ctl-gh-result", status.clientSecretConfigured ? "" : t("ctl.gh.noSecret"), !status.clientSecretConfigured);
+    if (status.device) {
+      showCtlGithubDeviceFlow(status.device);
+    } else {
+      hideCtlGithubDevice();
+    }
+  }
+
+  function showCtlGithubDeviceFlow(info) {
+    const wrap = document.getElementById("ctl-gh-device");
+    if (!wrap) return;
+    const code = document.getElementById("ctl-gh-device-code");
+    if (code) code.textContent = info.userCode || "";
+    const link = document.getElementById("ctl-gh-device-link");
+    if (link) link.href = info.verificationUriComplete || info.verificationUri || "https://github.com/login/device";
+    wrap.hidden = false;
+  }
+
+  function hideCtlGithubDevice() {
+    const wrap = document.getElementById("ctl-gh-device");
+    if (wrap) wrap.hidden = true;
   }
 
   function formatGithubAuthTime(epochMs) {
@@ -1219,21 +1246,61 @@
   function bindGithubAuthControls() {
     const loginBtn = document.getElementById("ctl-gh-login");
     const logoutBtn = document.getElementById("ctl-gh-logout");
+    const deviceLink = document.getElementById("ctl-gh-device-link");
+    if (deviceLink && !deviceLink.dataset.bound) {
+      deviceLink.dataset.bound = "true";
+      deviceLink.addEventListener("click", (event) => {
+        event.preventDefault();
+        if (desktop && typeof desktop.openExternal === "function") {
+          desktop.openExternal(deviceLink.href);
+        } else {
+          window.open(deviceLink.href, "_blank", "noopener");
+        }
+      });
+    }
+    const deviceCopyBtn = document.getElementById("ctl-gh-device-copy");
+    if (deviceCopyBtn && !deviceCopyBtn.dataset.bound) {
+      deviceCopyBtn.dataset.bound = "true";
+      deviceCopyBtn.addEventListener("click", () => {
+        const code = document.getElementById("ctl-gh-device-code");
+        const value = code ? code.textContent : "";
+        if (!value) return;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(value).then(() => {
+            deviceCopyBtn.textContent = t("ctl.gh.copied");
+            setTimeout(() => { deviceCopyBtn.textContent = "Copy"; }, 1500);
+          }).catch(() => { /* clipboard denied - the code is visible for manual selection */ });
+        }
+      });
+    }
     if (loginBtn && !loginBtn.dataset.bound) {
       loginBtn.dataset.bound = "true";
       loginBtn.addEventListener("click", async () => {
         loginBtn.disabled = true;
         try {
           const start = await apiPost("/auth/github/login", {});
-          const url = start && start.authorizeUrl;
-          if (!url) throw new Error("Controller did not return a GitHub authorize URL");
-          if (desktop && typeof desktop.openExternal === "function") {
-            desktop.openExternal(url);
+          if (!start) throw new Error("Controller did not return a login flow");
+          if (start.mode === "device") {
+            showCtlGithubDeviceFlow(start);
+            const deviceUrl = start.verificationUriComplete || start.verificationUri;
+            if (desktop && typeof desktop.openExternal === "function") {
+              desktop.openExternal(deviceUrl);
+            } else {
+              window.open(deviceUrl, "_blank", "noopener");
+            }
+            setControllerResult("ctl-gh-result", t("ctl.gh.deviceOpened"), false);
+            pollGithubAuthStatus(360);
           } else {
-            window.open(url, "_blank", "noopener");
+            const url = start.authorizeUrl;
+            if (!url) throw new Error("Controller did not return a GitHub authorize URL");
+            if (desktop && typeof desktop.openExternal === "function") {
+              desktop.openExternal(url);
+            } else {
+              window.open(url, "_blank", "noopener");
+            }
+            setControllerResult("ctl-gh-result", t("ctl.gh.opened"), false);
+            pollGithubAuthStatus(120);
           }
-          setControllerResult("ctl-gh-result", t("ctl.gh.opened"), false);
-          pollGithubAuthStatus(120);
         } catch (err) {
           setControllerResult("ctl-gh-result", err instanceof Error ? err.message : t("ctl.gh.failed"), true);
         } finally {

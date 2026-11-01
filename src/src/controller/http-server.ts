@@ -4722,10 +4722,27 @@ async function handleRequest(
   }
 
   if (req.method === "POST" && pathname === "/api/v1/auth/github/login") {
+    let flow: string | undefined;
     try {
-      const start = getGithubAuthManager(config, logger).beginLogin(resolveRequestOrigin(req, config));
-      logger.info("Controller: GitHub login flow started");
-      sendJson(res, 200, start);
+      const body = await parseJsonBody(req) as { flow?: unknown };
+      if (typeof body?.flow === "string") {
+        flow = body.flow.trim();
+      }
+    } catch {
+      // No body or invalid body: fall through to the default (device) flow.
+    }
+    const manager = getGithubAuthManager(config, logger);
+    try {
+      if (flow === "web") {
+        // Web flow needs a client secret for the code exchange; the device
+        // flow (default) is fully secretless.
+        const start = manager.beginLogin(resolveRequestOrigin(req, config));
+        sendJson(res, 200, { mode: "web", ...start });
+      } else {
+        const start = await manager.beginDeviceLogin();
+        sendJson(res, 200, { mode: "device", ...start });
+      }
+      logger.info(`Controller: GitHub login flow started (${flow === "web" ? "web" : "device"})`);
     } catch (err) {
       sendError(res, 400, err instanceof Error ? err.message : "failed to start GitHub login");
     }

@@ -20,6 +20,8 @@ export const GITHUB_CLIENT_SECRET_ENV = "TEAMCLAW_GITHUB_CLIENT_SECRET";
 
 const GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize";
 const GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token";
+const GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code";
+const GITHUB_DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
 const GITHUB_API_BASE = "https://api.github.com";
 const GITHUB_API_VERSION = "2026-03-10";
 const GITHUB_USER_AGENT = "teamclaw-github-auth";
@@ -52,6 +54,8 @@ export type GithubAccountInfo = {
 export type GithubAuthStore = {
   version: number;
   clientId: string;
+  /** Which OAuth flow produced this token; device-flow tokens refresh without a client secret. */
+  flowOrigin: "device" | "web";
   account: GithubAccountInfo | null;
   accessToken: string;
   refreshToken: string | null;
@@ -72,6 +76,16 @@ export type GithubAuthStatus = {
   refreshExpiresAt: number | null;
   callbackPath: string;
   callbackUrl: string | null;
+  /** Active device-flow login (user code to enter at github.com/login/device), if any. */
+  device: GithubDeviceFlowInfo | null;
+};
+
+export type GithubDeviceFlowInfo = {
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete: string;
+  expiresAt: number;
+  intervalMs: number;
 };
 
 export type GithubLoginStart = {
@@ -151,6 +165,7 @@ function enqueueStoreWrite(filePath: string, record: GithubAuthStore): Promise<v
 async function postTokenRequest(
   fetchImpl: GithubFetch,
   params: Record<string, string>,
+  options: { tolerateError?: boolean } = {},
 ): Promise<Record<string, unknown>> {
   const response = await fetchImpl(GITHUB_TOKEN_URL, {
     method: "POST",
@@ -168,7 +183,9 @@ async function postTokenRequest(
   } catch {
     payload = {};
   }
-  if (!response.ok || typeof payload.error === "string") {
+  // Device-flow polling reports authorization_pending / slow_down as an
+  // `error` field on HTTP 200; callers opt in to receiving those payloads.
+  if (!options.tolerateError && (!response.ok || typeof payload.error === "string")) {
     const errorName = typeof payload.error === "string" ? payload.error : `http_${response.status}`;
     const description = typeof payload.error_description === "string" ? payload.error_description : "";
     throw new GithubAuthError(
@@ -197,6 +214,8 @@ export function createGithubAuthManager(options: {
 
   const pendingFlows = new Map<string, { createdAt: number; codeVerifier: string; redirectUri: string }>();
   let inFlightRefresh: Promise<GithubAuthStore> | null = null;
+  let activeDeviceFlow: (GithubDeviceFlowInfo & { deviceCode: string }) | null = null;
+  let devicePollTimer: NodeJS.Timeout | null = null;
 
   function requireSecret(): void {
     if (!clientSecret) {
@@ -238,6 +257,133 @@ export function createGithubAuthManager(options: {
     }).toString()}`;
 
     return { authorizeUrl, state, callbackUrl };
+  }
+
+  function stopDeviceFlow(): void {
+    if (devicePollTimer) {
+      clearTimeout(devicePollTimer);
+      devicePollTimer = null;
+    }
+    activeDeviceFlow = null;
+  }
+
+  function scheduleDevicePoll(delayMs: number): void {
+    if (devicePollTimer) {
+      clearTimeout(devicePollTimer);
+    }
+    devicePollTimer = setTimeout(() => {
+      void pollDeviceFlowTick();
+    }, Math.max(0, delayMs));
+    devicePollTimer.unref?.();
+  }
+
+  /**
+   * Start a device-flow login. No client secret is required: the device code
+   * request and the token polling both send only the client id, and GitHub
+   * allows refreshing device-flow tokens without a secret as well.
+   */
+  async function beginDeviceLogin(): Promise<GithubDeviceFlowInfo> {
+    stopDeviceFlow();
+    const response = await fetchImpl(GITHUB_DEVICE_CODE_URL, {
+      method: "POST",
+      headers: {
+        "Accept": "application/json",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": GITHUB_USER_AGENT,
+      },
+      body: new URLSearchParams({
+        client_id: clientId,
+        // Yields an expiring access token plus a refresh token; refresh of
+        // device-flow tokens stays secretless.
+        scope: "offline_access",
+      }).toString(),
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    });
+    let data: Record<string, unknown> = {};
+    try {
+      data = (await response.json()) as Record<string, unknown>;
+    } catch {
+      data = {};
+    }
+    if (!response.ok || typeof data.error === "string") {
+      const errorName = typeof data.error === "string" ? data.error : `http_${response.status}`;
+      const hint = errorName === "device_flow_disabled"
+        ? "Device flow is disabled for this GitHub App. Open the GitHub App settings and check 'Enable Device Flow'."
+        : "";
+      throw new GithubAuthError(
+        `GitHub device authorization failed (${errorName})${hint ? `: ${hint}` : ""}`,
+        errorName,
+      );
+    }
+    const deviceCode = typeof data.device_code === "string" ? data.device_code : "";
+    const userCode = typeof data.user_code === "string" ? data.user_code : "";
+    const verificationUri = typeof data.verification_uri === "string"
+      ? data.verification_uri
+      : "https://github.com/login/device";
+    if (!deviceCode || !userCode) {
+      throw new GithubAuthError("GitHub device authorization response was missing device_code/user_code.", "device_code_invalid");
+    }
+    const expiresInSeconds = typeof data.expires_in === "number" && data.expires_in > 0 ? data.expires_in : 900;
+    const intervalMs = (typeof data.interval === "number" && data.interval > 0 ? data.interval : 5) * 1000;
+    activeDeviceFlow = {
+      userCode,
+      deviceCode,
+      verificationUri,
+      verificationUriComplete: `${verificationUri}?user_code=${encodeURIComponent(userCode)}`,
+      expiresAt: now() + expiresInSeconds * 1000,
+      intervalMs,
+    };
+    logger?.info(`Controller: GitHub device login started (code ${userCode})`);
+    scheduleDevicePoll(intervalMs);
+    const { deviceCode: _omit, ...info } = activeDeviceFlow;
+    return info;
+  }
+
+  async function pollDeviceFlowTick(): Promise<void> {
+    const flow = activeDeviceFlow;
+    if (!flow) {
+      return;
+    }
+    if (now() >= flow.expiresAt) {
+      logger?.warn("Controller: GitHub device login expired before authorization");
+      stopDeviceFlow();
+      return;
+    }
+    let payload: Record<string, unknown>;
+    try {
+      payload = await postTokenRequest(fetchImpl, {
+        client_id: clientId,
+        device_code: flow.deviceCode,
+        grant_type: GITHUB_DEVICE_GRANT_TYPE,
+      }, { tolerateError: true });
+    } catch (err) {
+      logger?.warn(`Controller: GitHub device poll failed (${err instanceof Error ? err.message : String(err)}); retrying`);
+      scheduleDevicePoll(flow.intervalMs);
+      return;
+    }
+    const errorCode = typeof payload.error === "string" ? payload.error : "";
+    if (errorCode === "authorization_pending") {
+      scheduleDevicePoll(flow.intervalMs);
+      return;
+    }
+    if (errorCode === "slow_down") {
+      flow.intervalMs += 5000;
+      scheduleDevicePoll(flow.intervalMs);
+      return;
+    }
+    if (errorCode) {
+      // expired_token / access_denied / incorrect_device_code / device_flow_disabled
+      logger?.warn(`Controller: GitHub device login ended (${errorCode})`);
+      stopDeviceFlow();
+      return;
+    }
+    try {
+      await persistTokenExchange(payload, "device");
+    } catch (err) {
+      logger?.warn(`Controller: GitHub device login completion failed (${err instanceof Error ? err.message : String(err)})`);
+    } finally {
+      stopDeviceFlow();
+    }
   }
 
   async function fetchAccount(accessToken: string): Promise<GithubAccountInfo> {
@@ -282,6 +428,7 @@ export function createGithubAuthManager(options: {
       return {
         version: typeof parsed.version === "number" ? parsed.version : STORE_VERSION,
         clientId: typeof parsed.clientId === "string" ? parsed.clientId : clientId,
+        flowOrigin: parsed.flowOrigin === "device" ? "device" : "web",
         account: account && typeof account.login === "string"
           ? {
               id: typeof account.id === "number" ? account.id : 0,
@@ -313,19 +460,30 @@ export function createGithubAuthManager(options: {
   }
 
   async function performRefresh(store: GithubAuthStore): Promise<GithubAuthStore> {
-    requireSecret();
     if (!store.refreshToken) {
       await clearStore();
       throw new GithubAuthError("GitHub login has no refresh token; sign in again.", "refresh_unavailable");
     }
+    const refreshParams: Record<string, string> = {
+      client_id: clientId,
+      grant_type: "refresh_token",
+      refresh_token: store.refreshToken,
+    };
+    if (clientSecret) {
+      refreshParams.client_secret = clientSecret;
+    } else if (store.flowOrigin !== "device") {
+      // GitHub: client_secret is required for refresh UNLESS the token came
+      // from the device flow. Secretless installs must therefore log in via
+      // the device flow (the default).
+      await clearStore();
+      throw new GithubAuthError(
+        `Refreshing this GitHub login requires the client secret. Sign in again using the device flow (default), which refreshes without a secret, or configure ${GITHUB_CLIENT_SECRET_ENV}.`,
+        "missing_client_secret",
+      );
+    }
     let payload: Record<string, unknown>;
     try {
-      payload = await postTokenRequest(fetchImpl, {
-        client_id: clientId,
-        client_secret: clientSecret,
-        grant_type: "refresh_token",
-        refresh_token: store.refreshToken,
-      });
+      payload = await postTokenRequest(fetchImpl, refreshParams);
     } catch (err) {
       if (err instanceof GithubAuthError && err.code === "bad_refresh_token") {
         // The refresh token is dead (expired or revoked): drop the stored
@@ -354,6 +512,31 @@ export function createGithubAuthManager(options: {
     await enqueueStoreWrite(filePath, next);
     logger?.info("Controller: GitHub access token refreshed");
     return next;
+  }
+
+  async function persistTokenExchange(payload: Record<string, unknown>, flowOrigin: "device" | "web"): Promise<GithubAccountInfo> {
+    const accessToken = typeof payload.access_token === "string" ? payload.access_token : "";
+    if (!accessToken) {
+      throw new GithubAuthError("GitHub token response did not include an access token.", "missing_access_token");
+    }
+    const account = await fetchAccount(accessToken);
+    const fetchedAt = now();
+    await enqueueStoreWrite(filePath, {
+      version: STORE_VERSION,
+      clientId,
+      flowOrigin,
+      account,
+      accessToken,
+      refreshToken: typeof payload.refresh_token === "string" ? payload.refresh_token : null,
+      obtainedAt: fetchedAt,
+      expiresAt: typeof payload.expires_in === "number" ? fetchedAt + payload.expires_in * 1000 : null,
+      refreshExpiresAt: typeof payload.refresh_token_expires_in === "number"
+        ? fetchedAt + payload.refresh_token_expires_in * 1000
+        : null,
+      updatedAt: fetchedAt,
+    });
+    logger?.info(`Controller: GitHub login stored for @${account.login}`);
+    return account;
   }
 
   async function completeLogin(params: GithubLoginCallbackParams): Promise<GithubAccountInfo> {
@@ -386,28 +569,7 @@ export function createGithubAuthManager(options: {
       redirect_uri: flow.redirectUri,
       code_verifier: flow.codeVerifier,
     });
-    const accessToken = typeof payload.access_token === "string" ? payload.access_token : "";
-    if (!accessToken) {
-      throw new GithubAuthError("GitHub token response did not include an access token.", "missing_access_token");
-    }
-
-    const account = await fetchAccount(accessToken);
-    const fetchedAt = now();
-    await enqueueStoreWrite(filePath, {
-      version: STORE_VERSION,
-      clientId,
-      account,
-      accessToken,
-      refreshToken: typeof payload.refresh_token === "string" ? payload.refresh_token : null,
-      obtainedAt: fetchedAt,
-      expiresAt: typeof payload.expires_in === "number" ? fetchedAt + payload.expires_in * 1000 : null,
-      refreshExpiresAt: typeof payload.refresh_token_expires_in === "number"
-        ? fetchedAt + payload.refresh_token_expires_in * 1000
-        : null,
-      updatedAt: fetchedAt,
-    });
-    logger?.info(`Controller: GitHub login stored for @${account.login}`);
-    return account;
+    return persistTokenExchange(payload, "web");
   }
 
   async function getAccessToken(): Promise<string> {
@@ -455,6 +617,7 @@ export function createGithubAuthManager(options: {
     }
     await clearStore();
     pendingFlows.clear();
+    stopDeviceFlow();
   }
 
   async function getStatus(origin?: string): Promise<GithubAuthStatus> {
@@ -469,6 +632,15 @@ export function createGithubAuthManager(options: {
       callbackPath: GITHUB_AUTH_CALLBACK_PATH,
       callbackUrl: origin
         ? origin.trim().replace(/\/+$/, "") + GITHUB_AUTH_CALLBACK_PATH
+        : null,
+      device: activeDeviceFlow
+        ? {
+            userCode: activeDeviceFlow.userCode,
+            verificationUri: activeDeviceFlow.verificationUri,
+            verificationUriComplete: activeDeviceFlow.verificationUriComplete,
+            expiresAt: activeDeviceFlow.expiresAt,
+            intervalMs: activeDeviceFlow.intervalMs,
+          }
         : null,
     };
   }
@@ -486,6 +658,7 @@ export function createGithubAuthManager(options: {
 
   return {
     beginLogin,
+    beginDeviceLogin,
     completeLogin,
     getAccessToken,
     getAuthHeaders,

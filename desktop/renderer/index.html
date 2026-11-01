@@ -195,6 +195,14 @@
             <div class="section-head compact"><h2 id="ctl-gh-title">GitHub login</h2></div>
             <p class="ctl-hint"><span id="ctl-gh-current-label">Current:</span> <code id="ctl-gh-account">-</code></p>
             <p id="ctl-gh-hint" class="ctl-hint">Authorizes TeamClaw to access the GitHub API on your behalf. The token is stored only on the controller machine.</p>
+            <div id="ctl-gh-device" class="ctl-gh-device" hidden>
+              <p class="ctl-hint"><span id="ctl-gh-device-hint">Open github.com/login/device and enter this code:</span></p>
+              <p class="ctl-hint"><a id="ctl-gh-device-link" href="https://github.com/login/device">github.com/login/device</a></p>
+              <div class="ctl-gh-device-row">
+                <code id="ctl-gh-device-code" class="ctl-gh-device-code">----</code>
+                <button id="ctl-gh-device-copy" class="btn btn-small" type="button">Copy</button>
+              </div>
+            </div>
             <div class="ctl-actions">
               <button id="ctl-gh-login" class="btn btn-primary" type="button">Sign in with GitHub</button>
               <button id="ctl-gh-logout" class="btn" type="button" hidden>Sign out</button>

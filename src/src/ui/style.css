@@ -2437,3 +2437,26 @@ body {
 .github-auth-hint {
   margin: 0;
 }
+
+.github-auth-device {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px dashed rgba(128, 128, 128, 0.4);
+  border-radius: 8px;
+  background: rgba(128, 128, 128, 0.08);
+}
+
+.github-auth-device-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.github-auth-device-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 3px;
+}

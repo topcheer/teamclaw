@@ -44,6 +44,27 @@ async function runGithubAuthSmoke() {
   assert.match(githubAuthSource, /PENDING_FLOW_TTL_MS/, "login state must have a CSRF TTL");
   assert.match(githubAuthSource, /TEAMCLAW_GITHUB_CLIENT_SECRET/, "client secret must be injectable via env");
 
+  // Device flow (default, secretless): device code request + polling + secretless refresh.
+  assert.match(
+    githubAuthSource,
+    /GITHUB_DEVICE_CODE_URL = "https:\/\/github\.com\/login\/device\/code"/,
+    "device flow must POST to github.com/login/device/code",
+  );
+  assert.match(
+    githubAuthSource,
+    /urn:ietf:params:oauth:grant-type:device_code/,
+    "device-flow token polling must use the device_code grant type (client_id only, no secret)",
+  );
+  assert.match(githubAuthSource, /authorization_pending/, "device polling must keep waiting on authorization_pending");
+  assert.match(githubAuthSource, /slow_down/, "device polling must honor slow_down backoff (+5s)");
+  assert.match(githubAuthSource, /flowOrigin/, "persisted tokens must record flow origin for secretless refresh");
+  assert.match(
+    githubAuthSource,
+    /store\.flowOrigin !== "device"/,
+    "refresh must only demand a client secret for web-flow tokens",
+  );
+  assert.match(httpServerSource, /beginDeviceLogin\(\)/, "login endpoint must default to the device flow");
+
   // Persistence: plugin state dir + 0600 + atomic rename.
   assert.match(githubAuthSource, /"plugins", "teamclaw", "auth", "github\.json"/, "tokens must live under the teamclaw plugin state dir");
   assert.match(githubAuthSource, /mode: 0o600/, "token file must be written with 0600 permissions");
@@ -70,7 +91,8 @@ async function runGithubAuthSmoke() {
   assert.match(uiAppSource, /\/auth\/github\/login/, "web UI must start GitHub login");
   assert.match(uiAppSource, /\/auth\/github\/status/, "web UI must render GitHub login status");
   assert.match(uiAppSource, /\/auth\/github\/logout/, "web UI must support GitHub sign-out");
-  assert.match(desktopAppPath ? desktopAppSource : "", /\/auth\/github\/login/, "desktop facade must start GitHub login");
+  assert.match(uiAppSource, /verificationUriComplete/, "web UI must offer the prefilled device verification URL");
+  assert.match(desktopAppSource, /verificationUriComplete/, "desktop facade must offer the prefilled device verification URL");
   assert.match(desktopAppSource, /openExternal/, "desktop facade must open the authorize URL in the system browser");
 
   console.log("test-github-auth: ok");

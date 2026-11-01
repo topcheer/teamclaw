@@ -1321,3 +1321,23 @@ textarea { padding: 14px 16px; min-height: 188px; resize: vertical; line-height:
   border: 1px solid rgba(230, 162, 60, 0.4);
   vertical-align: middle;
 }
+
+.ctl-gh-device {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px dashed rgba(128, 128, 128, 0.4);
+  border-radius: 8px;
+}
+
+.ctl-gh-device-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ctl-gh-device-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 3px;
+}
