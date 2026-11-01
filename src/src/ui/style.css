@@ -2265,3 +2265,148 @@ body {
     justify-content: flex-end;
   }
 }
+
+/* Workspace location indicator (workspace tab sidebar) */
+.workspace-current-path {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  margin: 8px 0;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+}
+.workspace-current-path-label {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.55;
+}
+#workspace-current-path-value {
+  font-size: 11px;
+  word-break: break-all;
+  opacity: 0.9;
+}
+
+/* Workspace setup prompt (centered modal) */
+.workspace-prompt-modal {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 1200;
+  padding: 24px;
+}
+.workspace-prompt-modal.open {
+  display: flex;
+}
+.workspace-prompt-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 10, 14, 0.6);
+  backdrop-filter: blur(2px);
+}
+.workspace-prompt-panel {
+  position: relative;
+  width: 100%;
+  max-width: 560px;
+  max-height: 90vh;
+  overflow-y: auto;
+  background: var(--bg-panel, #171a21);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  padding: 24px 28px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+}
+.workspace-prompt-kicker {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  opacity: 0.55;
+  margin-bottom: 4px;
+}
+.workspace-prompt-header h2 {
+  margin: 0 0 12px;
+  font-size: 18px;
+}
+.workspace-prompt-body p {
+  margin: 6px 0;
+  line-height: 1.5;
+}
+.workspace-prompt-current {
+  opacity: 0.7;
+  margin-bottom: 2px;
+}
+.workspace-prompt-hint {
+  opacity: 0.85;
+}
+.workspace-prompt-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 16px 0 8px;
+}
+.workspace-prompt-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 9px 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+}
+.workspace-prompt-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.workspace-prompt-note {
+  font-size: 12px;
+  opacity: 0.55;
+}
+
+/* Stale provisioned-worker records (ghost rows from previous gateway runs) */
+.worker-card-stale {
+  opacity: 0.55;
+}
+.worker-status.stale {
+  background: rgba(255, 165, 0, 0.18);
+  color: #e6a23c;
+  border: 1px solid rgba(230, 162, 60, 0.4);
+}
+.worker-remove-btn {
+  margin-left: auto;
+}
+
+/* Model settings dialog */
+.model-settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 10px 0;
+}
+.model-settings-label {
+  font-size: 12px;
+  opacity: 0.75;
+}
+.model-settings-field select {
+  padding: 7px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(0, 0, 0, 0.25);
+  color: inherit;
+}
+.model-settings-roles {
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 4px;
+  margin-top: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 4px;
+}

@@ -2,9 +2,11 @@ import type { PluginLogger } from "../api.js";
 import type { DiscoveryResult } from "./types.js";
 import { MDNS_TYPE } from "./protocol.js";
 
+type BonjourCtor = typeof import("bonjour-service");
+
 export class MDnsAdvertiser {
-  private service: InstanceType<typeof import("bonjour-service").default> | null = null;
-  private advertisement: ReturnType<InstanceType<typeof import("bonjour-service").default>["publish"]> | null = null;
+  private service: InstanceType<BonjourCtor> | null = null;
+  private advertisement: ReturnType<InstanceType<BonjourCtor>["publish"]> | null = null;
   private logger: PluginLogger;
 
   constructor(logger: PluginLogger) {
@@ -13,7 +15,7 @@ export class MDnsAdvertiser {
 
   async start(port: number, teamName: string): Promise<void> {
     try {
-      const Bonjour = (await import("bonjour-service")).default;
+      const Bonjour = ((await import("bonjour-service")) as unknown as { default: BonjourCtor }).default;
       this.service = new Bonjour();
       this.advertisement = this.service.publish({
         name: `teamclaw-${teamName}-controller`,
@@ -88,7 +90,7 @@ export class MDnsBrowser {
           resolve();
         });
 
-        browser.on("error", (err) => {
+        (browser as unknown as { on: (event: "error", listener: (err: unknown) => void) => void }).on("error", (err) => {
           this.logger.warn(`mDNS: browse error: ${String(err)}`);
         });
       });

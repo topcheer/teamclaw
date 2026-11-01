@@ -1866,10 +1866,10 @@ async function runCommand(command: string, args: string[], stdin?: string): Prom
       child.stdin?.end();
     }
 
-    child.stdout?.on("data", (chunk: Uint8Array | string) => {
+    child.stdout?.on("data", (chunk: Buffer) => {
       stdout += chunk.toString("utf8");
     });
-    child.stderr?.on("data", (chunk: Uint8Array | string) => {
+    child.stderr?.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf8");
     });
     child.on("error", reject);

@@ -19,7 +19,7 @@ For the easiest guided setup, run:
 npx -y @teamclaws/teamclaw install
 ```
 
-The guided installer automatically uses OpenClaw's break-glass install flag for TeamClaw, because TeamClaw legitimately needs host orchestration capabilities that the built-in scanner marks as critical.
+The guided installer handles OpenClaw's install consent automatically: it starts with the legacy break-glass flag and, on OpenClaw 2026.10+ hosts where that flag is a deprecated no-op, retries with `--accept-capabilities` when the host requires capability consent. TeamClaw legitimately needs host orchestration capabilities that the built-in scanner marks as critical.
 
 This installer can:
 
@@ -51,13 +51,17 @@ npx -y @teamclaws/teamclaw install --agent-mode main
 If you only want to install the plugin manually, use:
 
 ```bash
+# OpenClaw 2026.10+
+openclaw plugins install --accept-capabilities @teamclaws/teamclaw
+
+# Legacy hosts (<2026.10)
 openclaw plugins install --dangerously-force-unsafe-install @teamclaws/teamclaw
 ```
 
 If you want to force the ClawHub package path, use:
 
 ```bash
-openclaw plugins install --dangerously-force-unsafe-install clawhub:@teamclaws/teamclaw
+openclaw plugins install --accept-capabilities clawhub:@teamclaws/teamclaw
 ```
 
 Then enable and configure TeamClaw in your `openclaw.json`.

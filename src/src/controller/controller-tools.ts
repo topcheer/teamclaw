@@ -38,6 +38,9 @@ const EXECUTION_READY_BLOCKERS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /\bwait(?:ing)?\s+for\b/i, reason: "it says the work should wait for another output first" },
   { pattern: /依赖于|前置条件|前置依赖|前提条件|前序任务|上游任务/u, reason: "it explicitly mentions a predecessor dependency" },
   { pattern: /待.*完成|等待.*完成/u, reason: "it is described as work for a later phase" },
+  { pattern: /前提/u, reason: "it mentions a prerequisite condition that may not be satisfied yet" },
+  { pattern: /blocked\s*-\s*by/i, reason: "it explicitly says the task is blocked by another item" },
+  { pattern: /需要.*先完成/u, reason: "it states another piece of work must complete first" },
 ];
 
 const VALID_ROLE_IDS = new Set([
@@ -79,6 +82,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
         const kickoffHandler = deps.getKickoffHandler?.();
         if (!kickoffHandler) {
           return {
+            details: {},
             content: [{
               type: "text" as const,
               text: "Kickoff meeting is not available in this deployment. Proceed with direct task creation.",
@@ -88,7 +92,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
 
         const requirement = String(params.requirement ?? "").trim();
         if (!requirement) {
-          return { content: [{ type: "text" as const, text: "requirement is required." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "requirement is required." }] };
         }
 
         const rawRoles = Array.isArray(params.candidateRoles) ? params.candidateRoles : [];
@@ -97,7 +101,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
           .filter((r): r is RoleId => VALID_ROLE_IDS.has(r));
 
         if (candidateRoles.length === 0) {
-          return { content: [{ type: "text" as const, text: "At least one valid candidate role is required." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "At least one valid candidate role is required." }] };
         }
 
         const complexity = (params.complexity === "simple" || params.complexity === "medium" || params.complexity === "complex")
@@ -107,6 +111,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
         try {
           const result = await kickoffHandler(candidateRoles, complexity, requirement);
           return {
+            details: {},
             content: [{
               type: "text" as const,
               text: result.summary,
@@ -114,6 +119,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
           };
         } catch (err) {
           return {
+            details: {},
             content: [{
               type: "text" as const,
               text: `Kickoff meeting failed: ${err instanceof Error ? err.message : String(err)}. Proceed with controller-only planning.`,
@@ -130,7 +136,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
         title: Type.String({ description: "Task title" }),
         description: Type.String({ description: "Execution-ready task description with scope, expected deliverable, constraints, resolved clarifications, and no unmet predecessor dependency" }),
         priority: Type.Optional(Type.String({ description: "Priority: low, medium, high, critical" })),
-        assignedRole: Type.Optional(Type.String({ description: "Exact target role ID (pm, architect, developer, qa, release-engineer, infra-engineer, devops, security-engineer, designer, marketing)" })),
+        assignedRole: Type.Optional(Type.String({ description: "Exact target role ID (pm, architect, developer, qa, release-engineer, infra-engineer, devops, security-engineer, designer, marketing, data-engineer)" })),
         projectName: Type.Optional(Type.String({ description: "Stable project key to reuse or create for this task (for example: ggcode, todo-rest-api)." })),
         recommendedSkills: Type.Optional(
           Type.Array(
@@ -145,12 +151,13 @@ export function createControllerTools(deps: ControllerToolsDeps) {
         const description = String(params.description ?? "");
         const normalizedSessionKey = typeof sessionKey === "string" ? sessionKey.trim() : "";
         if (!title) {
-          return { content: [{ type: "text" as const, text: "title is required." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "title is required." }] };
         }
 
         const state = getTeamState();
         if (shouldBlockControllerWithoutWorkers(config, state)) {
           return {
+            details: {},
             content: [{
               type: "text" as const,
               text: `${buildControllerNoWorkersMessage()} Stop after reporting this block to the human.`,
@@ -161,6 +168,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
         const blocker = detectExecutionReadyBlocker(description);
         if (blocker) {
           return {
+            details: {},
             content: [{
               type: "text" as const,
               text: `Refusing to create task "${title}" because it is not execution-ready: ${blocker}. Only create tasks that can start immediately; keep downstream work in the controller plan until prerequisites are already complete.`,
@@ -170,6 +178,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
         const overlapBlocker = detectActiveTaskOverlap(title, description, state);
         if (overlapBlocker) {
           return {
+            details: {},
             content: [{
               type: "text" as const,
               text: `Refusing to create task "${title}" because it is not execution-ready: ${overlapBlocker}. Wait for the active task to finish or narrow the new task so it does not edit the same service scope in parallel.`,
@@ -195,7 +204,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
 
           if (!res.ok) {
             const err = await res.text();
-            return { content: [{ type: "text" as const, text: `Failed to create task: ${err}` }] };
+            return { details: {}, content: [{ type: "text" as const, text: `Failed to create task: ${err}` }] };
           }
 
           const data = await res.json() as { task: TaskInfo };
@@ -212,13 +221,14 @@ export function createControllerTools(deps: ControllerToolsDeps) {
             : "";
 
           return {
+            details: {},
             content: [{
               type: "text" as const,
               text: `Task created: ${task.title} [${task.id}] [${task.priority}]${assigned}${recommended}`,
             }],
           };
         } catch (err) {
-          return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+          return { details: {}, content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
         }
       },
     },
@@ -295,6 +305,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
         const normalizedSessionKey = typeof sessionKey === "string" ? sessionKey.trim() : "";
         if (!normalizedSessionKey) {
           return {
+            details: {},
             content: [{
               type: "text" as const,
               text: "Cannot record controller manifest because the current TeamClaw controller session key is missing.",
@@ -304,7 +315,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
 
         const requirementSummary = String(params.requirementSummary ?? "").trim();
         if (!requirementSummary) {
-          return { content: [{ type: "text" as const, text: "requirementSummary is required." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "requirementSummary is required." }] };
         }
 
         const clarificationSchemas = normalizeClarificationQuestionSchemas(params.clarificationSchemas);
@@ -337,17 +348,18 @@ export function createControllerTools(deps: ControllerToolsDeps) {
 
           if (!res.ok) {
             const err = await res.text();
-            return { content: [{ type: "text" as const, text: `Failed to record controller manifest: ${err}` }] };
+            return { details: {}, content: [{ type: "text" as const, text: `Failed to record controller manifest: ${err}` }] };
           }
 
           return {
+            details: {},
             content: [{
               type: "text" as const,
               text: `Controller manifest recorded: roles=${manifest.requiredRoles.join(", ") || "none"} created=${manifest.createdTasks.length} deferred=${manifest.deferredTasks.length}${manifest.requirementFullyComplete ? " requirementFullyComplete=true" : ""}`,
             }],
           };
         } catch (err) {
-          return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+          return { details: {}, content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
         }
       },
     },
@@ -366,12 +378,12 @@ export function createControllerTools(deps: ControllerToolsDeps) {
           if (status) url.searchParams.set("status", status);
           const res = await fetch(url.toString());
           if (!res.ok) {
-            return { content: [{ type: "text" as const, text: `Failed to list tasks: ${res.status}` }] };
+            return { details: {}, content: [{ type: "text" as const, text: `Failed to list tasks: ${res.status}` }] };
           }
 
           const data = await res.json() as { tasks: TaskInfo[] };
           if (data.tasks.length === 0) {
-            return { content: [{ type: "text" as const, text: "No tasks found." }] };
+            return { details: {}, content: [{ type: "text" as const, text: "No tasks found." }] };
           }
 
           const lines = data.tasks.map((t) => {
@@ -379,9 +391,9 @@ export function createControllerTools(deps: ControllerToolsDeps) {
             return `[${t.status}] ${t.priority.toUpperCase()} ${t.title} (${t.id})${assignee}`;
           });
 
-          return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+          return { details: {}, content: [{ type: "text" as const, text: lines.join("\n") }] };
         } catch (err) {
-          return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+          return { details: {}, content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
         }
       },
     },
@@ -396,7 +408,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
       async execute(_id: string, params: Record<string, unknown>) {
         const taskId = String(params.taskId ?? "");
         if (!taskId) {
-          return { content: [{ type: "text" as const, text: "taskId is required." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "taskId is required." }] };
         }
 
         try {
@@ -411,15 +423,15 @@ export function createControllerTools(deps: ControllerToolsDeps) {
 
           if (!res.ok) {
             const err = await res.text();
-            return { content: [{ type: "text" as const, text: `Failed to assign task: ${err}` }] };
+            return { details: {}, content: [{ type: "text" as const, text: `Failed to assign task: ${err}` }] };
           }
 
           const data = await res.json() as { task: TaskInfo; worker?: { id: string; label: string } };
           const worker = data.worker;
           const workerInfo = worker ? ` assigned to ${worker.label} (${worker.id})` : " (no available worker)";
-          return { content: [{ type: "text" as const, text: `Task assigned: ${data.task.title}${workerInfo}` }] };
+          return { details: {}, content: [{ type: "text" as const, text: `Task assigned: ${data.task.title}${workerInfo}` }] };
         } catch (err) {
-          return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+          return { details: {}, content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
         }
       },
     },
@@ -440,7 +452,7 @@ export function createControllerTools(deps: ControllerToolsDeps) {
       async execute(_id: string, params: Record<string, unknown>) {
         const content = String(params.content ?? "");
         if (!content) {
-          return { content: [{ type: "text" as const, text: "content is required." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "content is required." }] };
         }
 
         try {
@@ -476,16 +488,16 @@ export function createControllerTools(deps: ControllerToolsDeps) {
           });
 
           if (!res.ok) {
-            return { content: [{ type: "text" as const, text: `Failed to send message: ${res.status}` }] };
+            return { details: {}, content: [{ type: "text" as const, text: `Failed to send message: ${res.status}` }] };
           }
 
           const data = await res.json() as { status: string; recipients?: number };
           if (params.toRole) {
-            return { content: [{ type: "text" as const, text: `Message sent to ${params.toRole}: ${data.status}` }] };
+            return { details: {}, content: [{ type: "text" as const, text: `Message sent to ${params.toRole}: ${data.status}` }] };
           }
-          return { content: [{ type: "text" as const, text: `Broadcast sent to ${data.recipients ?? 0} recipients` }] };
+          return { details: {}, content: [{ type: "text" as const, text: `Broadcast sent to ${data.recipients ?? 0} recipients` }] };
         } catch (err) {
-          return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+          return { details: {}, content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
         }
       },
     },

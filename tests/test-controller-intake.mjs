@@ -111,6 +111,23 @@ async function runControllerIntakePromptSmoke() {
     /overlaps with active TeamClaw work on|repo-wide code changes/,
     "controller overlap detection should surface a clear reason when another active task already owns the same service scope",
   );
+  // --- EXECUTION_READY_BLOCKERS: dependency-keyword patterns ---
+  assert.match(
+    controllerToolsSource,
+    /\/前提\/u/,
+    "EXECUTION_READY_BLOCKERS should include the Chinese prerequisite keyword 前提",
+  );
+  assert.match(
+    controllerToolsSource,
+    /\/blocked\\s\*-?\\s\*by\/i/,
+    "EXECUTION_READY_BLOCKERS should match 'blocked by' or 'blocked-by' case-insensitively",
+  );
+  assert.match(
+    controllerToolsSource,
+    /\/需要\.\*先完成\/u/,
+    "EXECUTION_READY_BLOCKERS should include the Chinese phrase 需要…先完成",
+  );
+
   assert.match(
     controllerToolsSource,
     /function detectLaterPhasePhrase\(text: string\)/,
@@ -223,7 +240,7 @@ async function runControllerIntakePromptSmoke() {
   );
   assert.match(
     httpServerSource,
-    /const reconciledTasks = reconcileControllerManifestTaskBindings\(sessionKey,\s*createdTaskIds,\s*recordedManifest,\s*deps\)/,
+    /const reconciledTasks = reconcileControllerManifestTaskBindings\(sessionKey,\s*createdTaskIds,\s*recordedManifest,\s*controllerRun\.id,\s*deps\)/,
     "controller intake should bind manifest-declared tasks to the current session before finalizing the run",
   );
   assert.match(

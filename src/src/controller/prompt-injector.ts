@@ -11,9 +11,15 @@ import {
   composePrompt,
 } from "../prompt-policy.js";
 import { hasOnDemandWorkerProvisioning, shouldBlockControllerWithoutWorkers } from "./controller-capacity.js";
-import { resolveTeamClawWorkspaceDir } from "../workspace-browser.js";
+import { resolveTeamClawWorkspaceDir } from "../openclaw-workspace.js";
 import fs from "node:fs";
 import path from "node:path";
+
+const TEAMCLAW_ROLE_IDS_TEXT = [
+  "pm", "architect", "developer", "qa",
+  "release-engineer", "infra-engineer", "devops", "security-engineer",
+  "designer", "marketing", "data-engineer",
+];
 
 export type ControllerPromptDeps = {
   config: PluginConfig;

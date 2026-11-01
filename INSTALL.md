@@ -151,13 +151,17 @@ npx -y @teamclaws/teamclaw install --yes --install-mode worker --controller-url 
 ### Option 2: Install from npm
 
 ```bash
+# OpenClaw 2026.10+
+openclaw plugins install --accept-capabilities @teamclaws/teamclaw
+
+# Legacy hosts (<2026.10)
 openclaw plugins install --dangerously-force-unsafe-install @teamclaws/teamclaw
 ```
 
 ### Option 3: Install from ClawHub
 
 ```bash
-openclaw plugins install --dangerously-force-unsafe-install clawhub:@teamclaws/teamclaw
+openclaw plugins install --accept-capabilities clawhub:@teamclaws/teamclaw
 ```
 
 ## Recommended first setup: controller + on-demand `process` workers

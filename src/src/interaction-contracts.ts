@@ -310,7 +310,7 @@ function normalizeResultDeliverables(raw: unknown): WorkerTaskResultDeliverable[
   }
   return raw
     .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object")
-    .map((entry) => {
+    .map((entry): WorkerTaskResultDeliverable | null => {
       const kind = typeof entry.kind === "string" && RESULT_DELIVERABLE_KINDS.has(entry.kind as WorkerTaskResultDeliverable["kind"])
         ? entry.kind as WorkerTaskResultDeliverable["kind"]
         : "note";
@@ -332,7 +332,7 @@ function normalizeResultFollowUps(raw: unknown): WorkerTaskResultFollowUp[] {
   }
   return raw
     .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object")
-    .map((entry) => {
+    .map((entry): WorkerTaskResultFollowUp | null => {
       const type = typeof entry.type === "string" && RESULT_FOLLOW_UP_TYPES.has(entry.type as WorkerTaskResultFollowUp["type"])
         ? entry.type as WorkerTaskResultFollowUp["type"]
         : null;
