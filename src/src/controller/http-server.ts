@@ -3567,6 +3567,9 @@ function serveStaticFile(res: ServerResponse, filePath: string, contentType: str
     res.writeHead(200, {
       "Content-Type": contentType,
       "Access-Control-Allow-Origin": "*",
+      // UI assets change with every plugin deploy on a localhost controller;
+      // always revalidate so browsers never stick to a stale app.js.
+      "Cache-Control": "no-cache",
     });
     res.end(content);
   } catch {

@@ -3338,11 +3338,11 @@ function renderGithubCorner(status) {
       }
     }
     userChip.classList.remove("hidden");
-    loginBtn.classList.add("hidden");
+    loginBtn.hidden = true;
   } else {
     userChip.classList.add("hidden");
     loginBtn.textContent = t("gh.login");
-    loginBtn.classList.remove("hidden");
+    loginBtn.hidden = false;
   }
 }
 

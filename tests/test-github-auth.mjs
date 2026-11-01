@@ -13,6 +13,7 @@ const httpServerPath = path.join(projectRoot, "src", "src", "controller", "http-
 const typesPath = path.join(projectRoot, "src", "src", "types.ts");
 const configPath = path.join(projectRoot, "src", "src", "config.ts");
 const uiAppPath = path.join(projectRoot, "src", "src", "ui", "app.js");
+const uiHtmlPath = path.join(projectRoot, "src", "src", "ui", "index.html");
 const desktopAppPath = path.join(projectRoot, "desktop", "renderer", "app.js");
 
 async function runGithubAuthSmoke() {
@@ -113,6 +114,11 @@ async function runGithubAuthSmoke() {
   assert.match(uiAppSource, /\/auth\/github\/status/, "web UI must render GitHub login status");
   assert.match(uiAppSource, /\/auth\/github\/logout/, "web UI must support GitHub sign-out");
   assert.ok(!uiAppSource.includes("gh.noSecret"), "web UI must not nag about the client secret (device flow is secretless)");
+  const uiHtmlSource = await fs.readFile(uiHtmlPath, "utf8");
+  assert.ok(
+    !/github-corner-login[^>]*\shidden/.test(uiHtmlSource),
+    "the corner login button must be visible by default (JS toggles the hidden property, not a class)",
+  );
   assert.match(desktopAppSource, /\/ui\/auth\/github/, "desktop facade must open the standalone GitHub login page");
   assert.match(desktopAppSource, /gh-corner-login/, "desktop facade must show a top-right login button");
   assert.match(desktopAppSource, /gh-corner-user/, "desktop facade must show the signed-in user chip in the corner");
