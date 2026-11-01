@@ -31,6 +31,19 @@
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       font-size: 36px; font-weight: 700; letter-spacing: 6px; margin: 8px 0 12px; user-select: all;
     }
+    .copy-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin: 4px 0 12px;
+    }
+
+    .copy-state {
+      color: #3fb950;
+      font-size: 13px;
+    }
+
     .countdown { color: #a8b0c0; font-size: 13px; margin-top: 8px; }
     .countdown b { color: #e6e8ee; }
     .avatar { width: 56px; height: 56px; border-radius: 50%; margin-bottom: 10px; }
@@ -61,11 +74,14 @@
 
     <div id="view-device" class="hidden">
       <h1 id="t-device-title">Enter this code on GitHub</h1>
-      <p class="sub" id="t-device-sub">Open the GitHub device page (button below). The code is prefilled automatically.</p>
+      <p class="sub" id="t-device-sub">The code is already copied to your clipboard. Open the GitHub device page (button below); it is prefilled automatically.</p>
       <div class="device-box">
         <div class="device-code" id="device-code">------</div>
-        <button id="btn-copy" class="btn" type="button">Copy code</button>
-        <div class="countdown" id="t-expires">Expires in <b id="countdown">--:--</b></div>
+        <div class="copy-row">
+          <span id="copy-state" class="copy-state hidden">Copied to clipboard</span>
+          <button id="btn-copy" class="btn" type="button">Copy code</button>
+        </div>
+        <div class="countdown" id="t-expires"><span id="t-expires-label">Expires in</span> <b id="countdown">--:--</b></div>
       </div>
       <a id="btn-open" class="btn btn-primary btn-block" href="https://github.com/login/device" target="_blank" rel="noopener">Open github.com/login/device</a>
       <p class="footer-note" id="t-waiting">Waiting for authorization... this page updates automatically.</p>
@@ -92,9 +108,10 @@
         idleSub: "授权 TeamClaw 以你的身份访问 GitHub API。设备流方式，无需 Client Secret。",
         start: "使用 GitHub 登录",
         deviceTitle: "在 GitHub 上输入此代码",
-        deviceSub: "点击下方按钮打开 GitHub 设备页，代码会自动填入。",
+        deviceSub: "代码已自动复制到剪贴板。点击下方按钮打开 GitHub 设备页，代码会自动填入。",
         copy: "复制代码",
-        copied: "已复制",
+        copied: "已复制到剪贴板",
+        copyFailed: "请手动复制代码",
         open: "打开 github.com/login/device",
         expires: "有效期剩余",
         waiting: "等待授权中...本页面会自动更新。",
@@ -109,9 +126,10 @@
         idleSub: "Authorize TeamClaw to access the GitHub API on your behalf. Device flow: no client secret needed.",
         start: "Sign in with GitHub",
         deviceTitle: "Enter this code on GitHub",
-        deviceSub: "Open the GitHub device page (button below). The code is prefilled automatically.",
+        deviceSub: "The code is already copied to your clipboard. Open the GitHub device page (button below); it is prefilled automatically.",
         copy: "Copy code",
-        copied: "Copied",
+        copied: "Copied to clipboard",
+        copyFailed: "Copy failed - select the code manually",
         open: "Open github.com/login/device",
         expires: "Expires in",
         waiting: "Waiting for authorization... this page updates automatically.",
@@ -135,7 +153,7 @@
       $("t-device-sub").textContent = STR.deviceSub;
       $("btn-copy").textContent = STR.copy;
       $("btn-open").textContent = STR.open;
-      $("t-expires").textContent = "";
+      $("copy-state").textContent = STR.copied;
       $("t-waiting").textContent = STR.waiting;
       $("t-success-title").textContent = STR.successTitle;
       $("btn-logout").textContent = STR.signOut;
@@ -144,16 +162,50 @@
       var countdownTimer = null;
       function setCountdown(expiresAt) {
         if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+        var label = $("t-expires-label");
+        if (label) { label.textContent = STR.expires; }
         function tick() {
+          var el = $("countdown");
+          if (!el) return;
           var left = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
           var m = Math.floor(left / 60), s = left % 60;
-          $("countdown").textContent = (m < 10 ? "0" + m : m) + ":" + (s < 10 ? "0" + s : s);
+          el.textContent = (m < 10 ? "0" + m : m) + ":" + (s < 10 ? "0" + s : s);
           if (left <= 0 && countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; refresh(); }
         }
-        $("t-expires").textContent = STR.expires + " ";
-        $("t-expires").appendChild($("countdown"));
         tick();
         countdownTimer = setInterval(tick, 1000);
+      }
+
+      function showCopiedState(ok) {
+        var state = $("copy-state");
+        if (!state) return;
+        state.textContent = ok ? STR.copied : STR.copyFailed;
+        state.classList.remove("hidden");
+      }
+
+      function copyCode(value) {
+        if (!value) return;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(value).then(function () {
+            showCopiedState(true);
+          }).catch(function () {
+            showCopiedState(false);
+          });
+          return;
+        }
+        try {
+          var helper = document.createElement("textarea");
+          helper.value = value;
+          helper.style.position = "fixed";
+          helper.style.opacity = "0";
+          document.body.appendChild(helper);
+          helper.select();
+          document.execCommand("copy");
+          document.body.removeChild(helper);
+          showCopiedState(true);
+        } catch (e) {
+          showCopiedState(false);
+        }
       }
 
       function render(status) {
@@ -169,10 +221,16 @@
           return;
         }
         if (status.device) {
-          $("device-code").textContent = status.device.userCode || "------";
-          $("btn-open").href = status.device.verificationUriComplete || status.device.verificationUri;
-          setCountdown(status.device.expiresAt);
+          var codeEl = $("device-code");
+          var codeValue = status.device.userCode || "------";
+          var codeChanged = codeEl.textContent !== codeValue;
+          codeEl.textContent = codeValue;
+          var openBtn = $("btn-open");
+          if (openBtn) { openBtn.href = status.device.verificationUriComplete || status.device.verificationUri; }
           show("device");
+          try { setCountdown(status.device.expiresAt); } catch (e) { /* countdown is cosmetic - never hide the code */ }
+          // Fresh code (the user just clicked sign-in): auto-copy to the clipboard.
+          if (codeChanged && codeValue !== "------") { copyCode(codeValue); }
           return;
         }
         if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
@@ -194,6 +252,8 @@
         var errBox = $("idle-error");
         errBox.classList.add("hidden");
         btn.disabled = true;
+        btn.textContent = STR.loading;
+        // Click-driven: the device code is requested only here, never on page load.
         fetch(API + "/login", { method: "POST" }).then(function (r) {
           return r.json().then(function (body) { return { ok: r.ok, body: body }; });
         }).then(function (result) {
@@ -204,18 +264,11 @@
         }).catch(function (err) {
           errBox.textContent = err instanceof Error ? err.message : String(err);
           errBox.classList.remove("hidden");
-        }).finally(function () { btn.disabled = false; });
+        }).finally(function () { btn.disabled = false; btn.textContent = STR.start; });
       });
 
       $("btn-copy").addEventListener("click", function () {
-        var value = $("device-code").textContent;
-        if (!value) return;
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(value).then(function () {
-            $("btn-copy").textContent = STR.copied;
-            setTimeout(function () { $("btn-copy").textContent = STR.copy; }, 1500);
-          }).catch(function () { /* clipboard denied - code is selectable */ });
-        }
+        copyCode($("device-code").textContent);
       });
 
       $("btn-logout").addEventListener("click", function () {

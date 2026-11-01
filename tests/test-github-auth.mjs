@@ -127,7 +127,110 @@ async function runGithubAuthSmoke() {
   console.log("test-github-auth: ok");
 }
 
-runGithubAuthSmoke().catch((err) => {
+/**
+ * Runs the standalone login page's inline script against a stub DOM that
+ * faithfully models textContent-destroys-children, then asserts the device
+ * view becomes visible and the fresh code is auto-copied. This exact scenario
+ * (page stuck on the idle view because setCountdown threw) regressed before.
+ */
+async function runLoginPageRuntimeSmoke() {
+  const html = await fs.readFile(githubLoginPagePath, "utf8");
+  assert.match(html, /id="t-expires-label"/, "the countdown label must be its own span");
+  assert.ok(!/\$\("t-expires"\)\.textContent = ""/.test(html), "init must not wipe the countdown node");
+  assert.match(html, /id="copy-state"/, "the page must show a copy status indicator");
+  assert.match(html, /navigator\.clipboard\.writeText/, "the page must copy via the async clipboard API");
+  assert.match(html, /codeChanged/, "a freshly issued device code must be auto-copied");
+
+  const scriptMatch = html.match(/<script>([\s\S]*)<\/script>/);
+  assert.ok(scriptMatch, "the login page must embed its script inline");
+
+  const ids = [
+    "app", "view-loading", "view-idle", "view-device", "view-success", "t-loading",
+    "t-idle-title", "t-idle-sub", "btn-start", "idle-error", "t-device-title", "t-device-sub",
+    "device-code", "copy-state", "btn-copy", "t-expires", "t-expires-label", "countdown",
+    "btn-open", "t-waiting", "ok-badge", "t-success-title", "account-avatar", "account-login",
+    "account-meta", "btn-logout", "t-close",
+  ];
+  const registry = new Map();
+  function makeEl(id) {
+    const el = {
+      id, _text: "", _children: [], detached: false, hidden: false, href: "", src: "",
+      disabled: false, value: "", style: {},
+      addEventListener() {}, select() {},
+      appendChild(child) { child.detached = false; this._children.push(child); this._text = ""; },
+      removeChild(child) { this._children = this._children.filter((c) => c !== child); },
+    };
+    Object.defineProperty(el, "classList", {
+      value: {
+        add: (c) => el._classes.add(c),
+        remove: (c) => el._classes.delete(c),
+        contains: (c) => el._classes.has(c),
+        toggle: (c, force) => {
+          if (force === undefined) { el._classes.has(c) ? el._classes.delete(c) : el._classes.add(c); }
+          else if (force) { el._classes.add(c); } else { el._classes.delete(c); }
+        },
+      },
+    });
+    el._classes = new Set();
+    Object.defineProperty(el, "textContent", {
+      get() { return this._text + this._children.map((c) => c.textContent).join(""); },
+      set(v) {
+        this._text = String(v);
+        for (const c of this._children) { c.detached = true; }
+        this._children = [];
+      },
+    });
+    return el;
+  }
+  for (const id of ids) { registry.set(id, makeEl(id)); }
+  registry.get("t-expires").appendChild(registry.get("countdown"));
+
+  const clipboardWrites = [];
+  const documentStub = {
+    getElementById: (id) => { const el = registry.get(id); return el && !el.detached ? el : null; },
+    createElement: () => makeEl("tmp"),
+    body: makeEl("body"),
+  };
+  const deviceStatus = {
+    authenticated: false,
+    account: null,
+    device: {
+      userCode: "WDJB-MJHT",
+      verificationUri: "https://github.com/login/device",
+      verificationUriComplete: "https://github.com/login/device?user_code=WDJB-MJHT",
+      expiresAt: Date.now() + 900_000,
+      intervalMs: 5000,
+    },
+  };
+  const pageScript = new Function(
+    "document", "navigator", "window", "fetch", "setInterval", "clearInterval", "setTimeout",
+    scriptMatch[1],
+  );
+  pageScript(
+    documentStub,
+    { language: "en-US", clipboard: { writeText: (v) => { clipboardWrites.push(v); return Promise.resolve(); } } },
+    { open: () => {} },
+    () => Promise.resolve({ ok: true, json: async () => deviceStatus }),
+    () => 0, () => {}, () => 0,
+  );
+  // Let the initial refresh() promise chain (and the auto-copy) settle.
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.ok(
+    !registry.get("view-device")._classes.has("hidden"),
+    "the device view must become visible once a login flow is active",
+  );
+  assert.equal(registry.get("device-code").textContent, "WDJB-MJHT");
+  assert.match(registry.get("countdown").textContent, /^\d\d:\d\d$/, "the countdown must render mm:ss");
+  assert.deepEqual(clipboardWrites, ["WDJB-MJHT"], "a fresh device code must be auto-copied to the clipboard");
+  assert.equal(registry.get("btn-open").href, deviceStatus.device.verificationUriComplete);
+}
+
+(async () => {
+  await runGithubAuthSmoke();
+  await runLoginPageRuntimeSmoke();
+  console.log("test-github-auth: ok (incl. login page runtime)");
+})().catch((err) => {
   console.error("test-github-auth failed:", err);
   process.exit(1);
 });
