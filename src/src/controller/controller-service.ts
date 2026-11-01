@@ -55,6 +55,7 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
   return {
     id: "teamclaw-controller",
     async start(_ctx: OpenClawPluginServiceContext) {
+      const serviceStartedAt = Date.now();
       await ensureOpenClawWorkspaceMemoryDir(logger);
       const repoState = await ensureControllerGitRepo(config, logger).catch((err) => {
         logger.warn(`Controller: failed to prepare git collaboration repo: ${err instanceof Error ? err.message : String(err)}`);
@@ -92,6 +93,27 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
         void saveTeamState(teamState!);
         return teamState!;
       };
+
+      // Provisioned workers die with the previous gateway process. Their
+      // persisted entries flip to offline once heartbeats stop but were
+      // never removed, so every gateway restart accumulated ghost rows in
+      // the workers list. Clear them on startup: provisioned-* entries that
+      // are offline (or whose heartbeat predates this process) cannot be
+      // alive because no worker for them exists yet.
+      const ghostWorkerIds = Object.values(teamState.workers)
+        .filter((worker) =>
+          worker.id.startsWith("provisioned-")
+          && (worker.status === "offline" || !worker.lastHeartbeat || worker.lastHeartbeat < serviceStartedAt),
+        )
+        .map((worker) => worker.id);
+      if (ghostWorkerIds.length > 0) {
+        updateState((state) => {
+          for (const workerId of ghostWorkerIds) {
+            delete state.workers[workerId];
+          }
+        });
+        logger.info(`Controller: removed ${ghostWorkerIds.length} stale provisioned worker record(s) from a previous gateway process`);
+      }
 
       workerProvisioningManager = new WorkerProvisioningManager({
         config,
