@@ -139,7 +139,9 @@ async function runLoginPageRuntimeSmoke() {
   assert.ok(!/\$\("t-expires"\)\.textContent = ""/.test(html), "init must not wipe the countdown node");
   assert.match(html, /id="copy-state"/, "the page must show a copy status indicator");
   assert.match(html, /navigator\.clipboard\.writeText/, "the page must copy via the async clipboard API");
-  assert.match(html, /codeChanged/, "a freshly issued device code must be auto-copied");
+  assert.match(html, /showDevice\(result\.body, true\)/, "the sign-in click must render the code and gesture-chain the copy");
+  assert.ok(!html.includes("window.open"), "the page must never auto-navigate to GitHub; the user clicks the open button");
+  assert.match(html, /showDevice\(status\.device, false\)/, "background polling must display without clipboard attempts");
 
   const scriptMatch = html.match(/<script>([\s\S]*)<\/script>/);
   assert.ok(scriptMatch, "the login page must embed its script inline");
@@ -155,8 +157,8 @@ async function runLoginPageRuntimeSmoke() {
   function makeEl(id) {
     const el = {
       id, _text: "", _children: [], detached: false, hidden: false, href: "", src: "",
-      disabled: false, value: "", style: {},
-      addEventListener() {}, select() {},
+      disabled: false, value: "", style: {}, _handlers: {},
+      addEventListener(type, fn) { this._handlers[type] = fn; }, select() {},
       appendChild(child) { child.detached = false; this._children.push(child); this._text = ""; },
       removeChild(child) { this._children = this._children.filter((c) => c !== child); },
     };
@@ -186,22 +188,22 @@ async function runLoginPageRuntimeSmoke() {
   registry.get("t-expires").appendChild(registry.get("countdown"));
 
   const clipboardWrites = [];
+  const windowOpens = [];
+  let fetchCalls = 0;
+  const deviceBody = {
+    mode: "device",
+    userCode: "WDJB-MJHT",
+    verificationUri: "https://github.com/login/device",
+    verificationUriComplete: "https://github.com/login/device?user_code=WDJB-MJHT",
+    expiresAt: Date.now() + 900_000,
+    intervalMs: 5000,
+  };
   const documentStub = {
     getElementById: (id) => { const el = registry.get(id); return el && !el.detached ? el : null; },
     createElement: () => makeEl("tmp"),
     body: makeEl("body"),
   };
-  const deviceStatus = {
-    authenticated: false,
-    account: null,
-    device: {
-      userCode: "WDJB-MJHT",
-      verificationUri: "https://github.com/login/device",
-      verificationUriComplete: "https://github.com/login/device?user_code=WDJB-MJHT",
-      expiresAt: Date.now() + 900_000,
-      intervalMs: 5000,
-    },
-  };
+  const deviceStatus = { authenticated: false, account: null, device: deviceBody };
   const pageScript = new Function(
     "document", "navigator", "window", "fetch", "setInterval", "clearInterval", "setTimeout",
     scriptMatch[1],
@@ -209,11 +211,21 @@ async function runLoginPageRuntimeSmoke() {
   pageScript(
     documentStub,
     { language: "en-US", clipboard: { writeText: (v) => { clipboardWrites.push(v); return Promise.resolve(); } } },
-    { open: () => {} },
-    () => Promise.resolve({ ok: true, json: async () => deviceStatus }),
+    { open: (...args) => { windowOpens.push(args); } },
+    (url) => {
+      fetchCalls++;
+      const body = String(url).endsWith("/login") ? deviceBody : deviceStatus;
+      return Promise.resolve({ ok: true, json: async () => body });
+    },
     () => 0, () => {}, () => 0,
   );
-  // Let the initial refresh() promise chain (and the auto-copy) settle.
+  // Initial status poll settles WITHOUT any clipboard write (no user gesture).
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(clipboardWrites, [], "background polling must not touch the clipboard");
+
+  // Step 1: the sign-in click fetches the code, renders it, and copies in-chain.
+  assert.ok(registry.get("btn-start")._handlers.click, "btn-start must be wired");
+  await registry.get("btn-start")._handlers.click();
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.ok(
@@ -222,8 +234,13 @@ async function runLoginPageRuntimeSmoke() {
   );
   assert.equal(registry.get("device-code").textContent, "WDJB-MJHT");
   assert.match(registry.get("countdown").textContent, /^\d\d:\d\d$/, "the countdown must render mm:ss");
-  assert.deepEqual(clipboardWrites, ["WDJB-MJHT"], "a fresh device code must be auto-copied to the clipboard");
-  assert.equal(registry.get("btn-open").href, deviceStatus.device.verificationUriComplete);
+  assert.deepEqual(clipboardWrites, ["WDJB-MJHT"], "the click chain must copy the fresh code to the clipboard");
+  assert.deepEqual(windowOpens, [], "clicking sign-in must NOT navigate to GitHub");
+  assert.equal(registry.get("btn-open").href, deviceBody.verificationUriComplete);
+  assert.ok(
+    !registry.get("copy-state")._classes.has("hidden"),
+    "the copy status indicator must be visible after the copy attempt",
+  );
 }
 
 (async () => {

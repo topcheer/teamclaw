@@ -108,7 +108,7 @@
         idleSub: "授权 TeamClaw 以你的身份访问 GitHub API。设备流方式，无需 Client Secret。",
         start: "使用 GitHub 登录",
         deviceTitle: "在 GitHub 上输入此代码",
-        deviceSub: "代码已自动复制到剪贴板。点击下方按钮打开 GitHub 设备页，代码会自动填入。",
+        deviceSub: "已尝试自动复制到剪贴板（也可点旁边的复制按钮）。确认后点击下方按钮打开 GitHub 设备页。",
         copy: "复制代码",
         copied: "已复制到剪贴板",
         copyFailed: "请手动复制代码",
@@ -126,7 +126,7 @@
         idleSub: "Authorize TeamClaw to access the GitHub API on your behalf. Device flow: no client secret needed.",
         start: "Sign in with GitHub",
         deviceTitle: "Enter this code on GitHub",
-        deviceSub: "The code is already copied to your clipboard. Open the GitHub device page (button below); it is prefilled automatically.",
+        deviceSub: "It is copied to your clipboard automatically (or use the copy button). When ready, click the button below to open GitHub.",
         copy: "Copy code",
         copied: "Copied to clipboard",
         copyFailed: "Copy failed - select the code manually",
@@ -208,6 +208,22 @@
         }
       }
 
+      /**
+       * Render the device-code view. autoCopy is true only when a real user
+       * click just produced the code: clipboard writes need the document
+       * focused and (in some engines) transient user activation, so we never
+       * attempt them from background polling.
+       */
+      function showDevice(device, autoCopy) {
+        var codeEl = $("device-code");
+        codeEl.textContent = device.userCode || "------";
+        var openBtn = $("btn-open");
+        if (openBtn) { openBtn.href = device.verificationUriComplete || device.verificationUri; }
+        show("device");
+        try { setCountdown(device.expiresAt); } catch (e) { /* countdown is cosmetic - never hide the code */ }
+        if (autoCopy) { copyCode(device.userCode || ""); }
+      }
+
       function render(status) {
         if (status.authenticated && status.account) {
           if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
@@ -221,16 +237,8 @@
           return;
         }
         if (status.device) {
-          var codeEl = $("device-code");
-          var codeValue = status.device.userCode || "------";
-          var codeChanged = codeEl.textContent !== codeValue;
-          codeEl.textContent = codeValue;
-          var openBtn = $("btn-open");
-          if (openBtn) { openBtn.href = status.device.verificationUriComplete || status.device.verificationUri; }
-          show("device");
-          try { setCountdown(status.device.expiresAt); } catch (e) { /* countdown is cosmetic - never hide the code */ }
-          // Fresh code (the user just clicked sign-in): auto-copy to the clipboard.
-          if (codeChanged && codeValue !== "------") { copyCode(codeValue); }
+          // Poll path: display only. No clipboard attempt, no navigation.
+          showDevice(status.device, false);
           return;
         }
         if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
@@ -253,13 +261,16 @@
         errBox.classList.add("hidden");
         btn.disabled = true;
         btn.textContent = STR.loading;
-        // Click-driven: the device code is requested only here, never on page load.
+        // Two-step flow: this click only requests the device code and renders
+        // it (with a gesture-chained clipboard copy). The user then explicitly
+        // clicks the open button to jump to GitHub - no automatic navigation.
         fetch(API + "/login", { method: "POST" }).then(function (r) {
           return r.json().then(function (body) { return { ok: r.ok, body: body }; });
         }).then(function (result) {
           if (!result.ok) { throw new Error(result.body && result.body.error ? result.body.error : "login failed"); }
-          var url = result.body && (result.body.verificationUriComplete || result.body.verificationUri);
-          if (url) { try { window.open(url, "_blank", "noopener"); } catch (e) { /* popup blocked - manual link below */ } }
+          if (result.body && result.body.userCode) {
+            showDevice(result.body, true);
+          }
           return refresh();
         }).catch(function (err) {
           errBox.textContent = err instanceof Error ? err.message : String(err);
