@@ -23,6 +23,13 @@ const REPLACEMENTS = [
     replacement: "true && \\",
   },
   {
+    // Upstream added a hard gate on the matrix-sdk-crypto native addon; its
+    // download-lib crashes under the builder's Node and TeamClaw images do
+    // not use the Matrix channel. Downgrade the hard failure to a warning.
+    needle: '(echo "ERROR: matrix-sdk-crypto native addon missing after retries" >&2 && exit 1)',
+    replacement: 'echo "WARN: matrix-sdk-crypto native addon missing after retries (ignored for teamclaw image)"',
+  },
+  {
     // The submodule pin tracks a release tag while the Dockerfile rolls with
     // upstream main; patchedDependencies occasionally references packages a
     // pinned manifest subset no longer resolves, which ERR_PNPM_UNUSED_PATCH
