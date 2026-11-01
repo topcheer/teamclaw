@@ -186,11 +186,13 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     sweeping.add(repo.id);
     try {
       const { candidates, issues, pulls } = await sweepRepo(repo, client);
-      advanceCursors(repo, issues, pulls);
-
-      // First-ever sweep for a repo is always a dry-run report (both manual
-      // and timer triggered) so autonomy starts from an audited baseline.
       const dryRun = !repo.dryRunDone && s.budget.firstSweepDryRun;
+      if (!dryRun) {
+        // Advance only for acting sweeps: a dry-run must leave the cursors
+        // untouched so the reported actions are actually performed next time
+        // instead of being marked as already-seen.
+        advanceCursors(repo, issues, pulls);
+      }
       const capped = candidates.slice(0, repo.policy.maxTasksPerSweep);
       let created = 0;
       const summary: string[] = [`found ${candidates.length} candidate(s)`];
