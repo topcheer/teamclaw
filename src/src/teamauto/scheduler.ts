@@ -218,6 +218,9 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
             }
           }
           repo.lastSweepSummary = `created ${created}/${capped.length} task(s)`;
+          if (capped.some((c) => c.kind === "fullReview")) {
+            repo.cursors.lastFullReviewAt = Date.now();
+          }
         }
       } else {
         repo.lastSweepSummary = "no new work";
