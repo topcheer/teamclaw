@@ -34,6 +34,7 @@ const expectedRoles = [
   "security-engineer",
   "designer",
   "marketing",
+  "data-engineer",
 ];
 
 async function runRoleRegistrySmoke() {
@@ -122,12 +123,12 @@ async function runRoleRegistrySmoke() {
   );
   assert.match(
     controllerToolsSource,
-    /Exact target role ID \(pm, architect, developer, qa, release-engineer, infra-engineer, devops, security-engineer, designer, marketing\)/,
+    /Exact target role ID \(pm, architect, developer, qa, release-engineer, infra-engineer, devops, security-engineer, designer, marketing, data-engineer\)/,
     "controller tools should describe target roles using the supported TeamClaw role IDs",
   );
   assert.match(
     workerToolsSource,
-    /Exact target role ID \(pm, architect, developer, qa, release-engineer, infra-engineer, devops, security-engineer, designer, marketing\)/,
+    /Exact target role ID \(pm, architect, developer, qa, release-engineer, infra-engineer, devops, security-engineer, designer, marketing, data-engineer\)/,
     "worker tools should describe target roles using the supported TeamClaw role IDs",
   );
 
@@ -139,7 +140,7 @@ async function runRoleRegistrySmoke() {
 
   assert.match(
     siteSource,
-    />10<\/strong>\s*<span>available role types<\/span>/,
+    />11<\/strong>\s*<span>available role types<\/span>/,
     "GitHub Pages site should reflect the expanded role count",
   );
 

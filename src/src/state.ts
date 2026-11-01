@@ -2,11 +2,73 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import type {
+  RoleId,
   StartupProvisioningReadiness,
   TeamProvisioningState,
   TeamState,
   WorkerIdentity,
 } from "./types.js";
+
+const STATE_VERSION = 2;
+
+function migrateState(raw: unknown): TeamState | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const state = raw as Record<string, unknown>;
+
+  // Basic structural guard — same checks as the old loadTeamState
+  if (
+    typeof state.teamName !== "string" ||
+    typeof state.createdAt !== "number" ||
+    typeof state.updatedAt !== "number" ||
+    !state.workers ||
+    !state.tasks
+  ) {
+    return null;
+  }
+
+  // Ensure required nested objects exist (defensive, same as before)
+  if (!state.controllerRuns || typeof state.controllerRuns !== "object") {
+    state.controllerRuns = {};
+  }
+  if (!state.projects || typeof state.projects !== "object") {
+    state.projects = {};
+  }
+  if (!Array.isArray(state.messages)) {
+    state.messages = [];
+  }
+  if (!state.clarifications || typeof state.clarifications !== "object") {
+    state.clarifications = {};
+  }
+  if (state.repo && typeof state.repo !== "object") {
+    delete state.repo;
+  }
+  if (!state.provisioning || typeof state.provisioning !== "object") {
+    state.provisioning = createEmptyProvisioningState();
+  } else {
+    const prov = state.provisioning as Record<string, unknown>;
+    if (!prov.workers || typeof prov.workers !== "object") {
+      prov.workers = {};
+    }
+    prov.startupReadiness = normalizeStartupReadiness(prov.startupReadiness);
+  }
+
+  const version = typeof state.version === "number" ? state.version : 1;
+
+  if (version > STATE_VERSION) {
+    throw new Error(
+      `Saved team state is version ${version}, but this software only supports up to version ${STATE_VERSION}. ` +
+      "Please update TeamClaw to a newer version that supports this state format.",
+    );
+  }
+
+  // Version 1 → 2: no new required fields beyond `version` itself.
+  // startupReadiness was already optional and handled by normalizeStartupReadiness above.
+  state.version = STATE_VERSION;
+
+  return state as unknown as TeamState;
+}
 
 function resolvePluginStateDir(): string {
   const explicitStateDir = process.env.OPENCLAW_STATE_DIR?.trim();
@@ -54,7 +116,7 @@ function normalizeStartupReadiness(value: unknown): StartupProvisioningReadiness
     startedAt,
     checkedAt,
     attempts,
-    requiredRoles,
+    requiredRoles: requiredRoles as RoleId[],
     readyWorkerIds,
     message,
   };
@@ -87,39 +149,8 @@ async function loadTeamState(teamName: string): Promise<TeamState | null> {
   const filePath = path.join(STATE_DIR, `${teamName}-team-state.json`);
   try {
     const raw = await fs.readFile(filePath, "utf8");
-    const parsed = JSON.parse(raw) as TeamState;
-    if (
-      typeof parsed.teamName !== "string" ||
-      typeof parsed.createdAt !== "number" ||
-      typeof parsed.updatedAt !== "number" ||
-      !parsed.workers ||
-      !parsed.tasks
-    ) {
-      return null;
-    }
-    if (!parsed.controllerRuns || typeof parsed.controllerRuns !== "object") {
-      parsed.controllerRuns = {};
-    }
-    if (!parsed.projects || typeof parsed.projects !== "object") {
-      parsed.projects = {};
-    }
-    if (!Array.isArray(parsed.messages)) {
-      parsed.messages = [];
-    }
-    if (!parsed.clarifications || typeof parsed.clarifications !== "object") {
-      parsed.clarifications = {};
-    }
-    if (parsed.repo && typeof parsed.repo !== "object") {
-      delete parsed.repo;
-    }
-    if (!parsed.provisioning || typeof parsed.provisioning !== "object") {
-      parsed.provisioning = createEmptyProvisioningState();
-    }
-    if (!parsed.provisioning.workers || typeof parsed.provisioning.workers !== "object") {
-      parsed.provisioning.workers = {};
-    }
-    parsed.provisioning.startupReadiness = normalizeStartupReadiness(parsed.provisioning.startupReadiness);
-    return parsed;
+    const parsed = JSON.parse(raw);
+    return migrateState(parsed);
   } catch {
     return null;
   }
@@ -128,6 +159,7 @@ async function loadTeamState(teamName: string): Promise<TeamState | null> {
 async function saveTeamState(state: TeamState): Promise<void> {
   await ensureDir(STATE_DIR);
   const filePath = path.join(STATE_DIR, `${state.teamName}-team-state.json`);
+  state.version = STATE_VERSION;
   state.updatedAt = Date.now();
   state.provisioning = state.provisioning && typeof state.provisioning === "object"
     ? state.provisioning

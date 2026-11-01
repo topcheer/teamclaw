@@ -12,6 +12,7 @@ export const TEAMCLAW_ROLE_IDS: RoleId[] = [
   "security-engineer",
   "designer",
   "marketing",
+  "data-engineer",
 ];
 
 export const TEAMCLAW_ROLE_IDS_TEXT = TEAMCLAW_ROLE_IDS.join(", ");

@@ -3,6 +3,12 @@ import { getRole } from "../roles.js";
 import { buildWorkerSessionRules, composePrompt } from "../prompt-policy.js";
 import { MessageQueue } from "./message-queue.js";
 
+const TEAMCLAW_ROLE_IDS_TEXT = [
+  "pm", "architect", "developer", "qa",
+  "release-engineer", "infra-engineer", "devops", "security-engineer",
+  "designer", "marketing", "data-engineer",
+];
+
 export function createWorkerPromptInjector(
   config: PluginConfig,
   getIdentity: () => WorkerIdentity | null,
@@ -23,6 +29,8 @@ export function createWorkerPromptInjector(
       `## TeamClaw Role: ${roleDef.label} ${roleDef.icon}`,
       roleDef.systemPrompt,
       ...buildWorkerSessionRules(),
+      "Important: submit structured collaboration contracts for all handoffs, reviews, progress updates, and result deliveries so the controller can route work without parsing freeform prose.",
+      "Do not use sessions_yield or end your turn while background work, coding agents, or process sessions are still running.",
       `Worker ID: ${identity.workerId}`,
       `Controller: ${identity.controllerUrl}`,
     ];

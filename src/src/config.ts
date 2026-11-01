@@ -44,6 +44,13 @@ function buildConfigSchema() {
           default: 600000,
           description: "Inactivity threshold in milliseconds before TeamClaw probes a stalled role task instead of failing it",
         },
+        maxConcurrentTasks: {
+          type: "integer" as const,
+          default: 5,
+          minimum: 1,
+          maximum: 50,
+          description: "Maximum number of tasks that can be in 'in_progress' status simultaneously",
+        },
         gitEnabled: {
           type: "boolean" as const,
           default: true,
@@ -226,6 +233,11 @@ function buildConfigSchema() {
       taskTimeoutMs: {
         label: "Task Stall Threshold",
         help: "In milliseconds, how long TeamClaw waits without visible progress before probing the task instead of failing it",
+      },
+      maxConcurrentTasks: {
+        label: "Max Concurrent Tasks",
+        hint: "number",
+        help: "Maximum number of tasks that can be in 'in_progress' status at the same time (1–50)",
       },
       gitEnabled: {
         label: "Git Collaboration",

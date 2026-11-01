@@ -11,6 +11,7 @@ It supports:
 - Git-backed workspace collaboration
 - on-demand worker provisioning with `process`, `docker`, and `kubernetes`
 - a built-in controller UI and desktop client for planning runs, tasks, clarifications, workspace browsing, and delivery reports
+- per-role model selection with a live model catalog (UI and desktop settings views; role overrides > team default), and workspace relocation from the UI without hand-editing host config
 
 **Website:** <https://topcheer.github.io/teamclaw/>
 
@@ -245,6 +246,7 @@ Default collaboration behavior:
 | `security-engineer` | Security engineer |
 | `designer` | Product / UI designer |
 | `marketing` | Marketing specialist |
+| `data-engineer` | Data engineer |
 
 ## Testing
 
