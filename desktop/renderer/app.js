@@ -95,6 +95,7 @@
       "ctl.ws.saved": "Updated. Restart the gateway (openclaw gateway restart) to apply.",
       "ctl.ws.failed": "Failed to update workspace",
       "ctl.ws.needAbsolute": "Enter an absolute path starting with / or ~/",
+      "ctl.notConnected": "Connect to a controller first",
       "tab.tasks": "Tasks",
       "tab.clarifications": "Clarifications",
       "tab.workspace": "Workspace",
@@ -257,6 +258,7 @@
       "ctl.ws.saved": "已更新。请重启网关（openclaw gateway restart）后生效。",
       "ctl.ws.failed": "更新工作区失败",
       "ctl.ws.needAbsolute": "请输入以 / 或 ~/ 开头的绝对路径",
+      "ctl.notConnected": "请先连接 controller",
       "tab.tasks": "任务",
       "tab.clarifications": "澄清",
       "tab.workspace": "工作区",
@@ -1062,6 +1064,25 @@
     return response.json();
   }
 
+  async function apiPut(path, body) {
+    const response = await fetch(controllerApi(path), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {}),
+    });
+    if (!response.ok) {
+      let message = `PUT ${path} failed (${response.status})`;
+      try {
+        const data = await response.json();
+        message = data.error || data.message || message;
+      } catch {
+        // ignore
+      }
+      throw new Error(message);
+    }
+    return response.json();
+  }
+
   function setConnectionPill(kind, text) {
     state.connectionState = kind;
     const el = $("#connection-pill");
@@ -1092,6 +1113,25 @@
   }
 
   function renderControllerSettings() {
+    const connected = state.connectionState === "connected";
+    document.querySelectorAll("#view-controller .ctl-actions button").forEach((btn) => {
+      btn.disabled = !connected;
+    });
+    if (!connected) {
+      const pathEl = document.getElementById("ctl-ws-path");
+      if (pathEl) pathEl.textContent = "(" + t("ctl.notConnected") + ")";
+      const badge = document.getElementById("ctl-ws-default");
+      if (badge) badge.classList.add("is-hidden");
+      const rolesEl = document.getElementById("ctl-roles");
+      if (rolesEl) rolesEl.innerHTML = "";
+      const defaultSelect = document.getElementById("ctl-default");
+      if (defaultSelect) defaultSelect.innerHTML = "";
+      setControllerResult("ctl-models-result", t("ctl.notConnected"), true);
+      setControllerResult("ctl-ws-result", "", false);
+      return;
+    }
+    setControllerResult("ctl-models-result", "", false);
+    setControllerResult("ctl-ws-result", "", false);
     bindControllerSettings();
     renderControllerWorkspaceCard();
     renderControllerModelsCard();
@@ -1119,8 +1159,9 @@
     let catalog;
     try {
       catalog = await apiGet("/models/config");
+      setControllerResult("ctl-models-result", "", false);
     } catch (err) {
-      setControllerResult("ctl-models-result", t("ctl.models.failed"), true);
+      setControllerResult("ctl-models-result", err instanceof Error ? err.message : t("ctl.models.failed"), true);
       return;
     }
     const options = [];
@@ -1164,7 +1205,7 @@
         });
         saveBtn.disabled = true;
         try {
-          await apiPost("/models/config", payload);
+          await apiPut("/models/config", payload);
           setControllerResult("ctl-models-result", t("ctl.models.saved"), false);
         } catch (err) {
           setControllerResult("ctl-models-result", err instanceof Error ? err.message : t("ctl.models.failed"), true);
@@ -1431,6 +1472,8 @@
     const refreshBtn = $("#refresh-btn");
     const drawer = $("#notice-drawer");
     const connected = state.connectionState === "connected";
+    const controllerNavBtn = document.querySelector(".nav-btn[data-view='controller']");
+    if (controllerNavBtn) controllerNavBtn.disabled = !connected;
     const condensed = connected && !state.connectionExpanded;
     if (card) card.classList.toggle("is-condensed", condensed);
     if (body) body.style.display = condensed ? "none" : "";
@@ -2877,6 +2920,9 @@
       clearReconnectTimer();
       state.reconnectAttempt = 0;
       setConnectionPill("connected", t("connection.connected"));
+      if (state.currentView === "controller") {
+        renderControllerSettings();
+      }
       state.connectionExpanded = false;
       setStatusLine(t("connection.connectedTo", { url: state.controllerUrl }));
       refreshAll(true).catch(() => {});
