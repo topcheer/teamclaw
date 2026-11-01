@@ -23,6 +23,15 @@ const REPLACEMENTS = [
     replacement: "true && \\",
   },
   {
+    // The submodule pin tracks a release tag while the Dockerfile rolls with
+    // upstream main; patchedDependencies occasionally references packages a
+    // pinned manifest subset no longer resolves, which ERR_PNPM_UNUSED_PATCH
+    // fails hard on. Container builds only need the resolvable subset.
+    needle: "COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./",
+    replacement: `COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+RUN node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.pnpm=p.pnpm||{};p.pnpm.allowUnusedPatches=true;fs.writeFileSync('package.json',JSON.stringify(p,null,2))"`,
+  },
+  {
     needle: "COPY . .\n",
     replacement: `COPY . .
 
