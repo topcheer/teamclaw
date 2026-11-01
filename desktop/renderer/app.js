@@ -78,6 +78,23 @@
       "connection.refresh": "Refresh",
       "mission.title": "Mission",
       "tab.planning": "Planning",
+      "tab.controller": "Controller",
+      "ctl.models.title": "Team models",
+      "ctl.models.hint": "Default model applies to the controller and every role; per-role selections override it for that role.",
+      "ctl.models.default": "Default model",
+      "ctl.models.useDefault": "(use default)",
+      "ctl.models.save": "Save models",
+      "ctl.models.saved": "Saved. Hot-reload applies; restart the gateway if needed.",
+      "ctl.models.failed": "Failed to save model settings",
+      "ctl.ws.title": "Workspace directory",
+      "ctl.ws.current": "Current:",
+      "ctl.ws.default": "default",
+      "ctl.ws.hint": "Point the team workspace at any absolute path on the controller machine. Applies after a gateway restart.",
+      "ctl.ws.inputLabel": "New workspace path",
+      "ctl.ws.apply": "Apply workspace",
+      "ctl.ws.saved": "Updated. Restart the gateway (openclaw gateway restart) to apply.",
+      "ctl.ws.failed": "Failed to update workspace",
+      "ctl.ws.needAbsolute": "Enter an absolute path starting with / or ~/",
       "tab.tasks": "Tasks",
       "tab.clarifications": "Clarifications",
       "tab.workspace": "Workspace",
@@ -223,6 +240,23 @@
       "connection.refresh": "刷新",
       "mission.title": "任务台",
       "tab.planning": "规划",
+      "tab.controller": "控制器",
+      "ctl.models.title": "团队模型",
+      "ctl.models.hint": "默认模型作用于控制器与所有角色；按角色的选择会覆盖默认值。",
+      "ctl.models.default": "默认模型",
+      "ctl.models.useDefault": "（跟随默认）",
+      "ctl.models.save": "保存模型",
+      "ctl.models.saved": "已保存。配置热重载生效；如未生效请重启网关。",
+      "ctl.models.failed": "保存模型设置失败",
+      "ctl.ws.title": "工作区目录",
+      "ctl.ws.current": "当前：",
+      "ctl.ws.default": "默认",
+      "ctl.ws.hint": "可将团队工作区指向控制器机器上的任意绝对路径。需重启网关后生效。",
+      "ctl.ws.inputLabel": "新工作区路径",
+      "ctl.ws.apply": "应用工作区",
+      "ctl.ws.saved": "已更新。请重启网关（openclaw gateway restart）后生效。",
+      "ctl.ws.failed": "更新工作区失败",
+      "ctl.ws.needAbsolute": "请输入以 / 或 ~/ 开头的绝对路径",
       "tab.tasks": "任务",
       "tab.clarifications": "澄清",
       "tab.workspace": "工作区",
@@ -404,6 +438,16 @@
       [".nav-btn[data-view='clarifications'] .nav-label", "tab.clarifications"],
       [".nav-btn[data-view='workspace'] .nav-label", "tab.workspace"],
       [".nav-btn[data-view='reports'] .nav-label", "tab.reports"],
+      [".nav-btn[data-view='controller'] .nav-label", "tab.controller"],
+      ["#ctl-models-title", "ctl.models.title"],
+      ["#ctl-models-hint", "ctl.models.hint"],
+      ["#ctl-default-label", "ctl.models.default"],
+      ["#ctl-models-save", "ctl.models.save"],
+      ["#ctl-ws-title", "ctl.ws.title"],
+      ["#ctl-ws-current-label", "ctl.ws.current"],
+      ["#ctl-ws-hint", "ctl.ws.hint"],
+      ["#ctl-ws-input-label", "ctl.ws.inputLabel"],
+      ["#ctl-ws-apply", "ctl.ws.apply"],
       ["#compose-focus-btn", "mission.newRequirement"],
       ["#notice-toggle", "mission.notifications"],
       ["#view-mission .section-head h2", "mission.requirement"],
@@ -1038,6 +1082,120 @@
   }
 
   /* function renmderRuntimeAlert(modelReadiness) keeps the legacy marker: TeamClaw is installed but cannot work yet. */
+  let controllerSettingsBound = false;
+
+  function setControllerResult(id, text, isError) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = text || "";
+    el.classList.toggle("ctl-error", Boolean(isError));
+  }
+
+  function renderControllerSettings() {
+    bindControllerSettings();
+    renderControllerWorkspaceCard();
+    renderControllerModelsCard();
+  }
+
+  async function renderControllerWorkspaceCard() {
+    const pathEl = document.getElementById("ctl-ws-path");
+    const badge = document.getElementById("ctl-ws-default");
+    if (!pathEl || !badge) return;
+    try {
+      const data = await apiGet("/api/v1/workspace/status");
+      pathEl.textContent = data.workspaceDir || "(unknown)";
+      badge.classList.toggle("is-hidden", data.isDefault !== true);
+    } catch (err) {
+      pathEl.textContent = "(unavailable)";
+      badge.classList.add("is-hidden");
+      void err;
+    }
+  }
+
+  async function renderControllerModelsCard() {
+    const defaultSelect = document.getElementById("ctl-default");
+    const rolesEl = document.getElementById("ctl-roles");
+    if (!defaultSelect || !rolesEl) return;
+    let catalog;
+    try {
+      catalog = await apiGet("/api/v1/models/config");
+    } catch (err) {
+      setControllerResult("ctl-models-result", t("ctl.models.failed"), true);
+      return;
+    }
+    const options = [];
+    (catalog.providers || []).forEach((provider) => {
+      (provider.models || []).forEach((modelId) => {
+        options.push({ value: provider.id + "/" + modelId, label: provider.id + " / " + modelId });
+      });
+    });
+    if (catalog.defaultModel && !options.some((opt) => opt.value === catalog.defaultModel)) {
+      options.unshift({ value: catalog.defaultModel, label: catalog.defaultModel + " (current)" });
+    }
+    defaultSelect.innerHTML = options
+      .map((opt) => '<option value="' + escapeHtml(opt.value) + '">' + escapeHtml(opt.label) + "</option>")
+      .join("");
+    defaultSelect.value = catalog.defaultModel || (options.length ? options[0].value : "");
+    const overrides = catalog.roleModelOverrides || {};
+    rolesEl.innerHTML = (catalog.roles || [])
+      .map((role) => {
+        const current = overrides[role.id] || "";
+        return '<label class="ctl-field"><span>' + escapeHtml(role.label) + '</span>'
+          + '<select data-ctl-role="' + escapeHtml(role.id) + '">'
+          + '<option value="">' + escapeHtml(t("ctl.models.useDefault")) + "</option>"
+          + options.map((opt) => '<option value="' + escapeHtml(opt.value) + '"' + (current === opt.value ? " selected" : "") + '>' + escapeHtml(opt.label) + "</option>").join("")
+          + "</select></label>";
+      })
+      .join("");
+  }
+
+  function bindControllerSettings() {
+    if (controllerSettingsBound) return;
+    controllerSettingsBound = true;
+    const saveBtn = document.getElementById("ctl-models-save");
+    if (saveBtn) {
+      saveBtn.addEventListener("click", async () => {
+        const defaultSelect = document.getElementById("ctl-default");
+        const payload = { roleModelOverrides: {} };
+        if (defaultSelect && defaultSelect.value) payload.defaultModel = defaultSelect.value;
+        document.querySelectorAll("[data-ctl-role]").forEach((sel) => {
+          const role = sel.getAttribute("data-ctl-role");
+          if (role && sel.value) payload.roleModelOverrides[role] = sel.value;
+        });
+        saveBtn.disabled = true;
+        try {
+          await apiPost("/api/v1/models/config", payload);
+          setControllerResult("ctl-models-result", t("ctl.models.saved"), false);
+        } catch (err) {
+          setControllerResult("ctl-models-result", err instanceof Error ? err.message : t("ctl.models.failed"), true);
+        } finally {
+          saveBtn.disabled = false;
+        }
+      });
+    }
+    const applyBtn = document.getElementById("ctl-ws-apply");
+    if (applyBtn) {
+      applyBtn.addEventListener("click", async () => {
+        const input = document.getElementById("ctl-ws-input");
+        const value = input ? input.value.trim() : "";
+        if (!value || (!value.startsWith("/") && !value.startsWith("~/"))) {
+          setControllerResult("ctl-ws-result", t("ctl.ws.needAbsolute"), true);
+          return;
+        }
+        applyBtn.disabled = true;
+        try {
+          await apiPost("/api/v1/workspace/change-dir", { workspaceDir: value });
+          setControllerResult("ctl-ws-result", t("ctl.ws.saved"), false);
+          renderControllerWorkspaceCard();
+        } catch (err) {
+          setControllerResult("ctl-ws-result", err instanceof Error ? err.message : t("ctl.ws.failed"), true);
+        } finally {
+          applyBtn.disabled = false;
+        }
+      });
+    }
+  }
+
   function renderRuntimeAlert() {
     const el = $("#runtime-alert");
     if (!el) return;
@@ -1301,7 +1459,7 @@
   }
 
   function activateView(view) {
-    const validViews = new Set(["mission", "planning", "tasks", "clarifications", "workspace", "reports"]);
+    const validViews = new Set(["mission", "planning", "tasks", "clarifications", "workspace", "reports", "controller"]);
     const nextView = validViews.has(view) ? view : "mission";
     state.currentView = nextView;
 
@@ -1323,6 +1481,8 @@
       renderWorkspaceContent();
     } else if (nextView === "reports") {
       renderReports();
+    } else if (nextView === "controller") {
+      renderControllerSettings();
     } else {
       renderMissionSummary();
       renderConversation();
