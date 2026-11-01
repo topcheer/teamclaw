@@ -160,7 +160,10 @@ async function runInstallerSmoke() {
       "installer should preserve the existing workspace when --yes keeps defaults",
     );
     assert.equal(
-      updated.agents?.list?.[0]?.model?.primary ?? updated.agents?.list?.[0]?.model,
+      updated.agents?.entries?.teamclaw?.model?.primary
+        ?? updated.agents?.entries?.teamclaw?.model
+        ?? updated.agents?.list?.[0]?.model?.primary
+        ?? updated.agents?.list?.[0]?.model,
       initialConfig.agents.defaults.model.primary,
       "installer should copy the effective host model into the dedicated TeamClaw agent config",
     );
@@ -426,9 +429,15 @@ exit 0
       sharedWorkspacePath,
       "installer should preserve the shared OpenClaw default workspace while independent TeamClaw mode uses a dedicated agent workspace",
     );
-    const teamclawAgentEntry = Array.isArray(updated.agents?.list)
-      ? updated.agents.list.find((entry) => entry?.id === "teamclaw")
-      : null;
+    const teamclawAgentEntry = (() => {
+      const keyed = updated.agents?.entries?.teamclaw;
+      if (keyed && typeof keyed === "object") {
+        return keyed;
+      }
+      return Array.isArray(updated.agents?.list)
+        ? updated.agents.list.find((entry) => entry?.id === "teamclaw")
+        : null;
+    })();
     assert.equal(
       teamclawAgentEntry?.workspace,
       expectedWorkspacePath,

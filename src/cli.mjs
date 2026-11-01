@@ -19,6 +19,19 @@ const PACKAGE_VERSION = packageMetadata.version;
 const PACKAGE_INSTALL_SPEC = `${PACKAGE_NAME}@${PACKAGE_VERSION}`;
 const PLUGIN_ID = "teamclaw";
 const DANGEROUS_INSTALL_FLAG = "--dangerously-force-unsafe-install";
+const CAPABILITY_CONSENT_FLAG = "--accept-capabilities";
+
+/**
+ * OpenClaw 2026.10+ replaced the legacy break-glass install flag (now a
+ * deprecated no-op) with a capability-consent flow. When a host enforces
+ * that flow, the install fails and asks the user to rerun with
+ * --accept-capabilities, so detect that failure and retry once with the
+ * consent flag appended. Legacy hosts (<2026.10) succeed on the first
+ * attempt with the legacy flag and never hit the retry path.
+ */
+function isCapabilityConsentRequired(output) {
+  return /accept-capabilities|capability[\s-]?consent|CapabilityConsentRequired/i.test(String(output || ""));
+}
 const DEFAULT_TEAMCLAW_IMAGE = "ghcr.io/topcheer/teamclaw-openclaw:latest";
 const DEFAULT_CONTROLLER_PORT = 9527;
 const DEFAULT_WORKER_PORT = 9528;
@@ -53,6 +66,7 @@ const ROLE_OPTIONS = [
   { value: "security-engineer", label: "Security Engineer" },
   { value: "designer", label: "UI/UX Designer" },
   { value: "marketing", label: "Marketing Specialist" },
+  { value: "data-engineer", label: "Data Engineer" },
 ];
 
 const INSTALL_MODE_OPTIONS = [
@@ -389,6 +403,11 @@ function cloneJsonValue(value) {
 
 function resolveConfiguredAgentEntryRecord(config, agentId) {
   const agents = isRecord(config.agents) ? config.agents : {};
+  // OpenClaw 2026.10+ keyed agents.entries take precedence over the legacy list.
+  const keyed = isRecord(agents.entries) ? agents.entries[agentId] : null;
+  if (isRecord(keyed)) {
+    return keyed;
+  }
   const list = Array.isArray(agents.list) ? agents.list : [];
   for (const entry of list) {
     if (!isRecord(entry) || entry.id !== agentId) {
@@ -479,6 +498,12 @@ function getCurrentWorkspacePath(config) {
 
 function getCurrentTeamClawAgentWorkspacePath(config) {
   const agents = isRecord(config.agents) ? config.agents : {};
+  const keyed = isRecord(agents.entries)
+    ? agents.entries[TEAMCLAW_AGENT_ID]
+    : null;
+  if (isRecord(keyed) && typeof keyed.workspace === "string") {
+    return expandUserPath(keyed.workspace);
+  }
   const list = Array.isArray(agents.list) ? agents.list : [];
   for (const entry of list) {
     if (!isRecord(entry) || entry.id !== TEAMCLAW_AGENT_ID) {
@@ -887,13 +912,23 @@ function listLanUiUrls(port) {
 
 function installPluginWithCommand(command, args, env) {
   const result = spawnSync(command, args, {
-    stdio: "inherit",
+    stdio: ["inherit", "pipe", "pipe"],
     env,
+    encoding: "utf8",
   });
+  const stdout = result.stdout ?? "";
+  const stderr = result.stderr ?? "";
+  if (stdout) {
+    process.stdout.write(stdout);
+  }
+  if (stderr) {
+    process.stderr.write(stderr);
+  }
   return {
     status: result.status ?? 1,
     signal: result.signal ?? null,
     error: result.error ?? null,
+    output: `${stdout}\n${stderr}`,
   };
 }
 
@@ -1021,7 +1056,7 @@ function attemptPluginInstall({ configPath }) {
     }
   }
   console.log(
-    `\nTeamClaw uses host-level orchestration capabilities, so OpenClaw requires ${DANGEROUS_INSTALL_FLAG} during plugin installation.`,
+    `\nTeamClaw uses host-level orchestration capabilities, so OpenClaw requires an install consent flag during plugin installation (legacy: ${DANGEROUS_INSTALL_FLAG}; OpenClaw 2026.10+: ${CAPABILITY_CONSENT_FLAG}).`,
   );
   const candidates = [
     {
@@ -1072,7 +1107,19 @@ function attemptPluginInstall({ configPath }) {
   for (let index = 0; index < candidates.length; index += 1) {
     const candidate = candidates[index];
     console.log(`\nInstalling ${candidate.targetDescription} with ${candidate.label}...`);
-    const result = installPluginWithCommand(candidate.command, candidate.args, env);
+    let result = installPluginWithCommand(candidate.command, candidate.args, env);
+    if (
+      result.status !== 0 &&
+      !candidate.args.includes(CAPABILITY_CONSENT_FLAG) &&
+      isCapabilityConsentRequired(result.output)
+    ) {
+      console.log("OpenClaw requires capability consent; retrying with --accept-capabilities...");
+      result = installPluginWithCommand(
+        candidate.command,
+        [...candidate.args, CAPABILITY_CONSENT_FLAG],
+        env,
+      );
+    }
     if (result.status === 0 && !result.error) {
       return {
         ok: true,
@@ -1489,22 +1536,54 @@ async function collectInstallChoices(configPath, config, prompter, options) {
 }
 
 function upsertAgentListEntry(agents, agentId, update) {
-  const list = Array.isArray(agents.list) ? agents.list.filter(isRecord) : [];
-  const existingIndex = list.findIndex((entry) => entry.id === agentId);
-  const nextEntry = {
-    ...(existingIndex >= 0 ? list[existingIndex] : {}),
-    id: agentId,
+  const legacyList = Array.isArray(agents.list) ? agents.list.filter(isRecord) : [];
+  // OpenClaw 2026.10+ rejects agents.list ("moved to keyed agents.entries").
+  // Write the keyed shape whenever the host already uses it, or when there is
+  // no legacy list to stay compatible with; only keep the array on hosts that
+  // still have one.
+  const useKeyedEntries = isRecord(agents.entries) || legacyList.length === 0;
+  if (!useKeyedEntries) {
+    const existingIndex = legacyList.findIndex((entry) => entry.id === agentId);
+    const nextEntry = {
+      ...(existingIndex >= 0 ? legacyList[existingIndex] : {}),
+      id: agentId,
+      ...update,
+    };
+    if (existingIndex >= 0) {
+      legacyList[existingIndex] = nextEntry;
+    } else {
+      legacyList.push(nextEntry);
+    }
+    agents.list = legacyList;
+    return;
+  }
+  const entries = isRecord(agents.entries) ? agents.entries : {};
+  // Fold legacy list entries into the keyed map once, then drop the list.
+  for (const legacyEntry of legacyList) {
+    const legacyId = isRecord(legacyEntry) && typeof legacyEntry.id === "string" ? legacyEntry.id : "";
+    if (!legacyId || isRecord(entries[legacyId])) {
+      continue;
+    }
+    const migrated = { ...legacyEntry };
+    delete migrated.id;
+    entries[legacyId] = migrated;
+  }
+  const existingKeyed = isRecord(entries[agentId]) ? entries[agentId] : {};
+  entries[agentId] = {
+    ...existingKeyed,
     ...update,
   };
-  if (existingIndex >= 0) {
-    list[existingIndex] = nextEntry;
-  } else {
-    list.push(nextEntry);
+  agents.entries = entries;
+  delete agents.list;
+  if (Object.keys(entries).length > 1) {
+    agents.ownership = "explicit";
   }
-  agents.list = list;
 }
 
 function removeAgentListEntry(agents, agentId) {
+  if (isRecord(agents.entries)) {
+    delete agents.entries[agentId];
+  }
   if (!Array.isArray(agents.list)) {
     return;
   }
@@ -1528,11 +1607,18 @@ function applyTeamClawHostRuntimeDefaults(next) {
 
   const tools = ensureRecord(next, "tools");
   const exec = ensureRecord(tools, "exec");
-  if (typeof exec.security !== "string" || !exec.security.trim()) {
-    exec.security = TEAMCLAW_RECOMMENDED_EXEC_SECURITY;
-  }
-  if (typeof exec.ask !== "string" || !exec.ask.trim()) {
-    exec.ask = TEAMCLAW_RECOMMENDED_EXEC_ASK;
+  if (typeof exec.mode === "string" && exec.mode.trim()) {
+    // OpenClaw 2026.10+ forbids mixing mode with security/ask in one exec
+    // object; mode="full" is the equivalent of security="full" + ask="off".
+    delete exec.security;
+    delete exec.ask;
+  } else {
+    if (typeof exec.security !== "string" || !exec.security.trim()) {
+      exec.security = TEAMCLAW_RECOMMENDED_EXEC_SECURITY;
+    }
+    if (typeof exec.ask !== "string" || !exec.ask.trim()) {
+      exec.ask = TEAMCLAW_RECOMMENDED_EXEC_ASK;
+    }
   }
 }
 
@@ -1541,6 +1627,17 @@ function collectTeamClawHostRuntimeWarnings(config) {
   const commands = isRecord(config.commands) ? config.commands : null;
   const tools = isRecord(config.tools) ? config.tools : null;
   const exec = tools && isRecord(tools.exec) ? tools.exec : null;
+
+  if (typeof exec?.mode === "string" && exec.mode.trim()) {
+    // Modern hosts configure tools.exec.mode; mode="full" maps to the
+    // recommended security/ask defaults, so only warn on stricter modes.
+    if (exec.mode.trim() !== TEAMCLAW_RECOMMENDED_EXEC_SECURITY) {
+      warnings.push(
+        `tools.exec.mode is set to "${exec.mode.trim()}" (TeamClaw works best with "${TEAMCLAW_RECOMMENDED_EXEC_SECURITY}"; stricter settings can block task execution or trigger repeated approvals).`,
+      );
+    }
+    return warnings;
+  }
 
   const execSecurity = typeof exec?.security === "string" ? exec.security.trim() : "";
   if (execSecurity && execSecurity !== TEAMCLAW_RECOMMENDED_EXEC_SECURITY) {
@@ -1697,7 +1794,7 @@ function applyInstallerChoices(config, choices, configPath) {
       teamclawConfig.workerProvisioningDisabled = false;
       teamclawConfig.workerProvisioningControllerUrl = "";
       teamclawConfig.workerProvisioningRoles = [];
-      teamclawConfig.workerProvisioningMaxPerRole = 10;
+      teamclawConfig.workerProvisioningMaxPerRole = 1;
       teamclawConfig.workerProvisioningImage = "";
       teamclawConfig.workerProvisioningPassEnv = [];
       teamclawConfig.workerProvisioningExtraEnv = {};
