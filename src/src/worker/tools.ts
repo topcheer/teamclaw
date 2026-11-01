@@ -50,7 +50,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
       label: "Ask Team Peer",
       description: "Send a question to another team member by role",
       parameters: Type.Object({
-        targetRole: Type.String({ description: "Exact target role ID (pm, architect, developer, qa, release-engineer, infra-engineer, devops, security-engineer, designer, marketing)" }),
+        targetRole: Type.String({ description: "Exact target role ID (pm, architect, developer, qa, release-engineer, infra-engineer, devops, security-engineer, designer, marketing, data-engineer)" }),
         question: Type.String({ description: "The question to ask" }),
         taskId: Type.Optional(Type.String({ description: "Related task ID if any" })),
         summary: Type.Optional(Type.String({ description: "Short structured summary for this question" })),
@@ -61,7 +61,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
       async execute(_id: string, params: Record<string, unknown>) {
         const identity = await resolveIdentity();
         if (!identity) {
-          return { content: [{ type: "text" as const, text: "Not registered with a team. Cannot send messages." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "Not registered with a team. Cannot send messages." }] };
         }
 
         const targetRole = String(params.targetRole ?? "");
@@ -69,7 +69,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
         const normalizedTargetRole = normalizeContractRole(targetRole);
 
         if (!targetRole || !question) {
-          return { content: [{ type: "text" as const, text: "targetRole and question are required." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "targetRole and question are required." }] };
         }
 
         try {
@@ -99,12 +99,12 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
           });
 
           if (!res.ok) {
-            return { content: [{ type: "text" as const, text: `Failed to send message: ${res.status}` }] };
+            return { details: {}, content: [{ type: "text" as const, text: `Failed to send message: ${res.status}` }] };
           }
 
-          return { content: [{ type: "text" as const, text: `Message sent to ${targetRole}.` }] };
+          return { details: {}, content: [{ type: "text" as const, text: `Message sent to ${targetRole}.` }] };
         } catch (err) {
-          return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+          return { details: {}, content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
         }
       },
     },
@@ -124,12 +124,12 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
       async execute(_id: string, params: Record<string, unknown>) {
         const identity = await resolveIdentity();
         if (!identity) {
-          return { content: [{ type: "text" as const, text: "Not registered with a team." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "Not registered with a team." }] };
         }
 
         const message = String(params.message ?? "");
         if (!message) {
-          return { content: [{ type: "text" as const, text: "message is required." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "message is required." }] };
         }
 
         try {
@@ -157,12 +157,12 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
           });
 
           if (!res.ok) {
-            return { content: [{ type: "text" as const, text: `Failed to broadcast: ${res.status}` }] };
+            return { details: {}, content: [{ type: "text" as const, text: `Failed to broadcast: ${res.status}` }] };
           }
 
-          return { content: [{ type: "text" as const, text: "Broadcast sent to all team members." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "Broadcast sent to all team members." }] };
         } catch (err) {
-          return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+          return { details: {}, content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
         }
       },
     },
@@ -181,7 +181,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
       async execute(_id: string, params: Record<string, unknown>) {
         const identity = await resolveIdentity();
         if (!identity) {
-          return { content: [{ type: "text" as const, text: "Not registered with a team." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "Not registered with a team." }] };
         }
 
         const targetRole = String(params.targetRole ?? "");
@@ -189,7 +189,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
         const taskId = String(params.taskId ?? "");
 
         if (!targetRole || !reviewContent) {
-          return { content: [{ type: "text" as const, text: "targetRole and reviewContent are required." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "targetRole and reviewContent are required." }] };
         }
 
         try {
@@ -218,12 +218,12 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
           });
 
           if (!res.ok) {
-            return { content: [{ type: "text" as const, text: `Failed to request review: ${res.status}` }] };
+            return { details: {}, content: [{ type: "text" as const, text: `Failed to request review: ${res.status}` }] };
           }
 
-          return { content: [{ type: "text" as const, text: `Review request sent to ${targetRole}.` }] };
+          return { details: {}, content: [{ type: "text" as const, text: `Review request sent to ${targetRole}.` }] };
         } catch (err) {
-          return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+          return { details: {}, content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
         }
       },
     },
@@ -242,7 +242,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
       async execute(_id: string, params: Record<string, unknown>) {
         const identity = await resolveIdentity();
         if (!identity) {
-          return { content: [{ type: "text" as const, text: "Not registered with a team." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "Not registered with a team." }] };
         }
 
         const taskId = String(params.taskId ?? "");
@@ -250,7 +250,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
         const reason = String(params.reason ?? "");
 
         if (!taskId || !targetRole) {
-          return { content: [{ type: "text" as const, text: "taskId and targetRole are required." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "taskId and targetRole are required." }] };
         }
 
         try {
@@ -273,12 +273,12 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
           });
 
           if (!res.ok) {
-            return { content: [{ type: "text" as const, text: `Failed to suggest handoff: ${res.status}` }] };
+            return { details: {}, content: [{ type: "text" as const, text: `Failed to suggest handoff: ${res.status}` }] };
           }
 
-          return { content: [{ type: "text" as const, text: `Handoff suggested to ${targetRole}.` }] };
+          return { details: {}, content: [{ type: "text" as const, text: `Handoff suggested to ${targetRole}.` }] };
         } catch (err) {
-          return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+          return { details: {}, content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
         }
       },
     },
@@ -321,12 +321,12 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
       async execute(_id: string, params: Record<string, unknown>) {
         const identity = await resolveIdentity();
         if (!identity) {
-          return { content: [{ type: "text" as const, text: "Not registered with a team." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "Not registered with a team." }] };
         }
 
         const taskId = String(params.taskId ?? "");
         if (!taskId) {
-          return { content: [{ type: "text" as const, text: "taskId is required." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "taskId is required." }] };
         }
 
         const contract = normalizeWorkerTaskResultContract({
@@ -342,7 +342,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
           notes: params.notes,
         });
         if (!contract) {
-          return { content: [{ type: "text" as const, text: "summary is required for teamclaw_submit_result_contract." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "summary is required for teamclaw_submit_result_contract." }] };
         }
 
         try {
@@ -352,16 +352,17 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
             body: JSON.stringify({ contract, workerId: identity.workerId }),
           });
           if (!res.ok) {
-            return { content: [{ type: "text" as const, text: `Failed to submit result contract: ${res.status}` }] };
+            return { details: {}, content: [{ type: "text" as const, text: `Failed to submit result contract: ${res.status}` }] };
           }
           return {
+            details: {},
             content: [{
               type: "text" as const,
               text: `Result contract recorded for ${taskId}: ${contract.outcome} / ${contract.summary}`,
             }],
           };
         } catch (err) {
-          return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+          return { details: {}, content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
         }
       },
     },
@@ -379,7 +380,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
       async execute(_id: string, params: Record<string, unknown>) {
         const identity = await resolveIdentity();
         if (!identity) {
-          return { content: [{ type: "text" as const, text: "Not registered with a team." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "Not registered with a team." }] };
         }
 
         const taskId = String(params.taskId ?? "");
@@ -395,7 +396,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
           : [];
 
         if (!taskId || !reason) {
-          return { content: [{ type: "text" as const, text: "taskId and reason are required." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "taskId and reason are required." }] };
         }
 
         try {
@@ -413,17 +414,18 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
           });
 
           if (!res.ok) {
-            return { content: [{ type: "text" as const, text: `Failed to request parallel help: ${res.status}` }] };
+            return { details: {}, content: [{ type: "text" as const, text: `Failed to request parallel help: ${res.status}` }] };
           }
 
           return {
+            details: {},
             content: [{
               type: "text" as const,
               text: `Parallel help requested for ${taskId}${requestedWorkerCount ? ` (target ${targetRole} workers: ${requestedWorkerCount})` : ""}.`,
             }],
           };
         } catch (err) {
-          return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+          return { details: {}, content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
         }
       },
     },
@@ -457,7 +459,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
       async execute(_id: string, params: Record<string, unknown>) {
         const identity = await resolveIdentity();
         if (!identity) {
-          return { content: [{ type: "text" as const, text: "Not registered with a team." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "Not registered with a team." }] };
         }
 
         const taskId = String(params.taskId ?? "");
@@ -467,7 +469,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
         const questionSchema = normalizeClarificationQuestionSchema(params.questionSchema);
 
         if (!taskId || !question || !blockingReason) {
-          return { content: [{ type: "text" as const, text: "taskId, question, and blockingReason are required." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "taskId, question, and blockingReason are required." }] };
         }
 
         try {
@@ -487,12 +489,12 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
           });
 
           if (!res.ok) {
-            return { content: [{ type: "text" as const, text: `Failed to request clarification: ${res.status}` }] };
+            return { details: {}, content: [{ type: "text" as const, text: `Failed to request clarification: ${res.status}` }] };
           }
 
-          return { content: [{ type: "text" as const, text: "Clarification requested. The task is now blocked until a human answers." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "Clarification requested. The task is now blocked until a human answers." }] };
         } catch (err) {
-          return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+          return { details: {}, content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
         }
       },
     },
@@ -504,18 +506,18 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
       async execute(_id: string) {
         const identity = await resolveIdentity();
         if (!identity) {
-          return { content: [{ type: "text" as const, text: "Not registered with a team." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "Not registered with a team." }] };
         }
 
         try {
           const res = await fetch(`${identity.controllerUrl}/api/v1/team/status`);
           if (!res.ok) {
-            return { content: [{ type: "text" as const, text: `Failed to get status: ${res.status}` }] };
+            return { details: {}, content: [{ type: "text" as const, text: `Failed to get status: ${res.status}` }] };
           }
           const data = await res.json() as Record<string, unknown>;
-          return { content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
+          return { details: {}, content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }] };
         } catch (err) {
-          return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+          return { details: {}, content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
         }
       },
     },
@@ -536,7 +538,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
       async execute(_id: string, params: Record<string, unknown>) {
         const identity = await resolveIdentity();
         if (!identity) {
-          return { content: [{ type: "text" as const, text: "Not registered with a team." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "Not registered with a team." }] };
         }
 
         const taskId = String(params.taskId ?? "");
@@ -544,13 +546,14 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
         const status = typeof params.status === "string" ? params.status : undefined;
 
         if (!taskId) {
-          return { content: [{ type: "text" as const, text: "taskId is required." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "taskId is required." }] };
         }
         if (!progress) {
-          return { content: [{ type: "text" as const, text: "progress or summary is required." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "progress or summary is required." }] };
         }
         if (status && !ALLOWED_PROGRESS_STATUSES.has(status)) {
           return {
+            details: {},
             content: [{
               type: "text" as const,
               text: "status must be in_progress or review. Do not mark tasks completed or failed via teamclaw_report_progress; finish by returning the deliverable or surfacing the error.",
@@ -584,12 +587,12 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
           });
 
           if (!res.ok) {
-            return { content: [{ type: "text" as const, text: `Failed to report progress: ${res.status}` }] };
+            return { details: {}, content: [{ type: "text" as const, text: `Failed to report progress: ${res.status}` }] };
           }
 
-          return { content: [{ type: "text" as const, text: "Progress reported." }] };
+          return { details: {}, content: [{ type: "text" as const, text: "Progress reported." }] };
         } catch (err) {
-          return { content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+          return { details: {}, content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
         }
       },
     },
