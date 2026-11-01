@@ -5,7 +5,7 @@ import type { KickoffAssessment, PluginConfig, RoleId, TeamState } from "../type
 import { loadTeamState, saveTeamState } from "../state.js";
 import { MDnsAdvertiser } from "../discovery.js";
 import { WORKER_TIMEOUT_MS } from "../protocol.js";
-import { createControllerHttpServer } from "./http-server.js";
+import { createControllerHttpServer, autoAssignPendingTasks } from "./http-server.js";
 import { TaskRouter } from "./task-router.js";
 import { MessageRouter } from "./message-router.js";
 import { TeamWebSocketServer } from "./websocket.js";
@@ -15,6 +15,8 @@ import { WorkerProvisioningManager } from "./worker-provisioning.js";
 import { PreviewManager } from "./preview-manager.js";
 import { runKickoffMeeting, buildKickoffAssessmentPrompt, ASSESSMENT_TIMEOUT_MS } from "./kickoff-orchestrator.js";
 import { resolvePreferredLanAddress } from "../networking.js";
+import { createTeamAutoScheduler, type TeamAutoScheduler } from "../teamauto/scheduler.js";
+import { getGithubAuthManager } from "./github-auth.js";
 
 export type KickoffHandler = (
   candidateRoles: RoleId[],
@@ -50,6 +52,7 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
   let wsServer: TeamWebSocketServer;
   let timeoutTimer: ReturnType<typeof setInterval> | null = null;
   let workerProvisioningManager: WorkerProvisioningManager | null = null;
+  let teamAutoSchedulerRef: TeamAutoScheduler | null = null;
   let previewManager: PreviewManager;
 
   return {
@@ -189,6 +192,7 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
         workerProvisioningManager,
         previewManager,
         getKickoffHandler: () => serviceKickoffHandler,
+        getTeamAutoScheduler: () => teamAutoSchedulerRef,
       });
 
       const PORT_RETRY_STEP = 10;
@@ -232,6 +236,24 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
       // Propagate the actual port to worker provisioning (created earlier, before port was known)
       if (workerProvisioningManager.isEnabled()) {
         workerProvisioningManager.setActualPort(actualPort);
+      }
+
+      // TeamAuto: autonomous repo collaboration (bind repos via /api/v1/teamauto/*).
+      try {
+        const auth = getGithubAuthManager(config, logger);
+        const httpDepsForAutoAssign = { config, logger, getTeamState: () => teamState, updateTeamState: updateState, taskRouter, messageRouter, wsServer } as Parameters<typeof autoAssignPendingTasks>[0];
+        teamAutoSchedulerRef = createTeamAutoScheduler({
+          logger,
+          auth,
+          getTeamState: () => teamState,
+          updateTeamState: updateState,
+          onTasksCreated: async () => {
+            await autoAssignPendingTasks(httpDepsForAutoAssign);
+          },
+        });
+        await teamAutoSchedulerRef.start();
+      } catch (err) {
+        logger.warn(`Controller: TeamAuto scheduler failed to start: ${err instanceof Error ? err.message : String(err)}`);
       }
 
       // Start mDNS advertising with the actual port
@@ -329,6 +351,10 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
         clearInterval(timeoutTimer);
         timeoutTimer = null;
       }
+      try {
+        await teamAutoSchedulerRef?.stop();
+      } catch { /* scheduler already stopped */ }
+      teamAutoSchedulerRef = null;
       if (workerProvisioningManager) {
         await workerProvisioningManager.stop();
       }
