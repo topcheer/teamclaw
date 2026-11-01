@@ -2412,32 +2412,6 @@ body {
 }
 
 /* GitHub login card inside the model settings modal */
-.model-settings-github {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid rgba(128, 128, 128, 0.25);
-}
-
-.github-auth-row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.github-auth-status {
-  font-size: 13px;
-  opacity: 0.9;
-  word-break: break-all;
-}
-
-.github-auth-hint {
-  margin: 0;
-}
-
 /* GitHub account chip in the top-right header corner */
 .github-corner-user {
   display: inline-flex;
