@@ -17,8 +17,10 @@ const REPLACEMENTS = [
     replacement: "NODE_OPTIONS=--max-old-space-size=2048 pnpm install --no-frozen-lockfile",
   },
   {
-    needle: "CI=true pnpm prune --prod",
-    replacement: "true",
+    // Upstream renamed this to opt out of the frozen-lockfile enforcement
+    // during prune; keep skipping the prune itself.
+    needle: "CI=true NPM_CONFIG_FROZEN_LOCKFILE=false pnpm prune --prod && \\",
+    replacement: "true && \\",
   },
   {
     needle: "COPY . .\n",
