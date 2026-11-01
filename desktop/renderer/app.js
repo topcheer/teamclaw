@@ -83,6 +83,7 @@
       "teamauto.refreshRepos": "Refresh repos",
       "teamauto.bind": "Bind",
       "teamauto.loginFirst": "Sign in to GitHub first (top-right Login).",
+      "teamauto.hint": "Pick one of your GitHub repositories. TeamClaw sweeps it on its own schedule, reviews issues/PRs, takes ownership of unassigned issues, and posts results with teamclaw markers.",
       "teamauto.loadingRepos": "Loading your repos...",
       "teamauto.noCandidates": "No selectable repos (check GitHub login)",
       "teamauto.needRepo": "Select a repository first",
@@ -280,6 +281,7 @@
       "teamauto.refreshRepos": "刷新仓库",
       "teamauto.bind": "绑定",
       "teamauto.loginFirst": "请先登录 GitHub（右上角 Login）。",
+      "teamauto.hint": "选择你的 GitHub 仓库。TeamClaw 按各自节奏定时扫描，自主 review issue/PR、认领未分配 issue，并以 teamclaw 标识写回结果。",
       "teamauto.loadingRepos": "正在加载你的仓库...",
       "teamauto.noCandidates": "无可选仓库（请检查 GitHub 登录）",
       "teamauto.needRepo": "请先选择一个仓库",
@@ -1303,7 +1305,7 @@
     }
     if (!githubCornerTimer) {
       githubCornerTimer = setInterval(() => {
-        if (!state.connected) return;
+        if (state.connectionState !== "connected") return;
         apiGet("/auth/github/status").then(renderGithubCorner).catch(() => {});
       }, 10000);
     }
@@ -1364,8 +1366,8 @@
     if (teamAutoCandidatesLoaded && !force) return;
     const select = document.getElementById("ta-repo-select");
     if (!select) return;
-    if (!state.connected) {
-      select.innerHTML = `<option>${t("teamauto.loginFirst")}</option>`;
+    if (state.connectionState !== "connected") {
+      select.innerHTML = `<option>${t("ctl.notConnected")}</option>`;
       return;
     }
     select.innerHTML = `<option>${t("teamauto.loadingRepos")}</option>`;
@@ -1425,7 +1427,7 @@
 
   let teamAutoBusy = false;
   async function renderTeamAuto() {
-    if (!state.connected) {
+    if (state.connectionState !== "connected") {
       const wrap = document.getElementById("ta-repos");
       if (wrap) wrap.innerHTML = `<div class="empty-state">${t("ctl.notConnected")}</div>`;
       return;
@@ -1518,7 +1520,7 @@
       });
     }
     setInterval(() => {
-      if (state.currentView === "teamauto" && state.connected) renderTeamAuto();
+      if (state.currentView === "teamauto" && state.connectionState === "connected") renderTeamAuto();
     }, 10000);
   }
 
