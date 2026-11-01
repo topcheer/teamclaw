@@ -1,4 +1,5 @@
 import { TEAMCLAW_PUBLISHED_RUNTIME_IMAGE } from "./install-defaults.js";
+import { DEFAULT_GITHUB_CLIENT_ID } from "./controller/github-auth.js";
 
 export type TeamClawMode = "controller" | "worker";
 
@@ -489,6 +490,13 @@ export type PluginConfig = {
   gitDefaultBranch: string;
   gitAuthorName: string;
   gitAuthorEmail: string;
+  /** GitHub App OAuth client ID used by the GitHub login feature. */
+  githubClientId: string;
+  /**
+   * GitHub App OAuth client secret. The TEAMCLAW_GITHUB_CLIENT_SECRET
+   * environment variable takes precedence when set.
+   */
+  githubClientSecret: string;
   agentIsolationMode: AgentIsolationMode;
   workerProvisioningType: WorkerProvisioningType;
   workerProvisioningDisabled: boolean;
@@ -649,6 +657,14 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
     ? raw.gitAuthorEmail.trim()
     : "teamclaw@local";
 
+  const githubClientId = typeof raw.githubClientId === "string" && raw.githubClientId.trim()
+    ? raw.githubClientId.trim()
+    : DEFAULT_GITHUB_CLIENT_ID;
+
+  const githubClientSecret = typeof raw.githubClientSecret === "string"
+    ? raw.githubClientSecret.trim()
+    : "";
+
   const agentIsolationMode: AgentIsolationMode =
     typeof raw.agentIsolationMode === "string" && (raw.agentIsolationMode === "independent" || raw.agentIsolationMode === "main")
       ? raw.agentIsolationMode
@@ -755,6 +771,8 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
     gitDefaultBranch,
     gitAuthorName,
     gitAuthorEmail,
+    githubClientId,
+    githubClientSecret,
     agentIsolationMode,
     workerProvisioningType,
     workerProvisioningDisabled,

@@ -76,6 +76,16 @@ function buildConfigSchema() {
           default: "teamclaw@local",
           description: "Git author email used for TeamClaw-managed workspace commits",
         },
+        githubClientId: {
+          type: "string" as const,
+          default: "Iv23liqWmzrS3swGiIvK",
+          description: "GitHub App OAuth client ID for the GitHub login feature",
+        },
+        githubClientSecret: {
+          type: "string" as const,
+          default: "",
+          description: "GitHub App OAuth client secret; the TEAMCLAW_GITHUB_CLIENT_SECRET environment variable takes precedence",
+        },
         agentIsolationMode: {
           type: "string" as const,
           enum: ["independent", "main"],
@@ -258,6 +268,15 @@ function buildConfigSchema() {
       gitAuthorEmail: {
         label: "Git Author Email",
         help: "Author email for TeamClaw-managed workspace commits",
+      },
+      githubClientId: {
+        label: "GitHub Client ID",
+        help: "GitHub App OAuth client ID used by the GitHub login feature",
+      },
+      githubClientSecret: {
+        label: "GitHub Client Secret",
+        hint: "optional - prefer the TEAMCLAW_GITHUB_CLIENT_SECRET env var",
+        help: "GitHub App OAuth client secret; the TEAMCLAW_GITHUB_CLIENT_SECRET environment variable takes precedence",
       },
       agentIsolationMode: {
         label: "Agent Isolation Mode",
