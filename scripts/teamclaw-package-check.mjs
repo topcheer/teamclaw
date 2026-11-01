@@ -17,6 +17,7 @@ const TEAMCLAW_ROLE_IDS = [
   "security-engineer",
   "designer",
   "marketing",
+  "data-engineer",
 ];
 
 const TEAMCLAW_MANIFEST_ID = "teamclaw";
@@ -195,9 +196,24 @@ if (!manifest) {
       uiHints: expectedConfigSchema.uiHints,
       configSchema: expectedConfigSchema.jsonSchema,
     };
-    if (JSON.stringify(manifest) !== JSON.stringify(expectedManifest)) {
+    // Compare generated fields individually instead of deep-equality: the
+    // manifest legitimately carries fields the generator does not produce
+    // (activation, contracts) required by openclaw 2026.10 hosts.
+    for (const [key, expectedValue] of Object.entries(expectedManifest)) {
+      if (JSON.stringify(manifest[key]) !== JSON.stringify(expectedValue)) {
+        errors.push(
+          `openclaw.plugin.json field "${key}" is out of sync with src/src/config.ts or package.json version; regenerate/update the manifest.`,
+        );
+      }
+    }
+    if (manifest.activation?.onStartup !== true) {
       errors.push(
-        "openclaw.plugin.json is out of sync with src/src/config.ts or package.json version; regenerate/update the manifest.",
+        "openclaw.plugin.json activation.onStartup must be true; openclaw 2026.10 hosts never register startup plugins without it.",
+      );
+    }
+    if (!Array.isArray(manifest.contracts?.tools) || manifest.contracts.tools.length === 0) {
+      errors.push(
+        "openclaw.plugin.json contracts.tools must declare the plugin's agent tool names; openclaw 2026.10 hosts reject registerTool without it.",
       );
     }
   } catch (error) {

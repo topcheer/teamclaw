@@ -26,3 +26,4 @@ Thumbs.db
 
 # Test runtime workspaces (contain nested .git for simulation)
 tests/config/*/workspace/
+desktop/dist

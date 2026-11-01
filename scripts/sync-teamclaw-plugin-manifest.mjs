@@ -16,6 +16,7 @@ const TEAMCLAW_ROLE_IDS = [
   "security-engineer",
   "designer",
   "marketing",
+  "data-engineer",
 ];
 
 const TEAMCLAW_MANIFEST_ID = "teamclaw";
@@ -85,11 +86,32 @@ if (!existsSync(packageJsonPath)) {
 
 const pkg = JSON.parse(readFileSync(packageJsonPath, "utf8"));
 const expectedConfigSchema = loadBuildConfigSchema(packageDir);
+// Agent tool names registered via api.registerTool - openclaw 2026.10 hosts
+// require them to be declared in manifest contracts.tools.
+const TEAMCLAW_AGENT_TOOL_NAMES = [
+  "teamclaw_ask_peer",
+  "teamclaw_assign_task",
+  "teamclaw_broadcast",
+  "teamclaw_create_task",
+  "teamclaw_get_team_status",
+  "teamclaw_list_tasks",
+  "teamclaw_report_progress",
+  "teamclaw_request_clarification",
+  "teamclaw_request_kickoff",
+  "teamclaw_request_parallel_help",
+  "teamclaw_request_review",
+  "teamclaw_send_message",
+  "teamclaw_submit_manifest",
+  "teamclaw_submit_result_contract",
+  "teamclaw_suggest_handoff",
+];
 const expectedManifest = {
   id: TEAMCLAW_MANIFEST_ID,
   name: TEAMCLAW_MANIFEST_NAME,
   description: TEAMCLAW_MANIFEST_DESCRIPTION,
   version: pkg.version,
+  activation: { onStartup: true },
+  contracts: { tools: TEAMCLAW_AGENT_TOOL_NAMES },
   skills: ["./skills"],
   uiHints: expectedConfigSchema.uiHints,
   configSchema: expectedConfigSchema.jsonSchema,
