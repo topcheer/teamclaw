@@ -1286,7 +1286,30 @@
   }
 
   function showError(message) {
-    window.alert(message);
+    // Non-blocking toast instead of a native alert(): native dialogs freeze
+    // the page and steal focus, and multiple rapid errors queue up behind
+    // each other. Toasts stack, auto-dismiss, and are click-dismissible.
+    let container = document.getElementById("toast-container");
+    if (!container) {
+      container = document.createElement("div");
+      container.id = "toast-container";
+      container.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:2000;display:flex;flex-direction:column;gap:10px;max-width:min(420px,80vw);";
+      document.body.appendChild(container);
+    }
+    const toast = document.createElement("div");
+    toast.className = "app-toast app-toast-error";
+    toast.style.cssText = "background:#7f1d1d;color:#fff;padding:12px 16px;border-radius:10px;"
+      + "box-shadow:0 8px 24px rgba(0,0,0,0.35);font-size:13px;line-height:1.45;"
+      + "cursor:pointer;opacity:0;transition:opacity 0.25s ease;";
+    toast.textContent = message;
+    container.appendChild(toast);
+    requestAnimationFrame(function () { toast.style.opacity = "1"; });
+    const dismiss = function () {
+      toast.style.opacity = "0";
+      setTimeout(function () { toast.remove(); }, 250);
+    };
+    toast.onclick = dismiss;
+    setTimeout(dismiss, 5000);
   }
 
   async function apiRequest(path, options) {
@@ -1993,10 +2016,13 @@
     container.querySelectorAll("[data-remove-worker]").forEach(function (btn) {
       btn.addEventListener("click", function () {
         var workerId = btn.getAttribute("data-remove-worker");
-        if (!workerId || !window.confirm("Remove stale worker record " + workerId + "?")) return;
+        if (!workerId) return;
         btn.disabled = true;
         apiRequest("/workers/" + encodeURIComponent(workerId), { method: "DELETE" })
-          .then(function () { refreshAll(); })
+          .then(function () {
+            showError("Removed stale worker record " + workerId);
+            refreshAll();
+          })
           .catch(function (err) { showError(err instanceof Error ? err.message : "Failed to remove worker"); btn.disabled = false; });
       });
     });
