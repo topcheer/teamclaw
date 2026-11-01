@@ -457,10 +457,16 @@ export async function updateTeamClawWorkspaceDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): Promise<{ configPath: string; agentEntryPath: string }> {
-  const normalized = path.resolve(expandUserPath(workspaceDir.trim(), homedir));
   if (!workspaceDir.trim()) {
     throw new Error("workspace path is required");
   }
+  // Reject relative paths: path.resolve() would silently join them onto the
+  // gateway process cwd (which can be the workspace itself), producing a
+  // nested garbage path in the host config.
+  if (!workspaceDir.trim().startsWith("/") && !workspaceDir.trim().startsWith("~/") && workspaceDir.trim() !== "~") {
+    throw new Error("workspace path must be absolute (start with / or ~/)");
+  }
+  const normalized = path.resolve(expandUserPath(workspaceDir.trim(), homedir));
   const configPath = resolveDefaultOpenClawConfigPath(env, homedir);
   let parsed: Record<string, unknown>;
   try {
@@ -508,6 +514,138 @@ export async function updateTeamClawWorkspaceDir(
   await fs.writeFile(configPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
   logger?.warn?.(`TeamClaw: workspace updated to ${normalized} (restart the gateway to apply)`);
   return { configPath, agentEntryPath: normalized };
+}
+
+const TEAMCLAW_ROLE_CATALOG: ReadonlyArray<{ id: string; label: string }> = [
+  { id: "pm", label: "Project Manager" },
+  { id: "architect", label: "Architect" },
+  { id: "developer", label: "Developer" },
+  { id: "qa", label: "QA Engineer" },
+  { id: "release-engineer", label: "Release Engineer" },
+  { id: "infra-engineer", label: "Infra Engineer" },
+  { id: "devops", label: "DevOps Engineer" },
+  { id: "security-engineer", label: "Security Engineer" },
+  { id: "designer", label: "Designer" },
+  { id: "marketing", label: "Marketing" },
+  { id: "data-engineer", label: "Data Engineer" },
+];
+
+export type TeamClawModelCatalog = {
+  defaultModel: string;
+  roleModelOverrides: Record<string, string>;
+  roles: ReadonlyArray<{ id: string; label: string }>;
+  providers: ReadonlyArray<{ id: string; models: string[] }>;
+};
+
+/**
+ * Model catalog for the UI settings dialog: provider/model ids from the host
+ * config (names only - never secrets), plus the current teamclaw default and
+ * per-role overrides.
+ */
+export function getTeamClawModelCatalog(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): TeamClawModelCatalog {
+  const parsedConfig = loadOpenClawConfigRecord(env, homedir);
+  const providers: Array<{ id: string; models: string[] }> = [];
+  const modelsSection = parsedConfig && isRecord(parsedConfig.models) ? parsedConfig.models : null;
+  const providerMap = modelsSection && isRecord((modelsSection as { providers?: unknown }).providers)
+    ? (modelsSection as { providers: Record<string, unknown> }).providers
+    : null;
+  if (providerMap) {
+    for (const [providerId, providerValue] of Object.entries(providerMap)) {
+      if (!isRecord(providerValue)) {
+        continue;
+      }
+      const rawModels = Array.isArray((providerValue as { models?: unknown }).models)
+        ? (providerValue as { models: unknown[] }).models
+        : [];
+      const models = rawModels
+        .map((entry) => {
+          if (typeof entry === "string") {
+            return entry;
+          }
+          const id = isRecord(entry) ? (entry as { id?: unknown }).id : undefined;
+          return typeof id === "string" ? id : "";
+        })
+        .filter(Boolean);
+      providers.push({ id: providerId, models });
+    }
+  }
+
+  let roleModelOverrides: Record<string, string> = {};
+  const pluginsSection = parsedConfig && isRecord(parsedConfig.plugins) ? parsedConfig.plugins : null;
+  const pluginEntries = pluginsSection && isRecord((pluginsSection as { entries?: unknown }).entries)
+    ? (pluginsSection as { entries: Record<string, unknown> }).entries
+    : null;
+  const teamclawPlugin = pluginEntries ? pluginEntries[TEAMCLAW_AGENT_ID] : null;
+  const pluginConfig = isRecord(teamclawPlugin) ? (teamclawPlugin as { config?: unknown }).config : null;
+  const overrides = pluginConfig && isRecord(pluginConfig) ? (pluginConfig as { roleModelOverrides?: unknown }).roleModelOverrides : null;
+  if (overrides && isRecord(overrides)) {
+    roleModelOverrides = { ...(overrides as Record<string, string>) };
+  }
+
+  return {
+    defaultModel: resolveConfiguredTeamClawModelValue(env, homedir),
+    roleModelOverrides,
+    roles: TEAMCLAW_ROLE_CATALOG,
+    providers,
+  };
+}
+
+/**
+ * Persist model configuration: the teamclaw agent default model (host config
+ * agents.entries.teamclaw.model) and per-role overrides (plugin config
+ * roleModelOverrides). The gateway hot-reloads config changes; a restart is
+ * only needed if a change does not take effect.
+ */
+export async function updateTeamClawModelConfig(
+  update: { defaultModel?: string; roleModelOverrides?: Record<string, string> },
+  logger?: { warn?: (message: string) => void },
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): Promise<{ configPath: string }> {
+  const configPath = resolveDefaultOpenClawConfigPath(env, homedir);
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON5.parse(await fs.readFile(configPath, "utf8")) as Record<string, unknown>;
+    if (!isRecord(parsed)) {
+      throw new Error("host config is not an object");
+    }
+  } catch (err) {
+    throw new Error(`failed to read host config at ${configPath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  if (typeof update.defaultModel === "string" && update.defaultModel.trim()) {
+    const agents = isRecord(parsed.agents) ? parsed.agents : {};
+    const entries = isRecord(agents.entries) ? agents.entries : {};
+    const teamclaw = isRecord(entries[TEAMCLAW_AGENT_ID]) ? entries[TEAMCLAW_AGENT_ID] : {};
+    entries[TEAMCLAW_AGENT_ID] = { ...teamclaw, model: update.defaultModel.trim() };
+    agents.entries = entries;
+    if (Object.keys(entries).length > 1 && agents.ownership !== "explicit") {
+      agents.ownership = "explicit";
+    }
+    parsed.agents = agents;
+  }
+
+  if (update.roleModelOverrides !== undefined && update.roleModelOverrides !== null) {
+    const plugins = isRecord(parsed.plugins) ? parsed.plugins : {};
+    const pluginEntries = isRecord(plugins.entries) ? plugins.entries : {};
+    const teamclawPlugin = isRecord(pluginEntries[TEAMCLAW_AGENT_ID]) ? pluginEntries[TEAMCLAW_AGENT_ID] : { enabled: true };
+    const pluginConfig = isRecord((teamclawPlugin as { config?: unknown }).config)
+      ? (teamclawPlugin as { config: Record<string, unknown> }).config
+      : {};
+    pluginEntries[TEAMCLAW_AGENT_ID] = {
+      ...teamclawPlugin,
+      config: { ...pluginConfig, roleModelOverrides: update.roleModelOverrides },
+    };
+    plugins.entries = pluginEntries;
+    parsed.plugins = plugins;
+  }
+
+  await fs.writeFile(configPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+  logger?.warn?.("TeamClaw: model config updated (hot-reload applies; restart the gateway if a change does not take effect)");
+  return { configPath };
 }
 
 /**
@@ -664,7 +802,6 @@ async function ensureTeamClawAgentConfigBootstrap(logger: PluginLogger): Promise
   const pluginEntries = isRecord(plugins.entries) ? plugins.entries : {};
   const teamclawPluginEntry = isRecord(pluginEntries[TEAMCLAW_AGENT_ID]) ? pluginEntries[TEAMCLAW_AGENT_ID] : {};
   const existingPluginConfig = isRecord(teamclawPluginEntry.config) ? teamclawPluginEntry.config : {};
-  const teamclawWorkspaceDir = path.join(resolveDefaultOpenClawStateDir(), `workspace-${TEAMCLAW_AGENT_ID}`);
   const teamclawAgentDir = path.join(resolveDefaultOpenClawStateDir(), "agents", TEAMCLAW_AGENT_ID, "agent");
 
   // OpenClaw 2026.10+ rejects agents.list ("moved to keyed agents.entries")
@@ -712,9 +849,6 @@ async function ensureTeamClawAgentConfigBootstrap(logger: PluginLogger): Promise
   }
   const nextEntry: Record<string, unknown> = {
     ...cloneJsonValue(existingEntry),
-    workspace: typeof existingEntry.workspace === "string" && existingEntry.workspace.trim()
-      ? existingEntry.workspace
-      : teamclawWorkspaceDir,
     agentDir: typeof existingEntry.agentDir === "string" && existingEntry.agentDir.trim()
       ? existingEntry.agentDir
       : teamclawAgentDir,
@@ -723,6 +857,13 @@ async function ensureTeamClawAgentConfigBootstrap(logger: PluginLogger): Promise
       exec: nextEntryExec,
     },
   };
+  // Keep the workspace implicit when unset: materializing the default here
+  // would make "default" and "explicitly configured" indistinguishable, which
+  // the UI workspace-relocation prompt depends on. The runtime resolver falls
+  // back to <stateDir>/workspace-teamclaw either way.
+  if (typeof existingEntry.workspace === "string" && existingEntry.workspace.trim()) {
+    nextEntry.workspace = existingEntry.workspace;
+  }
   if (!modernSchema) {
     nextEntry.id = TEAMCLAW_AGENT_ID;
   }

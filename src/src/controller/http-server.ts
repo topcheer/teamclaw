@@ -71,6 +71,10 @@ import {
   resolveTeamClawProjectsDir,
   deriveStableProjectKey,
   deriveProjectSlug,
+  teamClawWorkspaceIsDefault,
+  updateTeamClawWorkspaceDir,
+  getTeamClawModelCatalog,
+  updateTeamClawModelConfig,
 } from "../openclaw-workspace.js";
 import { resolvePreferredLanAddress } from "../networking.js";
 import { normalizeClarificationQuestionSchema, normalizeControllerManifest } from "./orchestration-manifest.js";
@@ -1187,7 +1191,26 @@ function extractLastAssistantText(messages: unknown[]): string {
 
   const lastAssistant = assistantMessages[assistantMessages.length - 1];
   if (!lastAssistant) {
-  return "";
+    return "";
+  }
+
+  if (typeof lastAssistant.content === "string") {
+    return lastAssistant.content;
+  }
+
+  if (Array.isArray(lastAssistant.content)) {
+    const textBlocks = lastAssistant.content
+      .filter((block): block is { type?: unknown; text?: unknown } => {
+        return !!block && typeof block === "object" && (block as { type?: unknown }).type === "text";
+      })
+      .map((block) => (typeof block.text === "string" ? block.text : ""))
+      .filter(Boolean);
+    if (textBlocks.length > 0) {
+      return textBlocks.join("\n");
+    }
+  }
+
+  return JSON.stringify(lastAssistant);
 }
 
 type SessionProgressEntry = {
@@ -1227,7 +1250,7 @@ function truncateProgressMessage(value: string): string {
   return `${trimmed.slice(0, MAX_SESSION_PROGRESS_MESSAGE_CHARS)}\n… (truncated)`;
 }
 
-function normalizeComparableText(value: string): string {
+function normalizeProgressComparableText(value: string): string {
   return value.trim().replace(/\r\n/g, "\n");
 }
 
@@ -1322,7 +1345,7 @@ function renderSessionMessage(message: Record<string, unknown>, role: string): {
 
 function buildSessionProgressEntries(messages: unknown[], controllerMessage: string): SessionProgressEntry[] {
   const entries: SessionProgressEntry[] = [];
-  const normalizedControllerMessage = normalizeComparableText(controllerMessage);
+  const normalizedControllerMessage = normalizeProgressComparableText(controllerMessage);
 
   for (const rawMessage of messages) {
     if (!rawMessage || typeof rawMessage !== "object") {
@@ -1340,7 +1363,7 @@ function buildSessionProgressEntries(messages: unknown[], controllerMessage: str
       continue;
     }
 
-    const comparableMessage = normalizeComparableText(rendered.message);
+    const comparableMessage = normalizeProgressComparableText(rendered.message);
     if (role === "user" && normalizedControllerMessage && comparableMessage.includes(normalizedControllerMessage)) {
       continue;
     }
@@ -1387,25 +1410,6 @@ function getNewSessionProgressEntries(
   }
 
   return entries.slice(overlap);
-}
-
-  if (typeof lastAssistant.content === "string") {
-    return lastAssistant.content;
-  }
-
-  if (Array.isArray(lastAssistant.content)) {
-    const textBlocks = lastAssistant.content
-      .filter((block): block is { type?: unknown; text?: unknown } => {
-        return !!block && typeof block === "object" && (block as { type?: unknown }).type === "text";
-      })
-      .map((block) => (typeof block.text === "string" ? block.text : ""))
-      .filter(Boolean);
-    if (textBlocks.length > 0) {
-      return textBlocks.join("\n");
-    }
-  }
-
-  return JSON.stringify(lastAssistant);
 }
 
 function formatDuration(timeoutMs: number): string {
@@ -1525,10 +1529,10 @@ function scoreControllerTaskBindingCandidate(task: TaskInfo): number {
 }
 
 function reconcileControllerManifestTaskBindings(
-  controllerRunId: string,
   sessionKey: string,
   createdTaskIds: string[],
   manifest: ControllerOrchestrationManifest | undefined,
+  controllerRunId: string,
   deps: ControllerHttpDeps,
 ): { taskIds: string[]; linkedTaskIds: string[] } {
   if (!manifest || manifest.createdTasks.length === 0) {
@@ -3106,7 +3110,7 @@ async function runControllerIntakeUnlocked(
     createdTaskIds = Array.from(new Set([...createdTaskIds, ...convertedClarificationTaskIds]));
   }
   syncControllerRunClarifications(controllerRun.id, sessionKey, recordedManifest, deps);
-  const reconciledTasks = reconcileControllerManifestTaskBindings(controllerRun.id, sessionKey, createdTaskIds, recordedManifest, deps);
+  const reconciledTasks = reconcileControllerManifestTaskBindings(sessionKey, createdTaskIds, recordedManifest, controllerRun.id, deps);
 
   // ── Automatic Team Kickoff ────────────────────────────────────────────
   // For complex projects (3+ roles), automatically run a kickoff meeting
@@ -3142,6 +3146,9 @@ async function runControllerIntakeUnlocked(
       );
       // Store kickoff assessments on the manifest for UI/API visibility
       recordedManifest.kickoffPlan = {
+        complexity: recordedManifest.requiredRoles.length >= 5 ? "complex" : "medium",
+        candidateRoles: recordedManifest.requiredRoles as RoleId[],
+        completed: true,
         assessments: kickoffResult.assessments,
         summary: kickoffResult.summary,
         triggeredAt: Date.now(),
@@ -3600,7 +3607,7 @@ function getEffectiveStartupReadiness(
       startedAt: recorded?.startedAt ?? state?.createdAt ?? Date.now(),
       checkedAt: Date.now(),
       attempts: recorded?.attempts ?? 0,
-      requiredRoles,
+      requiredRoles: requiredRoles as RoleId[],
       readyWorkerIds,
       message: recorded?.status === "ready"
         ? recorded.message
@@ -3613,7 +3620,7 @@ function getEffectiveStartupReadiness(
     startedAt: state?.createdAt ?? Date.now(),
     checkedAt: Date.now(),
     attempts: 0,
-    requiredRoles,
+    requiredRoles: requiredRoles as RoleId[],
     readyWorkerIds,
     message: `Startup provisioning warm-up is still initializing for ${requiredRoles.join(", ")}.`,
   };
@@ -4515,13 +4522,25 @@ async function autoAssignPendingTasks(
   deps: ControllerHttpDeps,
   preferredWorkerId?: string,
 ): Promise<TaskInfo[]> {
-  const { getTeamState, taskRouter, wsServer, logger } = deps;
+  const { getTeamState, taskRouter, wsServer, logger, config } = deps;
   const attemptedPairs = new Set<string>();
   const assignedTasks: TaskInfo[] = [];
+  const maxConcurrent = config.maxConcurrentTasks;
 
   while (true) {
     const state = getTeamState();
     if (!state) {
+      break;
+    }
+
+    // Throttle: count currently in-progress tasks and respect maxConcurrentTasks
+    const inProgressCount = Object.values(state.tasks).filter(
+      (t) => t.status === "in_progress",
+    ).length;
+    if (inProgressCount >= maxConcurrent) {
+      logger.debug?.(
+        `Controller: skipping auto-assign — ${inProgressCount} tasks in_progress (max ${maxConcurrent})`,
+      );
       break;
     }
 
@@ -4655,6 +4674,96 @@ async function handleRequest(
   }
 
   // ==================== Workspace Browser ====================
+
+  if (req.method === "GET" && pathname === "/api/v1/workspace/status") {
+    sendJson(res, 200, {
+      workspaceDir: resolveTeamClawWorkspaceDir(),
+      isDefault: teamClawWorkspaceIsDefault(),
+    });
+    return;
+  }
+
+  if (req.method === "POST" && pathname === "/api/v1/workspace/change-dir") {
+    let body: unknown;
+    try {
+      body = await parseJsonBody(req);
+    } catch {
+      sendError(res, 400, "invalid JSON body");
+      return;
+    }
+    const workspaceDir = typeof (body as { workspaceDir?: unknown })?.workspaceDir === "string"
+      ? (body as { workspaceDir: string }).workspaceDir
+      : "";
+    if (!workspaceDir.trim()) {
+      sendError(res, 400, "workspaceDir is required");
+      return;
+    }
+    try {
+      const result = await updateTeamClawWorkspaceDir(workspaceDir, {
+        warn: (message: string) => deps.logger.info(message),
+      });
+      sendJson(res, 200, {
+        ok: true,
+        workspaceDir: result.agentEntryPath,
+        configPath: result.configPath,
+        restartRequired: true,
+      });
+    } catch (err) {
+      sendError(res, 400, err instanceof Error ? err.message : "failed to update workspace directory");
+    }
+    return;
+  }
+
+  // GET /api/v1/models/config - model catalog + current selection for the UI settings dialog
+  if (req.method === "GET" && pathname === "/api/v1/models/config") {
+    try {
+      sendJson(res, 200, getTeamClawModelCatalog());
+    } catch (err) {
+      sendError(res, 500, err instanceof Error ? err.message : "failed to read model configuration");
+    }
+    return;
+  }
+
+  // PUT /api/v1/models/config - persist default and per-role model selection
+  if (req.method === "PUT" && pathname === "/api/v1/models/config") {
+    let body: { defaultModel?: unknown; roleModelOverrides?: unknown } | null = null;
+    try {
+      body = await parseJsonBody(req) as { defaultModel?: unknown; roleModelOverrides?: unknown };
+    } catch {
+      sendError(res, 400, "invalid JSON body");
+      return;
+    }
+    const update: { defaultModel?: string; roleModelOverrides?: Record<string, string> } = {};
+    if (typeof body?.defaultModel === "string") {
+      update.defaultModel = body.defaultModel.trim();
+    }
+    if (body?.roleModelOverrides && typeof body.roleModelOverrides === "object" && !Array.isArray(body.roleModelOverrides)) {
+      const overrides: Record<string, string> = {};
+      for (const [role, value] of Object.entries(body.roleModelOverrides as Record<string, unknown>)) {
+        if (typeof value === "string" && value.trim()) {
+          overrides[role] = value.trim();
+        }
+      }
+      update.roleModelOverrides = overrides;
+    }
+    if (update.defaultModel === undefined && update.roleModelOverrides === undefined) {
+      sendError(res, 400, "defaultModel or roleModelOverrides is required");
+      return;
+    }
+    try {
+      await updateTeamClawModelConfig(update, {
+        warn: (message: string) => deps.logger.info(message),
+      });
+      sendJson(res, 200, {
+        ok: true,
+        restartNote: "Config changes hot-reload; restart the gateway (openclaw gateway restart) if a change does not take effect.",
+        catalog: getTeamClawModelCatalog(),
+      });
+    } catch (err) {
+      sendError(res, 400, err instanceof Error ? err.message : "failed to update model configuration");
+    }
+    return;
+  }
 
   if (req.method === "GET" && pathname === "/api/v1/workspace/tree") {
     try {
@@ -4837,7 +4946,15 @@ async function handleRequest(
   // GET /api/v1/workers
   if (req.method === "GET" && pathname === "/api/v1/workers") {
     const state = getTeamState();
-    const workers = state ? Object.values(state.workers) : [];
+    const workers = state
+      ? Object.values(state.workers).map((worker) => ({
+          ...worker,
+          // Ghost rows from previous gateway processes (provisioned workers
+          // die with the process they ran in). The controller cleans these on
+          // startup; the flag lets the UI mark leftovers as removable.
+          staleRemovable: worker.id.startsWith("provisioned-") && worker.status === "offline",
+        }))
+      : [];
     sendJson(res, 200, { workers });
     return;
   }
@@ -4981,11 +5098,67 @@ async function handleRequest(
     return;
   }
 
+type TeamStatsResponse = {
+  totalWorkers: number;
+  workersByStatus: { idle: number; busy: number; offline: number };
+  totalTasks: number;
+  tasksByStatus: Record<string, number>;
+  averageTaskDuration: number | null;
+  uptime: number;
+};
+
+function computeTeamStats(state: TeamState): TeamStatsResponse {
+  const workers = Object.values(state.workers);
+  const tasks = Object.values(state.tasks);
+
+  const workersByStatus = { idle: 0, busy: 0, offline: 0 };
+  for (const worker of workers) {
+    workersByStatus[worker.status] += 1;
+  }
+
+  const tasksByStatus: Record<string, number> = {};
+  for (const task of tasks) {
+    tasksByStatus[task.status] = (tasksByStatus[task.status] ?? 0) + 1;
+  }
+
+  const completedTasks = tasks.filter(
+    (task) => task.status === "completed" && task.startedAt && task.completedAt,
+  );
+  const averageTaskDuration = completedTasks.length > 0
+    ? completedTasks.reduce((sum, task) => sum + (task.completedAt! - task.startedAt!), 0) / completedTasks.length
+    : null;
+
+  return {
+    totalWorkers: workers.length,
+    workersByStatus,
+    totalTasks: tasks.length,
+    tasksByStatus,
+    averageTaskDuration,
+    uptime: process.uptime() * 1000,
+  };
+}
+
   // GET /api/v1/tasks
   if (req.method === "GET" && pathname === "/api/v1/tasks") {
     const state = getTeamState();
     const tasks = state ? Object.values(state.tasks).map((task) => serializeTask(task)) : [];
     sendJson(res, 200, { tasks });
+    return;
+  }
+
+  // GET /api/v1/stats
+  if (req.method === "GET" && pathname === "/api/v1/stats") {
+    const state = getTeamState();
+    if (!state) {
+      sendError(res, 503, "Team state not available");
+      return;
+    }
+    try {
+      const stats = computeTeamStats(state);
+      sendJson(res, 200, stats);
+    } catch (err) {
+      sendError(res, 500, `Failed to compute stats: ${err instanceof Error ? err.message : String(err)}`);
+    }
     return;
   }
 
@@ -5338,7 +5511,7 @@ async function handleRequest(
         }, deps);
     }
 
-    const effectiveContract = buildEffectiveTaskResultContract(currentTask, result, error, submittedContract);
+    const effectiveContract = buildEffectiveTaskResultContract(currentTask, result, error, submittedContract ?? undefined);
 
     if (!error && effectiveContract.outcome === "blocked") {
       updateTeamState((teamState) => {
@@ -5397,7 +5570,7 @@ async function handleRequest(
       && gatedTask
       && taskRequiresMeaningfulProjectChangeGate(gatedTask)
       && !projectHasMeaningfulFileChanges(gatedTask, effectiveContract)
-      && !allowsNoChangeCompletion(gatedTask, submittedContract, result)
+      && !allowsNoChangeCompletion(gatedTask, submittedContract ?? undefined, result)
     ) {
       error = "Task reported completion but no meaningful project file changes were detected in the assigned project directory.";
       recordTaskExecutionEvent(taskId, {

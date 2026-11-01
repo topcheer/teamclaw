@@ -14,6 +14,12 @@ import {
 import { getRole } from "./roles.js";
 import type { RoleId, TaskAssignmentPayload, TaskExecutionEventInput, WorkerTaskResultContract } from "./types.js";
 
+const TEAMCLAW_ROLE_IDS_TEXT = [
+  "pm", "architect", "developer", "qa",
+  "release-engineer", "infra-engineer", "devops", "security-engineer",
+  "designer", "marketing", "data-engineer",
+];
+
 const SESSION_PROGRESS_POLL_INTERVAL_MS = 1000;
 const SESSION_PROGRESS_MESSAGE_LIMIT = 200;
 const MAX_SESSION_PROGRESS_MESSAGE_CHARS = 4000;
@@ -58,11 +64,15 @@ export type TaskExecutorResult = {
   contract?: Record<string, unknown>;
 };
 
+import type { PluginConfig } from "./types.js";
+
 export type RoleTaskExecutorDeps = {
   runtime: OpenClawPluginApi["runtime"];
   logger: PluginLogger;
   role: RoleId;
   taskTimeoutMs: number;
+  /** Full plugin config; used for per-role model overrides. */
+  config?: Pick<PluginConfig, "roleModelOverrides">;
   getSessionKey: (assignment: TaskAssignmentPayload) => string;
   getIdempotencyKey?: (assignment: TaskAssignmentPayload) => string;
   reportExecutionEvent?: (taskId: string, event: TaskExecutionEventInput) => Promise<void> | void;
@@ -90,10 +100,30 @@ export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
     function buildSubagentRunOptions(
       options: Parameters<typeof runtime.subagent.run>[0],
     ): Parameters<typeof runtime.subagent.run>[0] {
-      const enrichedOptions: Parameters<typeof runtime.subagent.run>[0] & { workspaceDir?: string } = {
+      // OpenClaw 2026.10+ renamed the subagent working-directory override from
+      // `workspaceDir` to `cwd`. Pass both so the run lands in the project
+      // workspace on legacy and current hosts (each host ignores the key it
+      // does not know).
+      const enrichedOptions: Parameters<typeof runtime.subagent.run>[0] & {
+        workspaceDir?: string;
+        cwd?: string;
+      } = {
         ...options,
         workspaceDir,
+        cwd: options.cwd ?? workspaceDir,
       };
+      // Per-role model override ("provider/model"): takes precedence over the
+      // teamclaw agent entry model for this role's subagent runs.
+      const roleModel = deps.config?.roleModelOverrides?.[role];
+      if (roleModel) {
+        const slashIndex = roleModel.indexOf("/");
+        if (slashIndex > 0) {
+          enrichedOptions.provider = roleModel.slice(0, slashIndex);
+          enrichedOptions.model = roleModel.slice(slashIndex + 1);
+        } else {
+          enrichedOptions.model = roleModel;
+        }
+      }
       return enrichedOptions;
     }
 
@@ -896,6 +926,7 @@ function buildTaskMessage(
 ): string {
   const rules = [
     ...buildTaskExecutionRules(RATE_LIMIT_WAITING_SENTINEL),
+    "Before your final reply, you MUST call teamclaw_submit_result_contract to deliver the structured result for this task. Do not end your turn without it.",
     ...buildWorkerMemoryContractRules(),
     ...buildVerificationPolicy(),
     ...buildDeliverableMetadataPolicy(),

@@ -126,6 +126,7 @@ function registerWorker(api: OpenClawPluginApi, config: ReturnType<typeof parseP
     logger,
     role: config.role,
     taskTimeoutMs: config.taskTimeoutMs,
+    config,
     getSessionKey: getWorkerSessionKey,
     getIdempotencyKey: (assignment) =>
       assignment.executionIdempotencyKey?.trim() || `teamclaw-${assignment.taskId}`,

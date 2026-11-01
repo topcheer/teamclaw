@@ -15,7 +15,7 @@ export type TaskStatus =
 
 export type TaskPriority = "low" | "medium" | "high" | "critical";
 
-export type TaskExecutionEventType = "lifecycle" | "progress" | "output" | "error";
+export type TaskExecutionEventType = "lifecycle" | "progress" | "output" | "error" | "warning";
 
 export type TaskExecutionStatus = "pending" | "running" | "completed" | "failed";
 
@@ -73,7 +73,8 @@ export type RoleId =
   | "devops"
   | "security-engineer"
   | "designer"
-  | "marketing";
+  | "marketing"
+  | "data-engineer";
 
 export type RoleDefinition = {
   id: RoleId;
@@ -274,6 +275,10 @@ export type KickoffPlan = {
   assessments: KickoffAssessment[];
   /** Whether the kickoff phase has completed. */
   completed: boolean;
+  /** Optional controller summary captured after the kickoff phase. */
+  summary?: string;
+  /** Timestamp (ms) recording when the kickoff phase was triggered. */
+  triggeredAt?: number;
 };
 
 export type ControllerManifestCreatedTask = {
@@ -472,6 +477,12 @@ export type PluginConfig = {
   teamName: string;
   heartbeatIntervalMs: number;
   processModel: ProcessModel;
+  /**
+   * Optional per-role model overrides as "provider/model" strings. When set,
+   * task execution for that role passes provider/model to subagent.run;
+   * otherwise the teamclaw agent entry model applies.
+   */
+  roleModelOverrides?: Partial<Record<RoleId, string>>;
   taskTimeoutMs: number;
   gitEnabled: boolean;
   gitRemoteUrl: string;
@@ -501,6 +512,7 @@ export type PluginConfig = {
   workerProvisioningKubernetesWorkspacePersistentVolumeClaim: string;
   workerProvisioningKubernetesLabels: Record<string, string>;
   workerProvisioningKubernetesAnnotations: Record<string, string>;
+  maxConcurrentTasks: number;
 };
 
 export type WorkerIdentity = {
@@ -511,6 +523,8 @@ export type WorkerIdentity = {
 };
 
 export type TeamState = {
+  /** Schema version for forward-compatible state migration. */
+  version?: number;
   teamName: string;
   workers: Record<string, WorkerInfo>;
   tasks: Record<string, TaskInfo>;
@@ -570,6 +584,21 @@ export type HeartbeatPayload = {
   currentTaskId?: string;
   timestamp: number;
 };
+
+function parseRoleModelOverrides(raw: unknown): Partial<Record<RoleId, string>> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return undefined;
+  }
+  const result: Partial<Record<RoleId, string>> = {};
+  let hasAny = false;
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (VALID_ROLES.includes(key as RoleId) && typeof value === "string" && value.trim()) {
+      result[key as RoleId] = value.trim();
+      hasAny = true;
+    }
+  }
+  return hasAny ? result : undefined;
+}
 
 export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConfig {
   const mode = (typeof raw.mode === "string" && (raw.mode === "controller" || raw.mode === "worker"))
@@ -697,6 +726,20 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
   const workerProvisioningKubernetesLabels = parseStringRecord(raw.workerProvisioningKubernetesLabels);
   const workerProvisioningKubernetesAnnotations = parseStringRecord(raw.workerProvisioningKubernetesAnnotations);
 
+  const rawMaxConcurrentTasks = raw.maxConcurrentTasks;
+  let maxConcurrentTasks: number;
+  if (rawMaxConcurrentTasks === undefined) {
+    maxConcurrentTasks = 5;
+  } else if (typeof rawMaxConcurrentTasks !== "number" || !Number.isInteger(rawMaxConcurrentTasks)) {
+    throw new Error(`maxConcurrentTasks must be an integer between 1 and 50, got ${rawMaxConcurrentTasks}`);
+  } else if (rawMaxConcurrentTasks < 1) {
+    throw new Error(`maxConcurrentTasks must be an integer between 1 and 50, got ${rawMaxConcurrentTasks}`);
+  } else if (rawMaxConcurrentTasks > 50) {
+    throw new Error(`maxConcurrentTasks must be an integer between 1 and 50, got ${rawMaxConcurrentTasks}`);
+  } else {
+    maxConcurrentTasks = rawMaxConcurrentTasks;
+  }
+
   return {
     mode,
     port,
@@ -705,6 +748,7 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
     teamName,
     heartbeatIntervalMs,
     processModel,
+    roleModelOverrides: parseRoleModelOverrides(raw.roleModelOverrides),
     taskTimeoutMs,
     gitEnabled,
     gitRemoteUrl,
@@ -734,6 +778,7 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
     workerProvisioningKubernetesWorkspacePersistentVolumeClaim,
     workerProvisioningKubernetesLabels,
     workerProvisioningKubernetesAnnotations,
+    maxConcurrentTasks,
   };
 }
 
@@ -796,5 +841,5 @@ const VALID_PROVISIONING_TYPES: WorkerProvisioningType[] = [
 const VALID_ROLES: RoleId[] = [
   "pm", "architect", "developer", "qa",
   "release-engineer", "infra-engineer", "devops", "security-engineer",
-  "designer", "marketing",
+  "designer", "marketing", "data-engineer",
 ];

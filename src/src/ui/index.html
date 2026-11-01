@@ -124,8 +124,12 @@
                 </div>
                 <button id="workspace-tree-refresh" class="btn btn-small" type="button" data-i18n="action.refresh">Refresh</button>
               </div>
+              <div class="workspace-current-path">
+                <span class="workspace-current-path-label">Location</span>
+                <code id="workspace-current-path-value">...</code>
+              </div>
               <div id="workspace-tree" class="workspace-tree">
-                <div class="empty-state">Workspace tree loading…</div>
+                <div class="empty-state">Workspace tree loading...</div>
               </div>
             </aside>
 
@@ -216,6 +220,7 @@
                   <option value="security-engineer">Security Engineer</option>
                   <option value="designer">UI/UX Designer</option>
                   <option value="marketing">Marketing Specialist</option>
+                  <option value="data-engineer">Data Engineer</option>
                 </select>
               </div>
             </div>
@@ -225,6 +230,52 @@
       </div>
     </div>
   </main>
+
+  <div id="workspace-prompt-modal" class="workspace-prompt-modal" aria-hidden="true">
+    <div class="workspace-prompt-backdrop" data-workspace-prompt-close></div>
+    <section class="workspace-prompt-panel" role="dialog" aria-modal="true" aria-labelledby="workspace-prompt-title">
+      <header class="workspace-prompt-header">
+        <div class="workspace-prompt-kicker">Workspace setup</div>
+        <h2 id="workspace-prompt-title">Choose a workspace directory</h2>
+      </header>
+      <div class="workspace-prompt-body">
+        <p class="workspace-prompt-current">Current workspace (default):</p>
+        <p><code id="workspace-prompt-path"></code></p>
+        <p class="workspace-prompt-hint">TeamClaw is using the default workspace location. You can move it anywhere on this machine (for example a project parent directory) before creating tasks.</p>
+        <div class="workspace-prompt-controls">
+          <input id="workspace-prompt-input" class="workspace-prompt-input" type="text" placeholder="/absolute/path/to/teamclaw_workspace" spellcheck="false" />
+          <div class="workspace-prompt-actions">
+            <button id="workspace-prompt-browse" class="btn" type="button">Browse...</button>
+            <button id="workspace-prompt-apply" class="btn btn-primary" type="button">Apply</button>
+            <button id="workspace-prompt-dismiss" class="btn btn-small" type="button" data-workspace-prompt-close>Keep default</button>
+          </div>
+        </div>
+        <p class="workspace-prompt-note">Applies after a gateway restart. Existing files are not moved automatically.</p>
+      </div>
+    </section>
+  </div>
+
+  <div id="model-settings-modal" class="workspace-prompt-modal" aria-hidden="true">
+    <div class="workspace-prompt-backdrop" data-model-settings-close></div>
+    <section class="workspace-prompt-panel" role="dialog" aria-modal="true" aria-labelledby="model-settings-title">
+      <header class="workspace-prompt-header">
+        <div class="workspace-prompt-kicker">Model settings</div>
+        <h2 id="model-settings-title">Team models</h2>
+      </header>
+      <div class="workspace-prompt-body">
+        <label class="model-settings-field">
+          <span class="model-settings-label">Default model (controller &amp; all roles)</span>
+          <select id="model-settings-default"></select>
+        </label>
+        <div id="model-settings-roles" class="model-settings-roles"></div>
+        <p class="workspace-prompt-note">Changes hot-reload when possible; restart the gateway (openclaw gateway restart) if a selection does not take effect. Per-role selections override the default for that role.</p>
+        <div class="workspace-prompt-actions">
+          <button id="model-settings-save" class="btn btn-primary" type="button">Save</button>
+          <button id="model-settings-close" class="btn btn-small" type="button" data-model-settings-close>Cancel</button>
+        </div>
+      </div>
+    </section>
+  </div>
 
   <div id="clarification-prompt-modal" class="clarification-prompt-modal" aria-hidden="true">
     <div class="clarification-prompt-backdrop" data-clarification-prompt-close></div>

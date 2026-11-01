@@ -1974,14 +1974,32 @@
     }
 
     container.innerHTML = workers.map(function (worker) {
+      var staleBadge = worker.staleRemovable
+        ? '<span class="worker-status stale" title="Ghost record from a previous gateway process">stale</span>'
+        : "";
       return (
-        '<div class="worker-card">' +
+        '<div class="worker-card' + (worker.staleRemovable ? " worker-card-stale" : "") + '" data-worker-id="' + escapeHtml(worker.id) + '">' +
         '  <span class="worker-icon">' + escapeHtml(worker.label || worker.role).charAt(0) + '</span>' +
         '  <span class="worker-label">' + escapeHtml(worker.label || worker.role) + '</span>' +
         '  <span class="worker-status ' + escapeHtml(worker.status || "offline") + '">' + escapeHtml(worker.status || "offline") + "</span>" +
+        staleBadge +
+        (worker.staleRemovable
+          ? '<button class="btn btn-small worker-remove-btn" type="button" data-remove-worker="' + escapeHtml(worker.id) + '">Remove</button>'
+          : "") +
         "</div>"
       );
     }).join("");
+
+    container.querySelectorAll("[data-remove-worker]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var workerId = btn.getAttribute("data-remove-worker");
+        if (!workerId || !window.confirm("Remove stale worker record " + workerId + "?")) return;
+        btn.disabled = true;
+        apiRequest("/workers/" + encodeURIComponent(workerId), { method: "DELETE" })
+          .then(function () { refreshAll(); })
+          .catch(function (err) { showError(err instanceof Error ? err.message : "Failed to remove worker"); btn.disabled = false; });
+      });
+    });
   }
 
   function renderTasks(tasks) {
@@ -3061,9 +3079,227 @@
     }
   }
 
+  var WORKSPACE_PROMPT_DISMISSED_KEY = "teamclaw.workspacePromptDismissed";
+
+  function updateWorkspacePathIndicator() {
+    var el = $("#workspace-current-path-value");
+    if (!el) return;
+    apiGet("/workspace/status").then(function (data) {
+      if (data && typeof data.workspaceDir === "string") {
+        el.textContent = data.workspaceDir + (data.isDefault ? "  (default)" : "");
+        el.title = data.workspaceDir;
+      }
+    }).catch(function () { /* leave placeholder */ });
+  }
+
+  function openWorkspacePromptModal(currentPath) {
+    var modal = $("#workspace-prompt-modal");
+    var pathEl = $("#workspace-prompt-path");
+    var input = $("#workspace-prompt-input");
+    if (!modal || !pathEl || !input) return;
+    pathEl.textContent = currentPath || "(unknown)";
+    input.value = currentPath || "";
+    modal.classList.add("open");
+    modal.setAttribute("aria-hidden", "false");
+  }
+
+  function closeWorkspacePromptModal() {
+    var modal = $("#workspace-prompt-modal");
+    if (!modal) return;
+    modal.classList.remove("open");
+    modal.setAttribute("aria-hidden", "true");
+  }
+
+  function promptWorkspaceIfDefault() {
+    if (localStorage.getItem(WORKSPACE_PROMPT_DISMISSED_KEY) === "1") {
+      return;
+    }
+    apiGet("/workspace/status").then(function (data) {
+      if (!data || data.isDefault !== true) {
+        return;
+      }
+      openWorkspacePromptModal(data.workspaceDir);
+    }).catch(function () {
+      // status endpoint unavailable - skip the prompt silently
+    });
+  }
+
+  function bindWorkspacePrompt() {
+    var modal = $("#workspace-prompt-modal");
+    if (!modal || modal.dataset.bound === "true") return;
+    modal.dataset.bound = "true";
+
+    modal.addEventListener("click", function (event) {
+      if (event.target && event.target.hasAttribute && event.target.hasAttribute("data-workspace-prompt-close")) {
+        localStorage.setItem(WORKSPACE_PROMPT_DISMISSED_KEY, "1");
+        closeWorkspacePromptModal();
+      }
+    });
+
+    var browse = $("#workspace-prompt-browse");
+    var input = $("#workspace-prompt-input");
+    var apply = $("#workspace-prompt-apply");
+
+    if (browse) {
+      browse.addEventListener("click", function () {
+        if (typeof window.showDirectoryPicker === "function") {
+          window.showDirectoryPicker({ mode: "readwrite", id: "teamclaw-workspace" })
+            .then(function (handle) {
+              if (input) {
+                input.value = handle.name || input.value;
+                input.dataset.verifiedPath = "";
+              }
+              showError("Browser directory picker cannot return full server paths; please type the absolute path instead.");
+            })
+            .catch(function () {
+              /* user cancelled */
+            });
+        } else {
+          showError("This browser does not support a native directory picker; please type the absolute path instead.");
+        }
+      });
+    }
+
+    if (apply) {
+      apply.addEventListener("click", function () {
+        var value = input && typeof input.value === "string" ? input.value.trim() : "";
+        if (!value || value.indexOf("/") !== 0) {
+          showError("Please enter an absolute path starting with /");
+          return;
+        }
+        apply.disabled = true;
+        apiPost("/workspace/change-dir", { workspaceDir: value }).then(function () {
+          localStorage.setItem(WORKSPACE_PROMPT_DISMISSED_KEY, "1");
+          closeWorkspacePromptModal();
+          showError("Workspace updated to " + value + ". Restart the gateway (openclaw gateway restart) to apply it.");
+          updateWorkspacePathIndicator();
+        }).catch(function (err) {
+          showError(err instanceof Error ? err.message : "Failed to update workspace directory");
+        }).finally(function () {
+          apply.disabled = false;
+        });
+      });
+    }
+  }
+
   applyStaticTranslations();
   renderWorkspaceTree(workspaceTree);
   renderWorkspaceFile();
   refreshAll().then(applyInitialUiState).catch(function () {});
   connectWebSocket();
+  bindWorkspacePrompt();
+  promptWorkspaceIfDefault();
+  updateWorkspacePathIndicator();
+  bindModelSettings();
+
+  function bindModelSettings() {
+  /* Module-level IIFE helper: delegated here to keep startup order simple. */
+  var opener = document.createElement("button");
+  opener.className = "btn btn-small";
+  opener.type = "button";
+  opener.id = "model-settings-open";
+  opener.textContent = "Models";
+  var refreshBtn = document.querySelector("#workspace-tree-refresh");
+  if (refreshBtn && refreshBtn.parentElement) {
+    refreshBtn.parentElement.appendChild(opener);
+    opener.addEventListener("click", openModelSettings);
+  }
+
+  var modal = document.querySelector("#model-settings-modal");
+  if (!modal || modal.dataset.bound === "true") return;
+  modal.dataset.bound = "true";
+
+  modal.addEventListener("click", function (event) {
+    if (event.target && event.target.hasAttribute && event.target.hasAttribute("data-model-settings-close")) {
+      closeModelSettings();
+    }
+  });
+
+  var save = document.querySelector("#model-settings-save");
+  if (save) {
+    save.addEventListener("click", function () {
+      var defaultSelect = document.querySelector("#model-settings-default");
+      var payload = { roleModelOverrides: {} };
+      if (defaultSelect && defaultSelect.value) {
+        payload.defaultModel = defaultSelect.value;
+      }
+      modal.querySelectorAll("[data-role-model]").forEach(function (sel) {
+        var role = sel.getAttribute("data-role-model");
+        if (role && sel.value) {
+          payload.roleModelOverrides[role] = sel.value;
+        }
+      });
+      save.disabled = true;
+      apiRequest("/models/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }).then(function () {
+        showError("Model settings saved. Hot-reload applies; restart the gateway if needed.");
+        closeModelSettings();
+      }).catch(function (err) {
+        showError(err instanceof Error ? err.message : "Failed to save model settings");
+      }).finally(function () {
+        save.disabled = false;
+      });
+    });
+  }
+}
+
+function openModelSettings() {
+  var modal = document.querySelector("#model-settings-modal");
+  if (!modal) return;
+  apiGet("/models/config").then(function (catalog) {
+    var options = [];
+    (catalog.providers || []).forEach(function (provider) {
+      (provider.models || []).forEach(function (modelId) {
+        options.push({ value: provider.id + "/" + modelId, label: provider.id + " / " + modelId });
+      });
+      if (!provider.models || provider.models.length === 0) {
+        options.push({ value: provider.id, label: provider.id + " (provider default)" });
+      }
+    });
+    if (catalog.defaultModel && !options.some(function (opt) { return opt.value === catalog.defaultModel; })) {
+      options.unshift({ value: catalog.defaultModel, label: catalog.defaultModel + " (current)" });
+    }
+
+    var defaultSelect = document.querySelector("#model-settings-default");
+    if (defaultSelect) {
+      defaultSelect.innerHTML = options.map(function (opt) {
+        return '<option value="' + escapeHtml(opt.value) + '">' + escapeHtml(opt.label) + "</option>";
+      }).join("");
+      defaultSelect.value = catalog.defaultModel || (options.length ? options[0].value : "");
+    }
+
+    var rolesEl = document.querySelector("#model-settings-roles");
+    if (rolesEl) {
+      rolesEl.innerHTML = (catalog.roles || []).map(function (role) {
+        var current = (catalog.roleModelOverrides || {})[role.id] || "";
+        return (
+          '<label class="model-settings-field">' +
+          '  <span class="model-settings-label">' + escapeHtml(role.label) + '</span>' +
+          '  <select data-role-model="' + escapeHtml(role.id) + '">' +
+          '    <option value="">(use default)</option>' +
+          options.map(function (opt) {
+            return '<option value="' + escapeHtml(opt.value) + '"' + (current === opt.value ? " selected" : "") + '>' + escapeHtml(opt.label) + "</option>";
+          }).join("") +
+          "  </select>" +
+          "</label>"
+        );
+      }).join("");
+    }
+
+    modal.classList.add("open");
+    modal.setAttribute("aria-hidden", "false");
+  }).catch(function (err) {
+    showError(err instanceof Error ? err.message : "Failed to load model catalog");
+  });
+}
+
+function closeModelSettings() {
+  var modal = document.querySelector("#model-settings-modal");
+  if (!modal) return;
+  modal.classList.remove("open");
+  modal.setAttribute("aria-hidden", "true");
+}
 })();
