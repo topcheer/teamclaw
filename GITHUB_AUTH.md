@@ -2,6 +2,8 @@
 
 Client ID：`Iv23liqWmzrS3swGiIvK`（GitHub App）。实现位于
 `src/src/controller/github-auth.ts`，路由挂在控制器 HTTP 服务（默认端口 9527）。
+UI 入口：Web UI 与桌面端**右上角**的 Login 按钮，弹出独立设备授权页 `/ui/auth/github`；
+登录后右上角显示用户（点击即退出并删除服务端 token）。
 
 **默认使用 Device Flow，全程不需要 Client Secret**（GitHub 官方对桌面/CLI 应用的
 推荐方案）：
@@ -56,14 +58,19 @@ Client ID：`Iv23liqWmzrS3swGiIvK`（GitHub App）。实现位于
 - CSRF/PKCE 不适用于 device flow（RFC 8628 本身以用户输入 code 为凭证）；
   Web Flow 路径仍保留 PKCE S256 + state（10 分钟 TTL，一次性）。
 
-## 3. 控制器 API
+## 3. 控制器 API 与独立登录页
+
+**独立登录页 `GET /ui/auth/github`**（`src/src/ui/github-login.html`，自包含单文件）：
+大号设备码 + 倒计时 + 复制按钮 + 预填链接按钮，每 2.5 秒轮询状态，成功后显示账号
+与退出按钮。中英文自动切换。右上角 Login 按钮打开此页。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| GET | `/api/v1/auth/github/status` | 登录态、账号、过期时间、进行中的设备流（user code） |
-| POST | `/api/v1/auth/github/login` | 默认返回 `{mode:"device", userCode, verificationUri, verificationUriComplete, expiresAt}`；body `{"flow":"web"}` 时返回 authorizeUrl（需 secret） |
+| GET | `/ui/auth/github` | 独立设备授权页（状态/设备码/成功/退出四态） |
+| GET | `/api/v1/auth/github/status` | 登录态、账号、过期时间、loginPageUrl、进行中的设备流（user code） |
+| POST | `/api/v1/auth/github/login` | 默认返回 `{mode:"device", userCode, verificationUri, verificationUriComplete, expiresAt, loginPageUrl, authorizeUrl}`；`authorizeUrl` 指向独立页以兼容旧客户端；body `{"flow":"web"}` 时走 PKCE Web 流（需 secret） |
 | GET | `/api/v1/auth/github/callback` | 仅 Web Flow 使用；换 token + 持久化，返回 HTML 结果页 |
-| POST | `/api/v1/auth/github/logout` | 有 secret 时尽力吊销（DELETE /applications/{id}/token）；无 secret 仅删本地凭据（如需远端吊销请到 GitHub Settings → Applications） |
+| POST | `/api/v1/auth/github/logout` | 删除服务端保存的 token（auth/github.json）；有 secret 时额外尽力吊销远端 token |
 | POST | `/api/v1/auth/github/refresh` | 手动强制刷新（正常由 getAccessToken 自动触发） |
 
 ## 4. 持久化方案

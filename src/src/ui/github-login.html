@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TeamClaw - GitHub Login</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      background: #0f1117; color: #e6e8ee;
+      font-family: -apple-system, "system-ui", "PingFang SC", "Microsoft YaHei", sans-serif;
+      padding: 24px;
+    }
+    main { width: 100%; max-width: 460px; background: #161923; border: 1px solid #2a2f3a; border-radius: 16px; padding: 32px 36px; text-align: center; }
+    h1 { font-size: 20px; margin: 0 0 6px; }
+    .sub { color: #a8b0c0; font-size: 14px; line-height: 1.6; margin: 0 0 20px; }
+    .hidden { display: none !important; }
+    .btn {
+      display: inline-block; appearance: none; border: 1px solid #2a2f3a; border-radius: 8px;
+      background: #21262d; color: #e6e8ee; padding: 10px 18px; font-size: 14px; cursor: pointer; text-decoration: none;
+    }
+    .btn:hover { background: #283040; }
+    .btn-primary { background: #238636; border-color: #2ea043; font-weight: 600; }
+    .btn-primary:hover { background: #2ea043; }
+    .btn-block { display: block; width: 100%; margin-top: 14px; padding: 12px; font-size: 15px; }
+    .btn[disabled] { opacity: 0.5; cursor: default; }
+    .device-box { border: 1px dashed #3d4450; border-radius: 12px; padding: 18px 14px 14px; margin: 18px 0 4px; background: rgba(128,128,128,0.06); }
+    .device-code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 36px; font-weight: 700; letter-spacing: 6px; margin: 8px 0 12px; user-select: all;
+    }
+    .countdown { color: #a8b0c0; font-size: 13px; margin-top: 8px; }
+    .countdown b { color: #e6e8ee; }
+    .avatar { width: 56px; height: 56px; border-radius: 50%; margin-bottom: 10px; }
+    .account { font-size: 16px; font-weight: 600; }
+    .meta { color: #a8b0c0; font-size: 13px; margin-top: 6px; }
+    .ok-badge { font-size: 34px; }
+    .error {
+      background: rgba(229,83,75,0.12); border: 1px solid rgba(229,83,75,0.5); color: #f0a6a2;
+      border-radius: 8px; padding: 10px 12px; font-size: 13px; line-height: 1.5; margin-top: 14px; text-align: left;
+    }
+    .footer-note { color: #6e7681; font-size: 12px; margin-top: 18px; }
+    a.link { color: #58a6ff; }
+  </style>
+</head>
+<body>
+  <main id="app">
+    <div id="view-loading">
+      <h1>TeamClaw GitHub</h1>
+      <p class="sub" id="t-loading">Loading...</p>
+    </div>
+
+    <div id="view-idle" class="hidden">
+      <h1 id="t-idle-title">Sign in with GitHub</h1>
+      <p class="sub" id="t-idle-sub">Authorize TeamClaw to access the GitHub API on your behalf. Device flow: no client secret needed.</p>
+      <button id="btn-start" class="btn btn-primary btn-block" type="button">Sign in with GitHub</button>
+      <div id="idle-error" class="error hidden"></div>
+    </div>
+
+    <div id="view-device" class="hidden">
+      <h1 id="t-device-title">Enter this code on GitHub</h1>
+      <p class="sub" id="t-device-sub">Open the GitHub device page (button below). The code is prefilled automatically.</p>
+      <div class="device-box">
+        <div class="device-code" id="device-code">------</div>
+        <button id="btn-copy" class="btn" type="button">Copy code</button>
+        <div class="countdown" id="t-expires">Expires in <b id="countdown">--:--</b></div>
+      </div>
+      <a id="btn-open" class="btn btn-primary btn-block" href="https://github.com/login/device" target="_blank" rel="noopener">Open github.com/login/device</a>
+      <p class="footer-note" id="t-waiting">Waiting for authorization... this page updates automatically.</p>
+    </div>
+
+    <div id="view-success" class="hidden">
+      <div class="ok-badge">&#10003;</div>
+      <h1 id="t-success-title">Signed in to GitHub</h1>
+      <img id="account-avatar" class="avatar hidden" alt="">
+      <div class="account" id="account-login"></div>
+      <div class="meta" id="account-meta"></div>
+      <button id="btn-logout" class="btn btn-block" type="button">Sign out</button>
+      <p class="footer-note" id="t-close">You can close this page and return to TeamClaw.</p>
+    </div>
+  </main>
+
+  <script>
+    (function () {
+      "use strict";
+      var zh = (navigator.language || "").toLowerCase().indexOf("zh") === 0;
+      var STR = zh ? {
+        loading: "加载中...",
+        idleTitle: "使用 GitHub 登录",
+        idleSub: "授权 TeamClaw 以你的身份访问 GitHub API。设备流方式，无需 Client Secret。",
+        start: "使用 GitHub 登录",
+        deviceTitle: "在 GitHub 上输入此代码",
+        deviceSub: "点击下方按钮打开 GitHub 设备页，代码会自动填入。",
+        copy: "复制代码",
+        copied: "已复制",
+        open: "打开 github.com/login/device",
+        expires: "有效期剩余",
+        waiting: "等待授权中...本页面会自动更新。",
+        successTitle: "GitHub 登录成功",
+        signOut: "退出登录",
+        close: "可以关闭本页返回 TeamClaw。",
+        validUntil: "令牌有效期至",
+        noExpiry: "令牌长期有效"
+      } : {
+        loading: "Loading...",
+        idleTitle: "Sign in with GitHub",
+        idleSub: "Authorize TeamClaw to access the GitHub API on your behalf. Device flow: no client secret needed.",
+        start: "Sign in with GitHub",
+        deviceTitle: "Enter this code on GitHub",
+        deviceSub: "Open the GitHub device page (button below). The code is prefilled automatically.",
+        copy: "Copy code",
+        copied: "Copied",
+        open: "Open github.com/login/device",
+        expires: "Expires in",
+        waiting: "Waiting for authorization... this page updates automatically.",
+        successTitle: "Signed in to GitHub",
+        signOut: "Sign out",
+        close: "You can close this page and return to TeamClaw.",
+        validUntil: "Token valid until",
+        noExpiry: "Token does not expire"
+      };
+
+      var API = "/api/v1/auth/github";
+      var $ = function (id) { return document.getElementById(id); };
+      var views = { loading: $("view-loading"), idle: $("view-idle"), device: $("view-device"), success: $("view-success") };
+      function show(name) { Object.keys(views).forEach(function (k) { views[k].classList.toggle("hidden", k !== name); }); }
+
+      $("t-loading").textContent = STR.loading;
+      $("t-idle-title").textContent = STR.idleTitle;
+      $("t-idle-sub").textContent = STR.idleSub;
+      $("btn-start").textContent = STR.start;
+      $("t-device-title").textContent = STR.deviceTitle;
+      $("t-device-sub").textContent = STR.deviceSub;
+      $("btn-copy").textContent = STR.copy;
+      $("btn-open").textContent = STR.open;
+      $("t-expires").textContent = "";
+      $("t-waiting").textContent = STR.waiting;
+      $("t-success-title").textContent = STR.successTitle;
+      $("btn-logout").textContent = STR.signOut;
+      $("t-close").textContent = STR.close;
+
+      var countdownTimer = null;
+      function setCountdown(expiresAt) {
+        if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+        function tick() {
+          var left = Math.max(0, Math.floor((expiresAt - Date.now()) / 1000));
+          var m = Math.floor(left / 60), s = left % 60;
+          $("countdown").textContent = (m < 10 ? "0" + m : m) + ":" + (s < 10 ? "0" + s : s);
+          if (left <= 0 && countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; refresh(); }
+        }
+        $("t-expires").textContent = STR.expires + " ";
+        $("t-expires").appendChild($("countdown"));
+        tick();
+        countdownTimer = setInterval(tick, 1000);
+      }
+
+      function render(status) {
+        if (status.authenticated && status.account) {
+          if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+          var av = $("account-avatar");
+          if (status.account.avatarUrl) { av.src = status.account.avatarUrl; av.classList.remove("hidden"); } else { av.classList.add("hidden"); }
+          $("account-login").textContent = "@" + status.account.login;
+          $("account-meta").textContent = status.expiresAt
+            ? STR.validUntil + " " + new Date(status.expiresAt).toLocaleString()
+            : STR.noExpiry;
+          show("success");
+          return;
+        }
+        if (status.device) {
+          $("device-code").textContent = status.device.userCode || "------";
+          $("btn-open").href = status.device.verificationUriComplete || status.device.verificationUri;
+          setCountdown(status.device.expiresAt);
+          show("device");
+          return;
+        }
+        if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+        show("idle");
+      }
+
+      var refreshing = false;
+      function refresh() {
+        if (refreshing) return Promise.resolve();
+        refreshing = true;
+        return fetch(API + "/status").then(function (r) { return r.json(); }).then(function (status) {
+          refreshing = false;
+          render(status);
+        }).catch(function () { refreshing = false; });
+      }
+
+      $("btn-start").addEventListener("click", function () {
+        var btn = $("btn-start");
+        var errBox = $("idle-error");
+        errBox.classList.add("hidden");
+        btn.disabled = true;
+        fetch(API + "/login", { method: "POST" }).then(function (r) {
+          return r.json().then(function (body) { return { ok: r.ok, body: body }; });
+        }).then(function (result) {
+          if (!result.ok) { throw new Error(result.body && result.body.error ? result.body.error : "login failed"); }
+          var url = result.body && (result.body.verificationUriComplete || result.body.verificationUri);
+          if (url) { try { window.open(url, "_blank", "noopener"); } catch (e) { /* popup blocked - manual link below */ } }
+          return refresh();
+        }).catch(function (err) {
+          errBox.textContent = err instanceof Error ? err.message : String(err);
+          errBox.classList.remove("hidden");
+        }).finally(function () { btn.disabled = false; });
+      });
+
+      $("btn-copy").addEventListener("click", function () {
+        var value = $("device-code").textContent;
+        if (!value) return;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(value).then(function () {
+            $("btn-copy").textContent = STR.copied;
+            setTimeout(function () { $("btn-copy").textContent = STR.copy; }, 1500);
+          }).catch(function () { /* clipboard denied - code is selectable */ });
+        }
+      });
+
+      $("btn-logout").addEventListener("click", function () {
+        var btn = $("btn-logout");
+        btn.disabled = true;
+        fetch(API + "/logout", { method: "POST" }).then(function () { return refresh(); }).finally(function () { btn.disabled = false; });
+      });
+
+      refresh();
+      setInterval(refresh, 2500);
+    })();
+  </script>
+</body>
+</html>

@@ -4690,6 +4690,13 @@ async function handleRequest(
     return;
   }
 
+  // Standalone GitHub device-login page (big user code + prefilled link + polling).
+  if (req.method === "GET" && (pathname === "/ui/auth/github" || pathname === "/ui/auth/github/")) {
+    const uiPath = path.join(import.meta.dirname, "..", "ui");
+    serveStaticFile(res, path.join(uiPath, "github-login.html"), "text/html; charset=utf-8");
+    return;
+  }
+
   if (req.method === "GET" && pathname.startsWith("/ui/")) {
     const uiPath = path.join(import.meta.dirname, "..", "ui");
     const file = pathname.slice(4); // remove "/ui/"
@@ -4733,14 +4740,18 @@ async function handleRequest(
     }
     const manager = getGithubAuthManager(config, logger);
     try {
+      const loginPageUrl = resolveRequestOrigin(req, config).replace(/\/+$/, "") + "/ui/auth/github";
       if (flow === "web") {
         // Web flow needs a client secret for the code exchange; the device
         // flow (default) is fully secretless.
         const start = manager.beginLogin(resolveRequestOrigin(req, config));
-        sendJson(res, 200, { mode: "web", ...start });
+        sendJson(res, 200, { mode: "web", loginPageUrl, ...start });
       } else {
         const start = await manager.beginDeviceLogin();
-        sendJson(res, 200, { mode: "device", ...start });
+        // authorizeUrl intentionally points at our standalone login page so
+        // older UI clients that just open response.authorizeUrl land on the
+        // device-code page instead of a dead web-flow URL.
+        sendJson(res, 200, { mode: "device", loginPageUrl, authorizeUrl: loginPageUrl, ...start });
       }
       logger.info(`Controller: GitHub login flow started (${flow === "web" ? "web" : "device"})`);
     } catch (err) {

@@ -76,6 +76,8 @@ export type GithubAuthStatus = {
   refreshExpiresAt: number | null;
   callbackPath: string;
   callbackUrl: string | null;
+  /** Absolute URL of the standalone device-login page, when origin is known. */
+  loginPageUrl: string | null;
   /** Active device-flow login (user code to enter at github.com/login/device), if any. */
   device: GithubDeviceFlowInfo | null;
 };
@@ -632,6 +634,9 @@ export function createGithubAuthManager(options: {
       callbackPath: GITHUB_AUTH_CALLBACK_PATH,
       callbackUrl: origin
         ? origin.trim().replace(/\/+$/, "") + GITHUB_AUTH_CALLBACK_PATH
+        : null,
+      loginPageUrl: origin
+        ? origin.trim().replace(/\/+$/, "") + "/ui/auth/github"
         : null,
       device: activeDeviceFlow
         ? {

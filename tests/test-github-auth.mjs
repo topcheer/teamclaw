@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, "..");
 const githubAuthPath = path.join(projectRoot, "src", "src", "controller", "github-auth.ts");
+const githubLoginPagePath = path.join(projectRoot, "src", "src", "ui", "github-login.html");
 const httpServerPath = path.join(projectRoot, "src", "src", "controller", "http-server.ts");
 const typesPath = path.join(projectRoot, "src", "src", "types.ts");
 const configPath = path.join(projectRoot, "src", "src", "config.ts");
@@ -15,13 +16,14 @@ const uiAppPath = path.join(projectRoot, "src", "src", "ui", "app.js");
 const desktopAppPath = path.join(projectRoot, "desktop", "renderer", "app.js");
 
 async function runGithubAuthSmoke() {
-  const [githubAuthSource, httpServerSource, typesSource, configSource, uiAppSource, desktopAppSource] = await Promise.all([
+  const [githubAuthSource, httpServerSource, typesSource, configSource, uiAppSource, desktopAppSource, githubLoginPageSource] = await Promise.all([
     fs.readFile(githubAuthPath, "utf8"),
     fs.readFile(httpServerPath, "utf8"),
     fs.readFile(typesPath, "utf8"),
     fs.readFile(configPath, "utf8"),
     fs.readFile(uiAppPath, "utf8"),
     fs.readFile(desktopAppPath, "utf8"),
+    fs.readFile(githubLoginPagePath, "utf8"),
   ]);
 
   // Client ID + callback path constants ship with the plugin.
@@ -64,6 +66,23 @@ async function runGithubAuthSmoke() {
     "refresh must only demand a client secret for web-flow tokens",
   );
   assert.match(httpServerSource, /beginDeviceLogin\(\)/, "login endpoint must default to the device flow");
+  assert.match(
+    httpServerSource,
+    /pathname === "\/ui\/auth\/github"/,
+    "controller must serve the standalone GitHub login page",
+  );
+  assert.match(
+    githubAuthSource,
+    /loginPageUrl/,
+    "auth status must expose the standalone login page URL",
+  );
+
+  // Standalone device-login page: big code + prefilled link + polling, no secret nagging.
+  assert.match(githubLoginPageSource, /device-code/, "login page must render the device user code");
+  assert.match(githubLoginPageSource, /verificationUriComplete/, "login page must link the prefilled verification URL");
+  assert.match(githubLoginPageSource, /\/api\/v1\/auth\/github/, "login page must drive the auth endpoints");
+  assert.match(githubLoginPageSource, /"\/status"/, "login page must poll the auth status endpoint");
+  assert.ok(!githubLoginPageSource.includes("client_secret"), "login page must never mention client secrets");
 
   // Persistence: plugin state dir + 0600 + atomic rename.
   assert.match(githubAuthSource, /"plugins", "teamclaw", "auth", "github\.json"/, "tokens must live under the teamclaw plugin state dir");
@@ -87,13 +106,17 @@ async function runGithubAuthSmoke() {
   assert.match(configSource, /githubClientId: \{/, "config schema must document githubClientId");
   assert.match(configSource, /githubClientSecret: \{/, "config schema must document githubClientSecret");
 
-  // UI surfaces (web + desktop).
-  assert.match(uiAppSource, /\/auth\/github\/login/, "web UI must start GitHub login");
+  // UI surfaces (web + desktop): header-corner login/user chip + standalone page.
+  assert.match(uiAppSource, /\/ui\/auth\/github/, "web UI must open the standalone GitHub login page");
+  assert.match(uiAppSource, /github-corner-login/, "web UI must show a top-right login button");
+  assert.match(uiAppSource, /github-corner-user/, "web UI must show the signed-in user chip in the corner");
   assert.match(uiAppSource, /\/auth\/github\/status/, "web UI must render GitHub login status");
   assert.match(uiAppSource, /\/auth\/github\/logout/, "web UI must support GitHub sign-out");
-  assert.match(uiAppSource, /verificationUriComplete/, "web UI must offer the prefilled device verification URL");
-  assert.match(desktopAppSource, /verificationUriComplete/, "desktop facade must offer the prefilled device verification URL");
-  assert.match(desktopAppSource, /openExternal/, "desktop facade must open the authorize URL in the system browser");
+  assert.ok(!uiAppSource.includes("gh.noSecret"), "web UI must not nag about the client secret (device flow is secretless)");
+  assert.match(desktopAppSource, /\/ui\/auth\/github/, "desktop facade must open the standalone GitHub login page");
+  assert.match(desktopAppSource, /gh-corner-login/, "desktop facade must show a top-right login button");
+  assert.match(desktopAppSource, /gh-corner-user/, "desktop facade must show the signed-in user chip in the corner");
+  assert.ok(!desktopAppSource.includes("ctl.gh.noSecret"), "desktop facade must not nag about the client secret");
 
   console.log("test-github-auth: ok");
 }

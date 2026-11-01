@@ -103,12 +103,8 @@
       "gh.logout": "Sign out",
       "gh.signedOut": "Not signed in",
       "gh.validUntil": "valid until",
-      "gh.loginStarted": "GitHub authorization page opened in a new tab. Finish there; this dialog updates automatically.",
-      "gh.deviceHint": "Open github.com/login/device and enter this code:",
-      "gh.deviceOpened": "Opened github.com/login/device. Enter the shown code if it is not prefilled; this dialog updates automatically.",
-      "gh.copied": "Copied",
+      "gh.pageOpened": "GitHub login page opened in a new tab. Finish there; this dialog updates automatically.",
       "gh.loggedOut": "Signed out of GitHub.",
-      "gh.noSecret": "GitHub Client Secret is not configured on the controller. Set githubClientSecret (or the TEAMCLAW_GITHUB_CLIENT_SECRET env var) first.",
       "worker.add": "Add worker",
       "worker.hide": "Hide worker command",
       "worker.cardTitle": "Register a new external worker",
@@ -202,12 +198,8 @@
       "gh.logout": "退出登录",
       "gh.signedOut": "未登录",
       "gh.validUntil": "有效期至",
-      "gh.loginStarted": "已在新的标签页打开 GitHub 授权页，完成后此处会自动更新。",
-      "gh.deviceHint": "打开 github.com/login/device 并输入此代码：",
-      "gh.deviceOpened": "已打开 github.com/login/device，若未自动填充请输入显示的代码，完成后此处会自动更新。",
-      "gh.copied": "已复制",
+      "gh.pageOpened": "已在新的标签页打开 GitHub 登录页，完成后此处会自动更新。",
       "gh.loggedOut": "已退出 GitHub 登录。",
-      "gh.noSecret": "控制器尚未配置 GitHub Client Secret，请先设置 githubClientSecret（或环境变量 TEAMCLAW_GITHUB_CLIENT_SECRET）。",
       "worker.add": "添加 worker",
       "worker.hide": "隐藏 worker 命令",
       "worker.cardTitle": "注册新的外部 worker",
@@ -3301,26 +3293,9 @@ function bindGithubAuth() {
   var logoutBtn = document.querySelector("#github-auth-logout");
   if (loginBtn) {
     loginBtn.addEventListener("click", function () {
-      loginBtn.disabled = true;
-      apiRequest("/auth/github/login", { method: "POST" }).then(function (start) {
-        if (!start) throw new Error("Controller did not return a login flow");
-        if (start.mode === "device") {
-          showGithubDeviceFlow(start);
-          window.open(start.verificationUriComplete || start.verificationUri, "_blank", "noopener");
-          showGithubAuthHint(t("gh.deviceOpened"));
-          pollGithubAuthStatus(360);
-        } else {
-          var url = start.authorizeUrl;
-          if (!url) throw new Error("Controller did not return a GitHub authorize URL");
-          window.open(url, "_blank", "noopener");
-          showGithubAuthHint(t("gh.loginStarted"));
-          pollGithubAuthStatus(120);
-        }
-      }).catch(function (err) {
-        showGithubAuthHint(err instanceof Error ? err.message : "Failed to start GitHub login", true);
-      }).finally(function () {
-        loginBtn.disabled = false;
-      });
+      window.open("/ui/auth/github", "_blank", "noopener");
+      showGithubAuthHint(t("gh.pageOpened"));
+      pollGithubAuthStatus(360);
     });
   }
   if (logoutBtn) {
@@ -3328,7 +3303,6 @@ function bindGithubAuth() {
       logoutBtn.disabled = true;
       apiRequest("/auth/github/logout", { method: "POST" }).then(function () {
         showGithubAuthHint(t("gh.loggedOut"));
-        hideGithubDeviceFlow();
       }).catch(function (err) {
         showGithubAuthHint(err instanceof Error ? err.message : "Failed to sign out", true);
       }).finally(function () {
@@ -3337,35 +3311,29 @@ function bindGithubAuth() {
       });
     });
   }
-  var deviceCopyBtn = document.querySelector("#github-auth-device-copy");
-  if (deviceCopyBtn) {
-    deviceCopyBtn.addEventListener("click", function () {
-      var codeEl = document.querySelector("#github-auth-device-code");
-      var value = codeEl ? codeEl.textContent : "";
-      if (!value) return;
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(value).then(function () {
-          deviceCopyBtn.textContent = t("gh.copied");
-          setTimeout(function () { deviceCopyBtn.textContent = "Copy"; }, 1500);
-        }).catch(function () { /* clipboard denied - user can select the code manually */ });
+  var cornerLogin = document.querySelector("#github-corner-login");
+  if (cornerLogin) {
+    cornerLogin.addEventListener("click", function () {
+      window.open("/ui/auth/github", "_blank", "noopener");
+      pollGithubAuthStatus(360);
+    });
+  }
+  var cornerUser = document.querySelector("#github-corner-user");
+  if (cornerUser) {
+    cornerUser.addEventListener("click", function () {
+      apiRequest("/auth/github/logout", { method: "POST" }).catch(function () { /* refresh below regardless */ }).finally(function () {
+        refreshGithubAuthStatus();
+      });
+    });
+    cornerUser.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        cornerUser.click();
       }
     });
   }
-}
-
-function showGithubDeviceFlow(info) {
-  var wrap = document.querySelector("#github-auth-device");
-  if (!wrap) return;
-  var hint = document.querySelector("#github-auth-device-hint");
-  var code = document.querySelector("#github-auth-device-code");
-  if (hint) hint.textContent = t("gh.deviceHint");
-  if (code) code.textContent = info.userCode || "";
-  wrap.classList.remove("hidden");
-}
-
-function hideGithubDeviceFlow() {
-  var wrap = document.querySelector("#github-auth-device");
-  if (wrap) wrap.classList.add("hidden");
+  // Keep the header-corner login state fresh without opening the settings modal.
+  setInterval(refreshGithubAuthStatus, 10000);
 }
 
 function showGithubAuthHint(message, isError) {
@@ -3414,17 +3382,32 @@ function renderGithubAuthStatus(status) {
     if (loginBtn) loginBtn.classList.remove("hidden");
     if (logoutBtn) logoutBtn.classList.add("hidden");
   }
-  if (!status.clientSecretConfigured) {
-    showGithubAuthHint(t("gh.noSecret"), true);
+  showGithubAuthHint("");
+  renderGithubCorner(status);
+}
+
+function renderGithubCorner(status) {
+  var loginBtn = document.querySelector("#github-corner-login");
+  var userChip = document.querySelector("#github-corner-user");
+  if (!loginBtn || !userChip) return;
+  if (status.authenticated && status.account) {
+    var nameEl = document.querySelector("#github-corner-name");
+    if (nameEl) nameEl.textContent = "@" + status.account.login;
+    var av = document.querySelector("#github-corner-avatar");
+    if (av) {
+      if (status.account.avatarUrl) {
+        av.src = status.account.avatarUrl;
+        av.classList.remove("hidden");
+      } else {
+        av.classList.add("hidden");
+      }
+    }
+    userChip.classList.remove("hidden");
+    loginBtn.classList.add("hidden");
   } else {
-    showGithubAuthHint("");
-  }
-  if (status.device) {
-    showGithubDeviceFlow(status.device);
-  } else if (!status.authenticated) {
-    hideGithubDeviceFlow();
-  } else {
-    hideGithubDeviceFlow();
+    userChip.classList.add("hidden");
+    loginBtn.textContent = t("gh.login");
+    loginBtn.classList.remove("hidden");
   }
 }
 
