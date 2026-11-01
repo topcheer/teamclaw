@@ -177,6 +177,17 @@ export function advanceCursors(repo: TeamAutoRepo, issues: SweepableIssue[], pul
       delete repo.cursors.seen[key];
     }
   }
-  repo.cursors.lastIssueSince = now;
-  repo.cursors.lastPrSince = now;
+  // `since` cursors track the newest observed object time, never the sweep's
+  // wall clock - objects updated between fetch and save must not fall behind
+  // the cursor forever.
+  let maxIssueUpdated = 0;
+  let maxPullUpdated = 0;
+  for (const issue of issues) {
+    maxIssueUpdated = Math.max(maxIssueUpdated, Date.parse(issue.updatedAt) || now);
+  }
+  for (const pull of pulls) {
+    maxPullUpdated = Math.max(maxPullUpdated, Date.parse(pull.updated_at) || now);
+  }
+  repo.cursors.lastIssueSince = Math.max(repo.cursors.lastIssueSince, maxIssueUpdated);
+  repo.cursors.lastPrSince = Math.max(repo.cursors.lastPrSince, maxPullUpdated);
 }
