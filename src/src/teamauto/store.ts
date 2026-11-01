@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+import { resolveTeamClawProjectsDir } from "../openclaw-workspace.js";
+
 /**
  * TeamAuto persistence: bound repos, schedules, policies, cursors, norms,
  * and write-back bookkeeping. Mirrors the plugin state-dir resolution used by
@@ -113,7 +115,7 @@ function emptyStore(): TeamAutoStore {
   };
 }
 
-export function resolveTeamAutoPaths(): { storeFile: string; reposRoot: string } {
+export function resolveTeamAutoPaths(): { storeFile: string; reposRoot: string; legacyReposRoot: string } {
   const explicitStateDir = process.env.OPENCLAW_STATE_DIR?.trim();
   let base: string;
   if (explicitStateDir) {
@@ -123,9 +125,19 @@ export function resolveTeamAutoPaths(): { storeFile: string; reposRoot: string }
     const homeDir = explicitHome ? path.resolve(explicitHome) : os.homedir();
     base = path.join(homeDir, ".openclaw", "plugins", "teamclaw");
   }
+  // Repos live inside the TeamClaw workspace projects tree so workers and
+  // the workspace browser can actually operate on them (TEAMAUTO_DESIGN.md).
+  // The pre-workspace location is kept only to migrate existing clones.
+  let reposRoot: string;
+  try {
+    reposRoot = path.join(resolveTeamClawProjectsDir(), "teamauto");
+  } catch {
+    reposRoot = path.join(base, "teamauto", "repos");
+  }
   return {
     storeFile: path.join(base, "teamauto.json"),
-    reposRoot: path.join(base, "teamauto", "repos"),
+    reposRoot,
+    legacyReposRoot: path.join(base, "teamauto", "repos"),
   };
 }
 

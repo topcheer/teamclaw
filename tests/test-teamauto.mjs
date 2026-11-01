@@ -64,6 +64,11 @@ async function sourceContracts() {
   assert.match(store, /firstSweepDryRun/, "first sweep must default to dry-run");
   assert.match(scheduler, /dry-run/, "dry-run path must be implemented");
 
+  assert.match(store, /resolveTeamClawProjectsDir/, "teamauto clones must live under the workspace projects tree");
+  assert.match(store, /legacyReposRoot/, "legacy clone location must be exposed for migration");
+  assert.match(sync, /teamAutoProjectDir/, "repo-sync must expose the projectDir slug");
+  assert.match(scheduler, /projectDir: teamAutoProjectDir/, "tasks must carry projectDir pointing at the repo checkout");
+
   // Norms learning renders into worker prompts.
   assert.match(norms, /CONTRIBUTING/, "norms must read CONTRIBUTING.md");
   assert.match(scheduler, /renderNormsBlock/, "task descriptions must embed the repo norms block");

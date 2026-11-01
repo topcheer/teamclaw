@@ -10,6 +10,11 @@ const exec = promisify(execFile);
 
 export const TEAMCLAW_BRANCH_PREFIX = "teamclaw/";
 
+/** TaskInfo.projectDir slug for a bound repo (relative to the projects dir). */
+export function teamAutoProjectDir(repoId: string): string {
+  return `teamauto/${repoSlugToDirName(repoId)}`;
+}
+
 /**
  * Git operations for TeamAuto. Authentication uses the device-flow token
  * inline in the remote URL (x-access-token basic auth) - proven to survive
@@ -45,9 +50,22 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
   }
 
   async function repoDir(repoId: string): Promise<string> {
-    const { reposRoot } = resolveTeamAutoPaths();
-    const dir = path.join(reposRoot, repoSlugToDirName(repoId));
+    const { reposRoot, legacyReposRoot } = resolveTeamAutoPaths();
     await fs.mkdir(reposRoot, { recursive: true });
+    const dir = path.join(reposRoot, repoSlugToDirName(repoId));
+    const legacy = path.join(legacyReposRoot, repoSlugToDirName(repoId));
+    // One-time migration: move pre-workspace clones into the projects tree.
+    try {
+      await fs.stat(path.join(legacy, ".git"));
+      try {
+        await fs.stat(path.join(dir, ".git"));
+      } catch {
+        await fs.mkdir(path.dirname(dir), { recursive: true });
+        await fs.rename(legacy, dir);
+      }
+    } catch {
+      // No legacy clone - normal path.
+    }
     return dir;
   }
 
