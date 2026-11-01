@@ -38,9 +38,12 @@
     "openclaw.plugin.json",
     "skills/",
     "src/",
-    "tsconfig.json"
+    "dist/",
+    "tsconfig.json",
+    "tsconfig.build.json"
   ],
   "scripts": {
+    "build": "tsc -p tsconfig.build.json && node -e \"require('fs').cpSync('src/ui','dist/src/ui',{recursive:true})\"",
     "manifest:sync": "cd .. && node scripts/sync-teamclaw-plugin-manifest.mjs src",
     "pack:dry-run": "npm pack --dry-run --json --ignore-scripts",
     "release:check": "cd .. && node scripts/teamclaw-package-check.mjs src",
@@ -50,10 +53,15 @@
     "@sinclair/typebox": "0.34.48",
     "bonjour-service": "^1.3.0",
     "json5": "^2.2.3",
-    "openclaw": "2026.3.24",
     "ws": "^8.19.0"
   },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.24"
+  },
   "devDependencies": {
+    "@types/node": "^24",
+    "@types/ws": "^8.18.2",
+    "openclaw": "2026.10.9",
     "typescript": "^5.9.0"
   },
   "publishConfig": {

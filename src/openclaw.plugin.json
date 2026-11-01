@@ -3,6 +3,9 @@
   "name": "TeamClaw",
   "description": "Virtual team collaboration - multiple OpenClaw instances form a virtual software company with role-based task routing.",
   "version": "2026.4.3-2",
+  "activation": {
+    "onStartup": true
+  },
   "skills": [
     "./skills"
   ],
@@ -273,7 +276,8 @@
             "devops",
             "security-engineer",
             "designer",
-            "marketing"
+            "marketing",
+            "data-engineer"
           ]
         }
       },
