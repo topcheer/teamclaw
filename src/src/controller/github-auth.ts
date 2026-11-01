@@ -85,7 +85,6 @@ export type GithubAuthStatus = {
 export type GithubDeviceFlowInfo = {
   userCode: string;
   verificationUri: string;
-  verificationUriComplete: string;
   expiresAt: number;
   intervalMs: number;
 };
@@ -331,7 +330,6 @@ export function createGithubAuthManager(options: {
       userCode,
       deviceCode,
       verificationUri,
-      verificationUriComplete: `${verificationUri}?user_code=${encodeURIComponent(userCode)}`,
       expiresAt: now() + expiresInSeconds * 1000,
       intervalMs,
     };
@@ -642,7 +640,6 @@ export function createGithubAuthManager(options: {
         ? {
             userCode: activeDeviceFlow.userCode,
             verificationUri: activeDeviceFlow.verificationUri,
-            verificationUriComplete: activeDeviceFlow.verificationUriComplete,
             expiresAt: activeDeviceFlow.expiresAt,
             intervalMs: activeDeviceFlow.intervalMs,
           }
