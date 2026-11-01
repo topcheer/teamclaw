@@ -1321,3 +1321,19 @@ textarea { padding: 14px 16px; min-height: 188px; resize: vertical; line-height:
   border: 1px solid rgba(230, 162, 60, 0.4);
   vertical-align: middle;
 }
+
+.gh-corner-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.gh-corner-avatar {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+}
+
+.gh-corner-avatar.is-hidden {
+  display: none;
+}

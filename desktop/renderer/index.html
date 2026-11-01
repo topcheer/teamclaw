@@ -57,6 +57,8 @@
           <div id="summary-line" class="summary-line">No controller summary yet.</div>
         </div>
         <div class="header-actions">
+          <button id="gh-corner-login" class="btn" type="button" hidden>Login</button>
+          <button id="gh-corner-user" class="btn gh-corner-user" type="button" hidden title="GitHub: click to sign out"><img id="gh-corner-avatar" class="gh-corner-avatar is-hidden" alt=""><span id="gh-corner-name">-</span></button>
           <button id="compose-focus-btn" class="btn" type="button">New requirement</button>
           <button id="notice-toggle" class="btn notice-toggle" type="button">Notifications <span id="notice-badge" class="notice-badge">0</span></button>
         </div>
@@ -189,6 +191,16 @@
             <div class="ctl-actions">
               <button id="ctl-ws-apply" class="btn btn-primary" type="button">Apply workspace</button>
               <span id="ctl-ws-result" class="ctl-result"></span>
+            </div>
+          </section>
+          <section class="panel detail-card">
+            <div class="section-head compact"><h2 id="ctl-gh-title">GitHub login</h2></div>
+            <p class="ctl-hint"><span id="ctl-gh-current-label">Current:</span> <code id="ctl-gh-account">-</code></p>
+            <p id="ctl-gh-hint" class="ctl-hint">Authorizes TeamClaw to access the GitHub API on your behalf. The token is stored only on the controller machine.</p>
+            <div class="ctl-actions">
+              <button id="ctl-gh-login" class="btn btn-primary" type="button">Sign in with GitHub</button>
+              <button id="ctl-gh-logout" class="btn" type="button" hidden>Sign out</button>
+              <span id="ctl-gh-result" class="ctl-result"></span>
             </div>
           </section>
         </div>

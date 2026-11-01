@@ -86,6 +86,16 @@
       "ctl.models.save": "Save models",
       "ctl.models.saved": "Saved. Hot-reload applies; restart the gateway if needed.",
       "ctl.models.failed": "Failed to save model settings",
+      "ctl.gh.title": "GitHub login",
+      "ctl.gh.current": "Current:",
+      "ctl.gh.hint": "Authorizes TeamClaw to access the GitHub API on your behalf. The token is stored only on the controller machine.",
+      "ctl.gh.login": "Sign in with GitHub",
+      "ctl.gh.logout": "Sign out",
+      "ctl.gh.signedOut": "Not signed in",
+      "ctl.gh.validUntil": "valid until",
+      "ctl.gh.pageOpened": "GitHub login page opened in your browser. Enter the code shown there; this app updates automatically.",
+      "ctl.gh.loggedOut": "Signed out.",
+      "ctl.gh.failed": "GitHub login failed",
       "ctl.ws.title": "Workspace directory",
       "ctl.ws.current": "Current:",
       "ctl.ws.default": "default",
@@ -249,6 +259,16 @@
       "ctl.models.save": "保存模型",
       "ctl.models.saved": "已保存。配置热重载生效；如未生效请重启网关。",
       "ctl.models.failed": "保存模型设置失败",
+      "ctl.gh.title": "GitHub 登录",
+      "ctl.gh.current": "当前：",
+      "ctl.gh.hint": "授权 TeamClaw 以你的身份访问 GitHub API。令牌仅保存在控制器机器上。",
+      "ctl.gh.login": "使用 GitHub 登录",
+      "ctl.gh.logout": "退出登录",
+      "ctl.gh.signedOut": "未登录",
+      "ctl.gh.validUntil": "有效期至",
+      "ctl.gh.pageOpened": "已在浏览器中打开 GitHub 登录页，输入页面上显示的代码，完成后此处会自动更新。",
+      "ctl.gh.loggedOut": "已退出登录。",
+      "ctl.gh.failed": "GitHub 登录失败",
       "ctl.ws.title": "工作区目录",
       "ctl.ws.current": "当前：",
       "ctl.ws.default": "默认",
@@ -450,6 +470,11 @@
       ["#ctl-ws-hint", "ctl.ws.hint"],
       ["#ctl-ws-input-label", "ctl.ws.inputLabel"],
       ["#ctl-ws-apply", "ctl.ws.apply"],
+      ["#ctl-gh-title", "ctl.gh.title"],
+      ["#ctl-gh-current-label", "ctl.gh.current"],
+      ["#ctl-gh-hint", "ctl.gh.hint"],
+      ["#ctl-gh-login", "ctl.gh.login"],
+      ["#ctl-gh-logout", "ctl.gh.logout"],
       ["#compose-focus-btn", "mission.newRequirement"],
       ["#notice-toggle", "mission.notifications"],
       ["#view-mission .section-head h2", "mission.requirement"],
@@ -1133,8 +1158,161 @@
     setControllerResult("ctl-models-result", "", false);
     setControllerResult("ctl-ws-result", "", false);
     bindControllerSettings();
+    bindGithubAuthControls();
     renderControllerWorkspaceCard();
     renderControllerModelsCard();
+    renderGithubAuthCard();
+  }
+
+  async function renderGithubAuthCard() {
+    const accountEl = document.getElementById("ctl-gh-account");
+    const loginBtn = document.getElementById("ctl-gh-login");
+    const logoutBtn = document.getElementById("ctl-gh-logout");
+    if (!accountEl || !loginBtn || !logoutBtn) return;
+    let status;
+    try {
+      status = await apiGet("/auth/github/status");
+    } catch {
+      accountEl.textContent = "-";
+      return;
+    }
+    if (status.authenticated && status.account) {
+      const when = status.expiresAt
+        ? " - " + t("ctl.gh.validUntil") + " " + formatGithubAuthTime(status.expiresAt)
+        : "";
+      accountEl.textContent = "@" + status.account.login + when;
+      loginBtn.hidden = true;
+      logoutBtn.hidden = false;
+    } else {
+      accountEl.textContent = t("ctl.gh.signedOut");
+      loginBtn.hidden = false;
+      logoutBtn.hidden = true;
+    }
+    setControllerResult("ctl-gh-result", "", false);
+    renderGithubCorner(status);
+  }
+
+  function renderGithubCorner(status) {
+    const loginBtn = document.getElementById("gh-corner-login");
+    const userBtn = document.getElementById("gh-corner-user");
+    if (!loginBtn || !userBtn) return;
+    if (status && status.authenticated && status.account) {
+      const nameEl = document.getElementById("gh-corner-name");
+      if (nameEl) nameEl.textContent = "@" + status.account.login;
+      const av = document.getElementById("gh-corner-avatar");
+      if (av) {
+        if (status.account.avatarUrl) {
+          av.src = status.account.avatarUrl;
+          av.classList.remove("is-hidden");
+        } else {
+          av.classList.add("is-hidden");
+        }
+      }
+      userBtn.hidden = false;
+      loginBtn.hidden = true;
+    } else {
+      userBtn.hidden = true;
+      loginBtn.textContent = t("ctl.gh.login");
+      loginBtn.hidden = false;
+    }
+  }
+
+  function openGithubLoginPage() {
+    const base = state.controllerUrl || "http://127.0.0.1:9527";
+    const url = base.replace(/\/+$/, "") + "/ui/auth/github";
+    if (desktop && typeof desktop.openExternal === "function") {
+      desktop.openExternal(url);
+    } else {
+      window.open(url, "_blank", "noopener");
+    }
+  }
+
+  let githubCornerTimer = null;
+  function setupGithubCorner() {
+    const loginBtn = document.getElementById("gh-corner-login");
+    if (loginBtn && !loginBtn.dataset.bound) {
+      loginBtn.dataset.bound = "true";
+      loginBtn.addEventListener("click", () => {
+        openGithubLoginPage();
+        pollGithubAuthStatus(360);
+      });
+    }
+    const userBtn = document.getElementById("gh-corner-user");
+    if (userBtn && !userBtn.dataset.bound) {
+      userBtn.dataset.bound = "true";
+      userBtn.addEventListener("click", async () => {
+        try {
+          await apiPost("/auth/github/logout", {});
+        } catch { /* refresh regardless */ }
+        try {
+          renderGithubCorner(await apiGet("/auth/github/status"));
+        } catch { /* ignore */ }
+      });
+    }
+    if (!githubCornerTimer) {
+      githubCornerTimer = setInterval(() => {
+        if (!state.connected) return;
+        apiGet("/auth/github/status").then(renderGithubCorner).catch(() => {});
+      }, 10000);
+    }
+  }
+
+  function formatGithubAuthTime(epochMs) {
+    const d = new Date(epochMs);
+    return d.toLocaleString(undefined, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+
+  let githubAuthPollTimer = null;
+  function pollGithubAuthStatus(attemptsLeft) {
+    if (githubAuthPollTimer) clearTimeout(githubAuthPollTimer);
+    if (attemptsLeft <= 0) return;
+    githubAuthPollTimer = setTimeout(async () => {
+      try {
+        const status = await apiGet("/auth/github/status");
+        if (status && status.authenticated) {
+          renderGithubAuthCard();
+        } else {
+          pollGithubAuthStatus(attemptsLeft - 1);
+        }
+      } catch {
+        pollGithubAuthStatus(attemptsLeft - 1);
+      }
+    }, 2500);
+  }
+
+  function bindGithubAuthControls() {
+    const loginBtn = document.getElementById("ctl-gh-login");
+    const logoutBtn = document.getElementById("ctl-gh-logout");
+    if (loginBtn && !loginBtn.dataset.bound) {
+      loginBtn.dataset.bound = "true";
+      loginBtn.addEventListener("click", async () => {
+        loginBtn.disabled = true;
+        try {
+          openGithubLoginPage();
+          setControllerResult("ctl-gh-result", t("ctl.gh.pageOpened"), false);
+          pollGithubAuthStatus(360);
+        } catch (err) {
+          setControllerResult("ctl-gh-result", err instanceof Error ? err.message : t("ctl.gh.failed"), true);
+        } finally {
+          loginBtn.disabled = false;
+        }
+      });
+    }
+    if (logoutBtn && !logoutBtn.dataset.bound) {
+      logoutBtn.dataset.bound = "true";
+      logoutBtn.addEventListener("click", async () => {
+        logoutBtn.disabled = true;
+        try {
+          await apiPost("/auth/github/logout", {});
+          setControllerResult("ctl-gh-result", t("ctl.gh.loggedOut"), false);
+        } catch (err) {
+          setControllerResult("ctl-gh-result", err instanceof Error ? err.message : t("ctl.gh.failed"), true);
+        } finally {
+          logoutBtn.disabled = false;
+          renderGithubAuthCard();
+        }
+      });
+    }
   }
 
   async function renderControllerWorkspaceCard() {
@@ -3642,6 +3820,7 @@
   setStatusLine(t("connection.waiting"));
   setSummaryLine(t("connection.noSummary"));
   setConnectionPill("disconnected", t("connection.disconnected"));
+  setupGithubCorner();
   connectSavedController();
   renderConversation();
   activateView('mission');

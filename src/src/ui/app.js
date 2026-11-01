@@ -99,6 +99,12 @@
       "runtime.title": "TeamClaw is installed but cannot work yet.",
       "runtime.noModel": "No TeamClaw model is configured for this instance.",
       "runtime.noAuth": "No usable OpenClaw auth profile was found for TeamClaw.",
+      "gh.login": "Sign in with GitHub",
+      "gh.logout": "Sign out",
+      "gh.signedOut": "Not signed in",
+      "gh.validUntil": "valid until",
+      "gh.pageOpened": "GitHub login page opened in a new tab. Finish there; this dialog updates automatically.",
+      "gh.loggedOut": "Signed out of GitHub.",
       "worker.add": "Add worker",
       "worker.hide": "Hide worker command",
       "worker.cardTitle": "Register a new external worker",
@@ -188,6 +194,12 @@
       "runtime.title": "TeamClaw 已安装，但当前还无法工作。",
       "runtime.noModel": "当前实例还没有为 TeamClaw 配置模型。",
       "runtime.noAuth": "未找到 TeamClaw 可用的 OpenClaw 认证配置。",
+      "gh.login": "使用 GitHub 登录",
+      "gh.logout": "退出登录",
+      "gh.signedOut": "未登录",
+      "gh.validUntil": "有效期至",
+      "gh.pageOpened": "已在新的标签页打开 GitHub 登录页，完成后此处会自动更新。",
+      "gh.loggedOut": "已退出 GitHub 登录。",
       "worker.add": "添加 worker",
       "worker.hide": "隐藏 worker 命令",
       "worker.cardTitle": "注册新的外部 worker",
@@ -3217,6 +3229,7 @@
   promptWorkspaceIfDefault();
   updateWorkspacePathIndicator();
   bindModelSettings();
+  bindGithubAuth();
 
   function bindModelSettings() {
   /* Module-level IIFE helper: delegated here to keep startup order simple. */
@@ -3272,6 +3285,138 @@
   }
 }
 
+function bindGithubAuth() {
+  var modal = document.querySelector("#model-settings-modal");
+  if (!modal || modal.dataset.githubBound === "true") return;
+  modal.dataset.githubBound = "true";
+  var loginBtn = document.querySelector("#github-auth-login");
+  var logoutBtn = document.querySelector("#github-auth-logout");
+  if (loginBtn) {
+    loginBtn.addEventListener("click", function () {
+      window.open("/ui/auth/github", "_blank", "noopener");
+      showGithubAuthHint(t("gh.pageOpened"));
+      pollGithubAuthStatus(360);
+    });
+  }
+  if (logoutBtn) {
+    logoutBtn.addEventListener("click", function () {
+      logoutBtn.disabled = true;
+      apiRequest("/auth/github/logout", { method: "POST" }).then(function () {
+        showGithubAuthHint(t("gh.loggedOut"));
+      }).catch(function (err) {
+        showGithubAuthHint(err instanceof Error ? err.message : "Failed to sign out", true);
+      }).finally(function () {
+        logoutBtn.disabled = false;
+        refreshGithubAuthStatus();
+      });
+    });
+  }
+  var cornerLogin = document.querySelector("#github-corner-login");
+  if (cornerLogin) {
+    cornerLogin.addEventListener("click", function () {
+      window.open("/ui/auth/github", "_blank", "noopener");
+      pollGithubAuthStatus(360);
+    });
+  }
+  var cornerUser = document.querySelector("#github-corner-user");
+  if (cornerUser) {
+    cornerUser.addEventListener("click", function () {
+      apiRequest("/auth/github/logout", { method: "POST" }).catch(function () { /* refresh below regardless */ }).finally(function () {
+        refreshGithubAuthStatus();
+      });
+    });
+    cornerUser.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        cornerUser.click();
+      }
+    });
+  }
+  // Keep the header-corner login state fresh without opening the settings modal.
+  setInterval(refreshGithubAuthStatus, 10000);
+}
+
+function showGithubAuthHint(message, isError) {
+  var hint = document.querySelector("#github-auth-hint");
+  if (!hint) return;
+  hint.textContent = message || "";
+  hint.style.color = isError ? "#e06c75" : "";
+}
+
+var githubAuthPollTimer = null;
+function pollGithubAuthStatus(attemptsLeft) {
+  if (githubAuthPollTimer) clearTimeout(githubAuthPollTimer);
+  if (attemptsLeft <= 0) return;
+  githubAuthPollTimer = setTimeout(function () {
+    apiGet("/auth/github/status").then(function (status) {
+      if (status && status.authenticated) {
+        renderGithubAuthStatus(status);
+      } else {
+        pollGithubAuthStatus(attemptsLeft - 1);
+      }
+    }).catch(function () {
+      pollGithubAuthStatus(attemptsLeft - 1);
+    });
+  }, 2500);
+}
+
+function formatGithubTime(epochMs) {
+  var d = new Date(epochMs);
+  return d.toLocaleString(undefined, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function renderGithubAuthStatus(status) {
+  var statusEl = document.querySelector("#github-auth-status");
+  var loginBtn = document.querySelector("#github-auth-login");
+  var logoutBtn = document.querySelector("#github-auth-logout");
+  if (!statusEl) return;
+  if (loginBtn) loginBtn.textContent = t("gh.login");
+  if (logoutBtn) logoutBtn.textContent = t("gh.logout");
+  if (status.authenticated && status.account) {
+    var when = status.expiresAt ? " - " + t("gh.validUntil") + " " + formatGithubTime(status.expiresAt) : "";
+    statusEl.textContent = "@" + status.account.login + when;
+    if (loginBtn) loginBtn.classList.add("hidden");
+    if (logoutBtn) logoutBtn.classList.remove("hidden");
+  } else {
+    statusEl.textContent = t("gh.signedOut");
+    if (loginBtn) loginBtn.classList.remove("hidden");
+    if (logoutBtn) logoutBtn.classList.add("hidden");
+  }
+  showGithubAuthHint("");
+  renderGithubCorner(status);
+}
+
+function renderGithubCorner(status) {
+  var loginBtn = document.querySelector("#github-corner-login");
+  var userChip = document.querySelector("#github-corner-user");
+  if (!loginBtn || !userChip) return;
+  if (status.authenticated && status.account) {
+    var nameEl = document.querySelector("#github-corner-name");
+    if (nameEl) nameEl.textContent = "@" + status.account.login;
+    var av = document.querySelector("#github-corner-avatar");
+    if (av) {
+      if (status.account.avatarUrl) {
+        av.src = status.account.avatarUrl;
+        av.classList.remove("hidden");
+      } else {
+        av.classList.add("hidden");
+      }
+    }
+    userChip.classList.remove("hidden");
+    loginBtn.classList.add("hidden");
+  } else {
+    userChip.classList.add("hidden");
+    loginBtn.textContent = t("gh.login");
+    loginBtn.classList.remove("hidden");
+  }
+}
+
+function refreshGithubAuthStatus() {
+  apiGet("/auth/github/status").then(renderGithubAuthStatus).catch(function () {
+    /* controller offline - leave the card as-is */
+  });
+}
+
 function openModelSettings() {
   var modal = document.querySelector("#model-settings-modal");
   if (!modal) return;
@@ -3317,6 +3462,7 @@ function openModelSettings() {
 
     modal.classList.add("open");
     modal.setAttribute("aria-hidden", "false");
+    refreshGithubAuthStatus();
   }).catch(function (err) {
     showError(err instanceof Error ? err.message : "Failed to load model catalog");
   });
