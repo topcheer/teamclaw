@@ -39,7 +39,7 @@ issue / PR / 评论 / commit，并遵守目标仓库自身的协作规范。
 ```
 
 - 任务生命周期、clarification 阻塞、角色路由全部**复用现有控制器机制**
-- clone 位置：`<workspace>/repos/<owner>__<repo>`（与团队协作仓库隔离）
+- clone 位置：`<workspace>/projects/teamauto/<owner>__<repo>`（任务携带 projectDir 指向该目录；存量旧位置 clone 首次访问时自动迁移）
 - token **不落盘**：git 操作用 `-c http.https://github.com/.extraheader=Authorization:...` 动态注入；API 用 `getAuthHeaders()`
 
 ## 数据模型（`~/.openclaw/plugins/teamclaw/teamauto.json`）

@@ -5,7 +5,7 @@ import type { GithubAuthManager } from "../controller/github-auth.js";
 import type { RoleId, TaskInfo, TeamState } from "../types.js";
 import { createGithubClient } from "./github-client.js";
 import { learnNorms, renderNormsBlock } from "./norms.js";
-import { createRepoSync } from "./repo-sync.js";
+import { createRepoSync, teamAutoProjectDir } from "./repo-sync.js";
 import { advanceCursors, sweepRepo, type Candidate } from "./scanner.js";
 import {
   consumeDailyBudget,
@@ -260,6 +260,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         title: `[${candidate.kind}] ${candidate.title}`,
         description: [
           `TeamAuto autonomous work for ${candidate.repoId}.`,
+          `Local checkout: projects/${teamAutoProjectDir(candidate.repoId)} in the team workspace.`,
           renderNormsBlock(repo.norms, repo.id),
           "---",
           candidate.context,
@@ -272,6 +273,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         priority: candidate.kind === "takeOwnership" ? "high" : "medium",
         assignedRole: candidate.role as RoleId,
         createdBy: "teamauto",
+        projectDir: teamAutoProjectDir(candidate.repoId),
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
