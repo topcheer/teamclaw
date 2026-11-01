@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "teamclaw-site",
+  "main": "worker.js",
+  "compatibility_date": "2025-09-01",
+  "rules": [
+    { "type": "Text", "globs": ["**/*.html"], "fallthrough": true }
+  ],
+  "workers_dev": true,
+  "routes": [
+    { "pattern": "teamclaw.dev", "custom_domain": true }
+  ]
+}

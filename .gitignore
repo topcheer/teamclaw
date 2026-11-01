@@ -23,6 +23,7 @@ Thumbs.db
 
 # Dev tools
 .playwright-mcp/
+.wrangler/
 
 # Test runtime workspaces (contain nested .git for simulation)
 tests/config/*/workspace/
