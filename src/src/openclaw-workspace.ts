@@ -1,4 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { createRequire } from "node:module";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -542,12 +547,124 @@ export type TeamClawModelCatalog = {
  * config (names only - never secrets), plus the current teamclaw default and
  * per-role overrides.
  */
-export function getTeamClawModelCatalog(
+/**
+ * Live host model catalog via `openclaw models list --json` (the gateway's
+ * own resolved catalog: provider plugins, dynamic entries, availability).
+ * Cached briefly because the CLI spawn costs ~seconds; falls back to the
+ * static config models when unavailable.
+ */
+let liveCatalogCache: { at: number; providers: Array<{ id: string; models: string[] }> } | null = null;
+let liveCatalogInFlight: Promise<Array<{ id: string; models: string[] }>> | null = null;
+const LIVE_CATALOG_TTL_MS = 30_000;
+
+/**
+ * Resolve how to invoke the openclaw CLI from inside the gateway process.
+ * LaunchAgent processes may lack /opt/homebrew/bin on PATH, so prefer
+ * node + the host package entry resolved through the plugin's node_modules
+ * link (the host links itself there at install time); fall back to the bare
+ * command name.
+ */
+function resolveOpenClawCliInvocation(): { command: string; args: string[] } {
+  if (process.execPath) {
+    try {
+      const moduleRequire = createRequire(import.meta.url);
+      const hostPkgDir = path.dirname(moduleRequire.resolve("openclaw/package.json"));
+      const entry = path.join(hostPkgDir, "openclaw.mjs");
+      if (existsSync(entry)) {
+        return { command: process.execPath, args: [entry] };
+      }
+    } catch (resolveErr) {
+      // Resolution failure is expected on hosts without the node_modules link;
+      // fall through to the bare CLI name.
+      void resolveErr;
+    }
+  }
+  return { command: "openclaw", args: [] };
+}
+
+function buildCatalogCliEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  // The gateway LaunchAgent environment carries runtime variables (e.g.
+  // OPENCLAW_GATEWAY_PORT) that hijack the CLI's behavior, and may lack the
+  // package manager bin dirs. Pass a minimal, PATH-augmented env instead.
+  const clean: NodeJS.ProcessEnv = {
+    PATH: ["/opt/homebrew/bin", "/usr/local/bin", env.PATH || "/usr/bin:/bin"].join(path.delimiter),
+  };
+  for (const key of ["HOME", "USER", "LANG", "OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR", "OPENCLAW_HOME"]) {
+    if (typeof env[key] === "string") {
+      clean[key] = env[key];
+    }
+  }
+  return clean;
+}
+
+async function readLiveModelCatalogProviders(env: NodeJS.ProcessEnv): Promise<Array<{ id: string; models: string[] }>> {
+  const now = Date.now();
+  if (liveCatalogCache && now - liveCatalogCache.at < LIVE_CATALOG_TTL_MS) {
+    return liveCatalogCache.providers;
+  }
+  if (liveCatalogInFlight) {
+    return liveCatalogInFlight;
+  }
+  liveCatalogInFlight = (async () => {
+    try {
+      const invocation = resolveOpenClawCliInvocation();
+      // IMPORTANT: `openclaw models list` is a gateway RPC client. Running it
+      // synchronously (spawnSync) from inside a gateway plugin service
+      // deadlocks: the CLI cannot reach the gateway whose event loop is
+      // blocked waiting on it. Async execFile keeps the loop free.
+      const { stdout } = await execFileAsync(
+        invocation.command,
+        [...invocation.args, "models", "list", "--json"],
+        {
+          timeout: 20_000,
+          maxBuffer: 8 * 1024 * 1024,
+          env: buildCatalogCliEnv(env),
+        },
+      );
+      const parsed = JSON.parse(stdout) as { models?: unknown };
+    const byProvider = new Map<string, Set<string>>();
+    if (Array.isArray(parsed.models)) {
+      for (const entry of parsed.models) {
+        const key = isRecord(entry) && typeof (entry as { key?: unknown }).key === "string"
+          ? (entry as { key: string }).key
+          : "";
+        if (!key || (entry as { available?: unknown }).available === false) {
+          continue;
+        }
+        const slash = key.indexOf("/");
+        const providerId = slash > 0 ? key.slice(0, slash) : key;
+        const modelId = slash > 0 ? key.slice(slash + 1) : "";
+        if (!modelId) {
+          continue;
+        }
+        if (!byProvider.has(providerId)) {
+          byProvider.set(providerId, new Set());
+        }
+        byProvider.get(providerId)!.add(modelId);
+      }
+    }
+    const providers = [...byProvider.entries()]
+      .map(([id, models]) => ({ id, models: [...models].sort() }))
+      .sort((left, right) => left.id.localeCompare(right.id));
+      liveCatalogCache = { at: now, providers };
+      return providers;
+    } catch (err) {
+      console.warn(`[teamclaw] live model catalog unavailable: ${err instanceof Error ? err.message : String(err)}`);
+      liveCatalogCache = { at: now, providers: [] };
+      return [];
+    } finally {
+      liveCatalogInFlight = null;
+    }
+  })();
+  return liveCatalogInFlight;
+}
+
+export async function getTeamClawModelCatalog(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
-): TeamClawModelCatalog {
+): Promise<TeamClawModelCatalog> {
   const parsedConfig = loadOpenClawConfigRecord(env, homedir);
-  const providers: Array<{ id: string; models: string[] }> = [];
+  const staticProviders: Array<{ id: string; models: string[] }> = [];
   const modelsSection = parsedConfig && isRecord(parsedConfig.models) ? parsedConfig.models : null;
   const providerMap = modelsSection && isRecord((modelsSection as { providers?: unknown }).providers)
     ? (modelsSection as { providers: Record<string, unknown> }).providers
@@ -569,9 +686,25 @@ export function getTeamClawModelCatalog(
           return typeof id === "string" ? id : "";
         })
         .filter(Boolean);
-      providers.push({ id: providerId, models });
+      staticProviders.push({ id: providerId, models });
     }
   }
+
+  // Live catalog first; merge static config entries in (dedup) so models the
+  // user pinned in config but the live resolver has not surfaced still show.
+  const merged = new Map<string, Set<string>>();
+  for (const provider of [...(await readLiveModelCatalogProviders(env)), ...staticProviders]) {
+    if (!merged.has(provider.id)) {
+      merged.set(provider.id, new Set());
+    }
+    const target = merged.get(provider.id)!;
+    for (const model of provider.models) {
+      target.add(model);
+    }
+  }
+  const providers = [...merged.entries()]
+    .map(([id, models]) => ({ id, models: [...models].sort() }))
+    .sort((left, right) => left.id.localeCompare(right.id));
 
   let roleModelOverrides: Record<string, string> = {};
   const pluginsSection = parsedConfig && isRecord(parsedConfig.plugins) ? parsedConfig.plugins : null;

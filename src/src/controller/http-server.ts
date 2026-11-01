@@ -4717,7 +4717,7 @@ async function handleRequest(
   // GET /api/v1/models/config - model catalog + current selection for the UI settings dialog
   if (req.method === "GET" && pathname === "/api/v1/models/config") {
     try {
-      sendJson(res, 200, getTeamClawModelCatalog());
+      sendJson(res, 200, await getTeamClawModelCatalog());
     } catch (err) {
       sendError(res, 500, err instanceof Error ? err.message : "failed to read model configuration");
     }
@@ -4757,7 +4757,7 @@ async function handleRequest(
       sendJson(res, 200, {
         ok: true,
         restartNote: "Config changes hot-reload; restart the gateway (openclaw gateway restart) if a change does not take effect.",
-        catalog: getTeamClawModelCatalog(),
+        catalog: await getTeamClawModelCatalog(),
       });
     } catch (err) {
       sendError(res, 400, err instanceof Error ? err.message : "failed to update model configuration");
