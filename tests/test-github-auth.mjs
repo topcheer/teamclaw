@@ -80,7 +80,8 @@ async function runGithubAuthSmoke() {
 
   // Standalone device-login page: big code + prefilled link + polling, no secret nagging.
   assert.match(githubLoginPageSource, /device-code/, "login page must render the device user code");
-  assert.match(githubLoginPageSource, /verificationUriComplete/, "login page must link the prefilled verification URL");
+  assert.match(githubLoginPageSource, /openBtn\.href = device\.verificationUri;/, "login page must link the plain device verification URL (GitHub does not support user_code prefill)");
+  assert.ok(!githubLoginPageSource.includes("verificationUriComplete"), "the login page must not use a synthesized prefill URL");
   assert.match(githubLoginPageSource, /\/api\/v1\/auth\/github/, "login page must drive the auth endpoints");
   assert.match(githubLoginPageSource, /"\/status"/, "login page must poll the auth status endpoint");
   assert.ok(!githubLoginPageSource.includes("client_secret"), "login page must never mention client secrets");
@@ -194,7 +195,6 @@ async function runLoginPageRuntimeSmoke() {
     mode: "device",
     userCode: "WDJB-MJHT",
     verificationUri: "https://github.com/login/device",
-    verificationUriComplete: "https://github.com/login/device?user_code=WDJB-MJHT",
     expiresAt: Date.now() + 900_000,
     intervalMs: 5000,
   };
@@ -236,7 +236,7 @@ async function runLoginPageRuntimeSmoke() {
   assert.match(registry.get("countdown").textContent, /^\d\d:\d\d$/, "the countdown must render mm:ss");
   assert.deepEqual(clipboardWrites, ["WDJB-MJHT"], "the click chain must copy the fresh code to the clipboard");
   assert.deepEqual(windowOpens, [], "clicking sign-in must NOT navigate to GitHub");
-  assert.equal(registry.get("btn-open").href, deviceBody.verificationUriComplete);
+  assert.equal(registry.get("btn-open").href, deviceBody.verificationUri);
   assert.ok(
     !registry.get("copy-state")._classes.has("hidden"),
     "the copy status indicator must be visible after the copy attempt",
