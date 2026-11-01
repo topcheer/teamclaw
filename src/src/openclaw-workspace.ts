@@ -143,8 +143,15 @@ function resolveConfiguredAgentEntry(
     return null;
   }
   const agents = isRecord(parsed.agents) ? parsed.agents : null;
-  const list = agents && Array.isArray(agents.list) ? agents.list : [];
   const normalizedAgentId = normalizeAgentId(agentId);
+  // OpenClaw 2026.10+ keyed agents.entries take precedence; legacy hosts
+  // (<2026.10) only have the array-shaped agents.list.
+  const entries = agents && isRecord(agents.entries) ? agents.entries : null;
+  const keyedEntry = entries ? entries[normalizedAgentId] : null;
+  if (isRecord(keyedEntry)) {
+    return keyedEntry;
+  }
+  const list = agents && Array.isArray(agents.list) ? agents.list : [];
   for (const entry of list) {
     if (!isRecord(entry)) {
       continue;
@@ -283,6 +290,35 @@ export type TeamClawModelReadiness = {
   message: string;
 };
 
+/**
+ * OpenClaw 2026.10+ moved model-provider auth out of the legacy per-agent
+ * `auth-profiles.json` file and into the host config (models.providers[*]
+ * with apiKey/auth, optionally backed by the secrets store). Treat a host
+ * config with provider auth as ready so the readiness gate does not false-
+ * negative on current hosts.
+ */
+function hostConfiguredProviderAuthExists(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): boolean {
+  try {
+    const configPath = resolveDefaultOpenClawConfigPath(env, homedir);
+    const parsed = JSON.parse(readFileSync(configPath, "utf8")) as {
+      models?: { providers?: Record<string, unknown> };
+      providers?: Record<string, unknown>;
+    };
+    const providers = parsed.models?.providers ?? parsed.providers ?? {};
+    return Object.values(providers).some(
+      (value) =>
+        Boolean(value) &&
+        typeof value === "object" &&
+        ("apiKey" in (value as object) || "auth" in (value as object)),
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function getTeamClawModelReadiness(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
@@ -299,20 +335,22 @@ export function getTeamClawModelReadiness(
       return false;
     }
   }) ?? authCandidates[0] ?? "";
-  const hasConfiguredModel = Boolean(configuredModel);
   const hasAuthProfiles = Boolean(authPath) && existsSync(authPath);
-  const status = hasConfiguredModel && hasAuthProfiles ? "ready" : "missing";
+  const hasHostProviderAuth = !hasAuthProfiles && hostConfiguredProviderAuthExists(env, homedir);
+  const authReady = hasAuthProfiles || hasHostProviderAuth;
+  const hasConfiguredModel = Boolean(configuredModel);
+  const status = hasConfiguredModel && authReady ? "ready" : "missing";
   const missingParts = [];
   if (!hasConfiguredModel) {
     missingParts.push("no model is configured");
   }
-  if (!hasAuthProfiles) {
+  if (!authReady) {
     missingParts.push("no auth-profiles.json was found");
   }
   return {
     status,
     hasConfiguredModel,
-    hasAuthProfiles,
+    hasAuthProfiles: authReady,
     configuredModel,
     authPath,
     message: status === "ready"
@@ -539,36 +577,60 @@ async function ensureTeamClawAgentConfigBootstrap(logger: PluginLogger): Promise
 
   const agents = isRecord(parsed.agents) ? parsed.agents : {};
   const defaults = isRecord(agents.defaults) ? agents.defaults : {};
-  const nextList = Array.isArray(agents.list) ? [...agents.list] : [];
   const rootTools = isRecord(parsed.tools) ? parsed.tools : {};
   const rootExec = isRecord(rootTools.exec) ? rootTools.exec : {};
   const plugins = isRecord(parsed.plugins) ? parsed.plugins : {};
-  const entries = isRecord(plugins.entries) ? plugins.entries : {};
-  const teamclawPluginEntry = isRecord(entries[TEAMCLAW_AGENT_ID]) ? entries[TEAMCLAW_AGENT_ID] : {};
+  const pluginEntries = isRecord(plugins.entries) ? plugins.entries : {};
+  const teamclawPluginEntry = isRecord(pluginEntries[TEAMCLAW_AGENT_ID]) ? pluginEntries[TEAMCLAW_AGENT_ID] : {};
   const existingPluginConfig = isRecord(teamclawPluginEntry.config) ? teamclawPluginEntry.config : {};
   const teamclawWorkspaceDir = path.join(resolveDefaultOpenClawStateDir(), `workspace-${TEAMCLAW_AGENT_ID}`);
   const teamclawAgentDir = path.join(resolveDefaultOpenClawStateDir(), "agents", TEAMCLAW_AGENT_ID, "agent");
-  const existingIndex = nextList.findIndex((entry) => isRecord(entry) && normalizeAgentId(entry.id) === TEAMCLAW_AGENT_ID);
-  const existingEntry = existingIndex >= 0 && isRecord(nextList[existingIndex]) ? nextList[existingIndex] : {};
+
+  // OpenClaw 2026.10+ rejects agents.list ("moved to keyed agents.entries")
+  // and rejects tools.exec objects mixing mode with security/ask. Write the
+  // keyed shape whenever the host already uses it, and never reintroduce the
+  // legacy list on modern hosts.
+  const agentEntries = isRecord(agents.entries) ? agents.entries : {};
+  const legacyList = Array.isArray(agents.list) ? agents.list.filter(isRecord) : [];
+  const modernSchema = isRecord(agents.entries) || legacyList.length === 0;
+
+  const findExistingAgentEntry = (): { entry: Record<string, unknown>; source: "entries" | "list" | "none" } => {
+    const keyed = agentEntries[TEAMCLAW_AGENT_ID];
+    if (isRecord(keyed)) {
+      return { entry: keyed, source: "entries" };
+    }
+    const fromList = legacyList.find((entry) => normalizeAgentId(entry.id) === TEAMCLAW_AGENT_ID);
+    if (fromList) {
+      return { entry: fromList, source: "list" };
+    }
+    return { entry: {}, source: "none" };
+  };
+  const existing = findExistingAgentEntry();
+  const existingEntry = existing.entry;
   const existingEntryTools = isRecord(existingEntry.tools) ? existingEntry.tools : {};
   const existingEntryExec = isRecord(existingEntryTools.exec) ? existingEntryTools.exec : {};
   const nextEntryExec: Record<string, unknown> = {
     ...cloneJsonValue(rootExec),
     ...cloneJsonValue(existingEntryExec),
   };
-  if (typeof nextEntryExec.security !== "string" || !nextEntryExec.security.trim()) {
-    nextEntryExec.security = typeof rootExec.security === "string" && rootExec.security.trim()
-      ? rootExec.security.trim()
-      : TEAMCLAW_RECOMMENDED_EXEC_SECURITY;
-  }
-  if (typeof nextEntryExec.ask !== "string" || !nextEntryExec.ask.trim()) {
-    nextEntryExec.ask = typeof rootExec.ask === "string" && rootExec.ask.trim()
-      ? rootExec.ask.trim()
-      : TEAMCLAW_RECOMMENDED_EXEC_ASK;
+  if (typeof nextEntryExec.mode === "string" && nextEntryExec.mode.trim()) {
+    // Keyed-schema hosts forbid combining mode with security/ask.
+    delete nextEntryExec.security;
+    delete nextEntryExec.ask;
+  } else {
+    if (typeof nextEntryExec.security !== "string" || !nextEntryExec.security.trim()) {
+      nextEntryExec.security = typeof rootExec.security === "string" && rootExec.security.trim()
+        ? rootExec.security.trim()
+        : TEAMCLAW_RECOMMENDED_EXEC_SECURITY;
+    }
+    if (typeof nextEntryExec.ask !== "string" || !nextEntryExec.ask.trim()) {
+      nextEntryExec.ask = typeof rootExec.ask === "string" && rootExec.ask.trim()
+        ? rootExec.ask.trim()
+        : TEAMCLAW_RECOMMENDED_EXEC_ASK;
+    }
   }
   const nextEntry: Record<string, unknown> = {
-    ...existingEntry,
-    id: TEAMCLAW_AGENT_ID,
+    ...cloneJsonValue(existingEntry),
     workspace: typeof existingEntry.workspace === "string" && existingEntry.workspace.trim()
       ? existingEntry.workspace
       : teamclawWorkspaceDir,
@@ -580,6 +642,9 @@ async function ensureTeamClawAgentConfigBootstrap(logger: PluginLogger): Promise
       exec: nextEntryExec,
     },
   };
+  if (!modernSchema) {
+    nextEntry.id = TEAMCLAW_AGENT_ID;
+  }
   if (nextEntry.model == null && defaults.model != null) {
     nextEntry.model = cloneJsonValue(defaults.model);
   }
@@ -596,23 +661,48 @@ async function ensureTeamClawAgentConfigBootstrap(logger: PluginLogger): Promise
     nextPluginConfig.workerProvisioningType = "process";
   }
 
-  const entryChanged = JSON.stringify(existingEntry) !== JSON.stringify(nextEntry);
+  const entryChanged = JSON.stringify(existingEntry) !== JSON.stringify(nextEntry)
+    || (modernSchema && (legacyList.length > 0 || !isRecord(agentEntries[TEAMCLAW_AGENT_ID])));
   const pluginConfigChanged = JSON.stringify(existingPluginConfig) !== JSON.stringify(nextPluginConfig);
   if (!entryChanged && !pluginConfigChanged) {
     return;
   }
 
-  if (existingIndex >= 0) {
-    nextList[existingIndex] = nextEntry;
+  if (modernSchema) {
+    // Fold any legacy list entries into the keyed map, then drop the list so
+    // 2026.10 hosts stop rejecting the config.
+    for (const legacyEntry of legacyList) {
+      const legacyId = normalizeAgentId(legacyEntry.id);
+      if (!legacyId || isRecord(agentEntries[legacyId])) {
+        continue;
+      }
+      const migrated = cloneJsonValue(legacyEntry);
+      delete migrated.id;
+      agentEntries[legacyId] = migrated;
+    }
+    const keyedNextEntry = cloneJsonValue(nextEntry);
+    delete keyedNextEntry.id;
+    agentEntries[TEAMCLAW_AGENT_ID] = keyedNextEntry;
+    agents.entries = agentEntries;
+    delete agents.list;
+    if (Object.keys(agentEntries).length > 1 && agents.ownership !== "explicit") {
+      agents.ownership = "explicit";
+    }
   } else {
-    nextList.push(nextEntry);
+    const nextList = [...legacyList];
+    const existingIndex = nextList.findIndex((entry) => isRecord(entry) && normalizeAgentId(entry.id) === TEAMCLAW_AGENT_ID);
+    if (existingIndex >= 0) {
+      nextList[existingIndex] = nextEntry;
+    } else {
+      nextList.push(nextEntry);
+    }
+    agents.list = nextList;
   }
-  agents.list = nextList;
   parsed.agents = agents;
   if (pluginConfigChanged) {
     teamclawPluginEntry.config = nextPluginConfig;
-    entries[TEAMCLAW_AGENT_ID] = teamclawPluginEntry;
-    plugins.entries = entries;
+    pluginEntries[TEAMCLAW_AGENT_ID] = teamclawPluginEntry;
+    plugins.entries = pluginEntries;
     parsed.plugins = plugins;
   }
   await fs.writeFile(configPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
