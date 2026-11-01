@@ -168,6 +168,31 @@
           <div id="report-list" class="report-list"></div>
         </section>
       </section>
+
+      <section id="view-controller" class="stage-view">
+        <div class="view-grid controller-grid">
+          <section class="panel detail-card">
+            <div class="section-head compact"><h2 id="ctl-models-title">Team models</h2></div>
+            <p id="ctl-models-hint" class="ctl-hint">Default model applies to the controller and every role; per-role selections override it for that role.</p>
+            <label class="ctl-field"><span id="ctl-default-label">Default model</span><select id="ctl-default"></select></label>
+            <div id="ctl-roles" class="ctl-roles"></div>
+            <div class="ctl-actions">
+              <button id="ctl-models-save" class="btn btn-primary" type="button">Save models</button>
+              <span id="ctl-models-result" class="ctl-result"></span>
+            </div>
+          </section>
+          <section class="panel detail-card">
+            <div class="section-head compact"><h2 id="ctl-ws-title">Workspace directory</h2></div>
+            <p class="ctl-hint"><span id="ctl-ws-current-label">Current:</span> <code id="ctl-ws-path">...</code> <span id="ctl-ws-default" class="ctl-badge is-hidden">default</span></p>
+            <p id="ctl-ws-hint" class="ctl-hint">Point the team workspace at any absolute path on the controller machine. Applies after a gateway restart.</p>
+            <label class="ctl-field"><span id="ctl-ws-input-label">New workspace path</span><input id="ctl-ws-input" type="text" spellcheck="false" placeholder="/absolute/path/to/teamclaw_workspace" /></label>
+            <div class="ctl-actions">
+              <button id="ctl-ws-apply" class="btn btn-primary" type="button">Apply workspace</button>
+              <span id="ctl-ws-result" class="ctl-result"></span>
+            </div>
+          </section>
+        </div>
+      </section>
     </main>
   </div>
 
@@ -196,31 +221,6 @@
       </div>
     </section>
   </aside>
-
-  <section id="view-controller" class="stage-view">
-    <div class="view-grid controller-grid">
-      <section class="panel detail-card">
-        <div class="section-head compact"><h2 id="ctl-models-title">Team models</h2></div>
-        <p id="ctl-models-hint" class="ctl-hint">Default model applies to the controller and every role; per-role selections override it for that role.</p>
-        <label class="ctl-field"><span id="ctl-default-label">Default model</span><select id="ctl-default"></select></label>
-        <div id="ctl-roles" class="ctl-roles"></div>
-        <div class="ctl-actions">
-          <button id="ctl-models-save" class="btn btn-primary" type="button">Save models</button>
-          <span id="ctl-models-result" class="ctl-result"></span>
-        </div>
-      </section>
-      <section class="panel detail-card">
-        <div class="section-head compact"><h2 id="ctl-ws-title">Workspace directory</h2></div>
-        <p class="ctl-hint"><span id="ctl-ws-current-label">Current:</span> <code id="ctl-ws-path">...</code> <span id="ctl-ws-default" class="ctl-badge is-hidden">default</span></p>
-        <p id="ctl-ws-hint" class="ctl-hint">Point the team workspace at any absolute path on the controller machine. Applies after a gateway restart.</p>
-        <label class="ctl-field"><span id="ctl-ws-input-label">New workspace path</span><input id="ctl-ws-input" type="text" spellcheck="false" placeholder="/absolute/path/to/teamclaw_workspace" /></label>
-        <div class="ctl-actions">
-          <button id="ctl-ws-apply" class="btn btn-primary" type="button">Apply workspace</button>
-          <span id="ctl-ws-result" class="ctl-result"></span>
-        </div>
-      </section>
-    </div>
-  </section>
 
   <div id="clarification-modal" class="clarification-modal is-hidden" aria-hidden="true">
     <div class="clarification-modal-backdrop" data-clarification-modal-dismiss="backdrop"></div>
