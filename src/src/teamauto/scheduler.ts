@@ -12,6 +12,7 @@ import {
   defaultCursors,
   defaultPolicy,
   loadTeamAutoStore,
+  pushTeamAutoActivity,
   saveTeamAutoStore,
   type TeamAutoRepo,
   type TeamAutoRepoNorms,
@@ -112,6 +113,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     // returns immediately; sweeps stay gated until provision completes.
     repo.provision = { status: "provisioning", message: "cloning repo", startedAt: Date.now(), updatedAt: Date.now() };
     s.repos.push(repo);
+    pushTeamAutoActivity(s, { at: Date.now(), repoId: normalized, kind: "bind", text: `bound (schedule ${repo.schedule})` });
     await saveTeamAutoStore(s);
     scheduleRepo(repo);
     void provisionRepoInBackground(normalized, info.cloneUrl, info.defaultBranch);
@@ -127,6 +129,8 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       await updateRepoProvision(repoId, { status: "provisioning", message: "learning repo norms" });
       const norms = await learnNorms(repoRef, client, sync, cloneUrl, defaultBranch);
       await updateRepoProvision(repoId, { status: "ready", message: "ready", norms });
+      const sReady = await ensureStore();
+      pushTeamAutoActivity(sReady, { at: Date.now(), repoId, kind: "provision", text: "ready (clone + norms done)" });
       logger.info(`TeamAuto: provisioned ${repoId} (clone + norms done)`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -223,6 +227,13 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     try {
       const { candidates, issues, pulls } = await sweepRepo(repo, client);
       const dryRun = !repo.dryRunDone && s.budget.firstSweepDryRun;
+      if (dryRun) {
+        // One observing pass, then act. Flip unconditionally - flipping only
+        // when candidates existed deadlocked empty first sweeps in dry-run
+        // mode forever (dry-run never advanced cursors -> still "first sweep"
+        // -> still zero candidates -> dryRunDone never set).
+        repo.dryRunDone = true;
+      }
       if (!dryRun) {
         // Advance only for acting sweeps: a dry-run must leave the cursors
         // untouched so the reported actions are actually performed next time
@@ -235,7 +246,6 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
 
       if (capped.length && dryRun) {
         summary.push(...capped.map((c) => `DRY-RUN would ${c.kind}: ${c.title}`));
-        repo.dryRunDone = true;
         repo.lastSweepSummary = `dry-run: ${summary.join("; ")}`;
       } else if (capped.length) {
         if (!consumeDailyBudget(s, capped.length)) {
@@ -244,6 +254,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           for (const candidate of capped) {
             const taskId = enqueueCandidate(repo, candidate);
             if (taskId) {
+              pushTeamAutoActivity(s, { at: Date.now(), repoId: repo.id, kind: "task", text: `${candidate.kind}: ${candidate.title}` });
               const action = candidate.kind === "prReview"
                 ? ("prComment" as const)
                 : candidate.kind === "fullReview"
@@ -262,6 +273,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         repo.lastSweepSummary = "no new work";
       }
       repo.lastSweepAt = Date.now();
+      pushTeamAutoActivity(s, { at: Date.now(), repoId: repo.id, kind: "sweep", text: repo.lastSweepSummary ?? "sweep complete" });
       await saveTeamAutoStore(s);
       if (created > 0) {
         await deps.onTasksCreated().catch((err) => {
@@ -349,18 +361,25 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         } else {
           const role = (task.assignedRole ?? "qa") as string;
           const body = `${task.result.trim()}\n${MARKER_FOOTER(role)}`;
+          let writebackDone = false;
           if (entry.action === "issueComment" && entry.targetId) {
             await client.postIssueComment(owner, name, entry.targetId, body);
             entry.doneAt = Date.now();
+            writebackDone = true;
           } else if (entry.action === "prComment" && entry.targetId) {
             await client.postPullReviewComment(owner, name, entry.targetId, body);
             entry.doneAt = Date.now();
+            writebackDone = true;
           } else if (entry.action === "createIssue") {
             const number = await client.createIssue(owner, name, `[teamclaw:${role}] ${task.title.replace(/^\[[^\]]+\]\s*/, "")}`, body, ["teamclaw"]);
             entry.targetId = number;
             entry.doneAt = Date.now();
+            writebackDone = true;
           } else {
             entry.error = `unsupported action ${entry.action}`;
+          }
+          if (writebackDone) {
+            pushTeamAutoActivity(s, { at: Date.now(), repoId: entry.repoId, kind: "writeback", text: `${entry.action} #${entry.targetId ?? "-"} ok (${task.id})` });
           }
         }
       } catch (err) {
@@ -442,12 +461,17 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     }
   }
 
-  async function getStatus(): Promise<{ repos: TeamAutoRepo[]; budget: TeamAutoStore["budget"] }> {
+  async function getStatus(): Promise<{ repos: TeamAutoRepo[]; budget: TeamAutoStore["budget"]; activity: NonNullable<TeamAutoStore["activity"]> }> {
     const s = await ensureStore();
-    return { repos: s.repos, budget: s.budget };
+    return { repos: s.repos, budget: s.budget, activity: s.activity ?? [] };
   }
 
-  return { addRepo, removeRepo, setRepoEnabled, updateRepo, runSweepNow, registerWriteback, reconcileWritebacks, start, stop, getStatus };
+  async function getActivity(): Promise<NonNullable<TeamAutoStore["activity"]>> {
+    const s = await ensureStore();
+    return (s.activity ?? []).slice().reverse();
+  }
+
+  return { addRepo, removeRepo, setRepoEnabled, updateRepo, runSweepNow, registerWriteback, reconcileWritebacks, start, stop, getStatus, getActivity };
 }
 
 export type TeamAutoScheduler = ReturnType<typeof createTeamAutoScheduler>;

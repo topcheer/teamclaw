@@ -133,6 +133,8 @@
       "teamauto.norms": "Norms",
       "teamauto.confirmUnbind": "Unbind this repo?",
       "teamauto.empty": "No repos bound yet. Pick one above and click Bind.",
+      "teamauto.activity": "Activity",
+      "teamauto.activityEmpty": "No TeamAuto activity yet - sweeps and write-backs will appear here.",
       "worker.add": "Add worker",
       "worker.hide": "Hide worker command",
       "worker.cardTitle": "Register a new external worker",
@@ -256,6 +258,8 @@
       "teamauto.norms": "协作规范",
       "teamauto.confirmUnbind": "确定解绑该仓库？",
       "teamauto.empty": "尚未绑定仓库。在上方选择后点击绑定。",
+      "teamauto.activity": "动态",
+      "teamauto.activityEmpty": "暂无 TeamAuto 动态-扫描与写回会出现在这里。",
       "worker.add": "添加 worker",
       "worker.hide": "隐藏 worker 命令",
       "worker.cardTitle": "注册新的外部 worker",
@@ -3603,6 +3607,24 @@ function closeModelSettings() {
   }
 
   var teamAutoBusy = false;
+  function renderTeamAutoActivity(activity) {
+    var wrap = $("#teamauto-activity");
+    if (!wrap) { return; }
+    var list = activity || [];
+    if (!list.length) {
+      wrap.innerHTML = '<div class="empty-state">' + escapeHtml(t("teamauto.activityEmpty")) + "</div>";
+      return;
+    }
+    wrap.innerHTML = list.slice(0, 30).map(function (e) {
+      var when = new Date(e.at || 0).toLocaleString();
+      return '<div class="teamauto-activity-item">'
+        + '<span class="teamauto-activity-kind k-' + escapeHtml(String(e.kind || "sweep")) + '">' + escapeHtml(String(e.kind || "")) + "</span>"
+        + '<span class="teamauto-activity-text"><b>' + escapeHtml(String(e.repoId || "")) + "</b> " + escapeHtml(String(e.text || "")) + "</span>"
+        + '<span class="teamauto-activity-time">' + escapeHtml(when) + "</span>"
+        + "</div>";
+    }).join("");
+  }
+
   function refreshTeamAutoTab() {
     if (teamAutoBusy) { return; }
     teamAutoBusy = true;
@@ -3610,6 +3632,9 @@ function closeModelSettings() {
     apiGet("/teamauto/repos").then(renderTeamAutoRepos).catch(function () {
       /* scheduler not running yet */
     }).finally(function () { teamAutoBusy = false; });
+    apiGet("/teamauto/activity").then(function (data) {
+      renderTeamAutoActivity((data && data.activity) || []);
+    }).catch(function () { /* activity is best-effort */ });
   }
 
   function bindTeamAutoTabEvents() {

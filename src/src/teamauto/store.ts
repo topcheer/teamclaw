@@ -84,10 +84,31 @@ export type TeamAutoWriteBack = {
   error: string | null;
 };
 
+export type TeamAutoActivityKind = "bind" | "provision" | "sweep" | "task" | "writeback";
+
+export type TeamAutoActivityEntry = {
+  at: number;
+  repoId: string;
+  kind: TeamAutoActivityKind;
+  text: string;
+};
+
+export const TEAMAUTO_ACTIVITY_LIMIT = 100;
+
+export function pushTeamAutoActivity(store: TeamAutoStore, entry: TeamAutoActivityEntry): void {
+  store.activity = store.activity ?? [];
+  store.activity.push(entry);
+  if (store.activity.length > TEAMAUTO_ACTIVITY_LIMIT) {
+    store.activity = store.activity.slice(store.activity.length - TEAMAUTO_ACTIVITY_LIMIT);
+  }
+}
+
 export type TeamAutoStore = {
   version: number;
   repos: TeamAutoRepo[];
   writebacks: TeamAutoWriteBack[];
+  /** Bounded activity log for the UI feed (persists across restarts). */
+  activity?: TeamAutoActivityEntry[];
   budget: {
     maxTasksPerDay: number;
     firstSweepDryRun: boolean;
@@ -116,6 +137,7 @@ function emptyStore(): TeamAutoStore {
     version: TEAMAUTO_STORE_VERSION,
     repos: [],
     writebacks: [],
+    activity: [],
     budget: {
       maxTasksPerDay: 50,
       firstSweepDryRun: true,
