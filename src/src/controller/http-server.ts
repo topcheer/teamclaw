@@ -4694,6 +4694,13 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
     const viaTunnel = tunnelManager.isTunnelRequest(typeof req.headers.host === "string" ? req.headers.host : undefined);
     if (viaTunnel) {
       if (req.method === "GET" && (pathname === "/__tunnel_gate" || pathname === "/")) {
+        // Valid gate cookie on "/" goes straight to the dashboard; the gate
+        // page only greets visitors who have not authenticated yet.
+        if (pathname === "/" && tunnelManager.gateAllows(req)) {
+          res.writeHead(302, { Location: "/ui/" });
+          res.end();
+          return;
+        }
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
         res.end(gatePageHtml(String(req.headers.host), false));
         return;
@@ -4703,7 +4710,7 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
         const submitted = String((form as { token?: unknown }).token ?? "").trim().toUpperCase();
         const st = tunnelManager.status();
         if (st.active && st.gateToken && submitted === st.gateToken) {
-          const cookie = `${GATE_COOKIE_NAME}=${computeGateCookie(st.gateToken, st.hostname ?? "")}; Path=/; Max-Age=43200; HttpOnly; SameSite=Lax`;
+          const cookie = `${GATE_COOKIE_NAME}=${computeGateCookie(st.gateToken, st.tunnelId ?? "")}; Path=/; Max-Age=43200; HttpOnly; SameSite=Lax`;
           res.writeHead(302, { "Set-Cookie": cookie, Location: "/" });
           res.end();
           return;
@@ -4726,17 +4733,24 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
         const authStatus = await getGithubAuthManager(deps.config, logger).getStatus();
         const account = authStatus.account;
         if (!account?.login) { sendError(res, 401, "GitHub login required to share a tunnel"); return; }
-        try {
-          const h = await tunnelManager.start(account.login);
-          sendJson(res, 201, { hostname: h.hostname, gateToken: h.gateToken, tunnelId: h.tunnelId });
-        } catch (err) {
-          sendError(res, 502, err instanceof Error ? err.message : "tunnel start failed");
-        }
+        // Async launch: poll /tunnel/status for phase progress and the
+        // resulting hostname/gateToken once startOp.phase === "done".
+        const launched = tunnelManager.start(account.login);
+        sendJson(res, 202, { launched, status: tunnelManager.status() });
         return;
       }
       if (req.method === "POST" && pathname === "/api/v1/tunnel/stop") {
         await tunnelManager.stop();
         sendJson(res, 200, tunnelManager.status());
+        return;
+      }
+      if (req.method === "POST" && pathname === "/api/v1/tunnel/install-cloudflared") {
+        try {
+          const result = await tunnelManager.installCloudflared();
+          sendJson(res, result.ok ? 200 : 500, { ...result, status: tunnelManager.status() });
+        } catch (err) {
+          sendError(res, 500, err instanceof Error ? err.message : "install failed");
+        }
         return;
       }
     }
@@ -4751,6 +4765,12 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
 
   // Attach WebSocket
   wsServer.attach(server);
+
+  // Plugin shutdown: kill the local connector and tear down the remote
+  // tunnel so gateway exits never leak orphan cloudflared processes.
+  server.on("close", () => {
+    void tunnelManagerSingleton?.stop().catch(() => undefined);
+  });
 
   setTimeout(() => {
     const state = deps.getTeamState();
