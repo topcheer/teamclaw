@@ -1,0 +1,152 @@
+name: OpenClaw Upstream Dockerfile Watch
+
+# The openclaw submodule pins a fixed commit while the upstream Dockerfile
+# rolls with upstream main. scripts/prepare-teamclaw-runtime-context.mjs
+# patches that Dockerfile with literal needles, so an upstream rename breaks
+# the runtime image build only when we next bump the submodule - often weeks
+# later, mid-release. This workflow pre-flights the drift daily: it replays
+# the pinned tree against upstream's current Dockerfile and files an issue
+# the moment a needle stops matching.
+
+on:
+  schedule:
+    - cron: "0 2 * * *" # daily 02:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: openclaw-upstream-dockerfile-watch
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24.x"
+  UPSTREAM_REMOTE: https://github.com/openclaw/openclaw.git
+  ISSUE_TITLE: "upstream openclaw Dockerfile drifted: prepare-script needles need updating"
+
+jobs:
+  preflight-needles:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout teamclaw (submodules included)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Fetch upstream openclaw main
+        working-directory: openclaw
+        run: |
+          git remote add upstream "$UPSTREAM_REMOTE" 2>/dev/null || true
+          git fetch upstream main --quiet
+          echo "upstream_main=$(git rev-parse --short upstream/main)" >> "$GITHUB_ENV"
+          echo "pinned=$(git rev-parse --short HEAD)" >> "$GITHUB_ENV"
+
+      - name: Measure Dockerfile drift
+        id: drift
+        working-directory: openclaw
+        run: |
+          lines=$(git diff HEAD upstream/main -- Dockerfile | wc -l | tr -d ' ')
+          echo "lines=$lines" >> "$GITHUB_OUTPUT"
+          echo "Dockerfile drift: $lines diff lines (pinned $pinned vs upstream $upstream_main)"
+
+      - name: Replay pinned tree against upstream Dockerfile
+        if: steps.drift.outputs.lines != '0'
+        id: needles
+        run: |
+          cp openclaw/Dockerfile /tmp/Dockerfile.pinned
+          git -C openclaw show upstream/main:Dockerfile > openclaw/Dockerfile
+          if node scripts/prepare-teamclaw-runtime-context.mjs --output-dir /tmp/watch-context 2>&1 | tee /tmp/needle-error.txt; then
+            echo "status=compatible" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=broken" >> "$GITHUB_OUTPUT"
+          fi
+          cp /tmp/Dockerfile.pinned openclaw/Dockerfile
+
+      - name: File drift issue (needles broken)
+        if: steps.needles.outputs.status == 'broken'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('node:fs');
+            const needleError = fs.readFileSync('/tmp/needle-error.txt', 'utf8')
+              .split('\n')
+              .filter((line) => line.includes('Expected Dockerfile command not found') || line.includes('Failed to prepare'))
+              .slice(0, 10)
+              .join('\n') || '(see run logs)';
+            const body = [
+              `Upstream \`openclaw\` main (\`${process.env.upstream_main}\`) Dockerfile drifted from our pin (\`${process.env.pinned}\`).`,
+              '',
+              'The runtime-image prepare script needles no longer match. The next submodule bump will fail CI unless the needles are updated first.',
+              '',
+              '**Broken needles:**',
+              '```',
+              needleError,
+              '```',
+              '',
+              `Reproduce locally:`,
+              '```bash',
+              'git -C openclaw fetch upstream main',
+              'git -C openclaw show upstream/main:Dockerfile > openclaw/Dockerfile',
+              'node scripts/prepare-teamclaw-runtime-context.mjs --output-dir /tmp/watch',
+              'git -C openclaw checkout -- Dockerfile',
+              '```',
+            ].join('\n');
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'upstream-dockerfile-drift',
+            });
+            if (existing.data.length > 0) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.data[0].number,
+                body,
+              });
+              core.notice(`Updated drift issue #${existing.data[0].number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: process.env.ISSUE_TITLE,
+                body,
+                labels: ['upstream-dockerfile-drift'],
+              });
+              core.notice(`Filed drift issue #${created.data.number}`);
+            }
+
+      - name: Close stale drift issue (compatible again)
+        if: steps.needles.outputs.status == 'compatible'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'upstream-dockerfile-drift',
+            });
+            for (const issue of existing.data) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed',
+                state_reason: 'completed',
+              });
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `Closed automatically: pinned-tree replay against upstream main (Dockerfile drift) now passes all prepare-script needles again.`,
+              });
+            }
