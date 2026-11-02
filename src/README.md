@@ -10,6 +10,8 @@ It supports:
 - clarifications, workspace browsing, controller UI visibility, and a matching desktop client
 - Git-based collaboration
 - on-demand worker provisioning with `process`, `docker`, and `kubernetes`
+- GitHub OAuth device-flow login and TeamAuto: scheduled issue/PR sweeps, joint multi-role full reviews, and write tasks delivered as pull requests from task-isolated git worktrees (read/write collaboration contract)
+- checkpoint/resume: interrupted tasks continue where they stopped after a restart, reusing the same session and worktree
 
 ## Install
 
