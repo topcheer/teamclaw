@@ -357,6 +357,21 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
   async function reconcileWritebacks(): Promise<void> {
     const s = await ensureStore();
     const state0 = deps.getTeamState();
+    // Dead letters: entries whose task is gone or failed without a result can
+    // never deliver - drop them instead of accumulating forever.
+    if (state0) {
+      const before = s.writebacks.length;
+      s.writebacks = s.writebacks.filter((w) => {
+        if (w.doneAt) { return true; }
+        const t = state0.tasks[w.taskId];
+        const dead = !t || (t.status === "failed" && !t.result);
+        if (dead) {
+          logger.warn(`TeamAuto: dropping dead write-back ${w.taskId} (${t ? "task failed without result" : "task missing"})`);
+        }
+        return !dead;
+      });
+      if (s.writebacks.length !== before) { await saveTeamAutoStore(s); }
+    }
     // Self-heal: an entry whose task later COMPLETED with a result (e.g. the
     // completion gate rejected an early submission, then a retry succeeded)
     // must be retried - a sticky error here would silently drop delivery.

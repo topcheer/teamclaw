@@ -116,6 +116,7 @@ async function sourceContracts() {
     "full reviews must bypass the per-sweep cap (busy repos starved them)",
   );
   assert.match(scheduler, /candidates\.filter\(\(c\) => c\.kind === "fullReview"\)/, "cap split must separate full reviews from regular candidates");
+  assert.match(scheduler, /dropping dead write-back/, "reconcile must drop undeliverable write-backs (task missing / failed without result)");
   assert.match(httpServer, /\/api\/v1\/teamauto\/activity/, "controller must expose the activity endpoint");
   assert.match(uiAppSrc, /teamauto-activity/, "web UI must render the activity feed");
   assert.match(desktopApp, /ta-activity/, "desktop must render the activity feed");
