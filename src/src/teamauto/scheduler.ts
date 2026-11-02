@@ -240,7 +240,13 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         // instead of being marked as already-seen.
         advanceCursors(repo, issues, pulls);
       }
-      const capped = candidates.slice(0, repo.policy.maxTasksPerSweep);
+      // Joint full reviews bypass the per-sweep cap: they append AFTER issue/
+      // pull candidates, so a busy repo would otherwise starve them forever
+      // (cap filled every sweep, lastFullReviewAt never advancing). They are
+      // at most one cycle (3 sections) per interval, so this stays bounded.
+      const fullReviews = candidates.filter((c) => c.kind === "fullReview");
+      const regular = candidates.filter((c) => c.kind !== "fullReview").slice(0, Math.max(0, repo.policy.maxTasksPerSweep - fullReviews.length));
+      const capped = [...fullReviews, ...regular];
       let created = 0;
       const summary: string[] = [`found ${candidates.length} candidate(s)`];
 
