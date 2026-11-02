@@ -1,0 +1,7 @@
+name = "teamclaw-tunnel-api"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+routes = [
+  { pattern = "apps.teamclaw.dev/api/*", zone_name = "teamclaw.dev" }
+]

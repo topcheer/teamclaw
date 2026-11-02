@@ -53,6 +53,7 @@ import type { WorkerProvisioningManager } from "./worker-provisioning.js";
 import type { PreviewManager } from "./preview-manager.js";
 import { createControllerPromptInjector } from "./prompt-injector.js";
 import { getGithubAuthManager } from "./github-auth.js";
+import { createTunnelManager, gatePageHtml, computeGateCookie, GATE_COOKIE_NAME, type TunnelManager } from "./tunnel-manager.js";
 import { createGithubClient } from "../teamauto/github-client.js";
 import type { TeamAutoScheduler } from "../teamauto/scheduler.js";
 import { buildControllerNoWorkersMessage, shouldBlockControllerWithoutWorkers } from "./controller-capacity.js";
@@ -4658,6 +4659,16 @@ export async function autoAssignPendingTasks(
 
 export function createControllerHttpServer(deps: ControllerHttpDeps): http.Server {
   const { logger, wsServer } = deps;
+  let tunnelManagerSingleton: TunnelManager | null = null;
+
+  const readFormBody = async (request: IncomingMessage): Promise<Record<string, unknown>> => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(chunk as Buffer);
+    const raw = Buffer.concat(chunks).toString("utf8");
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of new URLSearchParams(raw)) out[k] = v;
+    return out;
+  };
 
   const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
     // CORS preflight
@@ -4673,6 +4684,62 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
 
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     const pathname = url.pathname;
+
+    // Tunnel sharing: every request arriving via <user>.apps.teamclaw.dev is
+    // gated behind the token the local web UI displays.
+    let tunnelManager = tunnelManagerSingleton;
+    if (!tunnelManager) {
+      tunnelManager = tunnelManagerSingleton = createTunnelManager({ logger, localPort: deps.config.port });
+    }
+    const viaTunnel = tunnelManager.isTunnelRequest(typeof req.headers.host === "string" ? req.headers.host : undefined);
+    if (viaTunnel) {
+      if (req.method === "GET" && (pathname === "/__tunnel_gate" || pathname === "/")) {
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(gatePageHtml(String(req.headers.host), false));
+        return;
+      }
+      if (req.method === "POST" && pathname === "/__tunnel_gate/verify") {
+        const form = await readFormBody(req);
+        const submitted = String((form as { token?: unknown }).token ?? "").trim().toUpperCase();
+        const st = tunnelManager.status();
+        if (st.active && st.gateToken && submitted === st.gateToken) {
+          const cookie = `${GATE_COOKIE_NAME}=${computeGateCookie(st.gateToken, st.hostname ?? "")}; Path=/; Max-Age=43200; HttpOnly; SameSite=Lax`;
+          res.writeHead(302, { "Set-Cookie": cookie, Location: "/" });
+          res.end();
+          return;
+        }
+        res.writeHead(403, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(gatePageHtml(String(req.headers.host), true));
+        return;
+      }
+      if (!tunnelManager.gateAllows(req)) {
+        res.writeHead(403, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(gatePageHtml(String(req.headers.host), false));
+        return;
+      }
+    } else {
+      if (req.method === "GET" && pathname === "/api/v1/tunnel/status") {
+        sendJson(res, 200, tunnelManager.status());
+        return;
+      }
+      if (req.method === "POST" && pathname === "/api/v1/tunnel/start") {
+        const authStatus = await getGithubAuthManager(deps.config, logger).getStatus();
+        const account = authStatus.account;
+        if (!account?.login) { sendError(res, 401, "GitHub login required to share a tunnel"); return; }
+        try {
+          const h = await tunnelManager.start(account.login);
+          sendJson(res, 201, { hostname: h.hostname, gateToken: h.gateToken, tunnelId: h.tunnelId });
+        } catch (err) {
+          sendError(res, 502, err instanceof Error ? err.message : "tunnel start failed");
+        }
+        return;
+      }
+      if (req.method === "POST" && pathname === "/api/v1/tunnel/stop") {
+        await tunnelManager.stop();
+        sendJson(res, 200, tunnelManager.status());
+        return;
+      }
+    }
 
     try {
       await handleRequest(req, res, pathname, deps);
@@ -4742,6 +4809,7 @@ async function handleRequest(
   pathname: string,
   deps: ControllerHttpDeps,
 ): Promise<void> {
+  void pathname;
   const { config, logger, getTeamState, updateTeamState, taskRouter, messageRouter, wsServer } = deps;
   const requestUrl = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   const currentState = getTeamState();
