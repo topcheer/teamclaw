@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='1' y='1' width='30' height='30' rx='8' fill='%231d1b16'/%3E%3Cg stroke='%23d9a664' stroke-linecap='round' fill='none' transform='rotate(-20 16 16)'%3E%3Cpath d='M9.5 7.5V17.5' stroke-width='2.6'/%3E%3Cpath d='M15 5.5V19' stroke-width='2.6'/%3E%3Cpath d='M20.5 7.5V17.5' stroke-width='2.6'/%3E%3C/g%3E%3C/svg%3E">
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TeamClaw - Virtual Team Dashboard</title>
@@ -11,7 +12,20 @@
 <body>
   <header class="header">
     <div class="header-brand">
-      <img class="header-logo" src="/ui/assets/teamclaw-app-icon.png" alt="TeamClaw logo">
+      <svg class="header-logo" width="32" height="32" viewBox="0 0 32 32" role="img" aria-label="TeamClaw logo">
+        <defs>
+          <linearGradient id="tc-g" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#e8c17a"/>
+            <stop offset="1" stop-color="#c98f3d"/>
+          </linearGradient>
+        </defs>
+        <rect x="1" y="1" width="30" height="30" rx="8" fill="#1d1b16" stroke="#3a352a"/>
+        <g stroke="url(#tc-g)" stroke-linecap="round" fill="none" transform="rotate(-20 16 16)">
+          <path d="M9.5 7.5 V17.5" stroke-width="2.6"/>
+          <path d="M15 5.5 V19" stroke-width="2.6"/>
+          <path d="M20.5 7.5 V17.5" stroke-width="2.6"/>
+        </g>
+      </svg>
       <h1 class="header-title">TeamClaw</h1>
     </div>
     <div class="header-status">
