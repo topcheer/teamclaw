@@ -998,4 +998,18 @@ assert.match(
   "controller should block tasks and request clarification when the effective worker result contract is blocked",
 );
 
+// Provisioned worker configs must stay loadable by older openclaw runtimes:
+// the host config can carry the newer keyed agents.entries schema (written
+// by model configuration), which older workers reject with "Unrecognized
+// key: entries". The provisioner folds the teamclaw entry model back into
+// agents.defaults.model and strips the entries map.
+{
+  const provisioningSource = await fs.readFile(workerProvisioningPath, "utf8");
+  assert.match(
+    provisioningSource,
+    /agentsRecord\.entries\[TEAMCLAW_AGENT_ID\]\?\.model[\s\S]*agentDefaults\.model = entryModel[\s\S]*delete agentsRecord\.entries/,
+    "provisioned worker configs should fold agents.entries back into legacy agents.defaults for older worker runtimes",
+  );
+}
+
 console.log("PASS test-openclaw-workspace");

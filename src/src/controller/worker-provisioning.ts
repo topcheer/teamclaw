@@ -1374,6 +1374,21 @@ function buildProvisionedWorkerConfig(
   } else {
     delete agentDefaults.workspace;
   }
+  // The host controller may run a newer openclaw that persists the keyed
+  // agents.entries schema (e.g. agents.entries.teamclaw.model written by the
+  // model-configuration feature). Provisioned workers can run an older
+  // openclaw that rejects unknown agents keys ("Unrecognized key: entries"),
+  // so fold the teamclaw entry's model back into the legacy
+  // agents.defaults.model and drop the entries map. New-schema workers also
+  // accept agents.defaults, keeping the folded config compatible both ways.
+  const agentsRecord = agents as { entries?: Record<string, { model?: string }> };
+  if (agentsRecord.entries && typeof agentsRecord.entries === "object") {
+    const entryModel = agentsRecord.entries[TEAMCLAW_AGENT_ID]?.model;
+    if (entryModel && !agentDefaults.model) {
+      agentDefaults.model = entryModel;
+    }
+    delete agentsRecord.entries;
+  }
   agents.defaults = agentDefaults;
   config.agents = agents;
 
