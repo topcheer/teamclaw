@@ -4819,6 +4819,15 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
     void tunnelManagerSingleton?.stop().catch(() => undefined);
   });
 
+  // Boot reconciliation: reconnect a share persisted by a previous run
+  // (gateway restart or kill -9) so the tunnel id and gate token survive.
+  if (!tunnelManagerSingleton) {
+    tunnelManagerSingleton = createTunnelManager({ logger, localPort: deps.config.port });
+  }
+  void tunnelManagerSingleton.recover().catch((err) => {
+    logger.warn(`TeamClaw tunnel: boot recovery failed: ${String(err)}`);
+  });
+
   setTimeout(() => {
     const state = deps.getTeamState();
     const pendingCount = state

@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import type { PluginLogger } from "../../api.js";
@@ -80,6 +80,50 @@ function tunnelRuntimeHome(): string {
   }
 }
 
+export interface PersistedTunnelState {
+  tunnelId: string;
+  hostname: string;
+  gateToken: string;
+  deleteToken: string;
+  connectorToken: string;
+  pid: number | null;
+  savedAt: number;
+}
+
+function tunnelStatePath(): string {
+  return path.join(tunnelRuntimeHome(), "tunnel-state.json");
+}
+
+function readTunnelState(): PersistedTunnelState | null {
+  try {
+    const raw = JSON.parse(fs.readFileSync(tunnelStatePath(), "utf8")) as PersistedTunnelState;
+    return raw && raw.tunnelId && raw.connectorToken ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeTunnelState(st: PersistedTunnelState): void {
+  try {
+    fs.writeFileSync(tunnelStatePath(), JSON.stringify(st), { mode: 0o600 });
+  } catch { /* best effort */ }
+}
+
+function clearTunnelState(): void {
+  try { fs.rmSync(tunnelStatePath(), { force: true }); } catch { /* best effort */ }
+}
+
+// pid-reuse-safe liveness: only treat the pid as OUR orphan when the binary
+// still matches cloudflared.
+function connectorPidIsCloudflared(pid: number): boolean {
+  try {
+    const out = execFileSync("ps", ["-p", String(pid), "-o", "comm="], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    return out.includes("cloudflared");
+  } catch {
+    return false;
+  }
+}
+
 function findCloudflared(): string | null {
   for (const bin of CLOUDFLARED_CANDIDATES) {
     try {
@@ -142,7 +186,16 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
     }
     startOp = { running: true, phase: "starting-connector", detail: body.hostname };
     stopConnector();
-    child = spawn(bin, ["tunnel", "--no-autoupdate", "--protocol", "http2", "run", "--token", body.connector_token], {
+    child = spawnConnector(bin, body.connector_token);
+    handle = { tunnelId: body.tunnel_id, hostname: body.hostname, gateToken, deleteToken: body.delete_token ?? "" };
+    writeTunnelState({ tunnelId: body.tunnel_id, hostname: body.hostname, gateToken, deleteToken: body.delete_token ?? "", connectorToken: body.connector_token, pid: child.pid ?? null, savedAt: Date.now() });
+    lastError = null;
+    logger.info(`TeamClaw tunnel: serving https://${body.hostname}`);
+    return handle;
+  }
+
+  function spawnConnector(bin: string, connectorToken: string): ChildProcess {
+    const proc = spawn(bin, ["tunnel", "--no-autoupdate", "--protocol", "http2", "run", "--token", connectorToken], {
       stdio: ["ignore", "ignore", "pipe"],
       detached: false,
       // Isolate from ~/.cloudflared/cert.pem (a local origin-cert would
@@ -150,20 +203,15 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
       // networks (http2 rides regular TCP 443).
       env: { ...process.env, HOME: tunnelRuntimeHome() },
     });
-    child.on("exit", (code: number | null) => {
+    proc.on("exit", (code: number | null) => {
       logger.warn(`TeamClaw tunnel: cloudflared exited (code ${code})`);
-      child = null;
+      if (child === proc) child = null;
     });
-    // cloudflared logs land in a rotating-free single file for diagnosis.
+    // cloudflared logs (stderr) land in a single file for diagnosis.
+    // (stdout is "ignore" in stdio above, so there is nothing to pipe.)
     const logPath = path.join(tunnelRuntimeHome(), "cloudflared.log");
-    const logFd = fs.openSync(logPath, "a");
-    child.stderr?.pipe(fs.createWriteStream(logPath, { flags: "a" }));
-    child.stdout?.pipe(fs.createWriteStream(logPath, { flags: "a" }));
-    fs.closeSync(logFd);
-    handle = { tunnelId: body.tunnel_id, hostname: body.hostname, gateToken, deleteToken: body.delete_token ?? "" };
-    lastError = null;
-    logger.info(`TeamClaw tunnel: serving https://${body.hostname}`);
-    return handle;
+    proc.stderr?.pipe(fs.createWriteStream(logPath, { flags: "a" }));
+    return proc;
   }
 
   function stopConnector(): void {
@@ -179,8 +227,42 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
       const gone = handle;
       handle = null;
       await tunnelFetch(`/tunnels/${gone.tunnelId}?user=${encodeURIComponent(gone.hostname.split(".")[0]!.replace(/^team-/, ""))}&token=${encodeURIComponent(gone.deleteToken)}`, "DELETE").catch(() => undefined);
+      clearTunnelState();
       logger.info(`TeamClaw tunnel: stopped ${gone.hostname}`);
     }
+  }
+
+  // Boot reconciliation: reconnect the share persisted by a previous run.
+  // Reuses the SAME remotely-managed tunnel (its connector token), so the
+  // tunnel id and gate token survive gateway restarts and visitor gate
+  // cookies stay valid.
+  async function recover(): Promise<TunnelHandle | null> {
+    if (handle) return handle;
+    const st = readTunnelState();
+    if (!st) return null;
+    const bin = findCloudflared();
+    if (!bin) {
+      logger.warn("TeamClaw tunnel: previous share found but cloudflared is not installed; not recovering");
+      return null;
+    }
+    // kill -9 of the gateway leaves an orphaned connector behind (SIGKILL
+    // cannot run the close handler). Reap it before reconnecting - pid-reuse
+    // safe: only when the binary still matches.
+    if (st.pid && connectorPidIsCloudflared(st.pid)) {
+      try {
+        process.kill(st.pid, "SIGKILL");
+        logger.warn(`TeamClaw tunnel: killed orphaned connector (pid ${st.pid})`);
+      } catch { /* already gone */ }
+    }
+    startOp = { running: true, phase: "starting-connector", detail: st.hostname };
+    stopConnector();
+    child = spawnConnector(bin, st.connectorToken);
+    handle = { tunnelId: st.tunnelId, hostname: st.hostname, gateToken: st.gateToken, deleteToken: st.deleteToken };
+    writeTunnelState({ ...st, pid: child.pid ?? null, savedAt: Date.now() });
+    startOp = { running: false, phase: "done", detail: st.hostname };
+    lastError = null;
+    logger.info(`TeamClaw tunnel: recovered https://${st.hostname} (tunnel id and gate token preserved)`);
+    return handle;
   }
 
   function status(): TunnelStatus {
@@ -281,7 +363,7 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
   }
 
 
-  return { start: launchStart, stop, status, installCloudflared, isTunnelRequest, gateAllows };
+  return { start: launchStart, stop, recover, status, installCloudflared, isTunnelRequest, gateAllows };
 }
 
 export type TunnelManager = ReturnType<typeof createTunnelManager>;
