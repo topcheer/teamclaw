@@ -1340,22 +1340,26 @@ textarea { padding: 14px 16px; min-height: 188px; resize: vertical; line-height:
 
 /* TeamAuto tab */
 .teamauto-bind-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 12px 0 6px; }
-.teamauto-select { flex: 1; min-width: 220px; padding: 7px 10px; border-radius: 8px; border: 1px solid #30363d; background: #0d1117; color: inherit; }
-.teamauto-schedule-input { width: 150px; padding: 7px 10px; border-radius: 8px; border: 1px solid #30363d; background: #0d1117; color: inherit; }
+.teamauto-select { flex: 1; min-width: 220px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); }
+.teamauto-select:focus { outline: none; border-color: rgba(37,99,235,.58); box-shadow: 0 0 0 3px rgba(37,99,235,.11); }
+.teamauto-schedule-input { width: 150px; padding: 8px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); }
+.teamauto-schedule-input:focus { outline: none; border-color: rgba(37,99,235,.58); box-shadow: 0 0 0 3px rgba(37,99,235,.11); }
 .teamauto-msg { font-size: 13px; min-height: 18px; margin: 6px 0; }
 .teamauto-msg.ok { color: #3fb950; }
 .teamauto-msg.err { color: #f85149; }
 .teamauto-repos { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
-.teamauto-card { border: 1px solid #2a2f3a; border-radius: 10px; padding: 14px 16px; }
+.teamauto-card { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); padding: 16px 18px; }
 .teamauto-card-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
 .teamauto-repo-name { font-weight: 600; word-break: break-all; }
-.teamauto-badge { font-size: 12px; border: 1px solid #3d4450; border-radius: 20px; padding: 2px 10px; color: #8b949e; }
-.teamauto-badge.on { color: #3fb950; border-color: #238636; }
-.teamauto-badge.warn { color: #d29922; border-color: #9e6a03; }
-.teamauto-meta { color: #8b949e; font-size: 12.5px; margin-top: 8px; line-height: 1.7; }
-.teamauto-warn-text { color: #d29922; }
-.teamauto-config-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 10px; padding-top: 10px; border-top: 1px dashed #30363d; }
-.teamauto-config-row label { font-size: 12px; color: #8b949e; display: inline-flex; align-items: center; gap: 6px; }
-.teamauto-config-row input, .teamauto-config-row select { padding: 4px 8px; border-radius: 6px; border: 1px solid #30363d; background: #0d1117; color: inherit; font-size: 12px; }
+.teamauto-badge { font-size: 12px; border: 1px solid var(--border); border-radius: 20px; padding: 2px 10px; color: var(--muted); }
+.teamauto-badge.on { color: var(--success); border-color: var(--success); }
+.teamauto-badge.warn { color: var(--warn); border-color: var(--warn); }
+.teamauto-meta { color: var(--muted); font-size: 12.5px; margin-top: 8px; line-height: 1.7; }
+.teamauto-meta code { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px; color: var(--text-soft); }
+.teamauto-warn-text { color: var(--warn); }
+.teamauto-config-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border); }
+.teamauto-config-row label { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+.teamauto-config-row input, .teamauto-config-row select { padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font-size: 12.5px; }
+.teamauto-config-row input:focus, .teamauto-config-row select:focus { outline: none; border-color: rgba(37,99,235,.58); box-shadow: 0 0 0 3px rgba(37,99,235,.11); }
 .teamauto-config-row input[data-cfg="schedule"] { width: 120px; }
 .teamauto-actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
