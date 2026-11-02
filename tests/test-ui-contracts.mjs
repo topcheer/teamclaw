@@ -124,6 +124,18 @@ async function runUiContractSmoke() {
   assert.match(desktopStyle, /-webkit-app-region: drag/, "the titlebar must be the window drag region");
   assert.match(desktopApp, /dataset\.platform/, "renderer must bind the platform for titlebar insets");
 
+  // Day/night theming: paired token blocks, no-flash bootstrap, live toggle,
+  // window chrome follows the theme.
+  const desktopPreload = await fs.readFile(path.join(projectRoot, "desktop", "preload.mjs"), "utf8");
+  assert.match(desktopStyle, /html\[data-theme="dark"\]/, "a dark theme token block must exist");
+  assert.match(desktopStyle, /--info-bg|--danger-bg/, "status colors must be semantic tokens");
+  assert.match(desktopHtml, /teamclaw-theme/, "index.html must bootstrap the theme before paint");
+  assert.match(desktopHtml, /id="theme-toggle"/, "the theme toggle must be reachable in the rail");
+  assert.match(desktopApp, /prefers-color-scheme/, "system theme must be followed by default");
+  assert.match(desktopMain, /THEME_CHROME/, "window chrome colors must follow the theme");
+  assert.match(desktopMain, /window:apply-theme/, "theme changes must update window chrome live");
+  assert.match(desktopPreload, /applyTheme/, "preload must expose the theme bridge");
+
   console.log("UI contract smoke passed.");
 }
 

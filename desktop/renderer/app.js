@@ -4200,6 +4200,38 @@
   });
 
   applyStaticTranslations();
+
+  // ---------- day / night theme ----------
+  const THEME_KEY = "teamclaw-theme";
+  const themeToggle = document.getElementById("theme-toggle");
+  const themeLabel = document.getElementById("theme-toggle-label");
+  const systemDark = window.matchMedia("(prefers-color-scheme: dark)");
+  function applyTheme() {
+    const pref = localStorage.getItem(THEME_KEY) || "system";
+    const dark = pref === "night" || (pref !== "day" && systemDark.matches);
+    document.documentElement.dataset.theme = dark ? "dark" : "day";
+    if (themeLabel) {
+      themeLabel.textContent = dark ? "Night" : "Day";
+    }
+    if (desktop?.applyTheme) {
+      desktop.applyTheme(dark ? "night" : "day").catch(() => {});
+    }
+  }
+  if (themeToggle) {
+    themeToggle.addEventListener("click", () => {
+      const current = document.documentElement.dataset.theme === "dark" ? "night" : "day";
+      const next = current === "night" ? "day" : "night";
+      localStorage.setItem(THEME_KEY, next);
+      desktop?.saveSettings({ theme: next }).catch(() => {});
+      applyTheme();
+    });
+  }
+  systemDark.addEventListener("change", () => {
+    const pref = localStorage.getItem(THEME_KEY) || "system";
+    if (pref === "system") applyTheme();
+  });
+  applyTheme();
+
   setStatusLine(t("connection.waiting"));
   setSummaryLine(t("connection.noSummary"));
   setConnectionPill("disconnected", t("connection.disconnected"));

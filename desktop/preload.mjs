@@ -10,4 +10,5 @@ contextBridge.exposeInMainWorld("teamclawDesktop", {
   openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url),
   openPath: (targetPath) => ipcRenderer.invoke("shell:openPath", targetPath),
   showNotification: (payload) => ipcRenderer.invoke("notification:show", payload),
+  applyTheme: (theme) => ipcRenderer.invoke("window:apply-theme", theme),
 });
