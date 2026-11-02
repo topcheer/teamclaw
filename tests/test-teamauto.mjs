@@ -68,7 +68,7 @@ async function sourceContracts() {
   assert.match(store, /legacyReposRoot/, "legacy clone location must be exposed for migration");
   assert.match(sync, /teamAutoProjectDir/, "repo-sync must expose the projectDir slug");
   assert.match(scheduler, /projectDir: teamAutoProjectDir/, "tasks must carry projectDir pointing at the repo checkout");
-  assert.match(scheduler, /Idempotency-Key: \$\{candidate\.key\}/, "tasks must embed the dedup marker in their description");
+  assert.match(scheduler, /Idempotency-Key: \$\{candidate\.key\}:\$\{candidate\.kind\}/, "tasks must embed the kind-scoped dedup marker in their description");
   assert.match(scheduler, /description\.includes\(dedupMarker\)/, "in-flight dedup must match the description marker (title matching never worked)");
   assert.doesNotMatch(scheduler, /title\.includes\(candidate\.key\)/, "the broken title-based dedup must be gone");
 
