@@ -44,7 +44,7 @@ button, input, textarea { font: inherit; }
   display: flex;
   flex-direction: column;
   gap: 14px;
-  background: linear-gradient(180deg, var(--rail), #172131);
+  background: linear-gradient(180deg, var(--rail), #14120d);
   border-radius: 22px;
   padding: 16px;
 }
