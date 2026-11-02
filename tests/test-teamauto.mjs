@@ -98,6 +98,11 @@ async function sourceContracts() {
   assert.match(scanner, /JOINT_REVIEW_ROLES/, "joint review roles must be an explicit shared constant");
   assert.match(scheduler, /cycleKey/, "write-backs must carry the joint review cycle key");
   assert.match(scheduler, /Joint full review/, "same-cycle sections must converge into one umbrella issue");
+  assert.ok(
+    scheduler.includes("const capped = [...fullReviews, ...regular];"),
+    "full reviews must bypass the per-sweep cap (busy repos starved them)",
+  );
+  assert.match(scheduler, /candidates\.filter\(\(c\) => c\.kind === "fullReview"\)/, "cap split must separate full reviews from regular candidates");
   assert.match(httpServer, /\/api\/v1\/teamauto\/activity/, "controller must expose the activity endpoint");
   assert.match(uiAppSrc, /teamauto-activity/, "web UI must render the activity feed");
   assert.match(desktopApp, /ta-activity/, "desktop must render the activity feed");
