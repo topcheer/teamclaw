@@ -2741,7 +2741,8 @@
     const match = /^#\/tab\/([a-z][a-z0-9-]*)$/i.exec(window.location.hash || "");
     const name = match ? match[1] : "";
     if (!name) { return ""; }
-    const known = $$(".tab").some(function (item) { return item.dataset.tab === name; });
+    // $$ returns a NodeList: it has forEach but NOT .some - convert first.
+    const known = Array.from($$(".tab")).some(function (item) { return item.dataset.tab === name; });
     return known ? name : "";
   }
 
@@ -3205,7 +3206,8 @@
 
     if (initialUiState.tab) {
       // Only activate a tab that actually exists (guards stale links).
-      const tabExists = $$(".tab").some(function (item) { return item.dataset.tab === initialUiState.tab; });
+      // Array.from: NodeList has no .some.
+      const tabExists = Array.from($$(".tab")).some(function (item) { return item.dataset.tab === initialUiState.tab; });
       if (tabExists) {
         activateTab(initialUiState.tab);
       }

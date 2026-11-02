@@ -88,6 +88,16 @@ async function runUiContractSmoke() {
     "initial tab activation must be guarded against stale/unknown tab names",
   );
 
+  assert.doesNotMatch(
+    uiAppSource,
+    /\$\$\([^)]*\)\.some\(/,
+    "$$ returns a NodeList which has no .some - wrap with Array.from (breaks boot-from-hash at eval time)",
+  );
+  assert.ok(
+    uiAppSource.includes('Array.from($$(".tab")).some'),
+    "tab existence checks must use Array.from(...).some",
+  );
+
   console.log("UI contract smoke passed.");
 }
 
