@@ -31,6 +31,10 @@ assert.match(mgr, /proc\.stdout\?\.on\("data"/, "install progress consumes spawn
 assert.match(http, /__tunnel_gate\/verify/, "gate verify endpoint exists");
 assert.match(http, /Set-Cookie/, "verify sets the gate cookie");
 assert.match(http, /viaTunnel/, "requests are classified by arrival host");
+assert.match(worker, /rateLimited\(req, 10, 3600_000\)/, "create is per-IP rate limited");
+assert.match(worker, /rateLimited\(req, 20, 3600_000\)/, "delete is per-IP rate limited");
+assert.match(worker, /tunnelLive/, "live-connector guard protects shares from unauthenticated disruption");
+assert.match(worker, /delete_token: deleteToken/, "create issues an HMAC delete token");
 assert.match(mgr, /tunnels\/\$\{gone\.tunnelId\}\?user=[^`]*&token=/, "stop() presents the delete token to the tunnel server");
 assert.match(http, /\/api\/v1\/tunnel\/start/, "start endpoint present");
 assert.match(http, /serveVersionedHtml/, "index.html is served with content-versioned asset URLs (?v=<hash>) so tunnel/CDN browser-cache freezes cannot pin a stale app.js");
