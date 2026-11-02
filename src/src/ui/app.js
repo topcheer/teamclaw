@@ -87,6 +87,11 @@
       "empty.noTasksWithStatus": "No tasks with status \"{status}\"",
       "empty.noClarifications": "No clarification requests",
       "empty.noControllerActivity": "No controller activity yet",
+      "toast.taskCompleted": "Task completed",
+      "toast.taskFailed": "Task failed",
+      "toast.clarificationRequested": "Clarification needed",
+      "toast.clarificationAnswered": "Clarification answered",
+      "toast.teamautoPrefix": "TeamAuto",
       "empty.noMessages": "No messages yet",
       "empty.noPlanningSessions": "No planning sessions yet",
       "empty.noKickoffData": "No kickoff data",
@@ -215,6 +220,11 @@
       "empty.noTasksWithStatus": "没有状态为“{status}”的任务",
       "empty.noClarifications": "暂无澄清请求",
       "empty.noControllerActivity": "暂无 controller 活动",
+      "toast.taskCompleted": "任务完成",
+      "toast.taskFailed": "任务失败",
+      "toast.clarificationRequested": "需要澄清",
+      "toast.clarificationAnswered": "澄清已回答",
+      "toast.teamautoPrefix": "TeamAuto",
       "empty.noMessages": "暂无消息",
       "empty.noPlanningSessions": "暂无规划会话",
       "empty.noKickoffData": "暂无 kickoff 数据",
@@ -1395,6 +1405,50 @@
     setTimeout(dismiss, 5000);
   }
 
+  const recentNoticeKeys = {};
+
+  function showNotice(kind, title, body) {
+    // Status-change toasts (task completed / clarifications / TeamAuto activity).
+    // Deduped against event bursts and capped so a busy team cannot flood the corner.
+    const now = Date.now();
+    const dedupeKey = kind + "|" + title + "|" + body;
+    if (recentNoticeKeys[dedupeKey] && now - recentNoticeKeys[dedupeKey] < 4000) {
+      return;
+    }
+    recentNoticeKeys[dedupeKey] = now;
+    let container = document.getElementById("toast-container");
+    if (!container) {
+      container = document.createElement("div");
+      container.id = "toast-container";
+      container.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:2000;display:flex;flex-direction:column;gap:10px;max-width:min(420px,80vw);";
+      document.body.appendChild(container);
+    }
+    while (container.children.length >= 4) {
+      container.removeChild(container.firstChild);
+    }
+    const toast = document.createElement("div");
+    const bg = kind === "success" ? "#14532d" : kind === "attention" ? "#7f1d1d" : "#1e3a5f";
+    toast.style.cssText = "background:" + bg + ";color:#fff;padding:12px 16px;border-radius:10px;"
+      + "box-shadow:0 8px 24px rgba(0,0,0,0.35);font-size:13px;line-height:1.45;"
+      + "cursor:pointer;opacity:0;transition:opacity 0.25s ease;";
+    const titleEl = document.createElement("div");
+    titleEl.style.cssText = "font-weight:600;";
+    titleEl.textContent = title;
+    const bodyEl = document.createElement("div");
+    bodyEl.style.cssText = "opacity:.85;margin-top:2px;";
+    bodyEl.textContent = body;
+    toast.appendChild(titleEl);
+    toast.appendChild(bodyEl);
+    container.appendChild(toast);
+    requestAnimationFrame(function () { toast.style.opacity = "1"; });
+    const dismiss = function () {
+      toast.style.opacity = "0";
+      setTimeout(function () { toast.remove(); }, 250);
+    };
+    toast.onclick = dismiss;
+    setTimeout(dismiss, 6000);
+  }
+
   async function apiRequest(path, options) {
     const res = await fetch(API_BASE + path, options);
     let data = {};
@@ -1964,15 +2018,45 @@
       case "worker:offline":
       case "task:created":
       case "task:updated":
-      case "task:completed":
       case "message:new":
-      case "clarification:requested":
-      case "clarification:answered":
         refreshAll();
         if (selectedTaskId && taskId && taskId === selectedTaskId) {
           refreshTaskDetail(true);
         }
         break;
+      case "task:completed": {
+        refreshAll();
+        if (selectedTaskId && taskId && taskId === selectedTaskId) {
+          refreshTaskDetail(true);
+        }
+        const doneData = event.data || {};
+        const doneStatus = String(doneData.status || "").toLowerCase();
+        const doneFailed = doneStatus === "failed" || doneStatus === "blocked";
+        showNotice(doneFailed ? "attention" : "success",
+          t(doneFailed ? "toast.taskFailed" : "toast.taskCompleted"),
+          doneData.title || taskId || "");
+        break;
+      }
+      case "clarification:requested":
+        refreshAll();
+        if (selectedTaskId && taskId && taskId === selectedTaskId) {
+          refreshTaskDetail(true);
+        }
+        showNotice("attention", t("toast.clarificationRequested"), (event.data || {}).question || taskId || "");
+        break;
+      case "clarification:answered":
+        refreshAll();
+        if (selectedTaskId && taskId && taskId === selectedTaskId) {
+          refreshTaskDetail(true);
+        }
+        showNotice("info", t("toast.clarificationAnswered"), (event.data || {}).question || taskId || "");
+        break;
+      case "teamauto:activity": {
+        const entry = event.data || {};
+        showNotice("info", t("toast.teamautoPrefix") + " - " + String(entry.kind || "activity"),
+          String(entry.repoId || "") + (entry.text ? " - " + String(entry.text) : ""));
+        break;
+      }
       case "report:ready":
         handleReportReady(event.data || {});
         break;

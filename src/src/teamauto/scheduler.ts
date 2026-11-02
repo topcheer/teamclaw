@@ -14,6 +14,7 @@ import {
   loadTeamAutoStore,
   pushTeamAutoActivity,
   saveTeamAutoStore,
+  type TeamAutoActivityEntry,
   type TeamAutoRepo,
   type TeamAutoRepoNorms,
   type TeamAutoRepoProvision,
@@ -55,10 +56,17 @@ export type TeamAutoSchedulerDeps = {
   getTeamState: () => TeamState | null;
   updateTeamState: (updater: (state: TeamState) => void) => TeamState;
   onTasksCreated: () => Promise<void>;
+  /** Optional hook fired for every recorded activity entry (WS broadcast). */
+  onActivity?: (entry: TeamAutoActivityEntry) => void;
 };
 
 export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
   const { logger, auth } = deps;
+
+  function recordActivity(store: TeamAutoStore, entry: TeamAutoActivityEntry): void {
+    pushTeamAutoActivity(store, entry);
+    deps.onActivity?.(entry);
+  }
   const client = createGithubClient(auth);
   const sync = createRepoSync(auth, logger);
   const timers = new Map<string, NodeJS.Timeout>();
@@ -113,7 +121,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     // returns immediately; sweeps stay gated until provision completes.
     repo.provision = { status: "provisioning", message: "cloning repo", startedAt: Date.now(), updatedAt: Date.now() };
     s.repos.push(repo);
-    pushTeamAutoActivity(s, { at: Date.now(), repoId: normalized, kind: "bind", text: `bound (schedule ${repo.schedule})` });
+    recordActivity(s, { at: Date.now(), repoId: normalized, kind: "bind", text: `bound (schedule ${repo.schedule})` });
     await saveTeamAutoStore(s);
     scheduleRepo(repo);
     void provisionRepoInBackground(normalized, info.cloneUrl, info.defaultBranch);
@@ -130,7 +138,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       const norms = await learnNorms(repoRef, client, sync, cloneUrl, defaultBranch);
       await updateRepoProvision(repoId, { status: "ready", message: "ready", norms });
       const sReady = await ensureStore();
-      pushTeamAutoActivity(sReady, { at: Date.now(), repoId, kind: "provision", text: "ready (clone + norms done)" });
+      recordActivity(sReady, { at: Date.now(), repoId, kind: "provision", text: "ready (clone + norms done)" });
       logger.info(`TeamAuto: provisioned ${repoId} (clone + norms done)`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -260,7 +268,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           for (const candidate of capped) {
             const taskId = enqueueCandidate(repo, candidate);
             if (taskId) {
-              pushTeamAutoActivity(s, { at: Date.now(), repoId: repo.id, kind: "task", text: `${candidate.kind}: ${candidate.title}` });
+              recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "task", text: `${candidate.kind}: ${candidate.title}` });
               const action = candidate.kind === "prReview"
                 ? ("prComment" as const)
                 : candidate.kind === "fullReview"
@@ -279,7 +287,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         repo.lastSweepSummary = "no new work";
       }
       repo.lastSweepAt = Date.now();
-      pushTeamAutoActivity(s, { at: Date.now(), repoId: repo.id, kind: "sweep", text: repo.lastSweepSummary ?? "sweep complete" });
+      recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "sweep", text: repo.lastSweepSummary ?? "sweep complete" });
       await saveTeamAutoStore(s);
       if (created > 0) {
         await deps.onTasksCreated().catch((err) => {
@@ -424,7 +432,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
                 const pr = await client.createPullRequest(repoId.split("/")[0]!, repoId.split("/")[1]!, branch, info.defaultBranch, `[teamclaw:${role}] ${task.title.replace(/^\[[^\]]+\]\s*/, "")}`.slice(0, 120), `${task.result.trim()}\n${MARKER_FOOTER(role)}`);
                 entry.prUrl = pr.url;
                 body = `${body}\n\nDelivered as PR: ${pr.url}`;
-                pushTeamAutoActivity(s, { at: Date.now(), repoId, kind: "writeback", text: `PR opened: ${pr.url}` });
+                recordActivity(s, { at: Date.now(), repoId, kind: "writeback", text: `PR opened: ${pr.url}` });
               }
               await sync.removeTaskWorktree(repoId, task.id);
             } catch (prErr) {
@@ -474,7 +482,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
             entry.error = `unsupported action ${entry.action}`;
           }
           if (writebackDone) {
-            pushTeamAutoActivity(s, { at: Date.now(), repoId: entry.repoId, kind: "writeback", text: `${entry.action} #${entry.targetId ?? "-"} ok (${task.id})` });
+            recordActivity(s, { at: Date.now(), repoId: entry.repoId, kind: "writeback", text: `${entry.action} #${entry.targetId ?? "-"} ok (${task.id})` });
           }
         }
       } catch (err) {

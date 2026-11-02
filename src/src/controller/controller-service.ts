@@ -266,6 +266,12 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
           onTasksCreated: async () => {
             await autoAssignPendingTasks(httpDepsForAutoAssign);
           },
+          onActivity: (entry) => {
+            wsServer.broadcastUpdate({
+              type: "teamauto:activity",
+              data: { at: entry.at, repoId: entry.repoId, kind: entry.kind, text: entry.text },
+            });
+          },
         });
         await teamAutoSchedulerRef.start();
       } catch (err) {
