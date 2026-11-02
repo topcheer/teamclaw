@@ -29,6 +29,10 @@ assert.match(mgr, /stdio: \["ignore", "ignore", "ignore"\]/, "connector stdio de
 assert.match(http, /__tunnel_gate\/verify/, "gate verify endpoint exists");
 assert.match(http, /Set-Cookie/, "verify sets the gate cookie");
 assert.match(http, /viaTunnel/, "requests are classified by arrival host");
+assert.match(worker, /rateLimited\(req, 10, 3600_000\)/, "create is per-IP rate limited");
+assert.match(worker, /rateLimited\(req, 20, 3600_000\)/, "delete is per-IP rate limited");
+assert.match(worker, /tunnelLive/, "live-connector guard protects shares from unauthenticated disruption");
+assert.match(worker, /delete_token: deleteToken/, "create issues an HMAC delete token");
 assert.match(http, /\/api\/v1\/tunnel\/start/, "start endpoint present");
 assert.match(http, /\/api\/v1\/tunnel\/stop/, "stop endpoint present");
 assert.match(http, /GitHub login required/, "sharing requires github login (server-derived username)");
