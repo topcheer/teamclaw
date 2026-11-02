@@ -248,9 +248,13 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
   function enqueueCandidate(repo: TeamAutoRepo, candidate: Candidate): string | undefined {
     let createdId: string | undefined;
     deps.updateTeamState((state) => {
-      // Idempotency: an active or recent task for the same key wins.
+      // Idempotency: an active task for the same object wins. The key rides
+      // in the description (TaskInfo has no dedicated field) and must be a
+      // distinct marked line - titles contain human text that never matches
+      // the raw key (that was the pre-fix bug).
+      const dedupMarker = `Idempotency-Key: ${candidate.key}`;
       const duplicate = Object.values(state.tasks).find(
-        (t) => t.title.includes(candidate.key) && t.status !== "completed" && t.status !== "failed",
+        (t) => t.description.includes(dedupMarker) && t.status !== "completed" && t.status !== "failed",
       );
       if (duplicate) {
         return;
@@ -260,6 +264,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         title: `[${candidate.kind}] ${candidate.title}`,
         description: [
           `TeamAuto autonomous work for ${candidate.repoId}.`,
+          dedupMarker,
           `Local checkout: projects/${teamAutoProjectDir(candidate.repoId)} in the team workspace.`,
           renderNormsBlock(repo.norms, repo.id),
           "---",
