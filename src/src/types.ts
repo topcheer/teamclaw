@@ -127,6 +127,9 @@ export type TaskInfo = {
   lastHandoff?: TaskHandoffContract;
   clarificationRequestId?: string;
   execution?: TaskExecution;
+  /** Surviving progress snapshot for interrupted executions (resume support). */
+  checkpoint?: TaskCheckpoint;
+  resumeAttempt?: number;
 };
 
 export type TaskExecutionEvent = {
@@ -141,6 +144,19 @@ export type TaskExecutionEvent = {
   workerId?: string;
 };
 
+export type TaskCheckpoint = {
+  /** Epoch ms of the last checkpoint update. */
+  updatedAt: number;
+  /** Monotonic resume counter; controller increments on each orphan reset. */
+  attempt: number;
+  /** OpenClaw session key hosting the persisted conversation for this task. */
+  sessionKey: string;
+  /** Last assistant message observed before the interruption. */
+  lastAssistantMessage: string;
+  /** Human-readable notes of verified work already done (latest last). */
+  progressNotes: string[];
+};
+
 export type TaskAssignmentPayload = {
   taskId: string;
   title: string;
@@ -150,6 +166,9 @@ export type TaskAssignmentPayload = {
   projectDir?: string;
   executionSessionKey?: string;
   executionIdempotencyKey?: string;
+  /** Present when this assignment resumes an interrupted execution. */
+  checkpoint?: TaskCheckpoint;
+  resumeAttempt?: number;
   repo?: RepoSyncInfo;
   teamContext?: {
     requirementSummary?: string;

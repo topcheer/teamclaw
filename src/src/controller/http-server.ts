@@ -4430,7 +4430,11 @@ async function dispatchTaskToWorker(
   const repoInfo = buildRepoSyncInfo(repoState, sharedWorkspace);
   const description = buildTaskAssignmentDescription(task, state ?? null, repoInfo);
   const recommendedSkills = resolveRecommendedSkillsForRole(task.assignedRole, task.recommendedSkills ?? []);
-  const executionIdentity = buildTaskExecutionIdentity(task.id, worker.id);
+  // Resume support: reuse the interrupted execution's session so the worker
+  // continues the same persisted OpenClaw conversation instead of starting over.
+  const executionIdentity = (task.checkpoint?.sessionKey)
+    ? { executionSessionKey: task.checkpoint.sessionKey, executionIdempotencyKey: buildTaskExecutionIdentity(task.id, worker.id).executionIdempotencyKey }
+    : buildTaskExecutionIdentity(task.id, worker.id);
   const assignment: TaskAssignmentPayload = {
     taskId: task.id,
     title: task.title,
@@ -4440,6 +4444,8 @@ async function dispatchTaskToWorker(
     projectDir: task.projectDir,
     executionSessionKey: executionIdentity.executionSessionKey,
     executionIdempotencyKey: executionIdentity.executionIdempotencyKey,
+    checkpoint: task.checkpoint,
+    resumeAttempt: task.resumeAttempt,
     repo: repoInfo,
     teamContext: buildTaskContextSnapshot(task, state ?? null),
   };
@@ -5640,6 +5646,40 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
     }, deps);
     wsServer.broadcastUpdate({ type: "task:updated", data: serializeTask(updatedTask) });
     sendJson(res, 200, { task: serializeTask(updatedTask) });
+    return;
+  }
+
+  // POST /api/v1/tasks/:id/checkpoint - worker persists an execution progress
+  // snapshot so an interrupted task can resume instead of restarting.
+  if (req.method === "POST" && pathname.match(/^\/api\/v1\/tasks\/[^/]+\/checkpoint$/)) {
+    const taskId = pathname.split("/")[4];
+    let body: Record<string, unknown> = {};
+    try { body = await parseJsonBody(req); } catch { sendError(res, 400, "invalid JSON body"); return; }
+    const lastAssistantMessage = typeof body.lastAssistantMessage === "string" ? body.lastAssistantMessage.slice(0, 8000) : "";
+    const progressNote = typeof body.progressNote === "string" ? body.progressNote.slice(0, 1000) : "";
+    const sessionKey = typeof body.sessionKey === "string" ? body.sessionKey : "";
+    if (!lastAssistantMessage && !progressNote) {
+      sendError(res, 400, "lastAssistantMessage or progressNote is required");
+      return;
+    }
+    const updated = updateTeamState((s) => {
+      const task = s.tasks[taskId];
+      if (!task) { return; }
+      const prev = task.checkpoint;
+      const notes = [...(prev?.progressNotes ?? [])];
+      if (progressNote && !notes.includes(progressNote)) { notes.push(progressNote); }
+      task.checkpoint = {
+        updatedAt: Date.now(),
+        attempt: prev?.attempt ?? 0,
+        sessionKey: sessionKey || prev?.sessionKey || "",
+        lastAssistantMessage: lastAssistantMessage || prev?.lastAssistantMessage || "",
+        progressNotes: notes.slice(-10),
+      };
+      task.updatedAt = Date.now();
+    });
+    const task = updated?.tasks[taskId];
+    if (!task) { sendError(res, 404, "task not found"); return; }
+    sendJson(res, 200, { ok: true, updatedAt: task.checkpoint?.updatedAt });
     return;
   }
 
