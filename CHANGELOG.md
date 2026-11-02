@@ -1,5 +1,44 @@
 # Changelog
 
+## 2026.6.0
+
+Released 2026-11-03. This cycle spans PRs #59–#74 (all merged to main).
+
+### Features
+
+- **Internet tunnel sharing**: one-click share of the local dashboard at
+  `team-<github_user>.teamclaw.dev` — a Cloudflare Worker provisions
+  remotely-managed tunnels, the local controller runs `cloudflared`, and
+  visitors must enter the gate token shown in the local UI. Includes
+  cloudflared install status + one-click install (macOS/Linux/Windows) with
+  async progress for install and share, connector log pipeline, and a
+  visitor-degraded panel when the dashboard itself is opened through the
+  tunnel domain.
+- **Tunnel resilience & security**: DoH-pinned control-plane egress;
+  kill -9-safe boot recovery (share state persisted to disk, pid-reuse-safe
+  orphan reaping, reconnect of the same tunnel so gate tokens and visitor
+  cookies survive gateway restarts); per-IP rate limits, a live-share guard,
+  and HMAC delete tokens on the provisioning API.
+- **Web UI toasts**: task / clarification / TeamAuto activity notifications
+  with per-kind toggles; TeamAuto activity streamed live over WebSocket.
+- **Kubernetes operator (P0)**: TeamClaw CRD + reconciler + install
+  manifests, complete RBAC, operator image published to ghcr, and an
+  operator UI (SPA) with a CR management API.
+
+### Fixes
+
+- Tunnel/CDN edge-cache freezes: `index.html` is served with
+  content-versioned asset URLs (`?v=<hash>`) so UI deploys always reach
+  browsers behind the Cloudflare edge (previously up to 4h stale).
+- Provisioned worker configs: `agents.entries` folded into legacy defaults.
+- TeamAuto activity: provision-failure entries recorded with a bounded
+  dedupe map.
+
+### CI / Infrastructure
+
+- Operator image publish workflow (ghcr), upstream openclaw Dockerfile
+  drift watch, controller-gen pinned as a go tool dependency.
+
 ## 2026.5.0
 
 Released 2026-11-02. This cycle spans PRs #30–#57 (all merged to main).
