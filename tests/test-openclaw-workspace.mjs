@@ -160,7 +160,7 @@ assert.match(
 
 assert.match(
   taskExecutorSource,
-  /const enrichedOptions: Parameters<typeof runtime\.subagent\.run>\[0\] & \{ workspaceDir\?: string \} = \{\s*\.\.\.options,\s*workspaceDir,/,
+  /const enrichedOptions: Parameters<typeof runtime\.subagent\.run>\[0\] & \{\s*workspaceDir\?: string;\s*cwd\?: string;\s*\} = \{\s*\.\.\.options,\s*workspaceDir,\s*cwd: options\.cwd \?\? workspaceDir,/,
   "task executor should inject workspaceDir into subagent run options",
 );
 
@@ -574,7 +574,7 @@ assert.match(
 
 assert.match(
   stateSource,
-  /if \(!parsed\.projects \|\| typeof parsed\.projects !== "object"\) \{[\s\S]*parsed\.projects = \{\};[\s\S]*state\.projects = state\.projects && typeof state\.projects === "object"/,
+  /if \(!state\.projects \|\| typeof state\.projects !== "object"\) \{[\s\S]*state\.projects = \{\};[\s\S]*state\.projects = state\.projects && typeof state\.projects === "object"/,
   "team state persistence should normalize a projects registry for stable project identity reuse",
 );
 
@@ -670,7 +670,7 @@ assert.match(
 
 assert.match(
   controllerHttpServerSource,
-  /const effectiveContract = buildEffectiveTaskResultContract\(currentTask, result, error, submittedContract\);[\s\S]*if \(!error && effectiveContract\.outcome === "blocked"\)/,
+  /const effectiveContract = buildEffectiveTaskResultContract\(currentTask, result, error, submittedContract(?: \?\? undefined)?\);[\s\S]*if \(!error && effectiveContract\.outcome === "blocked"\)/,
   "controller should route blocked effective result contracts into clarification flow before marking the task completed",
 );
 
@@ -958,7 +958,7 @@ assert.match(
 
 assert.match(
   controllerHttpServerSource,
-  /taskRequiresMeaningfulProjectChangeGate\(gatedTask\)[\s\S]*!projectHasMeaningfulFileChanges\(gatedTask, effectiveContract\)[\s\S]*!allowsNoChangeCompletion\(gatedTask, submittedContract, result\)/,
+  /taskRequiresMeaningfulProjectChangeGate\(gatedTask\)[\s\S]*!projectHasMeaningfulFileChanges\(gatedTask, effectiveContract\)[\s\S]*!allowsNoChangeCompletion\(gatedTask, submittedContract(?: \?\? undefined)?, result\)/,
   "controller completion gate should only fail no-change developer tasks when they do not qualify as evidence-backed verification completions",
 );
 
@@ -994,7 +994,7 @@ assert.match(
 
 assert.match(
   controllerHttpServerSource,
-  /const effectiveContract = buildEffectiveTaskResultContract\(currentTask, result, error, submittedContract\);[\s\S]*effectiveContract\.outcome === "blocked"[\s\S]*await requestTaskClarification\(/,
+  /const effectiveContract = buildEffectiveTaskResultContract\(currentTask, result, error, submittedContract(?: \?\? undefined)?\);[\s\S]*effectiveContract\.outcome === "blocked"[\s\S]*await requestTaskClarification\(/,
   "controller should block tasks and request clarification when the effective worker result contract is blocked",
 );
 

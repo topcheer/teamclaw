@@ -140,7 +140,7 @@ async function runRoleRegistrySmoke() {
 
   assert.match(
     siteSource,
-    />11<\/strong>\s*<span>available role types<\/span>/,
+    /data-n="11"[^>]*>0<\/div>\s*<div class="lbl">Roles on the team<\/div>/,
     "GitHub Pages site should reflect the expanded role count",
   );
 
