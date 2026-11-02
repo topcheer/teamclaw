@@ -2489,3 +2489,8 @@ body {
 .teamauto-activity-kind.k-provision { color: var(--warning); }
 .teamauto-activity-text { flex: 1; color: var(--text-secondary); word-break: break-word; }
 .teamauto-activity-time { flex: none; color: var(--text-muted); font-size: 11.5px; }
+
+/* Tasks: keyword filter + show more */
+.task-keyword-input { margin-left: auto; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border, #2a2f3a); background: var(--bg-primary); color: var(--text-primary); font-size: 12.5px; width: 200px; }
+.task-keyword-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99,102,241,.15); }
+.tasks-show-more { display: block; margin: 14px auto 4px; }

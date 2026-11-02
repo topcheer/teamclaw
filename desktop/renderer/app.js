@@ -2085,8 +2085,18 @@
     return Array.isArray(input) ? input : Object.values(input || {});
   }
 
+  const TERMINAL_STATUSES = { completed: true, failed: true };
+  const PRIORITY_WEIGHT = { critical: 0, high: 1, medium: 2, low: 3 };
   function sortTasks(tasks) {
-    return normalizeArray(tasks).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    return normalizeArray(tasks).sort((a, b) => {
+      const terminalA = TERMINAL_STATUSES[a.status] ? 1 : 0;
+      const terminalB = TERMINAL_STATUSES[b.status] ? 1 : 0;
+      if (terminalA !== terminalB) { return terminalA - terminalB; }
+      const prioA = PRIORITY_WEIGHT[a.priority || "medium"] ?? 2;
+      const prioB = PRIORITY_WEIGHT[b.priority || "medium"] ?? 2;
+      if (prioA !== prioB) { return prioA - prioB; }
+      return (b.updatedAt || 0) - (a.updatedAt || 0);
+    });
   }
 
   function sortClarifications(items) {
