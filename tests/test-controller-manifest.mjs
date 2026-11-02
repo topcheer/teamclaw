@@ -29,6 +29,10 @@ async function transpileManifestModuleSubset(outDir) {
       output: path.join(outDir, "src", "roles.js"),
     },
     {
+      source: path.join(packageRoot, "src", "openclaw-workspace.ts"),
+      output: path.join(outDir, "src", "openclaw-workspace.js"),
+    },
+    {
       source: path.join(packageRoot, "src", "controller", "orchestration-manifest.ts"),
       output: path.join(outDir, "src", "controller", "orchestration-manifest.js"),
     },
@@ -75,91 +79,65 @@ async function runManifestRuntimeChecks() {
     const {
       normalizeManifestRoleList,
       normalizeManifestCreatedTasks,
-      validateControllerManifest,
-      recoverControllerManifestFromText,
+      normalizeControllerManifest,
     } = manifestModule;
 
     assert.deepEqual(
-      normalizeManifestRoleList(["Product Manager", "QA Engineer", "release engineer", "sre", "unknown role"]),
-      ["pm", "qa", "release-engineer", "sre"],
-      "manifest role normalization should accept common role labels and aliases while dropping unknown roles",
+      normalizeManifestRoleList(["pm", "Product Manager", "qa", "sre", "unknown role", "pm", "data-engineer"]),
+      ["pm", "qa", "data-engineer"],
+      "manifest role normalization should keep exact role ids (dropping labels, aliases, and unknowns) while deduping",
     );
 
     assert.deepEqual(
-      normalizeManifestCreatedTasks({
+      normalizeManifestCreatedTasks([{
         title: "Implement audit log export API",
-        assignedRole: "Developer",
+        assignedRole: "developer",
         expectedOutcome: "Code, tests, and API notes committed",
-      }),
+      }]),
       [{
         title: "Implement audit log export API",
         assignedRole: "developer",
         expectedOutcome: "Code, tests, and API notes committed",
       }],
-      "manifest created-task normalization should accept a single object payload and normalize assignedRole aliases",
+      "manifest created-task normalization should keep exact-id tasks and drop entries without title/outcome",
+    );
+    assert.deepEqual(
+      normalizeManifestCreatedTasks({ title: "single object", assignedRole: "developer", expectedOutcome: "x" }),
+      [],
+      "manifest created-task normalization only accepts array payloads (single objects are dropped)",
     );
 
-    const valid = validateControllerManifest({
+    const valid = normalizeControllerManifest({
       requirementSummary: "Ship audit log export",
-      requiredRoles: "Product Manager, QA Engineer",
-      createdTasks: {
+      requiredRoles: ["pm", "qa", "developer"],
+      createdTasks: [{
         title: "Implement audit log export API",
-        assignedRole: "Developer",
+        assignedRole: "developer",
         expectedOutcome: "Code, tests, and API usage notes committed",
-      },
+      }],
       deferredTasks: [{
         title: "Run release validation for audit log export",
-        assignedRole: "QA Engineer",
+        assignedRole: "qa",
         blockedBy: "Implementation does not exist yet",
         whenReady: "Create this after the developer task is completed",
       }],
-      clarificationQuestions: "- Which tenant tiers must receive the export?\n- Is CSV enough or is Parquet required?",
+      clarificationQuestions: ["Which tenant tiers must receive the export?", "Is CSV enough or is Parquet required?"],
+      clarificationsNeeded: true,
     });
-    assert.ok(valid.manifest, "validateControllerManifest should accept salvageable manifest shapes");
+    assert.ok(valid, "normalizeControllerManifest should accept manifest payloads with exact role ids");
     assert.deepEqual(
-      valid.manifest?.requiredRoles,
+      valid?.requiredRoles,
       ["pm", "qa", "developer"],
-      "manifest validation should normalize role labels and union task-assigned roles into requiredRoles",
+      "manifest normalization should keep exact required role ids",
     );
-    assert.equal(valid.manifest?.clarificationsNeeded, true, "clarification questions should imply clarificationsNeeded");
-    assert.equal(valid.manifest?.clarificationQuestions.length, 2, "multi-line clarificationQuestions should normalize into a string array");
+    assert.equal(valid?.clarificationsNeeded, true, "clarificationsNeeded should pass through");
+    assert.equal(valid?.clarificationQuestions.length, 2, "clarificationQuestions should normalize into a string array");
 
-    const invalid = validateControllerManifest({
-      requirementSummary: "Ship audit log export",
-      requiredRoles: ["Product Manager", "mystery role"],
-      createdTasks: [{
-        title: "Implement audit log export API",
-        assignedRole: "ghost role",
-        expectedOutcome: "",
-      }],
+    const invalid = normalizeControllerManifest({
+      requiredRoles: ["pm"],
+      createdTasks: [{ title: "x", assignedRole: "developer", expectedOutcome: "y" }],
     });
-    assert.equal(invalid.manifest, null, "invalid manifest payloads should be rejected instead of silently normalized");
-    assert.match(
-      invalid.issues.join("\n"),
-      /unknown role|expectedOutcome is required/i,
-      "invalid manifest validation should explain role and required-field problems",
-    );
-
-    const recovered = recoverControllerManifestFromText([
-      "Here is the manifest JSON:",
-      "```json",
-      "{",
-      '  "requirementSummary": "Ship audit log export",',
-      '  "requiredRoles": ["Product Manager", "QA Engineer"],',
-      '  "createdTasks": [',
-      '    {',
-      '      "title": "Implement audit log export API",',
-      '      "assignedRole": "Developer",',
-      '      "expectedOutcome": "Code, tests, and API usage notes committed"',
-      "    }",
-      "  ],",
-      '  "notes": "Recovered from reply text"',
-      "}",
-      "```",
-    ].join("\n"));
-    assert.ok(recovered.manifest, "reply recovery should parse manifest JSON from fenced assistant text");
-    assert.equal(recovered.manifest?.createdTasks[0]?.assignedRole, "developer");
-    assert.equal(recovered.issues.length, 0, "successful reply recovery should not report validation issues");
+    assert.equal(invalid, null, "manifest payloads without requirementSummary should be rejected");
 
     console.log("Controller manifest runtime checks passed.");
   } finally {

@@ -8,7 +8,8 @@
  * 3. Controller prompt includes kickoff tool documentation
  * 4. Controller tools include teamclaw_request_kickoff
  * 5. Worker http-handler accepts POST /api/v1/kickoff/assess
- * 6. parseAssessmentResponse handles edge cases
+ * 6. Kickoff assessment travels over the worker assess endpoint
+ *    (response parsed inline; no standalone parseAssessmentResponse)
  */
 
 import assert from "node:assert";
@@ -87,7 +88,7 @@ assert.match(serviceContent, /onKickoffHandlerAvailable/, "Controller service sh
 assert.match(serviceContent, /KickoffHandler/, "Controller service should export KickoffHandler type");
 assert.match(serviceContent, /runKickoffMeeting/, "Controller service should use runKickoffMeeting");
 assert.match(serviceContent, /requestKickoffAssessment/, "Controller service should have requestKickoffAssessment function");
-assert.match(serviceContent, /parseAssessmentResponse/, "Controller service should have parseAssessmentResponse function");
+assert.match(serviceContent, /kickoff\/assess/, "Controller service should call the worker kickoff assess endpoint");
 
 console.log("✅ Controller service kickoff wiring passed");
 

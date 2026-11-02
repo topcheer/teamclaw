@@ -20,6 +20,7 @@ const TEAMCLAW_ROLE_IDS = new Set<RoleId>([
   "security-engineer",
   "designer",
   "marketing",
+  "data-engineer",
 ]);
 
 export function normalizeManifestRoleList(raw: unknown): RoleId[] {
