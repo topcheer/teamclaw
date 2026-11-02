@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import path from "node:path";
 
 import type { PluginLogger } from "../../api.js";
 import type { GithubAuthManager } from "../controller/github-auth.js";
@@ -320,6 +321,14 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           `TeamAuto autonomous work for ${candidate.repoId}.`,
           dedupMarker,
           `Local checkout: projects/${teamAutoProjectDir(candidate.repoId)} in the team workspace.`,
+          ...(candidate.writeMode === "read-only" || (!candidate.writeMode && candidate.kind !== "takeOwnership")
+            ? [
+                "READ-ONLY TASK (collaboration contract): You must NOT modify, create, or delete any files - your reply IS the deliverable.",
+                "Base your review on the committed HEAD state (use git show/git log); uncommitted working-tree changes belong to a concurrent write task and must be ignored.",
+              ]
+            : [
+                "WRITE TASK (collaboration contract): you are executing in a dedicated git worktree; deliver your changes via commits there - the controller turns your branch into a PR.",
+              ]),
           renderNormsBlock(repo.norms, repo.id),
           "---",
           candidate.context,
@@ -331,6 +340,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         status: "pending",
         priority: candidate.kind === "takeOwnership" ? "high" : "medium",
         assignedRole: candidate.role as RoleId,
+        writeMode: candidate.writeMode === "write" ? "write" : "read-only",
         createdBy: "teamauto",
         projectDir: teamAutoProjectDir(candidate.repoId),
         createdAt: Date.now(),
@@ -366,8 +376,31 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           entry.error = task.status === "failed" ? (task.error ?? "task failed") : "task completed without a textual result";
         } else {
           const role = (task.assignedRole ?? "qa") as string;
-          const body = `${task.result.trim()}\n${MARKER_FOOTER(role)}`;
+          let body = `${task.result.trim()}\n${MARKER_FOOTER(role)}`;
           let writebackDone = false;
+          // WRITE TASKS (collaboration contract): commit the task worktree,
+          // push its branch, open a PR, and attach the link to the reply.
+          const repoId = entry.repoId;
+          const isTeamAutoWrite = task.writeMode === "write" && task.projectDir?.includes("__task-");
+          if (isTeamAutoWrite) {
+            try {
+              const info = await client.getRepoInfo(repoId.split("/")[0]!, repoId.split("/")[1]!);
+              const wtDir = await sync.ensureTaskWorktree(repoId, task.id);
+              const committed = await sync.commitAll(wtDir, `[teamclaw:${role}] ${task.title.replace(/^\[[^\]]+\]\s*/, "")}`.slice(0, 200), `teamclaw-${role}`, `teamclaw-${role}@users.noreply.github.com`);
+              const branch = `teamclaw/task-${task.id.replace(/[^\w-]/g, "")}`;
+              if (committed) {
+                await sync.pushBranch(repoId, wtDir, info.cloneUrl, branch);
+                const pr = await client.createPullRequest(repoId.split("/")[0]!, repoId.split("/")[1]!, branch, info.defaultBranch, `[teamclaw:${role}] ${task.title.replace(/^\[[^\]]+\]\s*/, "")}`.slice(0, 120), `${task.result.trim()}\n${MARKER_FOOTER(role)}`);
+                entry.prUrl = pr.url;
+                body = `${body}\n\nDelivered as PR: ${pr.url}`;
+                pushTeamAutoActivity(s, { at: Date.now(), repoId, kind: "writeback", text: `PR opened: ${pr.url}` });
+              }
+              await sync.removeTaskWorktree(repoId, task.id);
+            } catch (prErr) {
+              entry.error = `worktree PR delivery failed: ${prErr instanceof Error ? prErr.message : String(prErr)}`;
+              logger.warn(`TeamAuto: ${entry.error} (${task.id})`);
+            }
+          }
           if (entry.action === "issueComment" && entry.targetId) {
             await client.postIssueComment(owner, name, entry.targetId, body);
             entry.doneAt = Date.now();
@@ -502,7 +535,18 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     return (s.activity ?? []).slice().reverse();
   }
 
-  return { addRepo, removeRepo, setRepoEnabled, updateRepo, runSweepNow, registerWriteback, reconcileWritebacks, start, stop, getStatus, getActivity };
+  return { addRepo, removeRepo, setRepoEnabled, updateRepo, runSweepNow, registerWriteback, reconcileWritebacks, start, stop, getStatus, getActivity, ensureWriteWorktree, removeWriteWorktree };
+
+  /** Collaboration contract: dispatch asks for a task-scoped worktree dir (rel to projects root). */
+  async function ensureWriteWorktree(repoId: string, taskId: string): Promise<string> {
+    await sync.ensureCloned(repoId, `https://github.com/${repoId}.git`, "main").catch(() => undefined);
+    const wtAbs = await sync.ensureTaskWorktree(repoId, taskId);
+    return path.basename(wtAbs);
+  }
+
+  async function removeWriteWorktree(repoId: string, taskId: string): Promise<void> {
+    await sync.removeTaskWorktree(repoId, taskId);
+  }
 }
 
 export type TeamAutoScheduler = ReturnType<typeof createTeamAutoScheduler>;

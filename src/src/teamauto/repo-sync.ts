@@ -149,7 +149,52 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     }
   }
 
-  return { ensureCloned, currentSha, recentCommitMessages, readFileIfPresent, safeRepoPath, createWorkBranch, commitAll, pushBranch, repoDir };
+  /** Deterministic worktree dir (relative name) for a TeamAuto write task. */
+  function taskWorktreeDirName(repoId: string, taskId: string): string {
+    return `${teamAutoProjectDir(repoId)}__task-${taskId.replace(/[^\w-]/g, "")}`;
+  }
+
+  function taskBranchName(taskId: string): string {
+    return `teamclaw/task-${taskId.replace(/[^\w-]/g, "")}`;
+  }
+
+  /**
+   * Collaboration contract: write tasks execute in a dedicated git worktree
+   * branched from HEAD. Reuses an existing worktree (resume-safe) so the
+   * checkpoint/retry path lands in the same tree.
+   */
+  async function ensureTaskWorktree(repoId: string, taskId: string): Promise<string> {
+    const base = await repoDir(repoId);
+    const wtName = taskWorktreeDirName(repoId, taskId);
+    const wtPath = path.join(path.dirname(base), wtName);
+    if (await fs.access(path.join(wtPath, ".git")).then(() => true, () => false)) {
+      return wtPath; // resume case
+    }
+    await run(["worktree", "add", "-b", taskBranchName(taskId), wtPath, "HEAD"], base);
+    logger.warn(`TeamAuto: worktree ${wtName} (branch ${taskBranchName(taskId)}) for ${taskId}`);
+    return wtPath;
+  }
+
+  /** Remove a task worktree and its local branch (terminal cleanup). */
+  async function removeTaskWorktree(repoId: string, taskId: string): Promise<void> {
+    const base = await repoDir(repoId);
+    const wtName = taskWorktreeDirName(repoId, taskId);
+    const wtPath = path.join(path.dirname(base), wtName);
+    try {
+      if (await fs.access(wtPath).then(() => true, () => false)) {
+        await run(["worktree", "remove", "--force", wtPath], base);
+      }
+      await run(["branch", "-D", taskBranchName(taskId)], base).catch(() => undefined);
+    } catch (err) {
+      logger.warn(`TeamAuto: worktree cleanup failed for ${taskId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  function taskWorktreeRelDir(repoId: string, taskId: string): string {
+    return taskWorktreeDirName(repoId, taskId);
+  }
+
+  return { ensureCloned, currentSha, recentCommitMessages, readFileIfPresent, safeRepoPath, createWorkBranch, commitAll, pushBranch, ensureTaskWorktree, removeTaskWorktree, taskWorktreeRelDir, taskBranchName, repoDir };
 }
 
 export type TeamAutoRepoSync = ReturnType<typeof createRepoSync>;

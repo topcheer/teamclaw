@@ -25,6 +25,8 @@ export type Candidate = {
   number: number;
   title: string;
   role: "qa" | "developer" | "architect" | "security-engineer";
+  /** Collaboration contract: reviews are read-only, ownership work writes. */
+  writeMode: "read-only" | "write";
   /** Shared full-review cycle id: write-backs group on it (umbrella issue). */
   cycle?: number;
   reason: string;
@@ -102,6 +104,7 @@ export async function sweepRepo(
       key,
       number: issue.number,
       role: "qa" as const,
+      writeMode: "read-only" as const,
     };
     if (repo.policy.actions.issueReview) {
       candidates.push({
@@ -117,6 +120,7 @@ export async function sweepRepo(
         ...base,
         kind: "takeOwnership",
         role: "developer",
+        writeMode: "write",
         title: truncate(`Take ownership of issue #${issue.number}: ${issue.title}`, 120),
         reason: "unassigned issue eligible for autonomous ownership",
         context: `Own and implement issue #${issue.number}: ${issue.title}\nLink: ${issue.htmlUrl}\n\nBody:\n${truncate(issue.body, 6000)}`,
@@ -141,7 +145,8 @@ export async function sweepRepo(
         key,
         kind: "prReview",
         number: pull.number,
-        role: "qa",
+        role: "qa" as const,
+        writeMode: "read-only" as const,
         title: truncate(`Review PR #${pull.number}: ${pull.title}`, 120),
         reason: "new/updated pull request needs review",
         context: `PR #${pull.number} by @${pull.user} (head: ${pull.head})\nLink: ${pull.htmlUrl}\n\nDescription:\n${truncate(pull.body, 4000)}`,
@@ -166,6 +171,7 @@ export async function sweepRepo(
           kind: "fullReview",
           number: 0,
           role,
+          writeMode: "read-only" as const,
           cycle,
           title: `Full repository review (${role}): ${repo.id}`,
           reason: `scheduled ${repo.policy.actions.fullReview} full review (joint, ${role} section)`,

@@ -127,6 +127,8 @@ export type TaskInfo = {
   lastHandoff?: TaskHandoffContract;
   clarificationRequestId?: string;
   execution?: TaskExecution;
+  /** Collaboration contract: read-only tasks never mutate the checkout; write tasks run in a dedicated git worktree and deliver via PR. */
+  writeMode?: "read-only" | "write";
   /** Surviving progress snapshot for interrupted executions (resume support). */
   checkpoint?: TaskCheckpoint;
   resumeAttempt?: number;

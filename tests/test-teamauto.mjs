@@ -96,6 +96,19 @@ async function sourceContracts() {
   assert.match(scheduler, /kind: "writeback"/, "write-backs must be recorded");
   assert.match(scheduler, /kind: "bind"/, "binds must be recorded");
   assert.match(scanner, /JOINT_REVIEW_ROLES/, "joint review roles must be an explicit shared constant");
+
+  // Collaboration contract: read/write classification, worktree+PR delivery, write serialization.
+  assert.match(scanner, /writeMode: "write",/, "takeOwnership candidates must be classified as write tasks");
+  assert.match(scanner, /writeMode: "read-only" as const/, "review candidates must be classified read-only");
+  assert.match(scheduler, /READ-ONLY TASK \(collaboration contract\)/, "read-only tasks must carry the no-write mandate");
+  assert.match(scheduler, /Base your review on the committed HEAD state/, "read-only mandate must anchor reviews on committed state");
+  assert.match(scheduler, /WRITE TASK \(collaboration contract\)/, "write tasks must be told they run in a worktree");
+  assert.match(scheduler, /ensureTaskWorktree/, "scheduler must expose worktree setup");
+  assert.match(scheduler, /createPullRequest/, "write delivery must open a PR from the task branch");
+  assert.match(scheduler, /Delivered as PR:/, "the task reply must link the delivery PR");
+  assert.match(scheduler, /removeTaskWorktree/, "worktrees must be cleaned up after delivery");
+  assert.match(httpServer, /activeWriteRoots/, "auto-assign must serialize write tasks per repo checkout");
+  assert.match(httpServer, /ensureWriteWorktree/, "dispatch must place write tasks in a task-scoped worktree");
   assert.match(scheduler, /cycleKey/, "write-backs must carry the joint review cycle key");
   assert.match(scheduler, /Joint full review/, "same-cycle sections must converge into one umbrella issue");
   assert.ok(
