@@ -374,8 +374,11 @@
   function parseInitialUiState() {
     try {
       const params = new URLSearchParams(window.location.search || "");
+      // Hash routing (#/tab/<name>) wins over legacy query params and survives
+      // refresh; query params are kept for old bookmarks/links.
+      const hashMatch = /^#\/tab\/([a-z][a-z0-9-]*)$/i.exec(window.location.hash || "");
       return {
-        tab: params.get("tab") || "",
+        tab: hashMatch ? hashMatch[1] : (params.get("tab") || ""),
         taskId: params.get("taskId") || "",
         planningRun: params.get("planningRun") || "",
       };
@@ -2734,11 +2737,31 @@
     }).join("");
   }
 
+  function tabNameFromHash() {
+    const match = /^#\/tab\/([a-z][a-z0-9-]*)$/i.exec(window.location.hash || "");
+    const name = match ? match[1] : "";
+    if (!name) { return ""; }
+    const known = $$(".tab").some(function (item) { return item.dataset.tab === name; });
+    return known ? name : "";
+  }
+
+  function syncTabHash(tab) {
+    try {
+      const target = "#/tab/" + tab;
+      if (window.location.hash !== target) {
+        window.history.replaceState(null, "", target);
+      }
+    } catch (_err) {
+      // Embedded/non-browser hosts without history API - hash is best-effort.
+    }
+  }
+
   function activateTab(nextTab) {
     activeTab = nextTab || "tasks";
     $$(".tab").forEach(function (item) {
       item.classList.toggle("active", item.dataset.tab === activeTab);
     });
+    syncTabHash(activeTab);
     $$(".tab-panel").forEach(function (panel) { panel.classList.remove("active"); });
     const panel = $("#tab-" + activeTab);
     if (panel) {
@@ -2757,6 +2780,19 @@
     tab.addEventListener("click", function () {
       activateTab(tab.dataset.tab || "tasks");
     });
+  });
+
+  // Hash deep links: boot on #/tab/<name> (refresh keeps the current tab) and
+  // follow hashchange (browser back/forward between tabs).
+  const bootTab = tabNameFromHash();
+  if (bootTab) {
+    activateTab(bootTab);
+  }
+  window.addEventListener("hashchange", function () {
+    const fromHash = tabNameFromHash();
+    if (fromHash && fromHash !== activeTab) {
+      activateTab(fromHash);
+    }
   });
 
   $$(".filter-btn").forEach(function (btn) {
@@ -3168,7 +3204,11 @@
     }
 
     if (initialUiState.tab) {
-      activateTab(initialUiState.tab);
+      // Only activate a tab that actually exists (guards stale links).
+      const tabExists = $$(".tab").some(function (item) { return item.dataset.tab === initialUiState.tab; });
+      if (tabExists) {
+        activateTab(initialUiState.tab);
+      }
     }
 
     if (initialUiState.taskId) {
