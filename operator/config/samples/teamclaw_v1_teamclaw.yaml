@@ -1,0 +1,20 @@
+apiVersion: teamclaw.dev/v1
+kind: TeamClaw
+metadata:
+  name: demo-team
+spec:
+  teamName: demo-team
+  image: ghcr.io/topcheer/teamclaw-openclaw:latest
+  controller:
+    modelConfigSecretRef: demo-team-openclaw-config
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+  workspace:
+    enabled: true
+    size: 20Gi
+  workers:
+    provisioningType: kubernetes
+    minPerRole:
+      developer: 1

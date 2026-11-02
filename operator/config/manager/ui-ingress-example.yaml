@@ -1,0 +1,21 @@
+# Optional operator UI ingress. Apply separately if an ingress controller is
+# available; kustomize components/overlays can patch ingressClassName and host.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: teamclaw-operator-ui
+  namespace: teamclaw-operator-system
+  annotations: {}
+spec:
+  # ingressClassName: traefik   # k3s default; customize per cluster
+  rules:
+    - host: operator.teamclaw.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: teamclaw-operator-ui
+                port:
+                  name: ui

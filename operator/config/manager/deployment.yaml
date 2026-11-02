@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: teamclaw-operator
+  namespace: teamclaw-operator-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: teamclaw-operator
+  template:
+    metadata:
+      labels:
+        app: teamclaw-operator
+    spec:
+      serviceAccountName: teamclaw-operator
+      containers:
+        - name: operator
+          image: ghcr.io/topcheer/teamclaw-operator:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - --leader-elect
+            - --ui-bind-address=:9090
+          env:
+            # Stable bearer token for the operator UI. Replace in production
+            # (or source from a Secret with envFrom).
+            - name: TEAMCLAW_OPERATOR_UI_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: teamclaw-operator-ui-token
+                  key: token
+                  optional: true
+          ports:
+            - name: ui
+              containerPort: 9090
+              protocol: TCP
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+---
+# Operator UI: NodePort by default (decision D-UI). Port-forward alternative:
+#   kubectl -n teamclaw-operator-system port-forward svc/teamclaw-operator-ui 9090
+apiVersion: v1
+kind: Service
+metadata:
+  name: teamclaw-operator-ui
+  namespace: teamclaw-operator-system
+spec:
+  type: NodePort
+  selector:
+    app: teamclaw-operator
+  ports:
+    - name: ui
+      port: 9090
+      targetPort: ui
+      nodePort: 30990
+      protocol: TCP
