@@ -4,6 +4,23 @@
   box-sizing: border-box;
 }
 
+/* Slim scrollbars everywhere: system bars read as jarring chrome on the
+   dark workbench. Thin, quiet, hover-responsive - WebKit + Firefox. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover { background-color: var(--text-muted); }
+*::-webkit-scrollbar-corner { background: transparent; }
+
 :root {
   /* Workbench palette: warm charcoal base, sand-gold brand accent,
      desaturated statuses - deliberately off the default template ramp. */
