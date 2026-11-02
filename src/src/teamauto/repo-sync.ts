@@ -166,7 +166,9 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
   async function ensureTaskWorktree(repoId: string, taskId: string): Promise<string> {
     const base = await repoDir(repoId);
     const wtName = taskWorktreeDirName(repoId, taskId);
-    const wtPath = path.join(path.dirname(base), wtName);
+    // wtName carries the teamauto/ level for the REL path; the physical dir is
+    // a SIBLING of the base checkout (path.join would nest teamauto/ twice).
+    const wtPath = path.join(path.dirname(base), path.basename(wtName));
     if (await fs.access(path.join(wtPath, ".git")).then(() => true, () => false)) {
       return wtPath; // resume case
     }
