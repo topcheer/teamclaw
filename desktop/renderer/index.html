@@ -183,6 +183,18 @@
             <button id="ta-bind" class="btn btn-primary" type="button">Bind</button>
           </div>
           <div id="ta-bind-msg" class="teamauto-msg"></div>
+          <div id="ta-bind-overlay" class="ta-bind-overlay is-hidden" role="dialog" aria-modal="true">
+            <div class="ta-bind-dialog">
+              <div class="ta-bind-title" id="ta-bind-overlay-title">Binding...</div>
+              <ol class="ta-bind-steps">
+                <li data-stage="1"><span class="ta-step-dot"></span><span class="ta-step-label" data-i18n="teamauto.bindStageVerify">Verifying access</span></li>
+                <li data-stage="2"><span class="ta-step-dot"></span><span class="ta-step-label" data-i18n="teamauto.bindStageClone">Cloning repository</span></li>
+                <li data-stage="3"><span class="ta-step-dot"></span><span class="ta-step-label" data-i18n="teamauto.bindStageNorms">Learning repo conventions</span></li>
+              </ol>
+              <div class="ta-bind-note" id="ta-bind-overlay-note"></div>
+              <button id="ta-bind-overlay-close" class="btn btn-small is-hidden" type="button" data-i18n="teamauto.close">Close</button>
+            </div>
+          </div>
           <div id="ta-repos" class="teamauto-repos"></div>
         </section>
       </section>

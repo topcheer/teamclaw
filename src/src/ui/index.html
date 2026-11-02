@@ -196,6 +196,18 @@
                 <button id="teamauto-bind" class="btn btn-primary btn-small" type="button" data-i18n="teamauto.bind">Bind</button>
               </div>
               <div id="teamauto-bind-msg" class="teamauto-msg"></div>
+              <div id="teamauto-bind-overlay" class="ta-bind-overlay is-hidden" role="dialog" aria-modal="true">
+                <div class="ta-bind-dialog">
+                  <div class="ta-bind-title" id="teamauto-bind-title">Binding...</div>
+                  <ol class="ta-bind-steps">
+                    <li data-stage="1"><span class="ta-step-dot"></span><span class="ta-step-label" data-i18n="teamauto.bindStageVerify">Verifying access</span></li>
+                    <li data-stage="2"><span class="ta-step-dot"></span><span class="ta-step-label" data-i18n="teamauto.bindStageClone">Cloning repository</span></li>
+                    <li data-stage="3"><span class="ta-step-dot"></span><span class="ta-step-label" data-i18n="teamauto.bindStageNorms">Learning repo conventions</span></li>
+                  </ol>
+                  <div class="ta-bind-note" id="teamauto-bind-note"></div>
+                  <button id="teamauto-bind-overlay-close" class="btn btn-small is-hidden" type="button" data-i18n="teamauto.close">Close</button>
+                </div>
+              </div>
               <p class="teamauto-hint" data-i18n="teamauto.hint">Pick one of your GitHub repositories. TeamClaw sweeps it on its own schedule, reviews issues/PRs, takes ownership of unassigned issues, and posts results with teamclaw markers.</p>
             </div>
             <div id="teamauto-repos" class="teamauto-repos"></div>

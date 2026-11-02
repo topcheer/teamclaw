@@ -82,6 +82,14 @@
       "tab.teamauto": "TeamAuto",
       "teamauto.refreshRepos": "Refresh repos",
       "teamauto.bind": "Bind",
+      "teamauto.bindStageVerify": "Verifying access",
+      "teamauto.bindStageClone": "Cloning repository",
+      "teamauto.bindStageNorms": "Learning repo conventions",
+      "teamauto.bindReady": "Repository ready",
+      "teamauto.bindFailed": "Binding failed",
+      "teamauto.close": "Close",
+      "teamauto.provisioning": "preparing",
+      "teamauto.provisionFailed": "setup failed",
       "teamauto.loginFirst": "Sign in to GitHub first (top-right Login).",
       "teamauto.hint": "Pick one of your GitHub repositories. TeamClaw sweeps it on its own schedule, reviews issues/PRs, takes ownership of unassigned issues, and posts results with teamclaw markers.",
       "teamauto.loadingRepos": "Loading your repos...",
@@ -280,6 +288,14 @@
       "tab.teamauto": "TeamAuto",
       "teamauto.refreshRepos": "刷新仓库",
       "teamauto.bind": "绑定",
+      "teamauto.bindStageVerify": "验证访问权限",
+      "teamauto.bindStageClone": "克隆仓库中",
+      "teamauto.bindStageNorms": "学习仓库规范",
+      "teamauto.bindReady": "仓库就绪",
+      "teamauto.bindFailed": "绑定失败",
+      "teamauto.close": "关闭",
+      "teamauto.provisioning": "准备中",
+      "teamauto.provisionFailed": "准备失败",
       "teamauto.loginFirst": "请先登录 GitHub（右上角 Login）。",
       "teamauto.hint": "选择你的 GitHub 仓库。TeamClaw 按各自节奏定时扫描，自主 review issue/PR、认领未分配 issue，并以 teamclaw 标识写回结果。",
       "teamauto.loadingRepos": "正在加载你的仓库...",
@@ -1355,6 +1371,90 @@
     return response.json();
   }
 
+  function taBindOverlay() {
+    return document.getElementById("ta-bind-overlay");
+  }
+
+  function taSetBindStage(stage, note, isError) {
+    const overlay = taBindOverlay();
+    if (!overlay) { return; }
+    overlay.querySelectorAll(".ta-bind-steps li").forEach((li) => {
+      const n = parseInt(li.getAttribute("data-stage") || "0", 10);
+      li.classList.toggle("done", !isError && n < stage);
+      li.classList.toggle("active", !isError && n === stage);
+      li.classList.toggle("error", !!isError && n === stage);
+    });
+    const noteEl = document.getElementById("ta-bind-overlay-note");
+    if (noteEl) { noteEl.textContent = note || ""; noteEl.className = "ta-bind-note" + (isError ? " err" : ""); }
+  }
+
+  function taCloseBindOverlay(delayMs) {
+    const overlay = taBindOverlay();
+    if (!overlay) { return; }
+    setTimeout(() => {
+      overlay.classList.add("is-hidden");
+      const closeBtn = document.getElementById("ta-bind-overlay-close");
+      if (closeBtn) { closeBtn.classList.add("is-hidden"); }
+    }, delayMs || 0);
+  }
+
+  // Bind is async on the server: POST returns fast, then clone + norms run in
+  // the background. Drive the stage overlay by polling the repo provision state.
+  async function taRunBindWithOverlay(repo, schedule) {
+    const overlay = taBindOverlay();
+    const closeBtn = document.getElementById("ta-bind-overlay-close");
+    const titleEl = document.getElementById("ta-bind-overlay-title");
+    if (!overlay) {
+      // Overlay markup missing (older window) - fall back to plain wait.
+      try { await apiPost("/teamauto/repos", { repo, schedule }); return true; }
+      catch (err) { taMsg(err instanceof Error ? err.message : String(err), false); return false; }
+    }
+    if (titleEl) { titleEl.textContent = `${t("teamauto.bind")}: ${repo}`; }
+    closeBtn && closeBtn.classList.add("is-hidden");
+    overlay.classList.remove("is-hidden");
+    taSetBindStage(1, "");
+    let bound = false;
+    try {
+      await apiPost("/teamauto/repos", { repo, schedule });
+      bound = true;
+    } catch (err) {
+      taSetBindStage(1, err instanceof Error ? err.message : String(err), true);
+      closeBtn && closeBtn.classList.remove("is-hidden");
+      return false;
+    }
+    // Poll provision state until ready/failed (max ~5min).
+    const deadline = Date.now() + 300000;
+    let lastStage = 1;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 1500));
+      let provision = null;
+      try {
+        const data = await apiGet("/teamauto/repos");
+        const list = (data && data.repos) || [];
+        const hit = list.find((r) => r && r.id === repo);
+        provision = (hit && hit.provision) || { status: hit ? "ready" : "missing" };
+      } catch { /* transient poll failure - keep waiting */ }
+      if (!provision) { continue; }
+      if (provision.status === "failed") {
+        taSetBindStage(lastStage, `${t("teamauto.bindFailed")}: ${provision.message || ""}`, true);
+        closeBtn && closeBtn.classList.remove("is-hidden");
+        closeBtn && closeBtn.addEventListener("click", () => taCloseBindOverlay(0), { once: true });
+        return false;
+      }
+      const stage = /norm/i.test(provision.message || "") ? 3 : 2;
+      lastStage = Math.max(lastStage, stage);
+      taSetBindStage(stage, provision.message || "");
+      if (provision.status === "ready") {
+        taSetBindStage(4, t("teamauto.bindReady"));
+        taCloseBindOverlay(900);
+        return true;
+      }
+    }
+    taSetBindStage(lastStage, "timeout", true);
+    closeBtn && closeBtn.classList.remove("is-hidden");
+    return false;
+  }
+
   function taMsg(text, ok) {
     const el = document.getElementById("ta-bind-msg");
     if (!el) return;
@@ -1393,11 +1493,18 @@
       return;
     }
     wrap.innerHTML = repos.map((r) => {
-      const badge = !r.enabled
-        ? `<span class="teamauto-badge">${t("teamauto.disabled")}</span>`
-        : r.pausedReason
-          ? `<span class="teamauto-badge warn" title="${escapeHtml(r.pausedReason)}">${t("teamauto.paused")}</span>`
-          : `<span class="teamauto-badge on">${t("teamauto.active")}</span>`;
+      let badge;
+      if (!r.enabled) {
+        badge = `<span class="teamauto-badge">${t("teamauto.disabled")}</span>`;
+      } else if (r.provision && r.provision.status === "provisioning") {
+        badge = `<span class="teamauto-badge" title="${escapeHtml(r.provision.message || "")}">${t("teamauto.provisioning")}</span>`;
+      } else if (r.provision && r.provision.status === "failed") {
+        badge = `<span class="teamauto-badge warn" title="${escapeHtml(r.provision.message || "")}">${t("teamauto.provisionFailed")}</span>`;
+      } else if (r.pausedReason) {
+        badge = `<span class="teamauto-badge warn" title="${escapeHtml(r.pausedReason)}">${t("teamauto.paused")}</span>`;
+      } else {
+        badge = `<span class="teamauto-badge on">${t("teamauto.active")}</span>`;
+      }
       const when = r.lastSweepAt ? new Date(r.lastSweepAt).toLocaleString() : "-";
       const norms = r.norms ? escapeHtml(r.norms.commitStyle) : "...";
       const fr = r.policy.actions.fullReview;
@@ -1456,19 +1563,9 @@
         }
         const schedEl = document.getElementById("ta-schedule");
         bindBtn.disabled = true;
-        taMsg("...");
-        try {
-          await apiPost("/teamauto/repos", {
-            repo,
-            schedule: schedEl && schedEl.value.trim() ? schedEl.value.trim() : undefined,
-          });
-          taMsg(`${repo} -> ${t("teamauto.active")}`, true);
-          renderTeamAuto();
-        } catch (err) {
-          taMsg(err instanceof Error ? err.message : String(err), false);
-        } finally {
-          bindBtn.disabled = false;
-        }
+        const done = await taRunBindWithOverlay(repo, schedEl && schedEl.value.trim() ? schedEl.value.trim() : undefined);
+        bindBtn.disabled = false;
+        if (done) { taMsg(`${repo} -> ${t("teamauto.active")}`, true); renderTeamAuto(); }
       });
     }
     const refreshBtn = document.getElementById("ta-repos-refresh");

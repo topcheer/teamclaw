@@ -50,6 +50,14 @@ export type TeamAutoRepoNorms = {
   learnedAt: number;
 };
 
+export type TeamAutoRepoProvision = {
+  status: "provisioning" | "ready" | "failed";
+  /** Current stage label for UI display, e.g. "cloning repo". */
+  message: string;
+  startedAt: number;
+  updatedAt: number;
+};
+
 export type TeamAutoRepo = {
   id: string; // "owner/repo"
   enabled: boolean;
@@ -59,6 +67,8 @@ export type TeamAutoRepo = {
   lastSweepSummary: string | null;
   pausedReason: string | null;
   dryRunDone: boolean;
+  /** Bind-time provisioning state; ready/undefined means sweepable. */
+  provision?: TeamAutoRepoProvision;
   policy: TeamAutoRepoPolicy;
   cursors: TeamAutoCursors;
   norms: TeamAutoRepoNorms | null;

@@ -103,6 +103,14 @@
       "gh.login": "Sign in with GitHub",
       "teamauto.refreshRepos": "Refresh repos",
       "teamauto.bind": "Bind",
+      "teamauto.bindStageVerify": "Verifying access",
+      "teamauto.bindStageClone": "Cloning repository",
+      "teamauto.bindStageNorms": "Learning repo conventions",
+      "teamauto.bindReady": "Repository ready",
+      "teamauto.bindFailed": "Binding failed",
+      "teamauto.close": "Close",
+      "teamauto.provisioning": "preparing",
+      "teamauto.provisionFailed": "setup failed",
       "teamauto.hint": "Pick one of your GitHub repositories. TeamClaw sweeps it on its own schedule, reviews issues/PRs, takes ownership of unassigned issues, and posts results with teamclaw markers.",
       "teamauto.loginFirst": "Sign in to GitHub first (top-right Login).",
       "teamauto.loadingRepos": "Loading your repos...",
@@ -218,6 +226,14 @@
       "gh.login": "使用 GitHub 登录",
       "teamauto.refreshRepos": "刷新仓库",
       "teamauto.bind": "绑定",
+      "teamauto.bindStageVerify": "验证访问权限",
+      "teamauto.bindStageClone": "克隆仓库中",
+      "teamauto.bindStageNorms": "学习仓库规范",
+      "teamauto.bindReady": "仓库就绪",
+      "teamauto.bindFailed": "绑定失败",
+      "teamauto.close": "关闭",
+      "teamauto.provisioning": "准备中",
+      "teamauto.provisionFailed": "准备失败",
       "teamauto.hint": "选择你的 GitHub 仓库。TeamClaw 按各自节奏定时扫描，自主 review issue/PR、认领未分配 issue，并以 teamclaw 标识写回结果。",
       "teamauto.loginFirst": "请先登录 GitHub（右上角 Login）。",
       "teamauto.loadingRepos": "正在加载你的仓库...",
@@ -3505,9 +3521,13 @@ function closeModelSettings() {
     wrap.innerHTML = repos.map(function (r) {
       var badge = !r.enabled
         ? '<span class="teamauto-badge">' + escapeHtml(t("teamauto.disabled")) + "</span>"
-        : r.pausedReason
-          ? '<span class="teamauto-badge warn" title="' + escapeHtml(r.pausedReason) + '">' + escapeHtml(t("teamauto.paused")) + "</span>"
-          : '<span class="teamauto-badge on">' + escapeHtml(t("teamauto.active")) + "</span>";
+        : r.provision && r.provision.status === "provisioning"
+          ? '<span class="teamauto-badge" title="' + escapeHtml(r.provision.message || "") + '">' + escapeHtml(t("teamauto.provisioning")) + "</span>"
+          : r.provision && r.provision.status === "failed"
+            ? '<span class="teamauto-badge warn" title="' + escapeHtml(r.provision.message || "") + '">' + escapeHtml(t("teamauto.provisionFailed")) + "</span>"
+            : r.pausedReason
+              ? '<span class="teamauto-badge warn" title="' + escapeHtml(r.pausedReason) + '">' + escapeHtml(t("teamauto.paused")) + "</span>"
+              : '<span class="teamauto-badge on">' + escapeHtml(t("teamauto.active")) + "</span>";
       var when = r.lastSweepAt ? new Date(r.lastSweepAt).toLocaleString() : "-";
       var norms = r.norms ? escapeHtml(r.norms.commitStyle) : "...";
       var fr = r.policy.actions.fullReview;
@@ -3564,17 +3584,84 @@ function closeModelSettings() {
         var sched = $("#teamauto-schedule");
         bindBtn.disabled = true;
         teamAutoSetMsg("...");
-        apiRequest("/teamauto/repos", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ repo: repo, schedule: sched && sched.value.trim() ? sched.value.trim() : undefined }),
-        }).then(function () {
-          teamAutoSetMsg(repo + " -> " + t("teamauto.active"), true);
-          refreshTeamAutoTab();
-        }).catch(function (err) {
-          teamAutoSetMsg(err instanceof Error ? err.message : String(err), false);
-        }).finally(function () { bindBtn.disabled = false; });
+        teamAutoBindWithOverlay(repo, sched && sched.value.trim() ? sched.value.trim() : undefined)
+          .then(function (ok) {
+            if (ok) { teamAutoSetMsg(repo + " -> " + t("teamauto.active"), true); refreshTeamAutoTab(); }
+          })
+          .finally(function () { bindBtn.disabled = false; });
       });
+    }
+
+    function teamAutoSetBindStage(stage, note, isError) {
+      var overlay = $("#teamauto-bind-overlay");
+      if (!overlay) { return; }
+      overlay.querySelectorAll(".ta-bind-steps li").forEach(function (li) {
+        var n = parseInt(li.getAttribute("data-stage") || "0", 10);
+        li.classList.toggle("done", !isError && n < stage);
+        li.classList.toggle("active", !isError && n === stage);
+        li.classList.toggle("error", !!isError && n === stage);
+      });
+      var noteEl = $("#teamauto-bind-note");
+      if (noteEl) { noteEl.textContent = note || ""; noteEl.className = "ta-bind-note" + (isError ? " err" : ""); }
+    }
+
+    function teamAutoBindWithOverlay(repo, schedule) {
+      var overlay = $("#teamauto-bind-overlay");
+      var closeBtn = $("#teamauto-bind-overlay-close");
+      var titleEl = $("#teamauto-bind-title");
+      if (!overlay) {
+        return apiRequest("/teamauto/repos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repo: repo, schedule: schedule }) })
+          .then(function () { return true; })
+          .catch(function (err) { teamAutoSetMsg(err instanceof Error ? err.message : String(err), false); return false; });
+      }
+      if (titleEl) { titleEl.textContent = t("teamauto.bind") + ": " + repo; }
+      if (closeBtn) {
+        closeBtn.classList.add("is-hidden");
+        closeBtn.addEventListener("click", function () { overlay.classList.add("is-hidden"); }, { once: true });
+      }
+      overlay.classList.remove("is-hidden");
+      teamAutoSetBindStage(1, "");
+      return apiRequest("/teamauto/repos", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ repo: repo, schedule: schedule }) })
+        .catch(function (err) {
+          teamAutoSetBindStage(1, err instanceof Error ? err.message : String(err), true);
+          if (closeBtn) { closeBtn.classList.remove("is-hidden"); }
+          return null;
+        })
+        .then(function (created) {
+          if (created === null) { return false; }
+          // Poll the background provision (clone + norms) until it settles.
+          var deadline = Date.now() + 300000;
+          var lastStage = 1;
+          function poll() {
+            if (Date.now() > deadline) {
+              teamAutoSetBindStage(lastStage, "timeout", true);
+              if (closeBtn) { closeBtn.classList.remove("is-hidden"); }
+              return Promise.resolve(false);
+            }
+            return apiRequest("/teamauto/repos", { method: "GET" }).then(function (data) {
+              var list = (data && data.repos) || [];
+              var hit = null;
+              for (var i = 0; i < list.length; i++) { if (list[i] && list[i].id === repo) { hit = list[i]; break; } }
+              var provision = (hit && hit.provision) || (hit ? { status: "ready" } : null);
+              if (!provision) { return new Promise(function (r) { setTimeout(r, 1500); }).then(poll); }
+              if (provision.status === "failed") {
+                teamAutoSetBindStage(lastStage, t("teamauto.bindFailed") + ": " + (provision.message || ""), true);
+                if (closeBtn) { closeBtn.classList.remove("is-hidden"); }
+                return false;
+              }
+              var stage = /norm/i.test(provision.message || "") ? 3 : 2;
+              lastStage = Math.max(lastStage, stage);
+              teamAutoSetBindStage(stage, provision.message || "");
+              if (provision.status === "ready") {
+                teamAutoSetBindStage(4, t("teamauto.bindReady"));
+                setTimeout(function () { overlay.classList.add("is-hidden"); }, 900);
+                return true;
+              }
+              return new Promise(function (r) { setTimeout(r, 1500); }).then(poll);
+            }).catch(function () { return new Promise(function (r) { setTimeout(r, 1500); }).then(poll); });
+          }
+          return poll();
+        });
     }
     var refreshBtn = $("#teamauto-repos-refresh");
     if (refreshBtn && !refreshBtn.dataset.bound) {

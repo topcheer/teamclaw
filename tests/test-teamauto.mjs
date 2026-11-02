@@ -76,6 +76,26 @@ async function sourceContracts() {
   assert.match(norms, /CONTRIBUTING/, "norms must read CONTRIBUTING.md");
   assert.match(scheduler, /renderNormsBlock/, "task descriptions must embed the repo norms block");
 
+  // Bind must return fast: provisioning (clone + norms) runs in background.
+  assert.match(scheduler, /provision\?: TeamAutoRepoProvision|provision\?/u, "repo type must carry provision state");
+  assert.match(scheduler, /void provisionRepoInBackground\(normalized/, "addRepo must not await provisioning (bind returns immediately)");
+  assert.match(scheduler, /status: "provisioning", message: "cloning repo"/, "bind starts with the cloning stage");
+  assert.match(scheduler, /status: "ready", message: "ready", norms/, "provisioning completion persists learned norms");
+  assert.match(scheduler, /status: "failed", message/, "provisioning failures must be recorded for UI display");
+  assert.match(scheduler, /still provisioning/, "sweeps must be gated while provisioning");
+  assert.match(scheduler, /provisioning failed \(\$\{repo\.provision\.message\}\)/, "sweeps must report failed provisioning instead of running");
+
+  // Bind overlay: staged progress in both desktop and web UI.
+  assert.match(desktopHtml, /ta-bind-overlay/, "desktop must render the bind stage overlay");
+  assert.match(uiHtml, /teamauto-bind-overlay/, "web UI must render the bind stage overlay");
+  for (const src of [desktopApp, uiAppSrc]) {
+    const isDesktop = src === desktopApp;
+    assert.match(src, isDesktop ? /taRunBindWithOverlay/ : /teamAutoBindWithOverlay/, "bind click must drive the stage overlay");
+    assert.match(src, /bindStageVerify/, "stage labels must be localized");
+    assert.match(src, /provision\.status === "failed"/, "overlay must surface provision failures");
+    assert.match(src, /provision\.status === "ready"/, "overlay must close on ready");
+  }
+
   // Tabbed UI on both surfaces: repo picker, bound-repo list, closed-loop config.
   assert.match(uiHtml, /data-tab="teamauto"/, "web UI must have a TeamAuto tab");
   assert.match(uiHtml, /id="tab-teamauto"/, "web UI must render the TeamAuto panel");
