@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TeamClaw Operator</title>
+<style>
+  :root {
+    --bg: #1c1917; --panel: #292524; --panel2: #44403c; --line: #57534e;
+    --text: #fafaf9; --dim: #a8a29e; --amber: #f59e0b; --amber2: #d97706;
+    --ok: #4ade80; --bad: #f87171; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif; }
+  header { display: flex; align-items: center; gap: 14px; padding: 14px 22px; background: var(--panel); border-bottom: 2px solid var(--amber2); }
+  header .logo { width: 26px; height: 26px; }
+  header h1 { font-size: 17px; margin: 0; letter-spacing: .02em; }
+  header h1 b { color: var(--amber); }
+  header .spacer { flex: 1; }
+  header .conn { font-size: 12px; color: var(--dim); }
+  header .conn.on { color: var(--ok); }
+  .btn { background: var(--amber2); color: #fff; border: 0; border-radius: 8px; padding: 8px 16px; font-weight: 600; cursor: pointer; font-size: 13px; }
+  .btn:hover { background: var(--amber); }
+  .btn.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
+  .btn.ghost:hover { border-color: var(--amber); color: var(--amber); }
+  .btn.danger { background: #7f1d1d; }
+  .btn.danger:hover { background: #991b1b; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  main { max-width: 1080px; margin: 0 auto; padding: 22px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 14px; }
+  .card .row { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .card h3 { margin: 0; font-size: 15px; color: var(--amber); font-family: var(--mono); }
+  .pill { font-size: 11px; font-family: var(--mono); padding: 2px 9px; border-radius: 99px; border: 1px solid var(--line); color: var(--dim); }
+  .pill.ok { color: var(--ok); border-color: var(--ok); }
+  .pill.bad { color: var(--bad); border-color: var(--bad); }
+  .kv { display: grid; grid-template-columns: 150px 1fr; gap: 4px 12px; font-size: 13px; color: var(--dim); margin-top: 10px; }
+  .kv code { color: var(--text); font-family: var(--mono); font-size: 12px; word-break: break-all; }
+  .card .actions { display: flex; gap: 8px; margin-top: 12px; }
+  .empty { text-align: center; color: var(--dim); padding: 60px 0; }
+  /* login */
+  #login { position: fixed; inset: 0; background: rgba(0,0,0,.7); display: flex; align-items: center; justify-content: center; z-index: 100; }
+  #login .box { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 28px; width: 360px; }
+  #login h2 { margin: 0 0 6px; font-size: 16px; }
+  #login p { margin: 0 0 14px; color: var(--dim); font-size: 12px; }
+  #login input { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; font-family: var(--mono); font-size: 12px; }
+  #login .err { color: var(--bad); font-size: 12px; margin-top: 8px; min-height: 16px; }
+  /* modal form */
+  #modal { position: fixed; inset: 0; background: rgba(0,0,0,.7); display: none; align-items: flex-start; justify-content: center; overflow: auto; z-index: 90; padding: 40px 16px; }
+  #modal.open { display: flex; }
+  #modal form { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 24px; width: 640px; max-width: 100%; }
+  #modal h2 { margin: 0 0 16px; font-size: 16px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  label.f { display: block; margin-bottom: 12px; font-size: 12px; color: var(--dim); }
+  label.f span { display: block; margin-bottom: 4px; }
+  label.f input, label.f select, label.f textarea { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 11px; font-size: 13px; font-family: inherit; }
+  label.f textarea { font-family: var(--mono); font-size: 12px; min-height: 110px; resize: vertical; }
+  label.f .hint { font-size: 11px; color: var(--dim); opacity: .8; margin-top: 3px; }
+  fieldset { border: 1px solid var(--line); border-radius: 10px; margin: 0 0 14px; padding: 12px 14px 2px; }
+  legend { font-size: 11px; color: var(--amber); text-transform: uppercase; letter-spacing: .08em; padding: 0 6px; }
+  #toast { position: fixed; bottom: 20px; right: 20px; z-index: 200; display: flex; flex-direction: column; gap: 8px; }
+  #toast div { background: var(--panel2); color: var(--text); padding: 10px 16px; border-radius: 10px; border-left: 3px solid var(--amber); font-size: 13px; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+  #toast div.err { border-left-color: var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <svg class="logo" viewBox="0 0 24 24" fill="none"><path d="M5 3c4 3 4 6 2 9s-1 6 2 9M12 2c5 3.5 5 8 2.5 11.5S12 19 15 22M19 4c-3 2.5-3 5-1.5 8s.5 6-2 8" stroke="#f59e0b" stroke-width="1.8" stroke-linecap="round"/></svg>
+  <h1>TeamClaw <b>Operator</b></h1>
+  <span class="spacer"></span>
+  <span class="conn" id="conn">connecting...</span>
+  <button class="btn" id="new">New Team</button>
+</header>
+<main>
+  <div id="list"></div>
+</main>
+
+<div id="login" hidden>
+  <div class="box">
+    <h2>Operator access token</h2>
+    <p>Paste the bearer token (cluster secret <code>teamclaw-operator-ui-token</code>).</p>
+    <input id="token" type="password" placeholder="bearer token" autocomplete="off">
+    <div class="err" id="login-err"></div>
+    <div style="margin-top:14px;text-align:right"><button class="btn" id="login-go">Sign in</button></div>
+  </div>
+</div>
+
+<div id="modal">
+  <form id="form" onsubmit="return false"></form>
+</div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+var TOKEN_KEY = "teamclaw.operator.token";
+var pollTimer = null;
+
+function $(id) { return document.getElementById(id); }
+function h(tag, attrs, children) {
+  var el = document.createElement(tag);
+  for (var k in attrs || {}) { if (k === "text") el.textContent = attrs[k]; else el.setAttribute(k, attrs[k]); }
+  (children || []).forEach(function (c) { el.appendChild(c); });
+  return el;
+}
+function toast(text, isErr) {
+  var t = h("div", isErr ? { class: "err", text: text } : { text: text });
+  $("toast").appendChild(t);
+  setTimeout(function () { t.remove(); }, 4200);
+}
+function getToken() { try { return localStorage.getItem(TOKEN_KEY) || ""; } catch (e) { return ""; } }
+function setToken(v) { try { localStorage.setItem(TOKEN_KEY, v); } catch (e) {} }
+
+function api(method, path, body) {
+  var opts = { method: method, headers: { "Authorization": "Bearer " + getToken() } };
+  if (body !== undefined) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
+  return fetch(path, opts).then(function (res) {
+    if (res.status === 401) { showLogin(); throw new Error("unauthorized"); }
+    if (!res.ok) { return res.text().then(function (t) { throw new Error(t || res.status); }); }
+    return res.status === 204 ? null : res.json();
+  });
+}
+
+function showLogin() {
+  stopPolling();
+  $("conn").textContent = "locked";
+  $("conn").className = "conn";
+  $("login").hidden = false;
+  $("token").focus();
+}
+function hideLogin() { $("login").hidden = true; }
+
+$("login-go").addEventListener("click", function () {
+  var v = $("token").value.trim();
+  if (!v) { return; }
+  setToken(v);
+  api("GET", "/api/v1/teams").then(function () { hideLogin(); startPolling(); }).catch(function (e) {
+    $("login-err").textContent = e.message === "unauthorized" ? "token rejected" : e.message;
+  });
+});
+$("token").addEventListener("keydown", function (e) { if (e.key === "Enter") { $("login-go").click(); } });
+
+/* ---------- rendering ---------- */
+function condPill(team, type) {
+  var c = (team.conditions || []).filter(function (x) { return x.type === type; })[0];
+  if (!c) { return h("span", { class: "pill", text: type + ": ?" }); }
+  return h("span", { class: "pill " + (c.status === "True" ? "ok" : "bad"), title: c.message || "", text: type + ": " + c.status });
+}
+function esc(s) { return String(s == null ? "" : s); }
+
+function renderTeam(t) {
+  var card = h("div", { class: "card" });
+  card.appendChild(h("div", { class: "row" }, [
+    h("h3", { text: t.name }),
+    condPill(t, "Ready"),
+    condPill(t, "ConfigReady"),
+    h("span", { class: "pill", text: "workers " + (t.workers && t.workers.running || 0) + " run / " + (t.workers && t.workers.pending || 0) + " pend" }),
+  ]));
+  var kv = h("div", { class: "kv" }, [
+    h("div", { text: "team" }), h("code", { text: esc(t.teamName) }),
+    h("div", { text: "image" }), h("code", { text: esc(t.image) }),
+    h("div", { text: "controller" }), h("code", { text: esc(t.endpoint || "-") }),
+    h("div", { text: "workspace" }), h("code", { text: t.workspace ? (t.workspace.enabled ? t.workspace.size : "disabled") : "-" }),
+    h("div", { text: "ingress" }), h("code", { text: t.ingress ? t.ingress : "-" }),
+    h("div", { text: "config secret" }), h("code", { text: esc(t.configSecret) }),
+  ]);
+  card.appendChild(kv);
+  var actions = h("div", { class: "actions" });
+  var openBtn = h("button", { class: "btn ghost", text: "Open Controller UI" });
+  openBtn.disabled = !t.endpoint;
+  openBtn.addEventListener("click", function () {
+    var url = String(t.endpoint).replace("://", "://").replace(".svc", ".svc");
+    window.open("http://" + window.location.hostname + ":30991/ui", "_blank");
+  });
+  var editBtn = h("button", { class: "btn ghost", text: "Edit" });
+  editBtn.addEventListener("click", function () { openForm(t); });
+  var delBtn = h("button", { class: "btn danger", text: "Delete" });
+  delBtn.addEventListener("click", function () {
+    if (!window.confirm("Delete TeamClaw " + t.name + " and its managed resources?")) { return; }
+    api("DELETE", "/api/v1/teams/" + encodeURIComponent(t.name)).then(function () {
+      toast("deleted " + t.name); refresh();
+    }).catch(function (e) { toast(e.message, true); });
+  });
+  actions.appendChild(openBtn); actions.appendChild(editBtn); actions.appendChild(delBtn);
+  card.appendChild(actions);
+  return card;
+}
+
+function refresh() {
+  api("GET", "/api/v1/teams").then(function (data) {
+    $("conn").textContent = "connected"; $("conn").className = "conn on";
+    var list = $("list"); list.textContent = "";
+    var teams = data.teams || [];
+    if (teams.length === 0) {
+      list.appendChild(h("div", { class: "empty", text: "No TeamClaw instances. Create one to get started." }));
+      return;
+    }
+    teams.forEach(function (t) { list.appendChild(renderTeam(t)); });
+  }).catch(function (e) { if (e.message !== "unauthorized") { $("conn").textContent = "error: " + e.message; $("conn").className = "conn"; } });
+}
+function startPolling() { refresh(); stopPolling(); pollTimer = setInterval(refresh, 5000); }
+function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+
+/* ---------- create / edit form ---------- */
+function f(labelText, inputHtml, hint) {
+  var l = h("label", { class: "f" }, [h("span", { text: labelText })]);
+  l.insertAdjacentHTML("beforeend", inputHtml);
+  if (hint) { l.appendChild(h("div", { class: "hint", text: hint })); }
+  return l;
+}
+function openForm(existing) {
+  var fm = $("form");
+  fm.textContent = "";
+  fm.appendChild(h("h2", { text: existing ? "Edit " + existing.name : "Create TeamClaw" }));
+  var nameInput = existing ? null : '<input name="name" required pattern="[a-z0-9]([-a-z0-9]*[a-z0-9])?" placeholder="my-team">';
+  var basic = h("fieldset", {}, [h("legend", { text: "basics" })]);
+  var g1 = h("div", { class: "grid2" }, [
+    f("Name (k8s resource)", nameInput || "", existing ? "immutable after create" : "lowercase, hyphens"),
+    f("Team name", '<input name="teamName" value="' + esc(existing && existing.teamName) + '" placeholder="my-team">'),
+  ]);
+  basic.appendChild(g1);
+  basic.appendChild(f("Image", '<input name="image" value="' + esc(existing ? existing.image : "ghcr.io/topcheer/teamclaw-openclaw:latest") + '" placeholder="ghcr.io/topcheer/teamclaw-openclaw:latest">'));
+  fm.appendChild(basic);
+
+  var cfg = h("fieldset", {}, [h("legend", { text: "openclaw config" })]);
+  if (existing && existing.configSecret) {
+    cfg.appendChild(f("Config secret (existing)", '<input name="secretRef" value="' + esc(existing.configSecret) + '">', "edit keeps this secret; replace via inline below"));
+  } else {
+    cfg.appendChild(f("Config secret ref", '<input name="secretRef" placeholder="my-team-openclaw-config">', "Secret must contain an openclaw.json key"));
+  }
+  cfg.appendChild(f("...or paste inline openclaw.json (creates the secret for you)", '<textarea name="inline" spellcheck="false" placeholder=\'{ "gateway": { "mode": "local" }, "plugins": { ... } }\'></textarea>', "ignored when non-empty on edit"));
+  fm.appendChild(cfg);
+
+  var ws = h("fieldset", {}, [h("legend", { text: "workspace" })]);
+  ws.appendChild(h("div", { class: "grid2" }, [
+    f("Size", '<input name="wsSize" value="' + esc(existing && existing.workspace && existing.workspace.size || "20Gi") + '">'),
+    f("Storage class", '<input name="wsClass" value="' + esc(existing && existing.workspace && existing.workspace.storageClass || "") + '" placeholder="cluster default">'),
+  ]));
+  fm.appendChild(ws);
+
+  var net = h("fieldset", {}, [h("legend", { text: "ingress (optional)" })]);
+  net.appendChild(h("div", { class: "grid2" }, [
+    f("Host", '<input name="ingHost" value="' + esc(existing && existing.ingress || "") + '" placeholder="teamclaw.example.com">'),
+    f("Ingress class", '<input name="ingClass" value="' + esc(existing && existing.ingressClass || "") + '" placeholder="cluster default (traefik on k3s)">'),
+  ]));
+  net.appendChild(f("TLS secret name (optional)", '<input name="ingTls" value="' + esc(existing && existing.ingressTls || "") + '">'));
+  fm.appendChild(net);
+
+  var bar = h("div", { style: "display:flex;gap:8px;justify-content:flex-end" });
+  var cancel = h("button", { class: "btn ghost", type: "button", text: "Cancel" });
+  cancel.addEventListener("click", function () { $("modal").className = ""; });
+  var save = h("button", { class: "btn", type: "submit", text: existing ? "Save" : "Create" });
+  save.addEventListener("click", function () {
+    var v = function (n) { return fm.querySelector('[name="' + n + '"]'); };
+    var inline = (v("inline").value || "").trim();
+    if (inline) { try { JSON.parse(inline); } catch (e) { toast("inline config is not valid JSON: " + e.message, true); return; } }
+    var body = {
+      spec: {
+        teamName: v("teamName").value.trim() || (v("name") ? v("name").value.trim() : ""),
+        image: v("image").value.trim(),
+        workspace: { enabled: true, size: v("wsSize").value.trim() || "20Gi", storageClassName: v("wsClass").value.trim() },
+        network: {},
+      },
+    };
+    var ref = v("secretRef") ? v("secretRef").value.trim() : "";
+    if (ref) { body.spec.controller = { modelConfigSecretRef: ref }; }
+    var host = v("ingHost").value.trim();
+    if (host) {
+      body.spec.network.ingress = { host: host };
+      var cls = v("ingClass").value.trim(); if (cls) { body.spec.network.ingress.ingressClassName = cls; }
+      var tls = v("ingTls").value.trim(); if (tls) { body.spec.network.ingress.tlsSecretName = tls; }
+    }
+    if (inline) { body.configJson = inline; }
+    var done = function () { $("modal").className = ""; toast((existing ? "saved " : "created ") + (existing ? existing.name : v("name").value.trim())); refresh(); };
+    var fail = function (e) { toast(e.message, true); };
+    if (existing) { api("PUT", "/api/v1/teams/" + encodeURIComponent(existing.name), body).then(done).catch(fail); }
+    else { api("POST", "/api/v1/teams", body).then(done).catch(fail); }
+  });
+  bar.appendChild(cancel); bar.appendChild(save);
+  fm.appendChild(bar);
+  $("modal").className = "open";
+}
+$("new").addEventListener("click", function () { openForm(null); });
+
+/* ---------- boot ---------- */
+if (getToken()) { startPolling(); } else { showLogin(); }
+</script>
+</body>
+</html>

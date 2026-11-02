@@ -17,7 +17,7 @@ spec:
       containers:
         - name: operator
           image: ghcr.io/topcheer/teamclaw-operator:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           args:
             - --leader-elect
             - --ui-bind-address=:9090
