@@ -196,7 +196,23 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     return taskWorktreeDirName(repoId, taskId);
   }
 
-  return { ensureCloned, currentSha, recentCommitMessages, readFileIfPresent, safeRepoPath, createWorkBranch, commitAll, pushBranch, ensureTaskWorktree, removeTaskWorktree, taskWorktreeRelDir, taskBranchName, repoDir };
+  /** True when HEAD has commits beyond the base branch (worktree delivery). */
+  async function branchHasCommits(dir: string, baseBranch: string): Promise<boolean> {
+    try {
+      const out = await run(["rev-list", "--count", "HEAD", "--not", baseBranch], dir);
+      return Number(out.trim()) > 0;
+    } catch {
+      // Base branch name unknown/unfetched - fall back to diff against first parent chain
+      try {
+        const root = await run(["rev-list", "--max-parents=0", "HEAD"], dir);
+        return root.trim().length > 0;
+      } catch {
+        return false;
+      }
+    }
+  }
+
+  return { ensureCloned, currentSha, recentCommitMessages, readFileIfPresent, safeRepoPath, createWorkBranch, commitAll, pushBranch, ensureTaskWorktree, removeTaskWorktree, taskWorktreeRelDir, taskBranchName, branchHasCommits, repoDir };
 }
 
 export type TeamAutoRepoSync = ReturnType<typeof createRepoSync>;
