@@ -82,6 +82,8 @@ export type TeamAutoWriteBack = {
   doneAt: number | null;
   prUrl: string | null;
   error: string | null;
+  /** Joint full-review cycle id: same-cycle sections share one umbrella issue. */
+  cycleKey?: string;
 };
 
 export type TeamAutoActivityKind = "bind" | "provision" | "sweep" | "task" | "writeback";

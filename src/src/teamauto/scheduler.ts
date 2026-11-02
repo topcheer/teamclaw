@@ -260,7 +260,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
                 : candidate.kind === "fullReview"
                   ? ("createIssue" as const)
                   : ("issueComment" as const);
-              registerWriteback(taskId, action, repo.id, candidate.number || null);
+              registerWriteback(taskId, action, repo.id, candidate.number || null, candidate.cycle !== undefined ? String(candidate.cycle) : undefined);
               created++;
             }
           }
@@ -371,10 +371,35 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
             entry.doneAt = Date.now();
             writebackDone = true;
           } else if (entry.action === "createIssue") {
-            const number = await client.createIssue(owner, name, `[teamclaw:${role}] ${task.title.replace(/^\[[^\]]+\]\s*/, "")}`, body, ["teamclaw"]);
-            entry.targetId = number;
-            entry.doneAt = Date.now();
-            writebackDone = true;
+            // Joint full review: same-cycle sections land in ONE umbrella issue
+            // (first completed section creates it, the rest post as comments).
+            const sectionBody = `### ${role} section\n\n${task.result.trim()}\n${MARKER_FOOTER(role)}`;
+            if (entry.cycleKey) {
+              const peers = s.writebacks.filter((w) => w.repoId === entry.repoId && w.cycleKey === entry.cycleKey && w.taskId !== entry.taskId && w.targetId != null && w.doneAt);
+              const umbrella = peers[0];
+              if (umbrella && umbrella.targetId != null) {
+                await client.postIssueComment(owner, name, umbrella.targetId, sectionBody);
+                entry.targetId = umbrella.targetId;
+                entry.doneAt = Date.now();
+                writebackDone = true;
+              } else if (entry.targetId == null) {
+                const number = await client.createIssue(
+                  owner,
+                  name,
+                  `[teamclaw:fullreview] Joint full review - ${entry.repoId}`,
+                  `Joint multi-role full review (cycle ${entry.cycleKey}). Each role appends its section as a comment below.\n\n${sectionBody}`,
+                  ["teamclaw", "teamclaw:fullreview"],
+                );
+                entry.targetId = number;
+                entry.doneAt = Date.now();
+                writebackDone = true;
+              }
+            } else {
+              const number = await client.createIssue(owner, name, `[teamclaw:${role}] ${task.title.replace(/^\[[^\]]+\]\s*/, "")}`, sectionBody, ["teamclaw"]);
+              entry.targetId = number;
+              entry.doneAt = Date.now();
+              writebackDone = true;
+            }
           } else {
             entry.error = `unsupported action ${entry.action}`;
           }
@@ -393,12 +418,12 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
   }
 
   // Register the write-back intent when a task lands in the task store.
-  function registerWriteback(taskId: string, action: "issueComment" | "prComment" | "createIssue" | "createPR", repoId: string, targetId: number | null): void {
+  function registerWriteback(taskId: string, action: "issueComment" | "prComment" | "createIssue" | "createPR", repoId: string, targetId: number | null, cycleKey?: string): void {
     void ensureStore().then((s) => {
       if (s.writebacks.some((w) => w.taskId === taskId)) {
         return;
       }
-      s.writebacks.push({ taskId, action, repoId, targetId, doneAt: null, prUrl: null, error: null });
+      s.writebacks.push({ taskId, action, repoId, targetId, doneAt: null, prUrl: null, error: null, cycleKey });
       void saveTeamAutoStore(s);
     }).catch(() => {});
   }

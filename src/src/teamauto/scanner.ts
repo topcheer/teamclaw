@@ -9,13 +9,24 @@ import type { TeamAutoRepo } from "./store.js";
 
 export type CandidateKind = "issueReview" | "takeOwnership" | "prReview" | "fullReview";
 
+/** Roles that jointly author a scheduled full review (one section each). */
+export const JOINT_REVIEW_ROLES = ["architect", "qa", "security-engineer"] as const;
+
+const JOINT_REVIEW_FOCUS: Record<(typeof JOINT_REVIEW_ROLES)[number], string> = {
+  architect: "architecture and structure: module boundaries, layering, README/docs accuracy, maintainability hotspots, dead or duplicated code paths",
+  qa: "quality and tests: test coverage gaps, flaky-test hotspots, error-handling weaknesses, missing failure-path tests, CI blind spots",
+  "security-engineer": "security surface: dependency risks, secret handling, injection/validation gaps, auth-sensitive paths, unsafe defaults",
+};
+
 export type Candidate = {
   kind: CandidateKind;
   repoId: string;
   key: string; // idempotency key, e.g. "owner/repo#issue-42"
   number: number;
   title: string;
-  role: "qa" | "developer" | "architect";
+  role: "qa" | "developer" | "architect" | "security-engineer";
+  /** Shared full-review cycle id: write-backs group on it (umbrella issue). */
+  cycle?: number;
   reason: string;
   context: string;
 };
@@ -144,16 +155,28 @@ export async function sweepRepo(
     // Interval-gated only (the old !firstSweep gate could never open for a
     // repo whose first sweep observed nothing - see the deadlock note above).
     if (now - repo.cursors.lastFullReviewAt >= intervalMs) {
-      candidates.push({
-        repoId: repo.id,
-        key: `${repo.id}#fullreview-${Math.floor(now / intervalMs)}`,
-        kind: "fullReview",
-        number: 0,
-        role: "architect",
-        title: `Full repository review: ${repo.id}`,
-        reason: `scheduled ${repo.policy.actions.fullReview} full review`,
-        context: `Perform a full-repository review of ${repo.id}. Inspect the codebase structure, README accuracy, error handling hotspots, and test coverage gaps. Create issues for significant findings (title prefixed "[teamclaw:architect]") instead of changing code.`,
-      });
+      const cycle = Math.floor(now / intervalMs);
+      // Joint review: one candidate per role, one shared cycle. Each role's
+      // reply becomes a labeled section of a single umbrella review issue
+      // (the write-back reconciler groups by the cycle key).
+      for (const role of JOINT_REVIEW_ROLES) {
+        candidates.push({
+          repoId: repo.id,
+          key: `${repo.id}#fullreview-${cycle}-${role}`,
+          kind: "fullReview",
+          number: 0,
+          role,
+          cycle,
+          title: `Full repository review (${role}): ${repo.id}`,
+          reason: `scheduled ${repo.policy.actions.fullReview} full review (joint, ${role} section)`,
+          context: [
+            `Perform the ${role} section of a joint full-repository review of ${repo.id}.`,
+            `Your focus: ${JOINT_REVIEW_FOCUS[role]}.`,
+            "Other roles cover complementary areas in parallel - do NOT duplicate their scope; go deep on yours.",
+            "Your reply becomes the " + role + " section of the joint review issue on GitHub. Do not change code.",
+          ].join("\n"),
+        });
+      }
     }
   }
 
