@@ -195,6 +195,9 @@ export async function loadTeamAutoStore(): Promise<TeamAutoStore> {
     if (Array.isArray(parsed.writebacks)) {
       store.writebacks = parsed.writebacks as TeamAutoWriteBack[];
     }
+    if (Array.isArray(parsed.activity)) {
+      store.activity = parsed.activity.slice(-TEAMAUTO_ACTIVITY_LIMIT);
+    }
     store.budget = { ...store.budget, ...(parsed.budget ?? {}) };
     return store;
   } catch {
