@@ -91,6 +91,7 @@ async function sourceContracts() {
 
   // Activity persistence: bounded log recorded at bind/provision/sweep/task/writeback.
   assert.match(store, /pushTeamAutoActivity/, "store must export the activity recorder");
+  assert.match(store, /Array\.isArray\(parsed\.activity\)/, "loadTeamAutoStore must carry persisted activity across restarts (the whitelist rebuild silently dropped it)");
   assert.match(store, /TEAMAUTO_ACTIVITY_LIMIT = 100/, "activity log must be bounded");
   assert.match(scheduler, /kind: "sweep"/, "sweeps must be recorded");
   assert.match(scheduler, /kind: "writeback"/, "write-backs must be recorded");
