@@ -9,11 +9,15 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, "..");
 const uiAppPath = path.join(projectRoot, "src", "src", "ui", "app.js");
 const uiStylePath = path.join(projectRoot, "src", "src", "ui", "style.css");
+const uiHtmlPath = path.join(projectRoot, "src", "src", "ui", "index.html");
+const desktopAppPath = path.join(projectRoot, "desktop", "renderer", "app.js");
 
 async function runUiContractSmoke() {
-  const [uiAppSource, uiStyleSource] = await Promise.all([
+  const [uiAppSource, uiStyleSource, uiHtml, desktopApp] = await Promise.all([
     fs.readFile(uiAppPath, "utf8"),
     fs.readFile(uiStylePath, "utf8"),
+    fs.readFile(uiHtmlPath, "utf8"),
+    fs.readFile(desktopAppPath, "utf8"),
   ]);
 
   assert.match(
@@ -97,6 +101,16 @@ async function runUiContractSmoke() {
     uiAppSource.includes('Array.from($$(".tab")).some'),
     "tab existence checks must use Array.from(...).some",
   );
+
+  // Tasks page: composite ordering, terminal chunking, keyword filter.
+  assert.match(uiAppSource, /function taskComparator/, "tasks must render through the composite comparator");
+  assert.match(uiAppSource, /TERMINAL_STATUSES\[left\.status\] \? 1 : 0/, "comparator must float active tasks above terminal ones");
+  assert.match(uiAppSource, /PRIORITY_WEIGHT\[left\.priority/, "comparator must weigh priority within a status group");
+  assert.match(uiAppSource, /terminalTasksVisible/, "terminal tasks must render in bounded chunks");
+  assert.match(uiAppSource, /tasks-show-more/, "a show-more control must reveal additional terminal tasks");
+  assert.match(uiAppSource, /taskMatchesKeyword/, "keyword filtering must be applied to the task list");
+  assert.match(uiHtml, /task-keyword/, "the tasks toolbar must expose a keyword input");
+  assert.match(desktopApp, /TERMINAL_STATUSES\[a\.status\]/, "desktop sortTasks must use the same composite ordering");
 
   console.log("UI contract smoke passed.");
 }

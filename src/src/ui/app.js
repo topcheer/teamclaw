@@ -5,6 +5,8 @@
   const API_BASE = "/api/v1";
   let ws = null;
   let currentFilter = "all";
+  let taskKeywordFilter = "";
+  let terminalTasksVisible = 20;
   let activeTab = "tasks";
   let teamState = { workers: [], tasks: [], controllerRuns: [], messages: [], clarifications: [], modelReadiness: null, externalWorkerInstall: null };
   let selectedExternalWorkerRole = "developer";
@@ -151,6 +153,9 @@
       "filter.blocked": "Blocked",
       "filter.completed": "Completed",
       "filter.failed": "Failed",
+      "tasks.searchPlaceholder": "Filter by keyword...",
+      "tasks.showMore": "Show {n} more completed",
+      "tasks.noMatch": "No tasks match the keyword",
       "priority.low": "Low",
       "priority.medium": "Medium",
       "priority.high": "High",
@@ -276,6 +281,9 @@
       "filter.blocked": "阻塞",
       "filter.completed": "已完成",
       "filter.failed": "失败",
+      "tasks.searchPlaceholder": "关键字过滤...",
+      "tasks.showMore": "再显示 {n} 条已结束",
+      "tasks.noMatch": "没有匹配关键字的任务",
       "priority.low": "低",
       "priority.medium": "中",
       "priority.high": "高",
@@ -2103,24 +2111,60 @@
     });
   }
 
+  const TERMINAL_STATUSES = { completed: true, failed: true };
+  const PRIORITY_WEIGHT = { critical: 0, high: 1, medium: 2, low: 3 };
+
+  function taskComparator(left, right) {
+    const terminalL = TERMINAL_STATUSES[left.status] ? 1 : 0;
+    const terminalR = TERMINAL_STATUSES[right.status] ? 1 : 0;
+    if (terminalL !== terminalR) { return terminalL - terminalR; }
+    const prioL = PRIORITY_WEIGHT[left.priority || "medium"] ?? 2;
+    const prioR = PRIORITY_WEIGHT[right.priority || "medium"] ?? 2;
+    if (prioL !== prioR) { return prioL - prioR; }
+    return (right.updatedAt || 0) - (left.updatedAt || 0);
+  }
+
+  function taskMatchesKeyword(task, keyword) {
+    if (!keyword) { return true; }
+    const haystack = [task.id, task.title, task.description, task.assignedRole, task.createdBy, task.assignedWorkerId]
+      .filter(Boolean).join(" ").toLowerCase();
+    return haystack.includes(keyword);
+  }
+
   function renderTasks(tasks) {
     const container = $("#tasks-board");
     if (!container) return;
 
-    const filtered = currentFilter === "all"
+    const filtered = (currentFilter === "all"
       ? tasks
-      : tasks.filter(function (task) { return task.status === currentFilter; });
+      : tasks.filter(function (task) { return task.status === currentFilter; }))
+      .filter(function (task) { return taskMatchesKeyword(task, taskKeywordFilter); });
 
     if (filtered.length === 0) {
       container.innerHTML = '<div class="empty-state">' + escapeHtml(
-        currentFilter !== "all"
-          ? t("empty.noTasksWithStatus", { status: currentFilter })
-          : t("empty.noTasks")
+        taskKeywordFilter
+          ? t("tasks.noMatch")
+          : currentFilter !== "all"
+            ? t("empty.noTasksWithStatus", { status: currentFilter })
+            : t("empty.noTasks")
       ) + "</div>";
       return;
     }
 
-    container.innerHTML = filtered.map(function (task) {
+    const sorted = filtered.slice().sort(taskComparator);
+    // Active tasks render in full; terminal ones chunk so long-lived installs
+    // with hundreds of completed tasks stay fast and meaningful.
+    const activeTasks = sorted.filter(function (task) { return !TERMINAL_STATUSES[task.status]; });
+    const terminalTasks = sorted.filter(function (task) { return TERMINAL_STATUSES[task.status]; });
+    const visibleTerminal = terminalTasks.slice(0, terminalTasksVisible);
+    const hiddenTerminal = terminalTasks.length - visibleTerminal.length;
+    const visibleList = activeTasks.concat(visibleTerminal);
+
+    const showMoreHtml = hiddenTerminal > 0
+      ? '<button id="tasks-show-more" class="btn btn-small tasks-show-more" type="button">' + escapeHtml(t("tasks.showMore", { n: hiddenTerminal })) + "</button>"
+      : "";
+
+    container.innerHTML = visibleList.map(function (task) {
       const priority = task.priority || "medium";
       const status = task.status || "pending";
       const assignee = task.assignedWorkerId
@@ -2163,7 +2207,15 @@
         "  </div>" +
         "</div>"
       );
-    }).join("");
+    }).join("") + showMoreHtml;
+
+    const showMoreBtn = $("#tasks-show-more");
+    if (showMoreBtn) {
+      showMoreBtn.addEventListener("click", function () {
+        terminalTasksVisible += 20;
+        renderTasks(teamState.tasks || []);
+      });
+    }
   }
 
   function renderControllerRuns(runs) {
@@ -2805,9 +2857,19 @@
       $$(".filter-btn").forEach(function (item) { item.classList.remove("active"); });
       btn.classList.add("active");
       currentFilter = btn.dataset.filter;
+      terminalTasksVisible = 20;
       renderTasks(teamState.tasks || []);
     });
   });
+
+  const taskKeywordInput = $("#task-keyword");
+  if (taskKeywordInput) {
+    taskKeywordInput.addEventListener("input", function () {
+      taskKeywordFilter = taskKeywordInput.value.trim().toLowerCase();
+      terminalTasksVisible = 20;
+      renderTasks(teamState.tasks || []);
+    });
+  }
 
   const workspaceTreeRefresh = $("#workspace-tree-refresh");
   if (workspaceTreeRefresh) {
