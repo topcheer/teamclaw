@@ -112,6 +112,8 @@
       "teamauto.norms": "Norms",
       "teamauto.confirmUnbind": "Unbind this repo?",
       "teamauto.empty": "No repos bound yet. Pick one above and click Bind.",
+      "teamauto.activity": "Activity",
+      "teamauto.activityEmpty": "No TeamAuto activity yet - sweeps and write-backs will appear here.",
       "ctl.models.title": "Team models",
       "ctl.models.hint": "Default model applies to the controller and every role; per-role selections override it for that role.",
       "ctl.models.default": "Default model",
@@ -318,6 +320,8 @@
       "teamauto.norms": "协作规范",
       "teamauto.confirmUnbind": "确定解绑该仓库？",
       "teamauto.empty": "尚未绑定仓库。在上方选择后点击绑定。",
+      "teamauto.activity": "动态",
+      "teamauto.activityEmpty": "暂无 TeamAuto 动态 - 扫描与写回会出现在这里。",
       "ctl.models.title": "团队模型",
       "ctl.models.hint": "默认模型作用于控制器与所有角色；按角色的选择会覆盖默认值。",
       "ctl.models.default": "默认模型",
@@ -531,6 +535,7 @@
       ["#teamauto-hint", "teamauto.hint"],
       ["#ta-repos-refresh", "teamauto.refreshRepos"],
       ["#ta-bind", "teamauto.bind"],
+      ["#ta-activity-title", "teamauto.activity"],
       ["#ctl-models-title", "ctl.models.title"],
       ["#ctl-models-hint", "ctl.models.hint"],
       ["#ctl-default-label", "ctl.models.default"],
@@ -1533,6 +1538,24 @@
   }
 
   let teamAutoBusy = false;
+  function renderTeamAutoActivity(activity) {
+    const wrap = document.getElementById("ta-activity");
+    if (!wrap) return;
+    const list = activity || [];
+    if (!list.length) {
+      wrap.innerHTML = `<div class="empty-state">${t("teamauto.activityEmpty")}</div>`;
+      return;
+    }
+    wrap.innerHTML = list.slice(0, 30).map((e) => {
+      const when = new Date(e.at || 0).toLocaleString();
+      return `<div class="teamauto-activity-item">`
+        + `<span class="teamauto-activity-kind k-${escapeHtml(String(e.kind || "sweep"))}">${escapeHtml(String(e.kind || ""))}</span>`
+        + `<span class="teamauto-activity-text"><b>${escapeHtml(String(e.repoId || ""))}</b> ${escapeHtml(String(e.text || ""))}</span>`
+        + `<span class="teamauto-activity-time">${escapeHtml(when)}</span>`
+        + `</div>`;
+    }).join("");
+  }
+
   async function renderTeamAuto() {
     if (state.connectionState !== "connected") {
       const wrap = document.getElementById("ta-repos");
@@ -1544,9 +1567,12 @@
     void loadTeamAutoCandidates(false);
     try {
       renderTeamAutoRepos(await apiGet("/teamauto/repos"));
-    } catch { /* scheduler offline */ } finally {
-      teamAutoBusy = false;
-    }
+    } catch { /* scheduler offline */ }
+    try {
+      const data = await apiGet("/teamauto/activity");
+      renderTeamAutoActivity((data && data.activity) || []);
+    } catch { /* activity is best-effort */ }
+    finally { teamAutoBusy = false; }
   }
 
   function bindTeamAutoControls() {

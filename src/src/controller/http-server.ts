@@ -4733,6 +4733,17 @@ async function handleRequest(
 
   const teamAuto = deps.getTeamAutoScheduler?.() ?? null;
 
+  if (req.method === "GET" && pathname === "/api/v1/teamauto/activity") {
+    if (!teamAuto) { sendError(res, 503, "TeamAuto scheduler is not running"); return; }
+    try {
+      const activity = await teamAuto.getActivity();
+      sendJson(res, 200, { activity });
+    } catch (err) {
+      sendError(res, 500, err instanceof Error ? err.message : "failed to load activity");
+    }
+    return;
+  }
+
   if (req.method === "GET" && pathname === "/api/v1/teamauto/repos") {
     if (!teamAuto) { sendError(res, 503, "TeamAuto scheduler is not running"); return; }
     try {

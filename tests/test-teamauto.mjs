@@ -83,6 +83,21 @@ async function sourceContracts() {
   assert.match(scheduler, /status: "ready", message: "ready", norms/, "provisioning completion persists learned norms");
   assert.match(scheduler, /status: "failed", message/, "provisioning failures must be recorded for UI display");
   assert.match(scheduler, /still provisioning/, "sweeps must be gated while provisioning");
+
+  // Deadlock fix: no first-sweep candidate gate; dry-run flips unconditionally.
+  assert.doesNotMatch(scanner, /const firstSweep|if \(firstSweep\)/, "the first-sweep candidate gate must be gone (it deadlocked dry-run repos with zero candidates)");
+  assert.match(scheduler, /if \(dryRun\) \{[\s\S]{0,400}?repo\.dryRunDone = true;/u, "a completed dry-run sweep must flip dryRunDone even with zero candidates");
+  assert.doesNotMatch(scheduler, /repo\.dryRunDone = true;\s*\n\s*repo\.lastSweepSummary = `dry-run/u, "dryRunDone must not depend on candidates existing");
+
+  // Activity persistence: bounded log recorded at bind/provision/sweep/task/writeback.
+  assert.match(store, /pushTeamAutoActivity/, "store must export the activity recorder");
+  assert.match(store, /TEAMAUTO_ACTIVITY_LIMIT = 100/, "activity log must be bounded");
+  assert.match(scheduler, /kind: "sweep"/, "sweeps must be recorded");
+  assert.match(scheduler, /kind: "writeback"/, "write-backs must be recorded");
+  assert.match(scheduler, /kind: "bind"/, "binds must be recorded");
+  assert.match(httpServer, /\/api\/v1\/teamauto\/activity/, "controller must expose the activity endpoint");
+  assert.match(uiAppSrc, /teamauto-activity/, "web UI must render the activity feed");
+  assert.match(desktopApp, /ta-activity/, "desktop must render the activity feed");
   assert.match(scheduler, /provisioning failed \(\$\{repo\.provision\.message\}\)/, "sweeps must report failed provisioning instead of running");
 
   // Bind overlay: staged progress in both desktop and web UI.
@@ -156,10 +171,19 @@ async function unitTests() {
     listCommits: async () => [],
   };
 
-  // First sweep observes only (no candidates, no flood).
+  // First sweep now surfaces backlog candidates directly (the old observe-only
+  // gate deadlocked dry-run repos with zero candidates). Filtering still applies:
+  // issue 2 (assigned), 3 (own thread), 4 (label) drop; PR 10 (ours) drops.
   const first = await scannerMod.sweepRepo(repo, stubClient);
-  assert.equal(first.candidates.length, 0, "first sweep must only observe");
+  assert.equal(first.candidates.length, 4, "first sweep surfaces the filtered backlog (issue #1 review+ownership, PR #9 review, fullReview pending schedule)");
+  const firstKinds = first.candidates.map((c) => c.kind).sort().join(",");
+  assert.match(firstKinds, /issueReview/);
+  assert.match(firstKinds, /takeOwnership/);
+  assert.match(firstKinds, /prReview/);
   scannerMod.advanceCursors(repo, first.issues, first.pulls);
+  // After advancing cursors the same backlog must not re-surface.
+  const drained = await scannerMod.sweepRepo(repo, stubClient);
+  assert.equal(drained.candidates.filter((c) => c.kind !== "fullReview").length, 0, "advanced cursors suppress re-processing");
 
   // Between sweeps: only touched objects should act. Re-stamp issue 1 and PR 9.
   const bumpedIssues = issues.map((i) => (i.number === 1 ? { ...i, updatedAt: "2026-11-01T11:00:00Z" } : i));

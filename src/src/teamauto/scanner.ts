@@ -64,7 +64,6 @@ export async function sweepRepo(
     ? await client.listPulls(owner, name, repo.cursors.etags)
     : [];
   const candidates: Candidate[] = [];
-  const firstSweep = repo.cursors.lastIssueSince === 0;
 
   for (const issue of issues) {
     // Dedup: seen map survives sweeps; a closed-then-reopened issue updates.
@@ -73,10 +72,10 @@ export async function sweepRepo(
     if ((repo.cursors.seen[key] ?? 0) >= updatedAtMs) {
       continue;
     }
-    // First sweep only observes - it seeds cursors without enqueuing a flood.
-    if (firstSweep) {
-      continue;
-    }
+    // NOTE: no first-sweep gate here. Gating candidates on "first sweep"
+    // combined with the dry-run not advancing cursors deadlocked repos in
+    // observe-only mode forever (zero candidates -> dryRunDone never set).
+    // Backlog protection comes from the per-sweep cap + one dry-run pass.
     if (!labelAllowed(issue, repo) || !keywordAllowed(issue.title, repo)) {
       continue;
     }
@@ -120,9 +119,7 @@ export async function sweepRepo(
     if ((repo.cursors.seen[key] ?? 0) >= updatedAtMs) {
       continue;
     }
-    if (firstSweep) {
-      continue;
-    }
+    // See the issue-loop note: no first-sweep gate (deadlock source).
     // Skip our own PRs and drafts.
     if (pull.head.startsWith("teamclaw/") || pull.draft || TEAMCLAW_MARKER_RE.test(pull.title)) {
       continue;
@@ -144,7 +141,9 @@ export async function sweepRepo(
   // Periodic full review (weekly/daily), independent of per-object cursors.
   if (repo.policy.actions.fullReview !== "off") {
     const intervalMs = repo.policy.actions.fullReview === "daily" ? 24 * 3600_000 : 7 * 24 * 3600_000;
-    if (now - repo.cursors.lastFullReviewAt >= intervalMs && !firstSweep) {
+    // Interval-gated only (the old !firstSweep gate could never open for a
+    // repo whose first sweep observed nothing - see the deadlock note above).
+    if (now - repo.cursors.lastFullReviewAt >= intervalMs) {
       candidates.push({
         repoId: repo.id,
         key: `${repo.id}#fullreview-${Math.floor(now / intervalMs)}`,
