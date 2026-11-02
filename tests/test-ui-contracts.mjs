@@ -67,6 +67,27 @@ async function runUiContractSmoke() {
     "UI styles should highlight structured contract summaries on task cards",
   );
 
+  // Tab hash deep links (#/tab/<name>) must survive refresh.
+  assert.match(
+    uiAppSource,
+    /#\/tab\//,
+    "activating a tab must sync the #/tab/<name> hash",
+  );
+  assert.match(
+    uiAppSource,
+    /addEventListener\("hashchange"/,
+    "hash navigation must re-activate the tab (back/forward support)",
+  );
+  assert.ok(
+    uiAppSource.includes("#\\/tab\\/") && uiAppSource.includes("hashMatch"),
+    "initial UI state must prefer the #/tab/<name> hash over query params",
+  );
+  assert.match(
+    uiAppSource,
+    /item\.dataset\.tab === initialUiState\.tab/,
+    "initial tab activation must be guarded against stale/unknown tab names",
+  );
+
   console.log("UI contract smoke passed.");
 }
 
