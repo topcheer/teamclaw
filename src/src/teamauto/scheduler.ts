@@ -14,6 +14,8 @@ import {
   loadTeamAutoStore,
   saveTeamAutoStore,
   type TeamAutoRepo,
+  type TeamAutoRepoNorms,
+  type TeamAutoRepoProvision,
   type TeamAutoStore,
 } from "./store.js";
 
@@ -106,17 +108,40 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     if (options.keywordExclude?.length) {
       repo.policy.keywordFilter.exclude = options.keywordExclude;
     }
-    // Learn norms eagerly so the very first sweep already carries them.
-    try {
-      repo.norms = await learnNorms(repo, client, sync, info.cloneUrl, info.defaultBranch);
-    } catch (err) {
-      logger.warn(`TeamAuto: norms learning deferred for ${normalized}: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    // Provision (clone + norms learning) runs in the background so bind
+    // returns immediately; sweeps stay gated until provision completes.
+    repo.provision = { status: "provisioning", message: "cloning repo", startedAt: Date.now(), updatedAt: Date.now() };
     s.repos.push(repo);
     await saveTeamAutoStore(s);
     scheduleRepo(repo);
-    logger.info(`TeamAuto: bound ${normalized} (schedule ${repo.schedule}${repo.dryRunDone ? "" : ", first sweep dry-run"})`);
+    void provisionRepoInBackground(normalized, info.cloneUrl, info.defaultBranch);
+    logger.info(`TeamAuto: bound ${normalized} (schedule ${repo.schedule}${repo.dryRunDone ? "" : ", first sweep dry-run"}; provisioning in background)`);
     return repo;
+  }
+
+  async function provisionRepoInBackground(repoId: string, cloneUrl: string, defaultBranch: string): Promise<void> {
+    try {
+      const s0 = await ensureStore();
+      const repoRef = s0.repos.find((r) => r.id === repoId);
+      if (!repoRef) { return; }
+      await updateRepoProvision(repoId, { status: "provisioning", message: "learning repo norms" });
+      const norms = await learnNorms(repoRef, client, sync, cloneUrl, defaultBranch);
+      await updateRepoProvision(repoId, { status: "ready", message: "ready", norms });
+      logger.info(`TeamAuto: provisioned ${repoId} (clone + norms done)`);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn(`TeamAuto: provisioning failed for ${repoId}: ${message}`);
+      await updateRepoProvision(repoId, { status: "failed", message });
+    }
+  }
+
+  async function updateRepoProvision(repoId: string, patch: Partial<TeamAutoRepoProvision> & { norms?: TeamAutoRepoNorms }): Promise<void> {
+    const s = await ensureStore();
+    const repo = s.repos.find((r) => r.id === repoId);
+    if (!repo) { return; }
+    repo.provision = { status: patch.status ?? repo.provision?.status ?? "provisioning", message: patch.message ?? repo.provision?.message ?? "", startedAt: repo.provision?.startedAt ?? Date.now(), updatedAt: Date.now() };
+    if (patch.norms) { repo.norms = patch.norms; }
+    await saveTeamAutoStore(s);
   }
 
   async function removeRepo(repoId: string): Promise<void> {
@@ -179,6 +204,17 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
   // ---------- sweep engine ----------
 
   async function runSweep(repo: TeamAutoRepo, force: boolean): Promise<string> {
+    // Sweeps stay gated until bind-time provisioning (clone + norms) settles.
+    if (repo.provision?.status === "provisioning") {
+      const summary = `skipped: still provisioning (${repo.provision.message})`;
+      logger.debug?.(`TeamAuto: ${repo.id} ${summary}`);
+      return summary;
+    }
+    if (repo.provision?.status === "failed") {
+      const summary = `skipped: provisioning failed (${repo.provision.message})`;
+      logger.warn(`TeamAuto: ${repo.id} ${summary}`);
+      return summary;
+    }
     const s = await ensureStore();
     if (sweeping.has(repo.id)) {
       return "sweep already in progress";
