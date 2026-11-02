@@ -31,6 +31,7 @@ assert.match(mgr, /proc\.stdout\?\.on\("data"/, "install progress consumes spawn
 assert.match(http, /__tunnel_gate\/verify/, "gate verify endpoint exists");
 assert.match(http, /Set-Cookie/, "verify sets the gate cookie");
 assert.match(http, /viaTunnel/, "requests are classified by arrival host");
+assert.match(mgr, /tunnels\/\$\{gone\.tunnelId\}\?user=[^`]*&token=/, "stop() presents the delete token to the tunnel server");
 assert.match(http, /\/api\/v1\/tunnel\/start/, "start endpoint present");
 assert.match(http, /serveVersionedHtml/, "index.html is served with content-versioned asset URLs (?v=<hash>) so tunnel/CDN browser-cache freezes cannot pin a stale app.js");
 assert.match(http, /\/api\/v1\/tunnel\/stop/, "stop endpoint present");

@@ -59,6 +59,9 @@ export type TunnelHandle = {
   tunnelId: string;
   hostname: string;
   gateToken: string;
+  // HMAC(tunnelId) issued by the tunnel server at create time; required to
+  // delete a live tunnel (tunnel ids are public via the DNS CNAME).
+  deleteToken: string;
 };
 
 const CLOUDFLARED_CANDIDATES = [
@@ -133,7 +136,7 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
     if (!bin) throw new Error("cloudflared not found (brew install cloudflared)");
     const gateToken = randomBytes(6).toString("base64url").replace(/[-_]/g, "").slice(0, 8).toUpperCase();
     const res = await tunnelFetch("/tunnels", "POST", { github_user: githubUser, local_port: deps.localPort });
-    const body = res.json as { tunnel_id?: string; connector_token?: string; hostname?: string; error?: string };
+    const body = res.json as { tunnel_id?: string; connector_token?: string; hostname?: string; delete_token?: string; error?: string };
     if (res.status !== 201 || !body.tunnel_id || !body.connector_token || !body.hostname) {
       throw new Error(body.error ?? `tunnel server responded ${res.status}`);
     }
@@ -157,7 +160,7 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
     child.stderr?.pipe(fs.createWriteStream(logPath, { flags: "a" }));
     child.stdout?.pipe(fs.createWriteStream(logPath, { flags: "a" }));
     fs.closeSync(logFd);
-    handle = { tunnelId: body.tunnel_id, hostname: body.hostname, gateToken };
+    handle = { tunnelId: body.tunnel_id, hostname: body.hostname, gateToken, deleteToken: body.delete_token ?? "" };
     lastError = null;
     logger.info(`TeamClaw tunnel: serving https://${body.hostname}`);
     return handle;
@@ -175,7 +178,7 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
     if (handle) {
       const gone = handle;
       handle = null;
-      await tunnelFetch(`/tunnels/${gone.tunnelId}?user=${encodeURIComponent(gone.hostname.split(".")[0]!.replace(/^team-/, ""))}`, "DELETE").catch(() => undefined);
+      await tunnelFetch(`/tunnels/${gone.tunnelId}?user=${encodeURIComponent(gone.hostname.split(".")[0]!.replace(/^team-/, ""))}&token=${encodeURIComponent(gone.deleteToken)}`, "DELETE").catch(() => undefined);
       logger.info(`TeamClaw tunnel: stopped ${gone.hostname}`);
     }
   }
