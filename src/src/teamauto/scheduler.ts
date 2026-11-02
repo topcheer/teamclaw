@@ -356,6 +356,18 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
 
   async function reconcileWritebacks(): Promise<void> {
     const s = await ensureStore();
+    const state0 = deps.getTeamState();
+    // Self-heal: an entry whose task later COMPLETED with a result (e.g. the
+    // completion gate rejected an early submission, then a retry succeeded)
+    // must be retried - a sticky error here would silently drop delivery.
+    for (const w of s.writebacks) {
+      if (w.error && !w.doneAt && state0) {
+        const t = state0.tasks[w.taskId];
+        if (t && t.status === "completed" && t.result) {
+          w.error = null;
+        }
+      }
+    }
     const pending = s.writebacks.filter((w) => !w.doneAt && !w.error);
     if (!pending.length) {
       return;
@@ -388,7 +400,11 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
               const wtDir = await sync.ensureTaskWorktree(repoId, task.id);
               const committed = await sync.commitAll(wtDir, `[teamclaw:${role}] ${task.title.replace(/^\[[^\]]+\]\s*/, "")}`.slice(0, 200), `teamclaw-${role}`, `teamclaw-${role}@users.noreply.github.com`);
               const branch = `teamclaw/task-${task.id.replace(/[^\w-]/g, "")}`;
-              if (committed) {
+              // Workers often commit themselves inside the worktree - deliver
+              // whenever the branch carries commits beyond base, not only when
+              // commitAll just added new ones.
+              const deliverable = committed || (await sync.branchHasCommits(wtDir, info.defaultBranch));
+              if (deliverable) {
                 await sync.pushBranch(repoId, wtDir, info.cloneUrl, branch);
                 const pr = await client.createPullRequest(repoId.split("/")[0]!, repoId.split("/")[1]!, branch, info.defaultBranch, `[teamclaw:${role}] ${task.title.replace(/^\[[^\]]+\]\s*/, "")}`.slice(0, 120), `${task.result.trim()}\n${MARKER_FOOTER(role)}`);
                 entry.prUrl = pr.url;

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
 import zlib from "node:zlib";
+import { execFileSync } from "node:child_process";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawPluginApi, PluginLogger } from "../../api.js";
 import type {
@@ -3892,6 +3893,18 @@ function projectHasMeaningfulFileChanges(
   const projectRoot = path.join(resolveTeamClawProjectsDir(), task.projectDir);
   if (!fs.existsSync(projectRoot)) {
     return false;
+  }
+  // Collaboration contract: write tasks deliver in a dedicated worktree.
+  // An mtime scan is the wrong test there (committed files keep old mtimes
+  // and the gate may run before the flush) - ask git instead: does HEAD carry
+  // commits beyond the remote refs?
+  if (task.projectDir.includes("__task-")) {
+    try {
+      const out = execFileSync("git", ["rev-list", "--count", "HEAD", "--not", "--remotes"], { cwd: projectRoot }).toString();
+      return Number(out.trim()) > 0;
+    } catch {
+      return false;
+    }
   }
   const threshold = Math.max(task.startedAt ?? 0, task.createdAt ?? 0) - 1000;
   const stack = [projectRoot];
