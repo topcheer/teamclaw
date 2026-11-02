@@ -2,6 +2,29 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import type { PluginLogger } from "../../api.js";
+import https from "node:https";
+
+const TUNNEL_API_HOST = "apps.teamclaw.dev";
+async function tunnelFetch(pathq: string, method: "POST" | "DELETE", body?: unknown): Promise<{ status: number; json: any }> {
+  const ip = await new Promise<string>((resolve, reject) => {
+    const r = https.request({ host: "1.1.1.1", path: `/dns-query?name=${TUNNEL_API_HOST}&type=A`, method: "GET", headers: { accept: "application/dns-json" }, servername: "cloudflare-dns.com" } as never, (res: import("node:http").IncomingMessage) => {
+      let d = ""; res.on("data", (c: Buffer) => (d += c)); res.on("end", () => {
+        try { const rec = (JSON.parse(d).Answer || []).map((x: { data: string }) => x.data).find((x: string) => /^\d+\./.test(x)); rec ? resolve(rec) : reject(new Error("DoH no A record")); } catch (e) { reject(e); }
+      });
+    });
+    r.on("error", reject); r.end();
+  });
+  return new Promise((resolve, reject) => {
+    const payload = body === undefined ? null : JSON.stringify(body);
+    const req = https.request({ host: ip, servername: TUNNEL_API_HOST, path: `/api${pathq}`, method, headers: { host: TUNNEL_API_HOST, "Content-Type": "application/json", ...(payload ? { "Content-Length": Buffer.byteLength(payload) } : {}) } } as never, (res: import("node:http").IncomingMessage) => {
+      let d = ""; res.on("data", (c: Buffer) => (d += c)); res.on("end", () => { try { resolve({ status: res.statusCode ?? 0, json: d ? JSON.parse(d) : {} }); } catch { resolve({ status: res.statusCode ?? 0, json: {} }); } });
+    });
+    req.on("error", reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
 
 /**
  * Internet tunnel sharing for the local web UI.
@@ -77,13 +100,9 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
     const bin = findCloudflared();
     if (!bin) throw new Error("cloudflared not found (brew install cloudflared)");
     const gateToken = randomBytes(6).toString("base64url").replace(/[-_]/g, "").slice(0, 8).toUpperCase();
-    const res = await fetch(`${TUNNEL_SERVER_URL}/tunnels`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ github_user: githubUser, local_port: deps.localPort }),
-    });
+    const res = await tunnelFetch("/tunnels", "POST", { github_user: githubUser, local_port: deps.localPort });
     const body = (await res.json().catch(() => ({}))) as { tunnel_id?: string; connector_token?: string; hostname?: string; error?: string };
-    if (!res.ok || !body.tunnel_id || !body.connector_token || !body.hostname) {
+    if (res.status !== 201 || !body.tunnel_id || !body.connector_token || !body.hostname) {
       throw new Error(body.error ?? `tunnel server responded ${res.status}`);
     }
     stopConnector();
@@ -113,9 +132,7 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
     if (handle) {
       const gone = handle;
       handle = null;
-      await fetch(`${TUNNEL_SERVER_URL}/tunnels/${gone.tunnelId}?user=${encodeURIComponent(gone.hostname.split(".")[0]!)}`, {
-        method: "DELETE",
-      }).catch(() => undefined);
+      await tunnelFetch(`/tunnels/${gone.tunnelId}?user=${encodeURIComponent(gone.hostname.split(".")[0]!)}`, "DELETE").catch(() => undefined);
       logger.info(`TeamClaw tunnel: stopped ${gone.hostname}`);
     }
   }
