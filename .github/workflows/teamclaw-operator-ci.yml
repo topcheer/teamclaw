@@ -1,0 +1,37 @@
+name: TeamClaw Operator CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "operator/**"
+      - ".github/workflows/teamclaw-operator-ci.yml"
+  pull_request:
+    paths:
+      - "operator/**"
+      - ".github/workflows/teamclaw-operator-ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: teamclaw-operator-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: operator/go.mod
+      - name: Build
+        working-directory: operator
+        run: go build ./... && go vet ./...
+      - name: Verify generated CRD is up to date
+        working-directory: operator
+        run: |
+          go run sigs.k8s.io/controller-tools/cmd/controller-gen crd paths=./api/... output:crd:dir=/tmp/crd-check
+          diff -u config/crd/bases/teamclaw.dev_teamclaws.yaml /tmp/crd-check/teamclaw.dev_teamclaws.yaml
+      - name: Test
+        working-directory: operator
+        run: go test ./...
