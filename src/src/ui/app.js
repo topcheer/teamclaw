@@ -107,6 +107,16 @@
       "toast.freqWorker": "Topology-dependent - external workers rare; provisioned workers may cycle every task (idle TTL 120s)",
       "toast.freqTeamauto": "Low - per sweep, claim, or write-back",
       "toast.freqMessageNew": "High - every controller message",
+      "toast.taBind": "TeamAuto: repo bound",
+      "toast.taProvision": "TeamAuto: repo ready",
+      "toast.taTask": "TeamAuto: task queued",
+      "toast.taSweep": "TeamAuto: sweep finished",
+      "toast.taWriteback": "TeamAuto: write-back posted",
+      "toast.freqTaBind": "Rare - once per repo at bind time",
+      "toast.freqTaProvision": "Rare - once per repo after clone + norms",
+      "toast.freqTaTask": "Medium - each claimed issue/PR per sweep",
+      "toast.freqTaSweep": "Highest - every sweep cycle of every bound repo (cron)",
+      "toast.freqTaWriteback": "Medium - each comment/PR posted to GitHub",
       "empty.noMessages": "No messages yet",
       "empty.noPlanningSessions": "No planning sessions yet",
       "empty.noKickoffData": "No kickoff data",
@@ -255,6 +265,16 @@
       "toast.freqWorker": "视拓扑而定 - 外部 worker 很少；按需供给 worker 可能每任务上下线一次（空闲 120 秒回收）",
       "toast.freqTeamauto": "低 - 每次扫描/认领/回写",
       "toast.freqMessageNew": "高 - 每条 controller 消息",
+      "toast.taBind": "TeamAuto：仓库已绑定",
+      "toast.taProvision": "TeamAuto：仓库就绪",
+      "toast.taTask": "TeamAuto：任务入队",
+      "toast.taSweep": "TeamAuto：扫描完成",
+      "toast.taWriteback": "TeamAuto：已回写",
+      "toast.freqTaBind": "很少 - 每仓库绑定一次",
+      "toast.freqTaProvision": "很少 - 每仓库克隆学习完成后一次",
+      "toast.freqTaTask": "中 - 每次扫描认领的 issue/PR",
+      "toast.freqTaSweep": "最高 - 每个绑定仓库每个周期都触发（cron）",
+      "toast.freqTaWriteback": "中 - 每次向 GitHub 发评论/PR",
       "empty.noMessages": "暂无消息",
       "empty.noPlanningSessions": "暂无规划会话",
       "empty.noKickoffData": "暂无 kickoff 数据",
@@ -1445,6 +1465,11 @@
     { id: "worker:online", titleKey: "toast.workerOnline", freqKey: "toast.freqWorker" },
     { id: "worker:offline", titleKey: "toast.workerOffline", freqKey: "toast.freqWorker" },
     { id: "teamauto:activity", titleKey: "toast.teamautoPrefix", freqKey: "toast.freqTeamauto" },
+    { id: "teamauto:activity:bind", titleKey: "toast.taBind", freqKey: "toast.freqTaBind" },
+    { id: "teamauto:activity:provision", titleKey: "toast.taProvision", freqKey: "toast.freqTaProvision" },
+    { id: "teamauto:activity:task", titleKey: "toast.taTask", freqKey: "toast.freqTaTask" },
+    { id: "teamauto:activity:sweep", titleKey: "toast.taSweep", freqKey: "toast.freqTaSweep" },
+    { id: "teamauto:activity:writeback", titleKey: "toast.taWriteback", freqKey: "toast.freqTaWriteback" },
     { id: "message:new", titleKey: "toast.messageNew", freqKey: "toast.freqMessageNew" },
   ];
 
@@ -2238,8 +2263,11 @@
         break;
       case "teamauto:activity": {
         const entry = event.data || {};
-        showNotice("teamauto:activity", "info", t("toast.teamautoPrefix") + " - " + String(entry.kind || "activity"),
-          String(entry.repoId || "") + (entry.text ? " - " + String(entry.text) : ""));
+        const kindId = "teamauto:activity:" + String(entry.kind || "activity");
+        if (toastEnabled("teamauto:activity") && toastEnabled(kindId)) {
+          showNotice(kindId, "info", t("toast.teamautoPrefix") + " - " + String(entry.kind || "activity"),
+            String(entry.repoId || "") + (entry.text ? " - " + String(entry.text) : ""));
+        }
         break;
       }
       case "report:ready":
