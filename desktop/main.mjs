@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Notification, shell } from "electron";
+import { app, BrowserWindow, ipcMain, nativeTheme, Notification, shell } from "electron";
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_SETTINGS = {
   controllerUrl: "http://127.0.0.1:9527",
+  theme: "system",
 };
 
 let mainWindow = null;
@@ -146,7 +147,20 @@ async function installOpenClawLocally(options) {
   return await runShellCommand(command, { cwd: String(options?.cwd || "").trim() || process.cwd() });
 }
 
+// Window chrome colors per theme (kept in sync with renderer/style.css).
+const THEME_CHROME = {
+  day: { background: "#faf9f7", symbol: "#26231d" },
+  night: { background: "#131109", symbol: "#f0ece3" },
+};
+
+function effectiveTheme(theme) {
+  if (theme === "day" || theme === "night") return theme;
+  return nativeTheme.shouldUseDarkColors ? "night" : "day";
+}
+
 async function createMainWindow() {
+  const settings = await loadSettings();
+  const chrome = THEME_CHROME[effectiveTheme(settings.theme)];
   // Titleless chrome: the OS title bar is replaced by an in-page drag
   // region (renderer/.titlebar) so the app title merges with the shell.
   // macOS keeps native traffic lights (hiddenInset); Windows/Linux draw
@@ -158,14 +172,14 @@ async function createMainWindow() {
     height: 980,
     minWidth: 1180,
     minHeight: 760,
-    backgroundColor: "#faf9f7",
+    backgroundColor: chrome.background,
     title: "TeamClaw Desktop",
     icon: getDesktopIconPath(),
     titleBarStyle: isDarwin ? "hiddenInset" : "hidden",
     ...(isDarwin ? {} : {
       titleBarOverlay: {
-        color: "#faf9f7",
-        symbolColor: "#26231d",
+        color: chrome.background,
+        symbolColor: chrome.symbol,
         height: 40,
       },
     }),
@@ -201,6 +215,20 @@ app.on("window-all-closed", async () => {
   }
 });
 
+ipcMain.handle("window:apply-theme", async (_event, theme) => {
+  const chrome = THEME_CHROME[theme === "night" ? "night" : "day"];
+  if (mainWindow) {
+    mainWindow.setBackgroundColor(chrome.background);
+    if (process.platform !== "darwin") {
+      try {
+        mainWindow.setTitleBarOverlay({ color: chrome.background, symbolColor: chrome.symbol });
+      } catch {
+        /* setTitleBarOverlay unsupported on this platform/build */
+      }
+    }
+  }
+  return { ok: true };
+});
 ipcMain.handle("settings:get", async () => loadSettings());
 ipcMain.handle("settings:save", async (_event, settings) => saveSettings(settings));
 ipcMain.handle("controller:get-setup-info", async () => getLocalSetupInfo());
