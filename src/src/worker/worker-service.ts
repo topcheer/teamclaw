@@ -41,7 +41,22 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
         activeTaskSessionKeys.set(taskId, assignment.executionSessionKey || buildTeamClawAgentSessionKey(`teamclaw-task-${taskId}`));
         try {
           await deps.prepareTaskAssignment?.(assignment);
-          const taskPrompt = [assignment.title.trim(), assignment.description.trim()].filter(Boolean).join("\n\n");
+          let taskPrompt = [assignment.title.trim(), assignment.description.trim()].filter(Boolean).join("\n\n");
+          if (assignment.checkpoint) {
+            const cp = assignment.checkpoint;
+            const resumeLines = [
+              "## RESUMED EXECUTION",
+              `This task was interrupted mid-execution (resume attempt ${assignment.resumeAttempt ?? cp.attempt}). You are CONTINUING previous work, not starting over. The OpenClaw session you are running in already contains the full prior conversation - review it before acting.`,
+              "Do NOT redo steps that are already done. Re-verify state on disk/git instead of redoing work.",
+              "",
+              "Last assistant activity before interruption:",
+              (cp.lastAssistantMessage || "(none recorded)").slice(0, 4000),
+            ];
+            if (cp.progressNotes?.length) {
+              resumeLines.push("", "Progress notes from prior attempts:", ...cp.progressNotes.map((n) => `- ${n}`));
+            }
+            taskPrompt = `${taskPrompt}\n\n${resumeLines.join("\n")}`;
+          }
           const raw = await externalTaskExecutor(taskPrompt, assignment);
           if (cancelledTaskIds.has(taskId)) {
             throw new Error("Task execution cancelled by controller");

@@ -142,6 +142,9 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
 
       // Clean up orphaned tasks — tasks assigned to workers that no longer
       // exist OR that are offline (stale entries surviving from a previous run).
+      // Resume support: instead of silently restarting, keep the checkpoint and
+      // count resume attempts; past MAX the task fails fast instead of looping.
+      const MAX_RESUME_ATTEMPTS = 3;
       {
         let orphanCleaned = false;
         for (const task of Object.values(teamState.tasks)) {
@@ -151,9 +154,22 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
           ) {
             const worker = teamState.workers[task.assignedWorkerId];
             if (!worker || worker.status === "offline") {
-              logger.info(`Controller: resetting orphaned task ${task.id} (worker ${task.assignedWorkerId} ${worker ? "offline" : "missing"})`);
+              const attempt = (task.resumeAttempt ?? 0) + 1;
+              if (attempt > MAX_RESUME_ATTEMPTS) {
+                logger.warn(`Controller: task ${task.id} exceeded ${MAX_RESUME_ATTEMPTS} resume attempts - failing`);
+                task.status = "failed";
+                task.error = `resumed ${MAX_RESUME_ATTEMPTS} times without completing (last checkpoint: ${task.checkpoint?.lastAssistantMessage?.slice(0, 200) ?? "none"})`;
+                task.updatedAt = Date.now();
+                orphanCleaned = true;
+                continue;
+              }
+              logger.info(`Controller: resetting orphaned task ${task.id} for resume attempt ${attempt} (worker ${task.assignedWorkerId} ${worker ? "offline" : "missing"})`);
               task.status = "pending";
               task.assignedWorkerId = undefined;
+              task.resumeAttempt = attempt;
+              if (task.checkpoint) {
+                task.checkpoint.attempt = attempt;
+              }
               task.updatedAt = Date.now();
               orphanCleaned = true;
             }

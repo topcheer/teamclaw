@@ -118,6 +118,21 @@ function registerWorker(api: OpenClawPluginApi, config: ReturnType<typeof parseP
     }
   }
 
+  async function reportCheckpoint(taskId: string, checkpoint: { lastAssistantMessage: string; progressNote?: string; sessionKey: string }): Promise<void> {
+    if (!currentControllerUrl) {
+      return;
+    }
+    try {
+      await fetch(`${currentControllerUrl}/api/v1/tasks/${taskId}/checkpoint`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...checkpoint, workerId: currentWorkerId ?? undefined }),
+      });
+    } catch {
+      // Checkpointing is best-effort; a lost heartbeat only costs resume freshness.
+    }
+  }
+
   const getWorkerSessionKey = (assignment: TaskAssignmentPayload) =>
     assignment.executionSessionKey?.trim() || `teamclaw-task-${assignment.taskId}`;
 
@@ -131,6 +146,7 @@ function registerWorker(api: OpenClawPluginApi, config: ReturnType<typeof parseP
     getIdempotencyKey: (assignment) =>
       assignment.executionIdempotencyKey?.trim() || `teamclaw-${assignment.taskId}`,
     reportExecutionEvent,
+    reportCheckpoint,
   });
 
   function resolveProjectSyncPaths(projectDir: string | undefined): { sharedProjectDir: string; localProjectDir: string } | null {

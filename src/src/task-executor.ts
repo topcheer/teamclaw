@@ -21,6 +21,8 @@ const TEAMCLAW_ROLE_IDS_TEXT = [
 ];
 
 const SESSION_PROGRESS_POLL_INTERVAL_MS = 1000;
+/** Checkpoint heartbeat cadence (resume support). */
+const CHECKPOINT_EMIT_INTERVAL_MS = 15_000;
 const SESSION_PROGRESS_MESSAGE_LIMIT = 200;
 const MAX_SESSION_PROGRESS_MESSAGE_CHARS = 4000;
 const RUN_WAIT_SLICE_MS = 30_000;
@@ -76,10 +78,12 @@ export type RoleTaskExecutorDeps = {
   getSessionKey: (assignment: TaskAssignmentPayload) => string;
   getIdempotencyKey?: (assignment: TaskAssignmentPayload) => string;
   reportExecutionEvent?: (taskId: string, event: TaskExecutionEventInput) => Promise<void> | void;
+  /** Persist a resumable progress snapshot (throttled by the executor). */
+  reportCheckpoint?: (taskId: string, checkpoint: { lastAssistantMessage: string; progressNote?: string; sessionKey: string }) => Promise<void> | void;
 };
 
 export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
-  const { runtime, logger, role, taskTimeoutMs, getSessionKey, getIdempotencyKey, reportExecutionEvent } = deps;
+  const { runtime, logger, role, taskTimeoutMs, getSessionKey, getIdempotencyKey, reportExecutionEvent, reportCheckpoint } = deps;
   const roleDef = getRole(role);
   const roleSystemPrompt = roleDef
     ? roleDef.systemPrompt
@@ -143,6 +147,8 @@ export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
     }
 
     try {
+      // Checkpoint heartbeat state for resume support.
+      let lastCheckpointAt = 0;
       const runResult = await runtime.subagent.run(buildSubagentRunOptions({
         sessionKey,
         message: taskMessage,
@@ -291,6 +297,16 @@ export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
           }
           if (entry.stream === "assistant") {
             progressSnapshot.lastAssistantMessage = entry.message;
+            // Checkpoint heartbeat: persist the latest assistant turn so an
+            // interrupted execution resumes with fresh context (max once per
+            // CHECKPOINT_EMIT_INTERVAL_MS to bound controller write load).
+            if (reportCheckpoint && Date.now() - lastCheckpointAt >= CHECKPOINT_EMIT_INTERVAL_MS) {
+              lastCheckpointAt = Date.now();
+              void Promise.resolve(reportCheckpoint(taskId, {
+                lastAssistantMessage: entry.message.slice(0, 8000),
+                sessionKey,
+              })).catch(() => { /* checkpointing is best-effort */ });
+            }
           }
           await emitExecutionEvent({
             type: "progress",
