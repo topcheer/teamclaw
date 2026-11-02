@@ -3857,3 +3857,29 @@ function closeModelSettings() {
   }, 10000);
 
 })();
+
+  // Tunnel sharing (internet gate for the local web UI).
+  function initTunnelPanel() {
+    const wrap = document.getElementById("tunnel-panel");
+    if (!wrap || wrap.dataset.bound) return;
+    wrap.dataset.bound = "true";
+    const render = (st) => {
+      wrap.querySelector(".tunnel-state").innerHTML = st.active
+        ? '<div class="tunnel-on">Live: <a href="https://' + st.hostname + '" target="_blank" rel="noopener">https://' + st.hostname + '</a></div>'
+          + '<div class="tunnel-token">Gate token: <b>' + st.gateToken + '</b></div>'
+          + '<button class="btn btn-small" data-act="stop">Stop sharing</button>'
+        : '<button class="btn btn-small btn-primary" data-act="start">Share via tunnel</button>'
+          + '<span class="tunnel-note">requires GitHub login</span>';
+    };
+    const refresh = () => apiGet("/tunnel/status").then((st) => render(st || {})).catch(() => {});
+    wrap.addEventListener("click", (e) => {
+      const act = e.target.getAttribute && e.target.getAttribute("data-act");
+      if (!act) return;
+      e.target.disabled = true;
+      const call = act === "start" ? apiRequest("/tunnel/start", { method: "POST" }) : apiRequest("/tunnel/stop", { method: "POST" });
+      call.then(refresh).catch((err) => { wrap.querySelector(".tunnel-state").innerHTML = '<div class="tunnel-err">' + escapeHtml(String(err.message || err)) + "</div>"; });
+    });
+    refresh();
+    setInterval(refresh, 5000);
+  }
+  document.addEventListener("DOMContentLoaded", initTunnelPanel);

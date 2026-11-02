@@ -2551,3 +2551,12 @@ body {
 .task-keyword-input { margin-left: auto; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border, #2a2f3a); background: var(--bg-primary); color: var(--text-primary); font-size: 12.5px; width: 200px; }
 .task-keyword-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(99,102,241,.15); }
 .tasks-show-more { display: block; margin: 14px auto 4px; }
+
+/* Tunnel sharing panel (workspace tab) */
+.tunnel-card { border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-secondary); padding: 14px 18px; margin: 18px 0; }
+.tunnel-card h3 { font-size: 13px; margin-bottom: 8px; letter-spacing: .04em; text-transform: uppercase; color: var(--text-secondary); }
+.tunnel-on a { color: var(--accent); font-family: var(--mono); }
+.tunnel-token { margin: 8px 0; font-size: 13px; }
+.tunnel-token b { font-family: var(--mono); letter-spacing: .15em; color: var(--accent); }
+.tunnel-note { margin-left: 10px; color: var(--text-muted); font-size: 12px; }
+.tunnel-err { color: var(--danger); font-size: 12.5px; margin-top: 8px; }
