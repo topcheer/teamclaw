@@ -25,7 +25,9 @@ assert.doesNotMatch(worker, /console\.log/, "no logging in the worker (token hyg
 assert.match(mgr, /isTunnelRequest/, "manager exposes host detection");
 assert.match(mgr, /gateAllows/, "manager validates the gate cookie");
 assert.match(mgr, /cloudflared/, "manager spawns cloudflared");
-assert.match(mgr, /stdio: \["ignore", "ignore", "ignore"\]/, "connector stdio detached (no pipe leaks)");
+assert.match(mgr, /stdio: \["ignore", "ignore", "pipe"\]/, "connector pipes stderr only (stdout unused by cloudflared)");
+assert.match(mgr, /child\.stderr\?\.pipe/, "connector stderr is consumed (piped to cloudflared.log, no leak)");
+assert.match(mgr, /proc\.stdout\?\.on\("data"/, "install progress consumes spawn stdout");
 assert.match(http, /__tunnel_gate\/verify/, "gate verify endpoint exists");
 assert.match(http, /Set-Cookie/, "verify sets the gate cookie");
 assert.match(http, /viaTunnel/, "requests are classified by arrival host");
@@ -33,7 +35,9 @@ assert.match(worker, /rateLimited\(req, 10, 3600_000\)/, "create is per-IP rate 
 assert.match(worker, /rateLimited\(req, 20, 3600_000\)/, "delete is per-IP rate limited");
 assert.match(worker, /tunnelLive/, "live-connector guard protects shares from unauthenticated disruption");
 assert.match(worker, /delete_token: deleteToken/, "create issues an HMAC delete token");
+assert.match(mgr, /tunnels\/\$\{gone\.tunnelId\}\?user=[^`]*&token=/, "stop() presents the delete token to the tunnel server");
 assert.match(http, /\/api\/v1\/tunnel\/start/, "start endpoint present");
+assert.match(http, /serveVersionedHtml/, "index.html is served with content-versioned asset URLs (?v=<hash>) so tunnel/CDN browser-cache freezes cannot pin a stale app.js");
 assert.match(http, /\/api\/v1\/tunnel\/stop/, "stop endpoint present");
 assert.match(http, /GitHub login required/, "sharing requires github login (server-derived username)");
 

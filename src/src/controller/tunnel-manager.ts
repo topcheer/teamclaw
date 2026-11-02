@@ -3,6 +3,8 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import type { PluginLogger } from "../../api.js";
 import https from "node:https";
+import os from "node:os";
+import path from "node:path";
 
 const TUNNEL_API_HOST = "apps.teamclaw.dev";
 async function tunnelFetch(pathq: string, method: "POST" | "DELETE", body?: unknown): Promise<{ status: number; json: any }> {
@@ -37,7 +39,7 @@ async function tunnelFetch(pathq: string, method: "POST" | "DELETE", body?: unkn
  */
 
 export const TUNNEL_SERVER_URL = "https://apps.teamclaw.dev/api";
-const TUNNEL_HOST_SUFFIX = ".apps.teamclaw.dev";
+const TUNNEL_HOST_SUFFIX = ".teamclaw.dev";
 const GATE_COOKIE = "tc_tunnel_gate";
 
 export type TunnelStatus = {
@@ -45,6 +47,11 @@ export type TunnelStatus = {
   hostname: string | null;
   gateToken: string | null;
   connectorRunning: boolean;
+  tunnelId: string | null;
+  cloudflaredInstalled: boolean;
+  cloudflaredPath: string | null;
+  startOp: { running: boolean; phase: string; detail: string | null };
+  install: { running: boolean; phase: string; percent: number | null; detail: string | null };
   error: string | null;
 };
 
@@ -52,6 +59,9 @@ export type TunnelHandle = {
   tunnelId: string;
   hostname: string;
   gateToken: string;
+  // HMAC(tunnelId) issued by the tunnel server at create time; required to
+  // delete a live tunnel (tunnel ids are public via the DNS CNAME).
+  deleteToken: string;
 };
 
 const CLOUDFLARED_CANDIDATES = [
@@ -60,6 +70,15 @@ const CLOUDFLARED_CANDIDATES = [
   "/usr/local/bin/cloudflared",
   "/usr/bin/cloudflared",
 ];
+function tunnelRuntimeHome(): string {
+  try {
+    const dir = path.join(os.tmpdir(), "teamclaw-cloudflared-home");
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  } catch {
+    return process.env.HOME ?? "/tmp";
+  }
+}
 
 function findCloudflared(): string | null {
   for (const bin of CLOUDFLARED_CANDIDATES) {
@@ -83,6 +102,8 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
   let child: ChildProcess | null = null;
   let handle: TunnelHandle | null = null;
   let lastError: string | null = null;
+  let startOp: { running: boolean; phase: string; detail: string | null } = { running: false, phase: "idle", detail: null };
+  let installState: { running: boolean; phase: string; percent: number | null; detail: string | null } = { running: false, phase: "idle", percent: null, detail: null };
 
   function isTunnelRequest(hostHeader: string | undefined): boolean {
     return Boolean(hostHeader && hostHeader.toLowerCase().endsWith(TUNNEL_HOST_SUFFIX));
@@ -95,26 +116,51 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
     return Boolean(match && match[1] === gateCookieValue(handle.gateToken, handle.tunnelId));
   }
 
+  function launchStart(githubUser: string): { running: boolean; phase: string } {
+    if (startOp.running) return { running: true, phase: startOp.phase };
+    startOp = { running: true, phase: "creating-tunnel", detail: null };
+    void (async () => {
+      try {
+        const h = await start(githubUser);
+        startOp = { running: false, phase: "done", detail: h.hostname };
+      } catch (e) {
+        startOp = { running: false, phase: "error", detail: e instanceof Error ? e.message : String(e) };
+      }
+    })();
+    return { running: true, phase: startOp.phase };
+  }
+
   async function start(githubUser: string): Promise<TunnelHandle> {
     if (handle && child) return handle;
     const bin = findCloudflared();
     if (!bin) throw new Error("cloudflared not found (brew install cloudflared)");
     const gateToken = randomBytes(6).toString("base64url").replace(/[-_]/g, "").slice(0, 8).toUpperCase();
     const res = await tunnelFetch("/tunnels", "POST", { github_user: githubUser, local_port: deps.localPort });
-    const body = (await res.json().catch(() => ({}))) as { tunnel_id?: string; connector_token?: string; hostname?: string; error?: string };
+    const body = res.json as { tunnel_id?: string; connector_token?: string; hostname?: string; delete_token?: string; error?: string };
     if (res.status !== 201 || !body.tunnel_id || !body.connector_token || !body.hostname) {
       throw new Error(body.error ?? `tunnel server responded ${res.status}`);
     }
+    startOp = { running: true, phase: "starting-connector", detail: body.hostname };
     stopConnector();
-    child = spawn(bin, ["tunnel", "--no-autoupdate", "run", "--token", body.connector_token], {
-      stdio: ["ignore", "ignore", "ignore"],
+    child = spawn(bin, ["tunnel", "--no-autoupdate", "--protocol", "http2", "run", "--token", body.connector_token], {
+      stdio: ["ignore", "ignore", "pipe"],
       detached: false,
+      // Isolate from ~/.cloudflared/cert.pem (a local origin-cert would
+      // override the remotely-managed token config) and from QUIC-blocking
+      // networks (http2 rides regular TCP 443).
+      env: { ...process.env, HOME: tunnelRuntimeHome() },
     });
     child.on("exit", (code: number | null) => {
       logger.warn(`TeamClaw tunnel: cloudflared exited (code ${code})`);
       child = null;
     });
-    handle = { tunnelId: body.tunnel_id, hostname: body.hostname, gateToken };
+    // cloudflared logs land in a rotating-free single file for diagnosis.
+    const logPath = path.join(tunnelRuntimeHome(), "cloudflared.log");
+    const logFd = fs.openSync(logPath, "a");
+    child.stderr?.pipe(fs.createWriteStream(logPath, { flags: "a" }));
+    child.stdout?.pipe(fs.createWriteStream(logPath, { flags: "a" }));
+    fs.closeSync(logFd);
+    handle = { tunnelId: body.tunnel_id, hostname: body.hostname, gateToken, deleteToken: body.delete_token ?? "" };
     lastError = null;
     logger.info(`TeamClaw tunnel: serving https://${body.hostname}`);
     return handle;
@@ -132,7 +178,7 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
     if (handle) {
       const gone = handle;
       handle = null;
-      await tunnelFetch(`/tunnels/${gone.tunnelId}?user=${encodeURIComponent(gone.hostname.split(".")[0]!)}`, "DELETE").catch(() => undefined);
+      await tunnelFetch(`/tunnels/${gone.tunnelId}?user=${encodeURIComponent(gone.hostname.split(".")[0]!.replace(/^team-/, ""))}&token=${encodeURIComponent(gone.deleteToken)}`, "DELETE").catch(() => undefined);
       logger.info(`TeamClaw tunnel: stopped ${gone.hostname}`);
     }
   }
@@ -140,14 +186,102 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
   function status(): TunnelStatus {
     return {
       active: Boolean(handle),
+      tunnelId: handle?.tunnelId ?? null,
       hostname: handle?.hostname ?? null,
       gateToken: handle?.gateToken ?? null,
       connectorRunning: Boolean(child),
+      cloudflaredInstalled: findCloudflared() !== null,
+      cloudflaredPath: findCloudflared(),
+      startOp: { ...startOp },
+      install: { ...installState },
       error: lastError,
     };
   }
 
-  return { start, stop, status, isTunnelRequest, gateAllows };
+  /**
+   * One-click cloudflared install across platforms:
+   *   darwin  -> brew install cloudflared (Homebrew), tarball fallback
+   *   linux   -> official tarball into ~/.local/bin (no sudo needed)
+   *   win32   -> winget install Cloudflare.cloudflared
+   */
+
+  function installCloudflared(): Promise<{ ok: boolean; detail: string }> {
+    if (installState.running) {
+      return Promise.resolve({ ok: false, detail: "install already in progress" });
+    }
+    const home = process.env.HOME ?? "/tmp";
+    const userBin = path.join(home, ".local", "bin");
+    const target = path.join(userBin, "cloudflared");
+    const tail = (s: string) => s.trim().split("\n").slice(-2).join(" ").slice(0, 200);
+    const setPhase = (phase: string, percent: number | null, detail: string | null) => {
+      installState = { running: true, phase, percent, detail };
+    };
+    const finish = (phase: string, detail: string) => {
+      installState = { running: false, phase, percent: phase === "done" ? 100 : null, detail };
+    };
+    const run = (cmd: string, args: string[]) =>
+      new Promise<{ code: number; out: string }>((resolve) => {
+        const proc = spawn(cmd, args, { stdio: ["ignore", "pipe", "pipe"] });
+        let out = "";
+        proc.stdout?.on("data", (c) => (out += c));
+        proc.stderr?.on("data", (c) => (out += c));
+        proc.on("error", (e) => resolve({ code: 1, out: String(e) }));
+        proc.on("close", (code) => resolve({ code: code ?? 1, out }));
+      });
+
+    const job = (async (): Promise<{ ok: boolean; detail: string }> => {
+      const plat = process.platform + ":" + process.arch;
+      logger.info("TeamClaw tunnel: installing cloudflared for " + plat);
+      setPhase("installing", null, plat);
+      if (process.platform === "win32") {
+        const w = await run("winget", ["install", "--id", "Cloudflare.cloudflared", "--accept-source-agreements", "--accept-package-agreements"]);
+        return w.code === 0 ? { ok: true, detail: "installed via winget" } : { ok: false, detail: "winget: " + tail(w.out) };
+      }
+      if (process.platform === "darwin") {
+        setPhase("brew", 30, "Homebrew");
+        const brew = await run("brew", ["install", "cloudflared"]);
+        if (brew.code === 0) return { ok: true, detail: "installed via Homebrew" };
+      }
+      const arch = process.arch === "arm64" ? "arm64" : process.arch === "ia32" ? "386" : "amd64";
+      const name = process.platform === "darwin" ? "cloudflared-darwin-" + arch + ".tgz" : "cloudflared-linux-" + arch + ".tgz";
+      fs.mkdirSync(userBin, { recursive: true });
+      const tgz = path.join(userBin, name);
+      const url = "https://github.com/cloudflare/cloudflared/releases/latest/download/" + name;
+      let total = 0;
+      try {
+        const head = await new Promise<import("node:http").IncomingMessage>((resolve, reject) => {
+          const r = https.request(url, { method: "HEAD" } as never, resolve as never);
+          r.on("error", reject); r.end();
+        });
+        total = Number(head.headers["content-length"] ?? 0);
+      } catch { total = 0; }
+      setPhase("downloading", 0, url);
+      const timer = setInterval(() => {
+        try {
+          const size = fs.statSync(tgz).size;
+          if (total > 0) setPhase("downloading", Math.min(99, Math.floor((size / total) * 100)), null);
+        } catch { /* file not created yet */ }
+      }, 500);
+      const dl = await run("curl", ["-fsSL", "--retry", "3", "-o", tgz, url]);
+      clearInterval(timer);
+      if (dl.code !== 0) return { ok: false, detail: "download: " + tail(dl.out) };
+      setPhase("extracting", 99, null);
+      const ex = await run("tar", ["xzf", tgz, "-C", userBin]);
+      fs.rmSync(tgz, { force: true });
+      if (ex.code !== 0) return { ok: false, detail: "extract: " + tail(ex.out) };
+      fs.chmodSync(target, 0o755);
+      return { ok: true, detail: "installed to " + target };
+    })();
+
+    job.then(
+      (r) => finish(r.ok ? "done" : "error", r.detail),
+      (e) => finish("error", String(e)),
+    );
+    return job;
+  }
+
+
+  return { start: launchStart, stop, status, installCloudflared, isTunnelRequest, gateAllows };
 }
 
 export type TunnelManager = ReturnType<typeof createTunnelManager>;

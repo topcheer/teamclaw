@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
 import zlib from "node:zlib";
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawPluginApi, PluginLogger } from "../../api.js";
@@ -3583,6 +3584,52 @@ async function cancelTaskExecution(
   }, deps);
 }
 
+// Tunnel/CDN caches rewrite the origin's Cache-Control: no-cache into a long
+// browser freeze for cacheable extensions like .js (observed: Cloudflare
+// Browser Cache TTL max-age=14400 on tunneled UI assets). A UI update then
+// never reaches visitors through the tunnel. Serving content-versioned URLs
+// (?v=<hash>) makes every UI deploy a URL no browser or edge has ever seen,
+// so stale-cache behavior cannot recur.
+const uiAssetVersionCache = new Map<string, { mtimeMs: number; version: string }>();
+
+function uiAssetVersion(uiPath: string, file: string): string {
+  const full = path.join(uiPath, file);
+  try {
+    const mtimeMs = fs.statSync(full).mtimeMs;
+    const cached = uiAssetVersionCache.get(full);
+    if (cached && cached.mtimeMs === mtimeMs) return cached.version;
+    const version = createHash("sha1").update(fs.readFileSync(full)).digest("hex").slice(0, 10);
+    uiAssetVersionCache.set(full, { mtimeMs, version });
+    return version;
+  } catch {
+    return String(Date.now()); // unreadable asset: bust for this request
+  }
+}
+
+const UI_HTML_ASSET_REFS = [
+  "/ui/style.css",
+  "/ui/app.js",
+  "/ui/assets/teamclaw-app-icon.png",
+];
+
+function serveVersionedHtml(res: ServerResponse, htmlPath: string): void {
+  try {
+    const uiPath = path.dirname(htmlPath);
+    let html = fs.readFileSync(htmlPath, "utf8");
+    for (const ref of UI_HTML_ASSET_REFS) {
+      html = html.split(`"${ref}"`).join(`"${ref}?v=${uiAssetVersion(uiPath, ref.slice("/ui/".length))}"`);
+    }
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Access-Control-Allow-Origin": "*",
+      "Cache-Control": "no-cache",
+    });
+    res.end(html);
+  } catch {
+    sendError(res, 404, "File not found");
+  }
+}
+
 function serveStaticFile(res: ServerResponse, filePath: string, contentType: string): void {
   try {
     const content = fs.readFileSync(filePath);
@@ -4694,6 +4741,13 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
     const viaTunnel = tunnelManager.isTunnelRequest(typeof req.headers.host === "string" ? req.headers.host : undefined);
     if (viaTunnel) {
       if (req.method === "GET" && (pathname === "/__tunnel_gate" || pathname === "/")) {
+        // Valid gate cookie on "/" goes straight to the dashboard; the gate
+        // page only greets visitors who have not authenticated yet.
+        if (pathname === "/" && tunnelManager.gateAllows(req)) {
+          res.writeHead(302, { Location: "/ui/" });
+          res.end();
+          return;
+        }
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
         res.end(gatePageHtml(String(req.headers.host), false));
         return;
@@ -4703,7 +4757,7 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
         const submitted = String((form as { token?: unknown }).token ?? "").trim().toUpperCase();
         const st = tunnelManager.status();
         if (st.active && st.gateToken && submitted === st.gateToken) {
-          const cookie = `${GATE_COOKIE_NAME}=${computeGateCookie(st.gateToken, st.hostname ?? "")}; Path=/; Max-Age=43200; HttpOnly; SameSite=Lax`;
+          const cookie = `${GATE_COOKIE_NAME}=${computeGateCookie(st.gateToken, st.tunnelId ?? "")}; Path=/; Max-Age=43200; HttpOnly; SameSite=Lax`;
           res.writeHead(302, { "Set-Cookie": cookie, Location: "/" });
           res.end();
           return;
@@ -4726,17 +4780,24 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
         const authStatus = await getGithubAuthManager(deps.config, logger).getStatus();
         const account = authStatus.account;
         if (!account?.login) { sendError(res, 401, "GitHub login required to share a tunnel"); return; }
-        try {
-          const h = await tunnelManager.start(account.login);
-          sendJson(res, 201, { hostname: h.hostname, gateToken: h.gateToken, tunnelId: h.tunnelId });
-        } catch (err) {
-          sendError(res, 502, err instanceof Error ? err.message : "tunnel start failed");
-        }
+        // Async launch: poll /tunnel/status for phase progress and the
+        // resulting hostname/gateToken once startOp.phase === "done".
+        const launched = tunnelManager.start(account.login);
+        sendJson(res, 202, { launched, status: tunnelManager.status() });
         return;
       }
       if (req.method === "POST" && pathname === "/api/v1/tunnel/stop") {
         await tunnelManager.stop();
         sendJson(res, 200, tunnelManager.status());
+        return;
+      }
+      if (req.method === "POST" && pathname === "/api/v1/tunnel/install-cloudflared") {
+        try {
+          const result = await tunnelManager.installCloudflared();
+          sendJson(res, result.ok ? 200 : 500, { ...result, status: tunnelManager.status() });
+        } catch (err) {
+          sendError(res, 500, err instanceof Error ? err.message : "install failed");
+        }
         return;
       }
     }
@@ -4751,6 +4812,12 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
 
   // Attach WebSocket
   wsServer.attach(server);
+
+  // Plugin shutdown: kill the local connector and tear down the remote
+  // tunnel so gateway exits never leak orphan cloudflared processes.
+  server.on("close", () => {
+    void tunnelManagerSingleton?.stop().catch(() => undefined);
+  });
 
   setTimeout(() => {
     const state = deps.getTeamState();
@@ -4824,7 +4891,7 @@ async function handleRequest(
 
   if (req.method === "GET" && (pathname === "/ui" || pathname === "/ui/")) {
     const uiPath = path.join(import.meta.dirname, "..", "ui");
-    serveStaticFile(res, path.join(uiPath, "index.html"), "text/html; charset=utf-8");
+    serveVersionedHtml(res, path.join(uiPath, "index.html"));
     return;
   }
 
