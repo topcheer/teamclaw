@@ -154,12 +154,27 @@ async function unitTests() {
   const scannerMod = await import(path.join(projectRoot, "src", "dist", "src", "teamauto", "scanner.js")).catch(() => null);
   assert.ok(storeMod && scannerMod, "teamauto modules must be built (run npm --prefix src run build first)");
 
-  // nextFireMs cadence parsing.
+  // nextFireMs cadence parsing: wall-clock aligned, restart-safe, strictly future.
   const schedMod = await import(path.join(projectRoot, "src", "dist", "src", "teamauto", "scheduler.js"));
-  assert.equal(schedMod.nextFireMs("*/30 * * * *"), 30 * 60_000);
-  assert.equal(schedMod.nextFireMs("@hourly"), 3600_000);
-  assert.equal(schedMod.nextFireMs("@daily"), 24 * 3600_000);
-  assert.equal(schedMod.nextFireMs("weird"), 30 * 60_000);
+  const at = (h, m, sec = 0, ms = 0) => new Date(2026, 10, 2, h, m, sec, ms).getTime();
+  const atDay = (day, h, m) => new Date(2026, 10, day, h, m, 0, 0).getTime();
+  // 17:23:58 -> the next */30 boundary is 17:30. The old interval semantics
+  // chained 30min from "now" (17:53) and never survived a gateway restart.
+  assert.equal(schedMod.nextFireMs("*/30 * * * *", at(17, 23, 58, 250)), at(17, 30) - at(17, 23, 58, 250));
+  // Exactly on a boundary means the NEXT boundary, never zero delay.
+  assert.equal(schedMod.nextFireMs("*/30 * * * *", at(17, 30)), 30 * 60_000);
+  assert.equal(schedMod.nextFireMs("@hourly", at(17, 23)), at(18, 0) - at(17, 23));
+  assert.equal(schedMod.nextFireMs("@daily", at(17, 23)), atDay(3, 0, 0) - at(17, 23));
+  // "0 */6 * * *" used to silently degrade to a 1-minute cadence.
+  assert.equal(schedMod.nextFireMs("0 */6 * * *", at(17, 23)), at(18, 0) - at(17, 23));
+  // "0 9 * * *" used to sweep every minute; now it is tomorrow 09:00 local.
+  assert.equal(schedMod.nextFireMs("0 9 * * *", at(17, 23)), atDay(3, 9, 0) - at(17, 23));
+  assert.equal(schedMod.nextFireMs("45 8 * * *", at(9, 0)), atDay(3, 8, 45) - at(9, 0));
+  assert.equal(schedMod.nextFireMs("5 * * * *", at(17, 6)), at(18, 5) - at(17, 6));
+  // Unsupported expressions must fail loudly instead of guessing a cadence.
+  assert.throws(() => schedMod.nextFireMs("weird"), /unsupported schedule/u);
+  assert.throws(() => schedMod.nextFireMs("30 4 * * 1"), /unsupported schedule/u);
+  assert.throws(() => schedMod.nextFireMs("0 25 * * *"), /unsupported schedule/u);
 
   // Daily budget with rollover.
   const store = storeMod.defaultPolicy ? { budget: { maxTasksPerDay: 2, tasksToday: 0, dayStamp: "2000-01-01", firstSweepDryRun: true } } : null;
