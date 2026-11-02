@@ -147,14 +147,28 @@ async function installOpenClawLocally(options) {
 }
 
 async function createMainWindow() {
+  // Titleless chrome: the OS title bar is replaced by an in-page drag
+  // region (renderer/.titlebar) so the app title merges with the shell.
+  // macOS keeps native traffic lights (hiddenInset); Windows/Linux draw
+  // native min/max/close over the page via titleBarOverlay, tinted to the
+  // page background for a seamless look.
+  const isDarwin = process.platform === "darwin";
   mainWindow = new BrowserWindow({
     width: 1580,
     height: 980,
     minWidth: 1180,
     minHeight: 760,
-    backgroundColor: "#0b1020",
+    backgroundColor: "#faf9f7",
     title: "TeamClaw Desktop",
     icon: getDesktopIconPath(),
+    titleBarStyle: isDarwin ? "hiddenInset" : "hidden",
+    ...(isDarwin ? {} : {
+      titleBarOverlay: {
+        color: "#faf9f7",
+        symbolColor: "#26231d",
+        height: 40,
+      },
+    }),
     webPreferences: {
       preload: path.join(__dirname, "preload.mjs"),
       contextIsolation: true,

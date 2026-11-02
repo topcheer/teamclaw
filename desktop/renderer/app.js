@@ -1,6 +1,10 @@
 (function () {
   "use strict";
 
+  // Titleless window: platform drives titlebar insets (macOS traffic lights
+  // vs Windows/Linux overlay controls).
+  document.body.dataset.platform = window.teamclawDesktop?.platform || "";
+
   const desktop = window.teamclawDesktop;
   const STORAGE_KEY = "teamclaw-desktop-conversation";
   const SESSION_KEY = "teamclaw-desktop-session";

@@ -26,16 +26,49 @@
 html, body { margin: 0; height: 100%; }
 body {
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
   color: var(--text);
   font-family: "Fira Sans", "Inter", "SF Pro Text", "Segoe UI", Roboto, Arial, sans-serif;
   background: var(--bg);
+}
+
+/* Titleless window: the OS title bar is replaced by this in-page drag
+   region, merging the app title into the shell background. */
+.titlebar {
+  flex: none;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  -webkit-app-region: drag;
+  user-select: none;
+  padding: 0 16px;
+}
+.titlebar-title {
+  font-family: "Fira Code", ui-monospace, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+/* macOS: native traffic lights sit at the left; center the title. */
+body[data-platform="darwin"] .titlebar {
+  justify-content: center;
+  padding-left: 76px;
+  padding-right: 76px;
+}
+/* Windows/Linux: native overlay controls occupy the top-right corner. */
+body:not([data-platform="darwin"]) .titlebar {
+  justify-content: flex-start;
+  padding-right: 150px;
 }
 button, input, textarea { font: inherit; }
 .app-shell {
   display: grid;
   grid-template-columns: 248px 1fr;
   gap: 18px;
-  height: 100vh;
+  flex: 1;
   min-height: 0;
   padding: 18px;
 }
