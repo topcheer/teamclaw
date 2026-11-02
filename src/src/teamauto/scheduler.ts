@@ -1,5 +1,4 @@
 import { randomBytes } from "node:crypto";
-import path from "node:path";
 
 import type { PluginLogger } from "../../api.js";
 import type { GithubAuthManager } from "../controller/github-auth.js";
@@ -540,9 +539,11 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
 
   /** Collaboration contract: dispatch asks for a task-scoped worktree dir (rel to projects root). */
   async function ensureWriteWorktree(repoId: string, taskId: string): Promise<string> {
-    await sync.ensureCloned(repoId, `https://github.com/${repoId}.git`, "main").catch(() => undefined);
     const wtAbs = await sync.ensureTaskWorktree(repoId, taskId);
-    return path.basename(wtAbs);
+    void wtAbs;
+    // Rel dir INCLUDING the teamauto/ level (basename dropped it and pointed
+    // workers outside the git worktree).
+    return sync.taskWorktreeRelDir(repoId, taskId);
   }
 
   async function removeWriteWorktree(repoId: string, taskId: string): Promise<void> {
