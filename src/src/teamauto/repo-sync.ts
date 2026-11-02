@@ -181,7 +181,7 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
   async function removeTaskWorktree(repoId: string, taskId: string): Promise<void> {
     const base = await repoDir(repoId);
     const wtName = taskWorktreeDirName(repoId, taskId);
-    const wtPath = path.join(path.dirname(base), wtName);
+    const wtPath = path.join(path.dirname(base), path.basename(wtName));
     try {
       if (await fs.access(wtPath).then(() => true, () => false)) {
         await run(["worktree", "remove", "--force", wtPath], base);
