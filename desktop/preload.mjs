@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 contextBridge.exposeInMainWorld("teamclawDesktop", {
+  platform: process.platform,
   getSettings: () => ipcRenderer.invoke("settings:get"),
   saveSettings: (settings) => ipcRenderer.invoke("settings:save", settings),
   getLocalSetupInfo: () => ipcRenderer.invoke("controller:get-setup-info"),

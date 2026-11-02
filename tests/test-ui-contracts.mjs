@@ -112,6 +112,18 @@ async function runUiContractSmoke() {
   assert.match(uiHtml, /task-keyword/, "the tasks toolbar must expose a keyword input");
   assert.match(desktopApp, /TERMINAL_STATUSES\[a\.status\]/, "desktop sortTasks must use the same composite ordering");
 
+  // Desktop titleless window: in-page drag bar replaces the OS title bar.
+  const [desktopHtml, desktopMain, desktopStyle] = await Promise.all([
+    fs.readFile(path.join(projectRoot, "desktop", "renderer", "index.html"), "utf8"),
+    fs.readFile(path.join(projectRoot, "desktop", "main.mjs"), "utf8"),
+    fs.readFile(path.join(projectRoot, "desktop", "renderer", "style.css"), "utf8"),
+  ]);
+  assert.match(desktopHtml, /class="titlebar"/, "desktop shell must include the in-page titlebar");
+  assert.match(desktopMain, /titleBarStyle: isDarwin \? "hiddenInset" : "hidden"/, "window must hide the native title bar (hiddenInset on macOS)");
+  assert.match(desktopMain, /titleBarOverlay/, "Windows/Linux must keep native controls via titleBarOverlay");
+  assert.match(desktopStyle, /-webkit-app-region: drag/, "the titlebar must be the window drag region");
+  assert.match(desktopApp, /dataset\.platform/, "renderer must bind the platform for titlebar insets");
+
   console.log("UI contract smoke passed.");
 }
 
