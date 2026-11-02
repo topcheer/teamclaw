@@ -28,6 +28,9 @@ TeamClaw is currently **validated end-to-end** on the feasible benchmark topolog
 
 - Installation guide: [`INSTALL.md`](./INSTALL.md)
 - Design and architecture notes: [`DESIGN.md`](./DESIGN.md)
+- TeamAuto autonomous GitHub loop: [`TEAMAUTO_DESIGN.md`](./TEAMAUTO_DESIGN.md) - joint multi-role reviews, read/write collaboration contract (worktree + PR delivery), checkpoint/resume, persisted activity
+- GitHub OAuth login: [`GITHUB_AUTH.md`](./GITHUB_AUTH.md)
+- Task checkpoint/resume design: [`CHECKPOINT_RESUME.md`](./CHECKPOINT_RESUME.md)
 - Package-facing README: [`src/README.md`](./src/README.md)
 - Desktop packaging and release commands: [`INSTALL.md#desktop-app-packaging-macos`](./INSTALL.md#desktop-app-packaging-macos)
 - Public marketing site: <https://topcheer.github.io/teamclaw/>
