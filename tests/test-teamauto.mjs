@@ -95,6 +95,9 @@ async function sourceContracts() {
   assert.match(scheduler, /kind: "sweep"/, "sweeps must be recorded");
   assert.match(scheduler, /kind: "writeback"/, "write-backs must be recorded");
   assert.match(scheduler, /kind: "bind"/, "binds must be recorded");
+  assert.match(scanner, /JOINT_REVIEW_ROLES/, "joint review roles must be an explicit shared constant");
+  assert.match(scheduler, /cycleKey/, "write-backs must carry the joint review cycle key");
+  assert.match(scheduler, /Joint full review/, "same-cycle sections must converge into one umbrella issue");
   assert.match(httpServer, /\/api\/v1\/teamauto\/activity/, "controller must expose the activity endpoint");
   assert.match(uiAppSrc, /teamauto-activity/, "web UI must render the activity feed");
   assert.match(desktopApp, /ta-activity/, "desktop must render the activity feed");
@@ -175,11 +178,15 @@ async function unitTests() {
   // gate deadlocked dry-run repos with zero candidates). Filtering still applies:
   // issue 2 (assigned), 3 (own thread), 4 (label) drop; PR 10 (ours) drops.
   const first = await scannerMod.sweepRepo(repo, stubClient);
-  assert.equal(first.candidates.length, 4, "first sweep surfaces the filtered backlog (issue #1 review+ownership, PR #9 review, fullReview pending schedule)");
+  assert.equal(first.candidates.length, 6, "first sweep surfaces the filtered backlog (issue #1 review+ownership, PR #9 review, plus 3 joint fullReview sections)");
   const firstKinds = first.candidates.map((c) => c.kind).sort().join(",");
   assert.match(firstKinds, /issueReview/);
   assert.match(firstKinds, /takeOwnership/);
   assert.match(firstKinds, /prReview/);
+  const jointRoles = first.candidates.filter((c) => c.kind === "fullReview").map((c) => c.role).sort().join(",");
+  assert.equal(jointRoles, "architect,qa,security-engineer", "full review fans out one section per joint role");
+  const cycles = new Set(first.candidates.filter((c) => c.kind === "fullReview").map((c) => c.cycle));
+  assert.equal(cycles.size, 1, "all joint sections share one cycle id");
   scannerMod.advanceCursors(repo, first.issues, first.pulls);
   // After advancing cursors the same backlog must not re-surface.
   const drained = await scannerMod.sweepRepo(repo, stubClient);
