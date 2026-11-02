@@ -144,6 +144,8 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       const message = err instanceof Error ? err.message : String(err);
       logger.warn(`TeamAuto: provisioning failed for ${repoId}: ${message}`);
       await updateRepoProvision(repoId, { status: "failed", message });
+      const sFailed = await ensureStore();
+      recordActivity(sFailed, { at: Date.now(), repoId, kind: "provision", text: `failed: ${message}` });
     }
   }
 

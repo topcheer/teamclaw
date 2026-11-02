@@ -1610,6 +1610,13 @@
       return;
     }
     recentNoticeKeys[dedupeKey] = now;
+    if (Object.keys(recentNoticeKeys).length > 200) {
+      for (var staleKey in recentNoticeKeys) {
+        if (now - recentNoticeKeys[staleKey] >= 4000) {
+          delete recentNoticeKeys[staleKey];
+        }
+      }
+    }
     let container = document.getElementById("toast-container");
     if (!container) {
       container = document.createElement("div");
