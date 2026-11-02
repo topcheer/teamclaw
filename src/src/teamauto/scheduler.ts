@@ -303,11 +303,12 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
   function enqueueCandidate(repo: TeamAutoRepo, candidate: Candidate): string | undefined {
     let createdId: string | undefined;
     deps.updateTeamState((state) => {
-      // Idempotency: an active task for the same object wins. The key rides
-      // in the description (TaskInfo has no dedicated field) and must be a
-      // distinct marked line - titles contain human text that never matches
-      // the raw key (that was the pre-fix bug).
-      const dedupMarker = `Idempotency-Key: ${candidate.key}`;
+      // Idempotency: an active task for the same object AND kind wins. The
+      // key rides in the description (TaskInfo has no dedicated field) and
+      // must be a distinct marked line - titles contain human text that never
+      // matches the raw key (that was the pre-fix bug). Kind-scoping matters:
+      // object-level keys starved takeOwnership (review always enqueued first).
+      const dedupMarker = `Idempotency-Key: ${candidate.key}:${candidate.kind}`;
       const duplicate = Object.values(state.tasks).find(
         (t) => t.description.includes(dedupMarker) && t.status !== "completed" && t.status !== "failed",
       );
