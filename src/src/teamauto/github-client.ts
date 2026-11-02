@@ -223,6 +223,15 @@ export function createGithubClient(auth: GithubAuthManager) {
       await request("POST", `/repos/${owner}/${repo}/issues/${issueNumber}/assignees`, { body: { assignees: [assignee] } });
     },
 
+    /** Open a PR from a task worktree branch (collaboration contract delivery). */
+    async createPullRequest(owner: string, repo: string, head: string, base: string, title: string, body: string): Promise<{ number: number; url: string }> {
+      const { data } = await request("POST", `/repos/${owner}/${repo}/pulls`, {
+        body: { title, head, base, body },
+      });
+      const item = data as { number?: number; html_url?: string };
+      return { number: Number(item.number ?? 0), url: String(item.html_url ?? "") };
+    },
+
     /** Repos the logged-in user can select in the TeamAuto bind picker. */
     async listUserRepos(): Promise<{ id: string; fullName: string; private: boolean; pushedAt: string | null }[]> {
       const data = await getJson<unknown[]>("/user/repos?affiliation=owner,collaborator,organization_member&sort=pushed&per_page=100");

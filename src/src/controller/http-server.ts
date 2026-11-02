@@ -3465,6 +3465,22 @@ function scheduleProvisioningReconcile(deps: ControllerHttpDeps, reason: string)
   void deps.workerProvisioningManager?.requestReconcile(reason);
 }
 
+/** Collaboration contract helpers: at most ONE active write task per repo checkout. */
+function taskWriteRoot(task: TaskInfo): string | null {
+  if (task.writeMode === "read-only" || !task.projectDir) { return null; }
+  return task.projectDir.split("__task-")[0] ?? task.projectDir;
+}
+
+function activeWriteRoots(state: TeamState): Set<string> {
+  const roots = new Set<string>();
+  for (const t of Object.values(state.tasks)) {
+    if (t.status !== "assigned" && t.status !== "in_progress") { continue; }
+    const root = taskWriteRoot(t);
+    if (root) { roots.add(root); }
+  }
+  return roots;
+}
+
 function broadcastTaskExecutionEvent(
   taskId: string,
   task: TaskInfo,
@@ -4411,7 +4427,7 @@ async function dispatchTaskToWorker(
   worker: WorkerInfo,
   deps: ControllerHttpDeps,
 ): Promise<void> {
-  const { getTeamState } = deps;
+  const { getTeamState, logger, updateTeamState } = deps;
   const state = getTeamState();
   const task = state?.tasks[taskId];
   if (!task) {
@@ -4422,6 +4438,27 @@ async function dispatchTaskToWorker(
   if (task.projectDir) {
     const projectPath = path.join(resolveTeamClawProjectsDir(), task.projectDir);
     try { fs.mkdirSync(projectPath, { recursive: true }); } catch { /* best-effort */ }
+  }
+
+  // Collaboration contract: WRITE tasks execute in a task-scoped git worktree
+  // (branch teamclaw/task-<id>) so parallel roles never share a dirty checkout;
+  // delivery happens via push + PR in the write-back reconciler.
+  let assignmentProjectDir = task.projectDir;
+  if (task.writeMode === "write" && task.projectDir?.startsWith("teamauto/") && !task.projectDir.includes("__task-")) {
+    const scheduler = deps.getTeamAutoScheduler?.();
+    if (scheduler) {
+      const repoId = task.projectDir.slice("teamauto/".length).replace(/__/g, "/");
+      try {
+        assignmentProjectDir = await scheduler.ensureWriteWorktree(repoId, taskId);
+        updateTeamState((s) => {
+          const t = s.tasks[taskId];
+          if (t) { t.projectDir = assignmentProjectDir; }
+        });
+        logger.info(`Controller: write task ${taskId} -> worktree projects/${assignmentProjectDir}`);
+      } catch (err) {
+        logger.warn(`Controller: worktree setup failed for ${taskId}, falling back to shared checkout: ${String(err)}`);
+      }
+    }
   }
 
   const sharedWorkspace = deps.workerProvisioningManager?.isSharedWorkspaceWorker(worker.id)
@@ -4441,7 +4478,7 @@ async function dispatchTaskToWorker(
     description,
     priority: task.priority,
     recommendedSkills,
-    projectDir: task.projectDir,
+    projectDir: assignmentProjectDir,
     executionSessionKey: executionIdentity.executionSessionKey,
     executionIdempotencyKey: executionIdentity.executionIdempotencyKey,
     checkpoint: task.checkpoint,
@@ -4558,9 +4595,16 @@ export async function autoAssignPendingTasks(
       break;
     }
 
+    // Collaboration contract: serialize write tasks per repo checkout - a
+    // second writer on the same root waits until the active one settles.
+    const busyWriteRoots = activeWriteRoots(state);
     const candidateAssignments = taskRouter
       .autoAssignPendingTasks(state.tasks, state.workers)
-      .filter(({ task, worker }) => !attemptedPairs.has(`${task.id}:${worker.id}`));
+      .filter(({ task, worker }) => !attemptedPairs.has(`${task.id}:${worker.id}`))
+      .filter(({ task }) => {
+        const root = taskWriteRoot(task);
+        return !(root && busyWriteRoots.has(root));
+      });
 
     const nextAssignment = (
       (preferredWorkerId
