@@ -92,6 +92,21 @@
       "toast.clarificationRequested": "Clarification needed",
       "toast.clarificationAnswered": "Clarification answered",
       "toast.teamautoPrefix": "TeamAuto",
+      "toast.workerOnline": "Worker online",
+      "toast.workerOffline": "Worker offline",
+      "toast.taskCreated": "Task created",
+      "toast.taskUpdated": "Task updated",
+      "toast.messageNew": "New message",
+      "toast.settingsTitle": "Toast notifications",
+      "toast.enableAll": "Enable all",
+      "toast.disableAll": "Disable all",
+      "toast.freqTaskCompleted": "Low - once per task",
+      "toast.freqTaskCreated": "Medium - once per flow stage",
+      "toast.freqTaskUpdated": "High - several times per task lifecycle",
+      "toast.freqClarification": "Rare - only when a worker needs a human decision",
+      "toast.freqWorker": "Topology-dependent - external workers rare; provisioned workers may cycle every task (idle TTL 120s)",
+      "toast.freqTeamauto": "Low - per sweep, claim, or write-back",
+      "toast.freqMessageNew": "High - every controller message",
       "empty.noMessages": "No messages yet",
       "empty.noPlanningSessions": "No planning sessions yet",
       "empty.noKickoffData": "No kickoff data",
@@ -225,6 +240,21 @@
       "toast.clarificationRequested": "需要澄清",
       "toast.clarificationAnswered": "澄清已回答",
       "toast.teamautoPrefix": "TeamAuto",
+      "toast.workerOnline": "Worker 上线",
+      "toast.workerOffline": "Worker 下线",
+      "toast.taskCreated": "任务已创建",
+      "toast.taskUpdated": "任务更新",
+      "toast.messageNew": "新消息",
+      "toast.settingsTitle": "Toast 通知管理",
+      "toast.enableAll": "全部启用",
+      "toast.disableAll": "全部关闭",
+      "toast.freqTaskCompleted": "低 - 每任务一次",
+      "toast.freqTaskCreated": "中 - 每阶段一次",
+      "toast.freqTaskUpdated": "高 - 每任务生命周期多次",
+      "toast.freqClarification": "很少 - 仅当 worker 需要人来决策时",
+      "toast.freqWorker": "视拓扑而定 - 外部 worker 很少；按需供给 worker 可能每任务上下线一次（空闲 120 秒回收）",
+      "toast.freqTeamauto": "低 - 每次扫描/认领/回写",
+      "toast.freqMessageNew": "高 - 每条 controller 消息",
       "empty.noMessages": "暂无消息",
       "empty.noPlanningSessions": "暂无规划会话",
       "empty.noKickoffData": "暂无 kickoff 数据",
@@ -1405,11 +1435,150 @@
     setTimeout(dismiss, 5000);
   }
 
+  var TOAST_PREFS_KEY = "teamclaw.toast.prefs.v1";
+  var TOAST_EVENT_DEFS = [
+    { id: "task:completed", titleKey: "toast.taskCompleted", freqKey: "toast.freqTaskCompleted" },
+    { id: "task:created", titleKey: "toast.taskCreated", freqKey: "toast.freqTaskCreated" },
+    { id: "task:updated", titleKey: "toast.taskUpdated", freqKey: "toast.freqTaskUpdated" },
+    { id: "clarification:requested", titleKey: "toast.clarificationRequested", freqKey: "toast.freqClarification" },
+    { id: "clarification:answered", titleKey: "toast.clarificationAnswered", freqKey: "toast.freqClarification" },
+    { id: "worker:online", titleKey: "toast.workerOnline", freqKey: "toast.freqWorker" },
+    { id: "worker:offline", titleKey: "toast.workerOffline", freqKey: "toast.freqWorker" },
+    { id: "teamauto:activity", titleKey: "toast.teamautoPrefix", freqKey: "toast.freqTeamauto" },
+    { id: "message:new", titleKey: "toast.messageNew", freqKey: "toast.freqMessageNew" },
+  ];
+
+  function loadToastPrefs() {
+    try {
+      var raw = window.localStorage.getItem(TOAST_PREFS_KEY);
+      if (raw) {
+        var parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object") {
+          return parsed;
+        }
+      }
+    } catch (_err) {}
+    return {};
+  }
+
+  function toastEnabled(eventId) {
+    // All event toasts are enabled by default; users opt out per event.
+    return loadToastPrefs()[eventId] !== false;
+  }
+
+  function setToastPref(eventId, enabled) {
+    var prefs = loadToastPrefs();
+    prefs[eventId] = !!enabled;
+    try {
+      window.localStorage.setItem(TOAST_PREFS_KEY, JSON.stringify(prefs));
+    } catch (_err) {}
+  }
+
+  function workerEventLabel(data) {
+    data = data || {};
+    return String(data.id || data.workerId || data.name || data.role || "");
+  }
+
+  function messageEventLabel(data) {
+    data = data || {};
+    var from = data.fromRole || data.role || data.sender || "";
+    var text = String(data.text || data.content || data.body || "").slice(0, 80);
+    return (from ? from + ": " : "") + text;
+  }
+
+  function toggleToastSettingsPanel() {
+    var existing = document.getElementById("toast-settings-panel");
+    if (existing) {
+      existing.remove();
+      return;
+    }
+    var panel = document.createElement("div");
+    panel.id = "toast-settings-panel";
+    panel.style.cssText = "position:fixed;top:64px;right:16px;z-index:2100;background:#111827;color:#fff;"
+      + "border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,0.4);padding:16px;"
+      + "min-width:320px;max-width:min(430px,92vw);font-size:13px;line-height:1.5;";
+    var head = document.createElement("div");
+    head.style.cssText = "display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;";
+    var title = document.createElement("div");
+    title.style.fontWeight = "600";
+    title.textContent = t("toast.settingsTitle");
+    var close = document.createElement("button");
+    close.type = "button";
+    close.textContent = t("teamauto.close");
+    close.style.cssText = "background:none;border:1px solid rgba(255,255,255,0.3);color:#fff;border-radius:6px;padding:2px 8px;cursor:pointer;font-size:12px;";
+    close.addEventListener("click", function () { panel.remove(); });
+    head.appendChild(title);
+    head.appendChild(close);
+    panel.appendChild(head);
+    var prefs = loadToastPrefs();
+    TOAST_EVENT_DEFS.forEach(function (def) {
+      var row = document.createElement("label");
+      row.style.cssText = "display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-top:1px solid rgba(255,255,255,0.08);cursor:pointer;";
+      var box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = prefs[def.id] !== false;
+      box.style.marginTop = "3px";
+      box.addEventListener("change", function () {
+        setToastPref(def.id, box.checked);
+      });
+      var text = document.createElement("div");
+      var name = document.createElement("div");
+      name.style.fontWeight = "600";
+      name.textContent = t(def.titleKey);
+      var freq = document.createElement("div");
+      freq.style.cssText = "opacity:0.65;font-size:12px;";
+      freq.textContent = t(def.freqKey);
+      text.appendChild(name);
+      text.appendChild(freq);
+      row.appendChild(box);
+      row.appendChild(text);
+      panel.appendChild(row);
+    });
+    var foot = document.createElement("div");
+    foot.style.cssText = "display:flex;gap:8px;justify-content:flex-end;margin-top:10px;";
+    var allOn = document.createElement("button");
+    allOn.type = "button";
+    allOn.textContent = t("toast.enableAll");
+    var allOff = document.createElement("button");
+    allOff.type = "button";
+    allOff.textContent = t("toast.disableAll");
+    [allOn, allOff].forEach(function (btn) {
+      btn.style.cssText = "background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.25);color:#fff;border-radius:6px;padding:4px 10px;cursor:pointer;font-size:12px;";
+    });
+    allOn.addEventListener("click", function () {
+      TOAST_EVENT_DEFS.forEach(function (def) { setToastPref(def.id, true); });
+      panel.remove();
+      toggleToastSettingsPanel();
+    });
+    allOff.addEventListener("click", function () {
+      TOAST_EVENT_DEFS.forEach(function (def) { setToastPref(def.id, false); });
+      panel.remove();
+      toggleToastSettingsPanel();
+    });
+    foot.appendChild(allOff);
+    foot.appendChild(allOn);
+    panel.appendChild(foot);
+    document.body.appendChild(panel);
+  }
+
+  var toastSettingsToggle = $("#toast-settings-toggle");
+  if (toastSettingsToggle) {
+    toastSettingsToggle.addEventListener("click", function (event) {
+      event.stopPropagation();
+      toggleToastSettingsPanel();
+    });
+  }
+
   const recentNoticeKeys = {};
 
-  function showNotice(kind, title, body) {
-    // Status-change toasts (task completed / clarifications / TeamAuto activity).
-    // Deduped against event bursts and capped so a busy team cannot flood the corner.
+  function showNotice(eventId, kind, title, body) {
+    // Status-change toasts (task/worker/clarification/TeamAuto events).
+    // Per-event toggles persist in localStorage (all on by default);
+    // deduped against event bursts and capped so a busy team cannot
+    // flood the corner.
+    if (!toastEnabled(eventId)) {
+      return;
+    }
     const now = Date.now();
     const dedupeKey = kind + "|" + title + "|" + body;
     if (recentNoticeKeys[dedupeKey] && now - recentNoticeKeys[dedupeKey] < 4000) {
@@ -1423,7 +1592,7 @@
       container.style.cssText = "position:fixed;bottom:24px;right:24px;z-index:2000;display:flex;flex-direction:column;gap:10px;max-width:min(420px,80vw);";
       document.body.appendChild(container);
     }
-    while (container.children.length >= 4) {
+    while (container.children.length >= 6) {
       container.removeChild(container.firstChild);
     }
     const toast = document.createElement("div");
@@ -2015,14 +2184,30 @@
         handleTaskExecutionEvent(event.data || {});
         break;
       case "worker:online":
+        refreshAll();
+        showNotice("worker:online", "info", t("toast.workerOnline"), workerEventLabel(event.data));
+        break;
       case "worker:offline":
+        refreshAll();
+        showNotice("worker:offline", "info", t("toast.workerOffline"), workerEventLabel(event.data));
+        break;
       case "task:created":
-      case "task:updated":
-      case "message:new":
         refreshAll();
         if (selectedTaskId && taskId && taskId === selectedTaskId) {
           refreshTaskDetail(true);
         }
+        showNotice("task:created", "info", t("toast.taskCreated"), (event.data || {}).title || taskId || "");
+        break;
+      case "task:updated":
+        refreshAll();
+        if (selectedTaskId && taskId && taskId === selectedTaskId) {
+          refreshTaskDetail(true);
+        }
+        showNotice("task:updated", "info", t("toast.taskUpdated"), (event.data || {}).title || taskId || "");
+        break;
+      case "message:new":
+        refreshAll();
+        showNotice("message:new", "info", t("toast.messageNew"), messageEventLabel(event.data));
         break;
       case "task:completed": {
         refreshAll();
@@ -2032,7 +2217,7 @@
         const doneData = event.data || {};
         const doneStatus = String(doneData.status || "").toLowerCase();
         const doneFailed = doneStatus === "failed" || doneStatus === "blocked";
-        showNotice(doneFailed ? "attention" : "success",
+        showNotice("task:completed", doneFailed ? "attention" : "success",
           t(doneFailed ? "toast.taskFailed" : "toast.taskCompleted"),
           doneData.title || taskId || "");
         break;
@@ -2042,18 +2227,18 @@
         if (selectedTaskId && taskId && taskId === selectedTaskId) {
           refreshTaskDetail(true);
         }
-        showNotice("attention", t("toast.clarificationRequested"), (event.data || {}).question || taskId || "");
+        showNotice("clarification:requested", "attention", t("toast.clarificationRequested"), (event.data || {}).question || taskId || "");
         break;
       case "clarification:answered":
         refreshAll();
         if (selectedTaskId && taskId && taskId === selectedTaskId) {
           refreshTaskDetail(true);
         }
-        showNotice("info", t("toast.clarificationAnswered"), (event.data || {}).question || taskId || "");
+        showNotice("clarification:answered", "info", t("toast.clarificationAnswered"), (event.data || {}).question || taskId || "");
         break;
       case "teamauto:activity": {
         const entry = event.data || {};
-        showNotice("info", t("toast.teamautoPrefix") + " - " + String(entry.kind || "activity"),
+        showNotice("teamauto:activity", "info", t("toast.teamautoPrefix") + " - " + String(entry.kind || "activity"),
           String(entry.repoId || "") + (entry.text ? " - " + String(entry.text) : ""));
         break;
       }
