@@ -6,6 +6,7 @@ import type { RoleId, TaskInfo, TeamState } from "../types.js";
 import { createGithubClient } from "./github-client.js";
 import { learnNorms, renderNormsBlock } from "./norms.js";
 import { createRepoSync, teamAutoProjectDir } from "./repo-sync.js";
+import { nextFireMs } from "./schedule.js";
 import { advanceCursors, sweepRepo, type Candidate } from "./scanner.js";
 import {
   consumeDailyBudget,
@@ -34,22 +35,7 @@ function newId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${randomBytes(4).toString("hex")}`;
 }
 
-/** Minimal cron: supports minute-step schedules like "star-slash-n" (every n minutes), "@hourly", "@daily", plain-number fallback to minutes. */
-export function nextFireMs(schedule: string): number {
-  const trimmed = schedule.trim();
-  if (trimmed === "@hourly") {
-    return 3600_000;
-  }
-  if (trimmed === "@daily") {
-    return 24 * 3600_000;
-  }
-  const match = trimmed.match(/^\*\/(\d+)\s+\*\s+\*\s+\*\s+\*$/);
-  if (match) {
-    return Math.max(1, Number(match[1])) * 60_000;
-  }
-  const digits = trimmed.match(/\d+/);
-  return digits ? Math.max(1, Number(digits[0])) * 60_000 : 30 * 60_000;
-}
+export { nextFireMs, ScheduleParseError } from "./schedule.js";
 export type TeamAutoSchedulerDeps = {
   logger: PluginLogger;
   auth: GithubAuthManager;
@@ -98,10 +84,12 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     if (!info.permissions.pull) {
       throw new Error(`no read access to ${normalized}`);
     }
+    const schedule = options.schedule?.trim() || "*/30 * * * *";
+    nextFireMs(schedule); // validates: throws ScheduleParseError for unsupported expressions
     const repo: TeamAutoRepo = {
       id: normalized,
       enabled: true,
-      schedule: options.schedule?.trim() || "*/30 * * * *",
+      schedule,
       addedAt: Date.now(),
       lastSweepAt: 0,
       lastSweepSummary: null,
@@ -190,7 +178,9 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       throw new Error(`${repoId} not bound`);
     }
     if (patch.schedule?.trim()) {
-      repo.schedule = patch.schedule.trim();
+      const schedule = patch.schedule.trim();
+      nextFireMs(schedule); // validates before persisting
+      repo.schedule = schedule;
     }
     if (typeof patch.maxTasksPerSweep === "number" && patch.maxTasksPerSweep > 0) {
       repo.policy.maxTasksPerSweep = Math.min(20, Math.floor(patch.maxTasksPerSweep));
@@ -519,7 +509,13 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     if (!repo.enabled) {
       return;
     }
-    const delay = nextFireMs(repo.schedule);
+    let delay: number;
+    try {
+      delay = nextFireMs(repo.schedule);
+    } catch (err) {
+      logger.error(`TeamAuto: ${repo.id} has an unsupported schedule "${repo.schedule}" and will not be scheduled: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
     const timer = setTimeout(() => {
       void (async () => {
         const s = await ensureStore();
