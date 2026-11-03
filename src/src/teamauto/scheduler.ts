@@ -46,8 +46,21 @@ export type TeamAutoSchedulerDeps = {
   onActivity?: (entry: TeamAutoActivityEntry) => void;
 };
 
-/** Max failed attempts before a candidate is permanently skipped (dead-lettered). */
+/** Max HARD (non-transient) failures before a candidate is dead-lettered. */
 export const TEAMAUTO_DEAD_LETTER_ATTEMPTS = 3;
+
+/** Max TOTAL failures (transient included) before a candidate is dead-lettered. */
+export const TEAMAUTO_DEAD_LETTER_TRANSIENT_ATTEMPTS = 6;
+
+/**
+ * Failure signatures that are environmental, not the task's fault - the same
+ * candidate is likely to succeed on a later sweep. Observed live (92-task
+ * dump): upstream rate limiting ("AI service needs a short break"), shared
+ * workspace snapshot races ("Workspace filesystem changed"), worker gateway
+ * lifecycle races ("Gateway request entry is closed"). These get a wider
+ * retry allowance than hard failures so they do not dead-letter good work.
+ */
+export const TRANSIENT_FAILURE_RE = /workspace filesystem changed|ai service needs a short break|gateway request entry is closed|rate.?limit|timed? ?out|econnreset|socket hang up|bad gateway|service unavailable/i;
 
 /** The dedup marker for a candidate as embedded in task descriptions. */
 export function idempotencyMarker(candidate: { key: string; kind: string }): string {
@@ -56,11 +69,22 @@ export function idempotencyMarker(candidate: { key: string; kind: string }): str
 
 /** Failed task attempts for a candidate (task history is the attempt log). */
 export function failedAttemptCount(
-  state: { tasks: Record<string, { description: string; status: string }> },
+  state: { tasks: Record<string, { description: string; status: string; error?: string }> },
   candidate: { key: string; kind: string },
 ): number {
   const marker = idempotencyMarker(candidate);
   return Object.values(state.tasks).filter((t) => t.description.includes(marker) && t.status === "failed").length;
+}
+
+/** Failed attempts whose error is NOT a known transient signature. */
+export function hardAttemptCount(
+  state: Parameters<typeof failedAttemptCount>[0],
+  candidate: { key: string; kind: string },
+): number {
+  const marker = idempotencyMarker(candidate);
+  return Object.values(state.tasks).filter(
+    (t) => t.description.includes(marker) && t.status === "failed" && !(t.error && TRANSIENT_FAILURE_RE.test(t.error)),
+  ).length;
 }
 
 export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
@@ -337,8 +361,14 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       // Dead-letter: task history doubles as the attempt log. The dedup above
       // only blocks ACTIVE tasks, so a failed candidate would be re-enqueued
       // every sweep forever (observed: issue #12 re-candidated 4 sweeps in a
-      // row, burning daily budget on churn). Cap the retries instead.
-      if (failedAttemptCount(state, candidate) >= TEAMAUTO_DEAD_LETTER_ATTEMPTS) {
+      // row, burning daily budget on churn). Cap the retries instead - hard
+      // failures fast (3), environmental/transient failures get a wider
+      // allowance (6 total) so rate limits or workspace races do not kill
+      // work that would succeed on a quieter sweep.
+      if (
+        hardAttemptCount(state, candidate) >= TEAMAUTO_DEAD_LETTER_ATTEMPTS
+        || failedAttemptCount(state, candidate) >= TEAMAUTO_DEAD_LETTER_TRANSIENT_ATTEMPTS
+      ) {
         deadLettered = true;
         return;
       }

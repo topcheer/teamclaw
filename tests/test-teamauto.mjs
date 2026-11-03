@@ -169,6 +169,20 @@ async function unitTests() {
   };
   assert.equal(schedMod2.failedAttemptCount(markerState(2), { key: "r#issue-12", kind: "issueReview" }), 2, "counts only failed attempts for the exact marker");
   assert.equal(schedMod2.failedAttemptCount(markerState(3), { key: "r#issue-12", kind: "issueReview" }), 3, "3 failures reaches the dead-letter threshold");
+  // Transient failures get a wider allowance than hard failures.
+  assert.equal(typeof schedMod2.hardAttemptCount, "function", "hardAttemptCount must be exported");
+  assert.equal(schedMod2.TEAMAUTO_DEAD_LETTER_TRANSIENT_ATTEMPTS, 6, "transient allowance is 6 total attempts");
+  const transientState = (n, hardN) => {
+    const tasks = {};
+    for (let i = 0; i < n; i++) tasks[`transient${i}`] = { description: "Idempotency-Key: r#issue-12:issueReview", status: "failed", error: "⚠️ The AI service needs a short break. Please try again in a few minutes." };
+    for (let i = 0; i < hardN; i++) tasks[`hard${i}`] = { description: "Idempotency-Key: r#issue-12:issueReview", status: "failed", error: "resumed 3 times without completing" };
+    return { tasks };
+  };
+  assert.equal(schedMod2.hardAttemptCount(transientState(4, 0), { key: "r#issue-12", kind: "issueReview" }), 0, "transient failures (rate limit) are not hard failures");
+  assert.equal(schedMod2.hardAttemptCount(transientState(4, 2), { key: "r#issue-12", kind: "issueReview" }), 2, "hard failures count toward the tight cap");
+  assert.ok(schedMod2.TRANSIENT_FAILURE_RE.test("Workspace filesystem changed while preparing state for /x; retry"), "workspace race is transient");
+  assert.ok(schedMod2.TRANSIENT_FAILURE_RE.test("Gateway request entry is closed"), "gateway race is transient");
+  assert.ok(!schedMod2.TRANSIENT_FAILURE_RE.test("resumed 3 times without completing"), "resume-cap exhaustion is a hard failure");
 
   // nextFireMs cadence parsing: wall-clock aligned, restart-safe, strictly future.
   const schedMod = await import(path.join(projectRoot, "src", "dist", "src", "teamauto", "scheduler.js"));
