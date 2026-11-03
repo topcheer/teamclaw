@@ -141,7 +141,7 @@ function emptyStore(): TeamAutoStore {
     writebacks: [],
     activity: [],
     budget: {
-      maxTasksPerDay: 50,
+      maxTasksPerDay: 150,
       firstSweepDryRun: true,
       tasksToday: 0,
       dayStamp: now.toISOString().slice(0, 10),

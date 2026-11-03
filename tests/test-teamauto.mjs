@@ -154,6 +154,22 @@ async function unitTests() {
   const scannerMod = await import(path.join(projectRoot, "src", "dist", "src", "teamauto", "scanner.js")).catch(() => null);
   assert.ok(storeMod && scannerMod, "teamauto modules must be built (run npm --prefix src run build first)");
 
+  // Dead-letter helpers: task history doubles as the attempt log.
+  const schedMod2 = await import(path.join(projectRoot, "src", "dist", "src", "teamauto", "scheduler.js"));
+  assert.equal(typeof schedMod2.failedAttemptCount, "function", "failedAttemptCount must be exported");
+  assert.equal(schedMod2.idempotencyMarker({ key: "r#issue-12", kind: "issueReview" }), "Idempotency-Key: r#issue-12:issueReview");
+  assert.equal(schedMod2.TEAMAUTO_DEAD_LETTER_ATTEMPTS, 3, "dead-letter threshold is 3 failed attempts");
+  const markerState = (n) => {
+    const tasks = {};
+    for (let i = 0; i < n; i++) tasks[`failed${i}`] = { description: "pre\nIdempotency-Key: r#issue-12:issueReview\npost", status: "failed" };
+    tasks.active = { description: "Idempotency-Key: r#issue-12:issueReview", status: "in_progress" };
+    tasks.completed = { description: "Idempotency-Key: r#issue-12:issueReview", status: "completed" };
+    tasks.other = { description: "Idempotency-Key: r#issue-99:issueReview", status: "failed" };
+    return { tasks };
+  };
+  assert.equal(schedMod2.failedAttemptCount(markerState(2), { key: "r#issue-12", kind: "issueReview" }), 2, "counts only failed attempts for the exact marker");
+  assert.equal(schedMod2.failedAttemptCount(markerState(3), { key: "r#issue-12", kind: "issueReview" }), 3, "3 failures reaches the dead-letter threshold");
+
   // nextFireMs cadence parsing: wall-clock aligned, restart-safe, strictly future.
   const schedMod = await import(path.join(projectRoot, "src", "dist", "src", "teamauto", "scheduler.js"));
   const at = (h, m, sec = 0, ms = 0) => new Date(2026, 10, 2, h, m, sec, ms).getTime();
