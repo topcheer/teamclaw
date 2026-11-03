@@ -1,0 +1,30 @@
+{{- if .Values.ui.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: teamclaw-operator-ui
+  labels:
+    app.kubernetes.io/name: teamclaw-operator
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  {{- if .Values.ui.ingress.ingressClassName }}
+  ingressClassName: {{ .Values.ui.ingress.ingressClassName }}
+  {{- end }}
+  rules:
+    - host: {{ required "ui.ingress.host required when ingress enabled" .Values.ui.ingress.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: teamclaw-operator-ui
+                port:
+                  number: {{ .Values.ui.port }}
+  {{- if .Values.ui.ingress.tlsSecretName }}
+  tls:
+    - hosts: [{{ .Values.ui.ingress.host }}]
+      secretName: {{ .Values.ui.ingress.tlsSecretName }}
+  {{- end }}
+
+{{- end }}
