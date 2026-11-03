@@ -9,6 +9,14 @@ import { fileURLToPath } from "node:url";
 
 const REPLACEMENTS = [
   {
+    // The upstream tree ships a dangling .claude/skills symlink; the
+    // full-tree chmod find dies on it ("cannot operate on dangling
+    // symlink"). Skip .claude entirely at copy time AND make the find
+    // immune to any other dangling symlinks the tree may grow.
+    needle: "RUN find /app -path /app/node_modules -prune -o -exec chmod a+rX {} +",
+    replacement: "RUN find /app -path /app/node_modules -prune -o -xtype l -prune -o -exec chmod a+rX {} +",
+  },
+  {
     // Upstream 2026.10.10 rebuilt the plugin pipeline around
     // docker-plugin-selection.mjs: an empty selection keeps only
     // provider-matched plugins, which would prune teamclaw out of the
@@ -75,6 +83,7 @@ RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/sto
 
 const SKIP_BASENAMES = new Set([
   ".git",
+  ".claude",
   "node_modules",
   "dist",
   ".next",
