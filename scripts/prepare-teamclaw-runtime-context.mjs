@@ -176,6 +176,15 @@ async function main() {
     }
     dockerfileSource = dockerfileSource.replace(needle, replacement);
   }
+  // Output guards: the patched Dockerfile MUST carry our semantic changes.
+  // If an upstream edit silently no-ops a replacement (or a cache/checkout
+  // oddity serves a stale file), fail here with a precise message instead
+  // of a cryptic pnpm error twenty minutes later.
+  for (const marker of ['OPENCLAW_EXTENSIONS="teamclaw"', "--no-frozen-lockfile"]) {
+    if (!dockerfileSource.includes(marker)) {
+      throw new Error(`patched Dockerfile is missing ${marker} - replacement no-oped or stale source`);
+    }
+  }
   await fs.writeFile(dockerfilePath, dockerfileSource, "utf8");
 
   const result = {
