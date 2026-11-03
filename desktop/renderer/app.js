@@ -128,6 +128,21 @@
       "ctl.gh.title": "GitHub login",
       "ctl.gh.current": "Current:",
       "ctl.gh.hint": "Authorizes TeamClaw to access the GitHub API on your behalf. The token is stored only on the controller machine.",
+      "ctl.tunnel.title": "Internet tunnel",
+      "ctl.tunnel.hint": "Share the local web UI at a public HTTPS URL. Visitors must enter the gate token shown below.",
+      "ctl.tunnel.share": "Share via tunnel",
+      "ctl.tunnel.stop": "Stop sharing",
+      "ctl.tunnel.install": "Install cloudflared",
+      "ctl.tunnel.loading": "Loading…",
+      "ctl.tunnel.off": "Not sharing. Share to expose the web UI at team-<github-user>.teamclaw.dev.",
+      "ctl.tunnel.notInstalled": "cloudflared connector is not installed on the controller machine.",
+      "ctl.tunnel.starting": "Starting tunnel",
+      "ctl.tunnel.installing": "Installing cloudflared",
+      "ctl.tunnel.live": "Live",
+      "ctl.tunnel.gateToken": "Gate token",
+      "ctl.tunnel.stopped": "Sharing stopped.",
+      "ctl.tunnel.errNotConnected": "Connect to the controller first.",
+      "ctl.tunnel.actionFailed": "Tunnel action failed: ",
       "ctl.gh.login": "Sign in with GitHub",
       "ctl.gh.logout": "Sign out",
       "ctl.gh.signedOut": "Not signed in",
@@ -336,6 +351,21 @@
       "ctl.gh.title": "GitHub 登录",
       "ctl.gh.current": "当前：",
       "ctl.gh.hint": "授权 TeamClaw 以你的身份访问 GitHub API。令牌仅保存在控制器机器上。",
+      "ctl.tunnel.title": "互联网隧道",
+      "ctl.tunnel.hint": "将本地 Web UI 分享到公网 HTTPS 地址。访客需输入下方显示的门禁令牌。",
+      "ctl.tunnel.share": "通过隧道分享",
+      "ctl.tunnel.stop": "停止分享",
+      "ctl.tunnel.install": "安装 cloudflared",
+      "ctl.tunnel.loading": "加载中…",
+      "ctl.tunnel.off": "未分享。分享后可通过 team-<github用户>.teamclaw.dev 访问 Web UI。",
+      "ctl.tunnel.notInstalled": "控制器机器上尚未安装 cloudflared 连接器。",
+      "ctl.tunnel.starting": "正在启动隧道",
+      "ctl.tunnel.installing": "正在安装 cloudflared",
+      "ctl.tunnel.live": "在线",
+      "ctl.tunnel.gateToken": "门禁令牌",
+      "ctl.tunnel.stopped": "已停止分享。",
+      "ctl.tunnel.errNotConnected": "请先连接控制器。",
+      "ctl.tunnel.actionFailed": "隧道操作失败：",
       "ctl.gh.login": "使用 GitHub 登录",
       "ctl.gh.logout": "退出登录",
       "ctl.gh.signedOut": "未登录",
@@ -554,6 +584,11 @@
       ["#ctl-gh-hint", "ctl.gh.hint"],
       ["#ctl-gh-login", "ctl.gh.login"],
       ["#ctl-gh-logout", "ctl.gh.logout"],
+      ["#ctl-tunnel-title", "ctl.tunnel.title"],
+      ["#ctl-tunnel-hint", "ctl.tunnel.hint"],
+      ["#ctl-tunnel-share", "ctl.tunnel.share"],
+      ["#ctl-tunnel-stop", "ctl.tunnel.stop"],
+      ["#ctl-tunnel-install", "ctl.tunnel.install"],
       ["#compose-focus-btn", "mission.newRequirement"],
       ["#notice-toggle", "mission.notifications"],
       ["#view-mission .section-head h2", "mission.requirement"],
@@ -4231,6 +4266,108 @@
     if (pref === "system") applyTheme();
   });
   applyTheme();
+
+  // ---------- internet tunnel (controller view) ----------
+  function tunnelEls() {
+    return {
+      state: document.getElementById("ctl-tunnel-state"),
+      share: document.getElementById("ctl-tunnel-share"),
+      stop: document.getElementById("ctl-tunnel-stop"),
+      install: document.getElementById("ctl-tunnel-install"),
+      result: document.getElementById("ctl-tunnel-result"),
+    };
+  }
+
+  function renderTunnelPanel(st) {
+    const els = tunnelEls();
+    if (!els.state) return;
+    const connected = state.connectionState === "connected";
+    if (!connected || !st) {
+      els.state.textContent = connected ? t("ctl.tunnel.loading") : t("ctl.tunnel.errNotConnected");
+      els.share.hidden = true;
+      els.stop.hidden = true;
+      els.install.hidden = true;
+      return;
+    }
+    els.share.hidden = true;
+    els.stop.hidden = true;
+    els.install.hidden = true;
+    const progress = st.startOp && st.startOp.running
+      ? t("ctl.tunnel.starting") + ": " + (st.startOp.phase || "") + "…"
+      : st.install && st.install.running
+        ? t("ctl.tunnel.installing") + (st.install.percent != null ? " " + st.install.percent + "%" : "") + "…"
+        : null;
+    if (progress) {
+      els.state.textContent = progress;
+      return;
+    }
+    if (st.active && st.hostname) {
+      els.state.innerHTML =
+        '<span class="ctl-tunnel-live">' + escapeHtml(t("ctl.tunnel.live")) + '</span>'
+        + ' <a href="https://' + escapeHtml(st.hostname) + '" target="_blank" rel="noopener">https://' + escapeHtml(st.hostname) + '</a>'
+        + ' · ' + escapeHtml(t("ctl.tunnel.gateToken")) + ': <b class="ctl-tunnel-token">' + escapeHtml(st.gateToken || "-") + '</b>';
+      els.stop.hidden = false;
+      return;
+    }
+    if (st.cloudflaredInstalled === false) {
+      els.state.textContent = t("ctl.tunnel.notInstalled");
+      els.install.hidden = false;
+      return;
+    }
+    els.state.textContent = t("ctl.tunnel.off");
+    els.share.hidden = false;
+  }
+
+  async function refreshTunnelPanel() {
+    if (!document.getElementById("ctl-tunnel-state")) return;
+    if (state.connectionState !== "connected") {
+      renderTunnelPanel(null);
+      return;
+    }
+    const errEl = document.getElementById("ctl-tunnel-result");
+    try {
+      const st = await apiGet("/tunnel/status");
+      if (errEl) { errEl.textContent = ""; errEl.classList.remove("ctl-error"); }
+      renderTunnelPanel(st);
+    } catch (err) {
+      // Transient failures (e.g. right after connect) self-heal on the next
+      // 5s poll; keep the last error visible until then.
+      if (errEl) {
+        errEl.textContent = err && err.message ? err.message : String(err);
+        errEl.classList.add("ctl-error");
+      }
+      renderTunnelPanel(null);
+    }
+  }
+
+  async function tunnelAction(path, btn) {
+    const els = tunnelEls();
+    if (!btn) return;
+    btn.disabled = true;
+    if (els.result) els.result.textContent = "";
+    try {
+      await apiPost(path);
+    } catch (err) {
+      if (els.result) {
+        els.result.textContent = t("ctl.tunnel.actionFailed") + (err && err.message ? err.message : String(err));
+        els.result.classList.add("ctl-error");
+      }
+    } finally {
+      btn.disabled = false;
+      refreshTunnelPanel();
+    }
+  }
+
+  const tunnelShareBtn = document.getElementById("ctl-tunnel-share");
+  const tunnelStopBtn = document.getElementById("ctl-tunnel-stop");
+  const tunnelInstallBtn = document.getElementById("ctl-tunnel-install");
+  if (tunnelShareBtn) tunnelShareBtn.addEventListener("click", () => tunnelAction("/tunnel/start", tunnelShareBtn));
+  if (tunnelStopBtn) tunnelStopBtn.addEventListener("click", () => {
+    if (window.confirm(t("ctl.tunnel.stop") + "?")) tunnelAction("/tunnel/stop", tunnelStopBtn);
+  });
+  if (tunnelInstallBtn) tunnelInstallBtn.addEventListener("click", () => tunnelAction("/tunnel/install-cloudflared", tunnelInstallBtn));
+  refreshTunnelPanel();
+  setInterval(refreshTunnelPanel, 5000);
 
   setStatusLine(t("connection.waiting"));
   setSummaryLine(t("connection.noSummary"));

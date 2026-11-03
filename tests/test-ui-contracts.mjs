@@ -136,6 +136,17 @@ async function runUiContractSmoke() {
   assert.match(desktopMain, /window:apply-theme/, "theme changes must update window chrome live");
   assert.match(desktopPreload, /applyTheme/, "preload must expose the theme bridge");
 
+  // Desktop internet tunnel card (Controller view).
+  assert.match(desktopHtml, /ctl-tunnel-state/, "controller view hosts the tunnel card");
+  assert.match(desktopHtml, /ctl-tunnel-share/, "share action present");
+  assert.match(desktopHtml, /ctl-tunnel-stop/, "stop action present");
+  assert.match(desktopApp, /refreshTunnelPanel/, "tunnel card polls status");
+  assert.match(desktopApp, /\/tunnel\/status/, "polls the controller tunnel status endpoint");
+  assert.match(desktopApp, /\/tunnel\/start/, "share hits the controller start endpoint");
+  assert.match(desktopApp, /\/tunnel\/install-cloudflared/, "install action present");
+  assert.match(desktopApp, /ctl\.tunnel\.gateToken/, "gate token is surfaced to the user");
+  assert.match(desktopApp, /errEl\.textContent = ""/, "a successful poll clears the previous error (transient startup failures self-heal)");
+
   console.log("UI contract smoke passed.");
 }
 
