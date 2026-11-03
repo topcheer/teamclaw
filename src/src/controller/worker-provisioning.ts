@@ -1381,13 +1381,46 @@ function buildProvisionedWorkerConfig(
   // so fold the teamclaw entry's model back into the legacy
   // agents.defaults.model and drop the entries map. New-schema workers also
   // accept agents.defaults, keeping the folded config compatible both ways.
-  const agentsRecord = agents as { entries?: Record<string, { model?: string }> };
+  const agentsRecord = agents as {
+    entries?: Record<string, { model?: string }>;
+  };
   if (agentsRecord.entries && typeof agentsRecord.entries === "object") {
     const entryModel = agentsRecord.entries[TEAMCLAW_AGENT_ID]?.model;
     if (entryModel && !agentDefaults.model) {
       agentDefaults.model = entryModel;
     }
-    delete agentsRecord.entries;
+    // Container backends may run older openclaw runtimes that reject the
+    // keyed agents schema ("Unrecognized key: entries") - fold down to
+    // legacy defaults there. Process workers share the controller's own
+    // runtime, which REQUIRES at least one entry ("agents.entries must
+    // contain at least one configured agent" crash-loop, exit 78, observed
+    // 2026-11-03 when entries was deleted unconditionally) - keep only the
+    // teamclaw worker entry for them.
+    const containerized =
+      controllerConfig.workerProvisioningType === "docker" ||
+      controllerConfig.workerProvisioningType === "kubernetes";
+    if (containerized) {
+      delete agentsRecord.entries;
+    } else {
+      agentsRecord.entries = {
+        [TEAMCLAW_AGENT_ID]: agentsRecord.entries[TEAMCLAW_AGENT_ID] ?? {},
+      };
+      // Pruning entries can dangle defaults.heartbeat.agentId /
+      // defaults.systemAgent.agentId ("main" no longer exists in the worker
+      // config) - remap any dangling agentId reference to the surviving
+      // teamclaw entry.
+      for (const sectionKey of Object.keys(agentDefaults)) {
+        const section = (agentDefaults as Record<string, unknown>)[sectionKey];
+        if (
+          section &&
+          typeof section === "object" &&
+          typeof (section as { agentId?: unknown }).agentId === "string" &&
+          !agentsRecord.entries[(section as { agentId: string }).agentId]
+        ) {
+          (section as { agentId: string }).agentId = TEAMCLAW_AGENT_ID;
+        }
+      }
+    }
   }
   agents.defaults = agentDefaults;
   config.agents = agents;
