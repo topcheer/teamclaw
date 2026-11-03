@@ -30,6 +30,8 @@ export type ControllerToolsDeps = {
   sessionKey?: string | null;
   /** Handler for kickoff meeting requests. Use a getter for late-binding (service may start after tool registration). */
   getKickoffHandler?: () => ((candidateRoles: RoleId[], complexity: "simple" | "medium" | "complex", requirement: string) => Promise<{ assessments: KickoffAssessment[]; summary: string }>) | undefined;
+  /** Late-binding TeamAuto scheduler getter (scheduler starts with the controller service). */
+  getTeamAutoScheduler?: () => import("../teamauto/scheduler.js").TeamAutoScheduler | null;
 };
 
 const EXECUTION_READY_BLOCKERS: Array<{ pattern: RegExp; reason: string }> = [
@@ -498,6 +500,76 @@ export function createControllerTools(deps: ControllerToolsDeps) {
           return { details: {}, content: [{ type: "text" as const, text: `Broadcast sent to ${data.recipients ?? 0} recipients` }] };
         } catch (err) {
           return { details: {}, content: [{ type: "text" as const, text: `Error: ${err instanceof Error ? err.message : String(err)}` }] };
+        }
+      },
+    },
+    {
+      name: "teamclaw_teamauto_status",
+      label: "TeamAuto Status",
+      description: "List TeamAuto-managed repositories with their schedule, full-review cadence, pause state, and recent activity. Use this to discover which repos this controller autonomously maintains before proposing improvements to them.",
+      parameters: Type.Object({}),
+      async execute(_id: string, _params: Record<string, unknown>) {
+        const scheduler = deps.getTeamAutoScheduler?.();
+        if (!scheduler) {
+          return { details: {}, content: [{ type: "text" as const, text: "TeamAuto is not active on this controller." }] };
+        }
+        const status = await scheduler.getStatus();
+        const activity = (await scheduler.getActivity()).slice(-10).map((e: { at: number; repoId?: string; kind: string; text: string }) => `${new Date(e.at).toISOString().slice(11, 19)} ${e.repoId ?? ""} ${e.text}`);
+        return { details: {}, content: [{ type: "text" as const, text: `TeamAuto repos:\n${JSON.stringify(status, null, 2)}\nRecent activity:\n${activity.join("\n") || "(none)"}` }] };
+      },
+    },
+    {
+      name: "teamclaw_teamauto_sweep",
+      label: "TeamAuto Sweep Now",
+      description: "Trigger an immediate TeamAuto sweep of a bound repository (scans GitHub issues/PRs and creates review/ownership tasks) instead of waiting for the next cron tick.",
+      parameters: Type.Object({
+        repoId: Type.String({ description: "Bound repository id in owner/name form, e.g. topcheer/teamclaw" }),
+      }),
+      async execute(_id: string, params: Record<string, unknown>) {
+        const scheduler = deps.getTeamAutoScheduler?.();
+        if (!scheduler) {
+          return { details: {}, content: [{ type: "text" as const, text: "TeamAuto is not active on this controller." }] };
+        }
+        try {
+          const summary = await scheduler.runSweepNow(String(params.repoId ?? ""), true);
+          return { details: {}, content: [{ type: "text" as const, text: `Sweep done: ${summary}` }] };
+        } catch (err) {
+          return { details: {}, content: [{ type: "text" as const, text: `Sweep failed: ${err instanceof Error ? err.message : String(err)}` }] };
+        }
+      },
+    },
+    {
+      name: "teamclaw_teamauto_propose",
+      label: "TeamAuto Propose",
+      description: "Inject a manual work proposal into a TeamAuto-managed repository. The proposal flows through the normal TeamAuto task pipeline (dedup, failure caps, norms, worktree checkout, worker assignment) - no GitHub object is required. Prefer this over teamclaw_create_task when the target repo is TeamAuto-managed so the work inherits its governance.",
+      parameters: Type.Object({
+        repoId: Type.String({ description: "Bound repository id in owner/name form" }),
+        kind: Type.String({ description: "Candidate kind: issueReview, prReview, takeOwnership (write path), or fullReview" }),
+        title: Type.String({ description: "Short task title" }),
+        context: Type.String({ description: "Full task instructions: goal, scope, constraints, expected deliverable" }),
+        role: Type.Optional(Type.String({ description: "Target role id; defaults to developer for takeOwnership, architect otherwise" })),
+        writeMode: Type.Optional(Type.String({ description: "read-only (default) or write; takeOwnership defaults to write" })),
+      }),
+      async execute(_id: string, params: Record<string, unknown>) {
+        const scheduler = deps.getTeamAutoScheduler?.();
+        if (!scheduler) {
+          return { details: {}, content: [{ type: "text" as const, text: "TeamAuto is not active on this controller." }] };
+        }
+        const writeMode = params.writeMode === "write" ? "write" : params.writeMode === "read-only" ? "read-only" : undefined;
+        try {
+          const result = await scheduler.proposeManual(String(params.repoId ?? ""), {
+            kind: String(params.kind ?? "issueReview") as "issueReview" | "prReview" | "takeOwnership" | "fullReview",
+            title: String(params.title ?? ""),
+            context: String(params.context ?? ""),
+            role: params.role ? String(params.role) : undefined,
+            writeMode,
+          });
+          if (result === "duplicate-active-skipped") {
+            return { details: {}, content: [{ type: "text" as const, text: "Skipped: an active task for this proposal key already exists." }] };
+          }
+          return { details: {}, content: [{ type: "text" as const, text: `TeamAuto task created: ${result}` }] };
+        } catch (err) {
+          return { details: {}, content: [{ type: "text" as const, text: `Proposal failed: ${err instanceof Error ? err.message : String(err)}` }] };
         }
       },
     },

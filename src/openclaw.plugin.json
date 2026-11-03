@@ -22,7 +22,10 @@
       "teamclaw_send_message",
       "teamclaw_submit_manifest",
       "teamclaw_submit_result_contract",
-      "teamclaw_suggest_handoff"
+      "teamclaw_suggest_handoff",
+      "teamclaw_teamauto_propose",
+      "teamclaw_teamauto_status",
+      "teamclaw_teamauto_sweep"
     ]
   },
   "skills": [
