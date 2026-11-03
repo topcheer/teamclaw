@@ -1522,7 +1522,20 @@ async function prepareProcessRuntimeExtensions(stateDir: string): Promise<void> 
     await fs.symlink(controllerExtensionsDir, runtimeExtensionsDir, "dir");
   } else {
     await fs.mkdir(runtimeExtensionsDir, { recursive: true });
-    await fs.symlink(resolveCurrentTeamClawPluginRootDir(), path.join(runtimeExtensionsDir, "teamclaw"), "dir");
+    // Baked-in images set TEAMCLAW_BAKED_IN=true and the legacy helper
+    // returned "" for that case, so the symlink target was empty and
+    // process workers fell back to resolving the plugin from their cwd
+    // ("/app/dist/openclaw.plugin.json" not found → exit loop, k3s e2e
+    // 2026-11-03). Probe the baked image layout instead: the controller
+    // entrypoint (process.argv[1], e.g. /app/dist/index.js) sits below
+    // the app root, where the runtime image ships
+    // /app/extensions/teamclaw with its openclaw.plugin.json.
+    const pluginRootDir = process.env.TEAMCLAW_BAKED_IN === "true"
+      ? await resolveBakedTeamClawPluginRootDir()
+      : resolveCurrentTeamClawPluginRootDir();
+    if (pluginRootDir) {
+      await fs.symlink(pluginRootDir, path.join(runtimeExtensionsDir, "teamclaw"), "dir");
+    }
   }
 
   await copyControllerAuthProfiles(stateDir);
@@ -1695,6 +1708,33 @@ function resolveGatewayEntrypoint(): string {
 
 function resolveCurrentTeamClawPluginRootDir(): string {
   return process.env.TEAMCLAW_BAKED_IN === "true" ? "" : path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
+}
+
+/**
+ * Locate the teamclaw plugin root inside a baked runtime image. The image
+ * ships the plugin at <app-root>/extensions/teamclaw; the controller
+ * entrypoint (process.argv[1]) lives under <app-root>, so walk up from it.
+ * Returns "" when no candidate carries an openclaw.plugin.json (the
+ * caller then skips the symlink instead of creating a dangling one).
+ */
+async function resolveBakedTeamClawPluginRootDir(): Promise<string> {
+  const entrypoint = process.argv[1] ? path.resolve(process.argv[1]) : "";
+  const candidates = entrypoint
+    ? [
+        path.resolve(entrypoint, "../../extensions/teamclaw"),
+        path.resolve(entrypoint, "../extensions/teamclaw"),
+      ]
+    : [];
+  candidates.push("/app/extensions/teamclaw");
+  for (const candidate of candidates) {
+    try {
+      await fs.access(path.join(candidate, "openclaw.plugin.json"));
+      return candidate;
+    } catch {
+      // try the next candidate layout
+    }
+  }
+  return "";
 }
 
 function attachChildLogs(child: ChildProcess, logger: PluginLogger, prefix: string): void {
