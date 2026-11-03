@@ -87,6 +87,23 @@ export function hardAttemptCount(
   ).length;
 }
 
+/** Auto-pause retry backoff: 30m after the 1st failure, doubling, capped at 4h. */
+export const SWEEP_RETRY_BASE_MINUTES = 30;
+export const SWEEP_RETRY_MAX_MINUTES = 240;
+export function sweepBackoffMinutes(failures: number): number {
+  return Math.min(SWEEP_RETRY_BASE_MINUTES * 2 ** Math.max(0, failures - 1), SWEEP_RETRY_MAX_MINUTES);
+}
+
+/** Epoch ms when an auto-paused repo becomes due for its next retry attempt. */
+export function sweepRetryDueAt(failures: number, lastErrorAt: number): number {
+  return lastErrorAt + sweepBackoffMinutes(failures) * 60_000;
+}
+
+/** Auto-pauses (set by the sweep catch block) are cooldowns; user pauses are not. */
+export function isAutoPause(reason: string | null | undefined): boolean {
+  return !!reason && reason.startsWith("sweep failed:");
+}
+
 export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
   const { logger, auth } = deps;
 
@@ -322,6 +339,11 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         repo.lastSweepSummary = "no new work";
       }
       repo.lastSweepAt = Date.now();
+      if (isAutoPause(repo.pausedReason)) {
+        repo.pausedReason = null;
+        recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "sweep", text: "sweep recovered, auto-pause cleared" });
+      }
+      repo.sweepFailures = 0;
       recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "sweep", text: repo.lastSweepSummary ?? "sweep complete" });
       await saveTeamAutoStore(s);
       if (created > 0) {
@@ -333,7 +355,14 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       return repo.lastSweepSummary ?? "sweep complete";
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      // Transient failures (network blips, restart-interrupted sweeps) used to
+      // pause a repo FOREVER - teamclaw sat auto-paused 15h on one "fetch
+      // failed". Auto-pauses are cooldowns now: the timer retries after the
+      // backoff below, and a success clears the state in the block above.
+      repo.sweepFailures = (repo.sweepFailures ?? 0) + 1;
+      repo.lastSweepErrorAt = Date.now();
       repo.pausedReason = `sweep failed: ${message}`;
+      recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "sweep", text: `sweep failed (auto-retry in ~${sweepBackoffMinutes(repo.sweepFailures)}min): ${message}` });
       await saveTeamAutoStore(s).catch(() => {});
       logger.warn(`TeamAuto: sweep failed for ${repo.id}: ${message}`);
       return `error: ${message}`;
@@ -590,7 +619,10 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       void (async () => {
         const s = await ensureStore();
         const fresh = s.repos.find((r) => r.id === repo.id);
-        if (fresh?.enabled && fresh.pausedReason === null) {
+        const retryDue = fresh
+          ? isAutoPause(fresh.pausedReason) && Date.now() >= sweepRetryDueAt(fresh.sweepFailures ?? 1, fresh.lastSweepErrorAt ?? 0)
+          : false;
+        if (fresh?.enabled && (fresh.pausedReason === null || retryDue)) {
           await runSweep(fresh, false);
         }
         if (fresh?.enabled) {
