@@ -1,4 +1,4 @@
 [submodule "openclaw"]
 	path = openclaw
-	url = https://github.com/topcheer/openclaw.git
+	url = https://github.com/openclaw/openclaw.git
 	branch = main
