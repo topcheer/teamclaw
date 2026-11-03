@@ -111,7 +111,7 @@ controller:
     - |
       set -eu
       cp /tmp/config/openclaw.json /home/node/.openclaw/openclaw.json
-      exec node dist/index.js gateway --allow-unconfigured
+      exec node /app/openclaw.mjs gateway --allow-unconfigured
 
 resources: {}
 

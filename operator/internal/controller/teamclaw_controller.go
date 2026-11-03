@@ -219,7 +219,7 @@ func (r *TeamClawReconciler) controllerContainer(tc *teav1.TeamClaw) corev1.Cont
 		"set -eu",
 		"mkdir -p " + openclawHome + "/.openclaw",
 		"cp /tmp/config/" + controllerSecretKey + " " + openclawHome + "/.openclaw/" + controllerSecretKey,
-		"exec node dist/index.js gateway --allow-unconfigured",
+		"exec node /app/openclaw.mjs gateway --allow-unconfigured",
 	}, "\n")
 	return corev1.Container{
 		Name:            "controller",
