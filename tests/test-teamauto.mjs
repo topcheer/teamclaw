@@ -183,6 +183,16 @@ async function unitTests() {
   assert.ok(schedMod2.TRANSIENT_FAILURE_RE.test("Workspace filesystem changed while preparing state for /x; retry"), "workspace race is transient");
   assert.ok(schedMod2.TRANSIENT_FAILURE_RE.test("Gateway request entry is closed"), "gateway race is transient");
   assert.ok(!schedMod2.TRANSIENT_FAILURE_RE.test("resumed 3 times without completing"), "resume-cap exhaustion is a hard failure");
+  // Repo auto-pause is a cooldown with exponential backoff, not a life sentence.
+  assert.equal(typeof schedMod2.sweepBackoffMinutes, "function", "sweepBackoffMinutes must be exported");
+  assert.equal(schedMod2.sweepBackoffMinutes(1), 30, "first failure retries after 30 minutes");
+  assert.equal(schedMod2.sweepBackoffMinutes(2), 60, "second failure backs off to 60 minutes");
+  assert.equal(schedMod2.sweepBackoffMinutes(3), 120, "third failure backs off to 120 minutes");
+  assert.equal(schedMod2.sweepBackoffMinutes(9), 240, "backoff caps at 240 minutes");
+  assert.equal(schedMod2.sweepRetryDueAt(1, 1_000_000), 1_000_000 + 30 * 60_000, "retry due = last error + backoff");
+  assert.equal(schedMod2.isAutoPause("sweep failed: fetch failed"), true, "sweep failures are auto-pauses");
+  assert.equal(schedMod2.isAutoPause("disabled by user"), false, "user pauses are never auto-cleared");
+  assert.equal(schedMod2.isAutoPause(null), false, "null pause is healthy");
 
   // nextFireMs cadence parsing: wall-clock aligned, restart-safe, strictly future.
   const schedMod = await import(path.join(projectRoot, "src", "dist", "src", "teamauto", "scheduler.js"));

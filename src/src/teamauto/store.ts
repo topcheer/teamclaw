@@ -66,6 +66,10 @@ export type TeamAutoRepo = {
   lastSweepAt: number;
   lastSweepSummary: string | null;
   pausedReason: string | null;
+  /** Consecutive auto-paused sweep failures; drives retry backoff (0/undefined = healthy). */
+  sweepFailures?: number;
+  /** Epoch ms of the last auto-pausing sweep failure. */
+  lastSweepErrorAt?: number;
   dryRunDone: boolean;
   /** Bind-time provisioning state; ready/undefined means sweepable. */
   provision?: TeamAutoRepoProvision;
