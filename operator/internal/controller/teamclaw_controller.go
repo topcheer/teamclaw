@@ -224,7 +224,9 @@ func (r *TeamClawReconciler) controllerContainer(tc *teav1.TeamClaw) corev1.Cont
 	return corev1.Container{
 		Name:            "controller",
 		Image:           tc.Spec.Image,
-		ImagePullPolicy: corev1.PullIfNotPresent,
+		// Default spec.image uses a rolling :latest tag; IfNotPresent pins stale
+				// node-local layers forever (observed in k3s e2e), so always pull.
+				ImagePullPolicy: corev1.PullAlways,
 		Command:         []string{"sh", "-lc"},
 		Args:            []string{bootstrap},
 		Env: append([]corev1.EnvVar{
