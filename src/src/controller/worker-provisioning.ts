@@ -1353,7 +1353,7 @@ function createProvisionerBackend(
   }
 }
 
-function buildProvisionedWorkerConfig(
+export function buildProvisionedWorkerConfig(
   baseConfig: Record<string, unknown>,
   controllerConfig: PluginConfig,
   spec: {
