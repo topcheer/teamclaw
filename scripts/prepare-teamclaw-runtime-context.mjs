@@ -9,26 +9,22 @@ import { fileURLToPath } from "node:url";
 
 const REPLACEMENTS = [
   {
-    needle: "for ext in $OPENCLAW_EXTENSIONS; do \\\n",
-    replacement: "for ext in $(find /tmp/extensions -mindepth 1 -maxdepth 1 -type d -exec basename {} \\\\;); do \\\n",
+    // Upstream 2026.10.10 rebuilt the plugin pipeline around
+    // docker-plugin-selection.mjs: an empty selection keeps only
+    // provider-matched plugins, which would prune teamclaw out of the
+    // image. Default the build-arg to our plugin id (the old inline loop
+    // is gone).
+    needle: 'ARG OPENCLAW_EXTENSIONS=""',
+    replacement: 'ARG OPENCLAW_EXTENSIONS="teamclaw"',
   },
   {
     needle: "NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile",
     replacement: "NODE_OPTIONS=--max-old-space-size=2048 pnpm install --no-frozen-lockfile",
   },
-  {
-    // Upstream renamed this to opt out of the frozen-lockfile enforcement
-    // during prune; keep skipping the prune itself.
-    needle: "CI=true NPM_CONFIG_FROZEN_LOCKFILE=false pnpm prune --prod && \\",
-    replacement: "true && \\",
-  },
-  {
-    // Upstream added a hard gate on the matrix-sdk-crypto native addon; its
-    // download-lib crashes under the builder's Node and TeamClaw images do
-    // not use the Matrix channel. Downgrade the hard failure to a warning.
-    needle: '(echo "ERROR: matrix-sdk-crypto native addon missing after retries" >&2 && exit 1)',
-    replacement: 'echo "WARN: matrix-sdk-crypto native addon missing after retries (ignored for teamclaw image)"',
-  },
+  // Upstream 2026.10.10 removed the inline pnpm prune step (replaced by
+  // scripts/prune-docker-plugin-dist.mjs after the build) and the hard
+  // matrix-sdk-crypto addon gate - both needles and their patches are
+  // obsolete.
   {
     // The submodule pin tracks a release tag while the Dockerfile rolls with
     // upstream main; patchedDependencies occasionally references packages a
