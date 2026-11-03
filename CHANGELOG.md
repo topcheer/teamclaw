@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026.7.0
+
+Released 2026-11-03. This cycle spans PRs #77–#84 (all merged to main).
+
+### Features
+
+- **Desktop experience overhaul**: titleless window with an in-page drag
+  titlebar (#78); unified day/night theming with a full color system
+  overhaul (#79); internet tunnel card in the Controller view (#81).
+
+### Fixes
+
+- **Process-worker crash-loop (exit 78)**: `agents.entries` is no longer
+  unconditionally deleted from provisioned worker configs. Process workers
+  (sharing the controller's runtime) keep only their `teamclaw` entry — the
+  runtime requires at least one configured agent — while container workers
+  keep the legacy `defaults`-only schema that older openclaw runtimes
+  accept; dangling `agentId` references are remapped to the surviving entry
+  (#82). Behavior is now locked in by per-backend unit tests (#84).
+- **Operator stale-image deploys on k3s**: controller Deployments use
+  `imagePullPolicy: Always` for `:latest` images (#80).
+- **TeamAuto sweep drift**: wall-clock aligned sweep scheduling with strict
+  cron parsing — invalid expressions fail loudly instead of silently
+  degrading to a one-minute cadence (#77).
+- **Desktop**: balanced 2×2 controller grid in the Controller view (#83).
+- **Tests**: realigned the `test-openclaw-workspace` smoke contract with the
+  tokenized color system from #79 (disabled-button contrast now pinned via
+  `var(--info-bg)`/`var(--neutral-text)` instead of the removed hex values).
+
 ## 2026.6.0
 
 Released 2026-11-03. This cycle spans PRs #59–#74 (all merged to main).
