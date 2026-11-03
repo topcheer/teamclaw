@@ -176,14 +176,30 @@ func (r *TeamClawReconciler) reconcileWorkspace(ctx context.Context, tc *teav1.T
 		if tc.Spec.Workspace.Size != "" {
 			storage = resource.MustParse(tc.Spec.Workspace.Size)
 		}
-		pvc.Spec = corev1.PersistentVolumeClaimSpec{
-			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-			Resources: corev1.VolumeResourceRequirements{
-				Requests: corev1.ResourceList{corev1.ResourceStorage: storage},
-			},
-		}
-		if tc.Spec.Workspace.StorageClassName != "" {
-			pvc.Spec.StorageClassName = &tc.Spec.Workspace.StorageClassName
+		if pvc.CreationTimestamp.IsZero() {
+			// Fresh claim: full spec.
+			pvc.Spec = corev1.PersistentVolumeClaimSpec{
+				AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+				Resources: corev1.VolumeResourceRequirements{
+					Requests: corev1.ResourceList{corev1.ResourceStorage: storage},
+				},
+			}
+			if tc.Spec.Workspace.StorageClassName != "" {
+				pvc.Spec.StorageClassName = &tc.Spec.Workspace.StorageClassName
+			}
+		} else {
+			// Existing claim: PVC specs are immutable after creation except
+			// resources.requests (expansion only). Rewriting the full spec
+			// wipes VolumeName/StorageClassName in the patch and gets the
+			// whole reconcile rejected ("spec is immutable after creation"),
+			// which froze status updates on the k3s demo team.
+			if pvc.Spec.Resources.Requests == nil {
+				pvc.Spec.Resources.Requests = corev1.ResourceList{}
+			}
+			current := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+			if storage.Cmp(current) > 0 {
+				pvc.Spec.Resources.Requests[corev1.ResourceStorage] = storage
+			}
 		}
 		return controllerutil.SetControllerReference(tc, pvc, r.Scheme)
 	})
@@ -222,11 +238,11 @@ func (r *TeamClawReconciler) controllerContainer(tc *teav1.TeamClaw) corev1.Cont
 		"exec node /app/openclaw.mjs gateway --allow-unconfigured",
 	}, "\n")
 	return corev1.Container{
-		Name:            "controller",
-		Image:           tc.Spec.Image,
+		Name:  "controller",
+		Image: tc.Spec.Image,
 		// Default spec.image uses a rolling :latest tag; IfNotPresent pins stale
-				// node-local layers forever (observed in k3s e2e), so always pull.
-				ImagePullPolicy: corev1.PullAlways,
+		// node-local layers forever (observed in k3s e2e), so always pull.
+		ImagePullPolicy: corev1.PullAlways,
 		Command:         []string{"sh", "-lc"},
 		Args:            []string{bootstrap},
 		Env: append([]corev1.EnvVar{
