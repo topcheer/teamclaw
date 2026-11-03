@@ -8,7 +8,7 @@
 # Multi-arch: docker buildx build --platform linux/amd64 -f Dockerfile.teamclaw \
 #             -t registry.iot2.win/openclaw:teamclaw-test --push .
 
-ARG BASE_IMAGE=ghcr.io/openclaw/openclaw:latest
+ARG BASE_IMAGE=ghcr.io/openclaw/openclaw:latest  # 2026.10.10 at time of switch; pin a digest for reproducibility
 FROM ${BASE_IMAGE}
 
 USER root
@@ -38,18 +38,6 @@ COPY src/tsconfig.json /app/extensions/teamclaw/tsconfig.json
 COPY src/src/ /app/extensions/teamclaw/src/
 COPY src/README.md /app/extensions/teamclaw/README.md
 
-# ---------------------------------------------------------------
-# Build-time patch for container deployment:
-# When the plugin is baked into the image, the auto-bind in
-# buildDockerBinds() uses a container-internal path that the Docker
-# daemon on the host cannot resolve.
-#
-# The patch script makes:
-# 1. resolveCurrentTeamClawPluginRootDir() returns "" when
-#    TEAMCLAW_BAKED_IN=true
-# 2. buildDockerBinds() guards against empty pluginDir
-# ---------------------------------------------------------------
-COPY tests/patch-baked-in.cjs /tmp/patch-baked-in.cjs
-USER root
-RUN node /tmp/patch-baked-in.cjs && rm /tmp/patch-baked-in.cjs
-USER node
+# Note: the legacy baked-in patch was removed - the plugin's
+# resolveBakedTeamClawPluginRootDir() (PR #86) probes the image layout
+# (/app/extensions/teamclaw via process.argv[1]) natively.

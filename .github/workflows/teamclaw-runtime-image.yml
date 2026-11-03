@@ -86,10 +86,6 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Prepare TeamClaw runtime build context
-        id: context
-        run: node scripts/prepare-teamclaw-runtime-context.mjs --output-dir "$RUNNER_TEMP/teamclaw-runtime-image" --github-output "$GITHUB_OUTPUT"
-
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -103,19 +99,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Verify patched Dockerfile markers
-        run: |
-          f="${{ steps.context.outputs.dockerfile_path }}"
-          grep -q 'OPENCLAW_EXTENSIONS="teamclaw"' "$f" || { echo "::error::teamclaw selection marker missing in $f"; exit 1; }
-          grep -q -- '--no-frozen-lockfile' "$f" || { echo "::error::no-frozen marker missing in $f"; exit 1; }
-          sha256sum "$f"
       - name: Build and publish TeamClaw runtime image
+        # Official-image base + plugin layer (Dockerfile.teamclaw, ~3-5min).
+        # The legacy from-source build (prepare-teamclaw-runtime-context) burned
+        # 40-60min per run and needed re-patching on every upstream Dockerfile
+        # roll; it is retired.
         uses: docker/build-push-action@v6
         with:
-          context: ${{ steps.context.outputs.context_dir }}
-          file: ${{ steps.context.outputs.dockerfile_path }}
-          build-args: |
-            OPENCLAW_EXTENSIONS=teamclaw
+          context: ${{ github.workspace }}
+          file: ./Dockerfile.teamclaw
           labels: ${{ steps.tags.outputs.labels }}
           tags: ${{ steps.tags.outputs.tags }}
           platforms: linux/amd64,linux/arm64
