@@ -1,0 +1,13 @@
+apiVersion: v2
+name: teamclaw-operator
+description: TeamClaw Kubernetes operator - deploys TeamClaw controller/worker teams from TeamClaw CRs, with a built-in management UI.
+type: application
+version: 0.1.0
+appVersion: "2026.10.10"
+home: https://github.com/topcheer/teamclaw
+sources:
+  - https://github.com/topcheer/teamclaw
+keywords:
+  - openclaw
+  - teamclaw
+  - ai-agents

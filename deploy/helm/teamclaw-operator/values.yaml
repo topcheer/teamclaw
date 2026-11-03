@@ -1,0 +1,47 @@
+# Default values for teamclaw-operator.
+
+image:
+  repository: ghcr.io/topcheer/teamclaw-operator
+  tag: latest  # pin a digest for reproducible installs
+  pullPolicy: Always  # :latest must roll
+
+replicaCount: 1
+
+# Where the operator watches TeamClaw CRs (cluster-scoped watch, teams may
+# live in any namespace; default: the release namespace).
+namespace: ""
+
+rbac:
+  create: true
+
+serviceAccount:
+  create: true
+  name: teamclaw-operator
+
+# Operator UI (NodePort by default so k3s/on-prem clusters get instant access).
+ui:
+  enabled: true
+  type: NodePort
+  port: 9090
+  nodePort: 30990
+  ingress:
+    enabled: false
+    host: ""
+    ingressClassName: ""
+    tlsSecretName: ""
+
+# Bearer token guarding the UI + API. Generate with:
+#   openssl rand -hex 24
+# Either set .token directly or provide .existingSecret
+token:
+  existingSecret: ""
+  key: token
+  token: ""
+
+leaderElection:
+  enabled: true
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
