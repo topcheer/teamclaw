@@ -617,16 +617,32 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     }
     const timer = setTimeout(() => {
       void (async () => {
-        const s = await ensureStore();
-        const fresh = s.repos.find((r) => r.id === repo.id);
-        const retryDue = fresh
-          ? isAutoPause(fresh.pausedReason) && Date.now() >= sweepRetryDueAt(fresh.sweepFailures ?? 1, fresh.lastSweepErrorAt ?? 0)
-          : false;
-        if (fresh?.enabled && (fresh.pausedReason === null || retryDue)) {
-          await runSweep(fresh, false);
-        }
-        if (fresh?.enabled) {
-          scheduleRepo(fresh);
+        try {
+          const s = await ensureStore();
+          const fresh = s.repos.find((r) => r.id === repo.id);
+          const retryDue = fresh
+            ? isAutoPause(fresh.pausedReason) && Date.now() >= sweepRetryDueAt(fresh.sweepFailures ?? 1, fresh.lastSweepErrorAt ?? 0)
+            : false;
+          if (fresh?.enabled && (fresh.pausedReason === null || retryDue)) {
+            await runSweep(fresh, false);
+          }
+          if (fresh?.enabled) {
+            scheduleRepo(fresh);
+          }
+        } catch (err) {
+          // The timer chain must survive any single tick failure. Before this
+          // guard, a rejected ensureStore() (corrupt store file, IO error)
+          // unhandled-rejected through `void`, scheduleRepo(fresh) never ran,
+          // and the repo's scheduling chain died silently until a gateway
+          // restart. Re-arm from the last known config; updateRepo re-arms on
+          // config change anyway, so a stale schedule here is bounded.
+          logger.warn(`TeamAuto: sweep tick failed for ${repo.id}, re-arming timer: ${err instanceof Error ? err.message : String(err)}`);
+          try {
+            scheduleRepo(repo);
+          } catch {
+            // scheduleRepo only throws on programmer error; a dead chain here
+            // is still recoverable by restart (start() rebuilds all timers).
+          }
         }
       })();
     }, delay);
