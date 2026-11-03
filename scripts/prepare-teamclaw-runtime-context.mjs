@@ -155,6 +155,20 @@ async function main() {
     filter: (sourcePath) => shouldCopy(sourcePath),
   });
 
+  // The plugin ships a pinned "openclaw": "<exact>" dependency, but inside
+  // the image build it is a member of the upstream pnpm workspace whose root
+  // is the submodule-pinned version - an exact pin that differs from the
+  // root (e.g. plugin 2026.10.9 vs workspace 2026.10.10) resolves to
+  // nothing and fails the prod install with ERR_PNPM_NO_MATURE_MATCHING_
+  // VERSION. Rewrite it to the workspace protocol so the plugin always
+  // links whatever runtime the image actually builds.
+  const extensionPackageJsonPath = path.join(extensionTargetDir, "package.json");
+  const extensionPackageJson = JSON.parse(await fs.readFile(extensionPackageJsonPath, "utf8"));
+  if (extensionPackageJson.dependencies && typeof extensionPackageJson.dependencies.openclaw === "string") {
+    extensionPackageJson.dependencies.openclaw = "workspace:*";
+    await fs.writeFile(extensionPackageJsonPath, `${JSON.stringify(extensionPackageJson, null, 2)}\n`, "utf8");
+  }
+
   let dockerfileSource = await fs.readFile(path.join(contextDir, "Dockerfile"), "utf8");
   for (const { needle, replacement } of REPLACEMENTS) {
     if (!dockerfileSource.includes(needle)) {
