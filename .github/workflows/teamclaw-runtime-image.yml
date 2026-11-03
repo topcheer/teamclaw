@@ -103,6 +103,12 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Verify patched Dockerfile markers
+        run: |
+          f="${{ steps.context.outputs.dockerfile_path }}"
+          grep -q 'OPENCLAW_EXTENSIONS="teamclaw"' "$f" || { echo "::error::teamclaw selection marker missing in $f"; exit 1; }
+          grep -q -- '--no-frozen-lockfile' "$f" || { echo "::error::no-frozen marker missing in $f"; exit 1; }
+          sha256sum "$f"
       - name: Build and publish TeamClaw runtime image
         uses: docker/build-push-action@v6
         with:
