@@ -394,7 +394,7 @@ assert.match(
 
 assert.match(
   desktopStyleSource,
-  /\.btn\.btn-primary:disabled\s*\{[\s\S]*opacity:\s*1;[\s\S]*background:\s*#e8f0ff;[\s\S]*color:\s*#6b7280;/,
+  /\.btn\.btn-primary:disabled\s*\{[\s\S]*opacity:\s*1;[\s\S]*background:\s*var\(--info-bg\);[\s\S]*color:\s*var\(--neutral-text\);/,
   "desktop primary buttons should keep readable disabled contrast instead of relying on low-opacity blue treatment",
 );
 
@@ -406,7 +406,7 @@ assert.match(
 
 assert.match(
   desktopStyleSource,
-  /#bootstrap-install-btn\s*\{[\s\S]*background:\s*#2563eb;[\s\S]*color:\s*#fff;[\s\S]*#bootstrap-install-btn:hover\s*\{[\s\S]*background:\s*#1d4ed8;[\s\S]*#bootstrap-install-btn:disabled\s*\{[\s\S]*color:\s*#475569;/,
+  /#bootstrap-install-btn\s*\{[\s\S]*background:\s*var\(--info-text\);[\s\S]*color:\s*#fff;[\s\S]*#bootstrap-install-btn:hover\s*\{[\s\S]*background:\s*var\(--accent\);[\s\S]*#bootstrap-install-btn:disabled\s*\{[\s\S]*color:\s*var\(--neutral-text\);/,
   "desktop install CTA should keep explicit normal, hover, and disabled contrast in the bootstrap overlay",
 );
 
