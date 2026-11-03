@@ -46,6 +46,23 @@ export type TeamAutoSchedulerDeps = {
   onActivity?: (entry: TeamAutoActivityEntry) => void;
 };
 
+/** Max failed attempts before a candidate is permanently skipped (dead-lettered). */
+export const TEAMAUTO_DEAD_LETTER_ATTEMPTS = 3;
+
+/** The dedup marker for a candidate as embedded in task descriptions. */
+export function idempotencyMarker(candidate: { key: string; kind: string }): string {
+  return `Idempotency-Key: ${candidate.key}:${candidate.kind}`;
+}
+
+/** Failed task attempts for a candidate (task history is the attempt log). */
+export function failedAttemptCount(
+  state: { tasks: Record<string, { description: string; status: string }> },
+  candidate: { key: string; kind: string },
+): number {
+  const marker = idempotencyMarker(candidate);
+  return Object.values(state.tasks).filter((t) => t.description.includes(marker) && t.status === "failed").length;
+}
+
 export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
   const { logger, auth } = deps;
 
@@ -259,7 +276,9 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         } else {
           for (const candidate of capped) {
             const taskId = enqueueCandidate(repo, candidate);
-            if (taskId) {
+            if (taskId === "dead-lettered") {
+              recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "sweep", text: `dead-lettered after ${TEAMAUTO_DEAD_LETTER_ATTEMPTS} failed attempts: ${candidate.kind}: ${candidate.title}` });
+            } else if (taskId) {
               recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "task", text: `${candidate.kind}: ${candidate.title}` });
               const action = candidate.kind === "prReview"
                 ? ("prComment" as const)
@@ -299,19 +318,28 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     }
   }
 
-  function enqueueCandidate(repo: TeamAutoRepo, candidate: Candidate): string | undefined {
+  function enqueueCandidate(repo: TeamAutoRepo, candidate: Candidate): string | "dead-lettered" | undefined {
     let createdId: string | undefined;
+    let deadLettered = false;
     deps.updateTeamState((state) => {
       // Idempotency: an active task for the same object AND kind wins. The
       // key rides in the description (TaskInfo has no dedicated field) and
       // must be a distinct marked line - titles contain human text that never
       // matches the raw key (that was the pre-fix bug). Kind-scoping matters:
       // object-level keys starved takeOwnership (review always enqueued first).
-      const dedupMarker = `Idempotency-Key: ${candidate.key}:${candidate.kind}`;
+      const dedupMarker = idempotencyMarker(candidate);
       const duplicate = Object.values(state.tasks).find(
         (t) => t.description.includes(dedupMarker) && t.status !== "completed" && t.status !== "failed",
       );
       if (duplicate) {
+        return;
+      }
+      // Dead-letter: task history doubles as the attempt log. The dedup above
+      // only blocks ACTIVE tasks, so a failed candidate would be re-enqueued
+      // every sweep forever (observed: issue #12 re-candidated 4 sweeps in a
+      // row, burning daily budget on churn). Cap the retries instead.
+      if (failedAttemptCount(state, candidate) >= TEAMAUTO_DEAD_LETTER_ATTEMPTS) {
+        deadLettered = true;
         return;
       }
       const task: TaskInfo = {
@@ -349,7 +377,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       state.tasks[task.id] = task;
       createdId = task.id;
     });
-    return createdId;
+    return deadLettered ? "dead-lettered" : createdId;
   }
 
   // ---------- write-back reconciler ----------
@@ -436,10 +464,22 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
             await client.postIssueComment(owner, name, entry.targetId, body);
             entry.doneAt = Date.now();
             writebackDone = true;
+            // Our own comment bumps the issue's updatedAt, which the scanner
+            // treats as new activity - advance the seen cursor so we do not
+            // re-trigger a review of an object we just replied to. External
+            // edits (updatedAt > now) still re-arm the candidate.
+            const issueRepo = s.repos.find((r) => r.id === entry.repoId);
+            if (issueRepo) {
+              issueRepo.cursors.seen[`${entry.repoId}#issue-${entry.targetId}`] = Date.now();
+            }
           } else if (entry.action === "prComment" && entry.targetId) {
             await client.postPullReviewComment(owner, name, entry.targetId, body);
             entry.doneAt = Date.now();
             writebackDone = true;
+            const prRepo = s.repos.find((r) => r.id === entry.repoId);
+            if (prRepo) {
+              prRepo.cursors.seen[`${entry.repoId}#pr-${entry.targetId}`] = Date.now();
+            }
           } else if (entry.action === "createIssue") {
             // Joint full review: same-cycle sections land in ONE umbrella issue
             // (first completed section creates it, the rest post as comments).
