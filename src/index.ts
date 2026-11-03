@@ -39,6 +39,7 @@ function registerController(api: OpenClawPluginApi, config: ReturnType<typeof pa
   let getControllerTeamState = (): TeamState | null => null;
   let controllerUrl = `http://127.0.0.1:${config.port}`;
   let kickoffHandler: ((candidateRoles: import("./src/types.js").RoleId[], complexity: "simple" | "medium" | "complex", requirement: string) => Promise<{ assessments: import("./src/types.js").KickoffAssessment[]; summary: string }>) | undefined;
+  let getTeamAutoScheduler: () => import("./src/teamauto/scheduler.js").TeamAutoScheduler | null = () => null;
 
   // Service (starts HTTP server + mDNS + WebSocket)
   api.registerService(createControllerService({
@@ -54,6 +55,9 @@ function registerController(api: OpenClawPluginApi, config: ReturnType<typeof pa
     onKickoffHandlerAvailable: (handler) => {
       kickoffHandler = handler;
       logger.info("TeamClaw: kickoff handler registered successfully");
+    },
+    onTeamAutoSchedulerAvailable: (getter) => {
+      getTeamAutoScheduler = getter;
     },
   }));
 
@@ -75,6 +79,7 @@ function registerController(api: OpenClawPluginApi, config: ReturnType<typeof pa
       getTeamState: getControllerTeamState,
       sessionKey: ctx.sessionKey ?? null,
       getKickoffHandler: () => kickoffHandler,
+      getTeamAutoScheduler: () => getTeamAutoScheduler(),
     });
   });
 }

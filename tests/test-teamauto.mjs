@@ -193,6 +193,18 @@ async function unitTests() {
   assert.equal(schedMod2.isAutoPause("sweep failed: fetch failed"), true, "sweep failures are auto-pauses");
   assert.equal(schedMod2.isAutoPause("disabled by user"), false, "user pauses are never auto-cleared");
   assert.equal(schedMod2.isAutoPause(null), false, "null pause is healthy");
+  // Agent-facing TeamAuto surface: scheduler method + tool contract + prompt injection.
+  const manifestRaw = await fs.readFile(path.join(projectRoot, "src", "openclaw.plugin.json"), "utf8");
+  for (const tool of ["teamclaw_teamauto_status", "teamclaw_teamauto_sweep", "teamclaw_teamauto_propose"]) {
+    assert.ok(manifestRaw.includes(`"${tool}"`), `${tool} must be declared in the plugin tool contract`);
+  }
+  const toolsDist = await fs.readFile(path.join(projectRoot, "src", "dist", "src", "controller", "controller-tools.js"), "utf8");
+  for (const tool of ["teamclaw_teamauto_status", "teamclaw_teamauto_sweep", "teamclaw_teamauto_propose"]) {
+    assert.ok(toolsDist.includes(tool), `${tool} must be implemented in controller-tools dist`);
+  }
+  const policyDist = await fs.readFile(path.join(projectRoot, "src", "dist", "src", "prompt-policy.js"), "utf8");
+  assert.ok(policyDist.includes("teamclaw_teamauto_status"), "controller prompt rules must mention the teamauto status tool");
+  assert.ok(policyDist.includes("prefer over teamclaw_create_task"), "prompt rules must route teamauto repos to the governed pipeline");
 
   // nextFireMs cadence parsing: wall-clock aligned, restart-safe, strictly future.
   const schedMod = await import(path.join(projectRoot, "src", "dist", "src", "teamauto", "scheduler.js"));

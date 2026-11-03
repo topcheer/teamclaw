@@ -285,6 +285,9 @@ export function buildControllerToolRules(): string[] {
     "- teamclaw_list_tasks: List all tasks with status filtering",
     "- teamclaw_assign_task: Assign a task to a specific worker",
     "- teamclaw_send_message: Send messages between team members",
+    "- teamclaw_teamauto_status: List TeamAuto-managed repos (schedule, cadence, pause state, recent activity) - call this first when a request mentions improving one of the bound repositories",
+    "- teamclaw_teamauto_sweep: Trigger an immediate TeamAuto sweep of a bound repo",
+    "- teamclaw_teamauto_propose: Inject a proposal into a TeamAuto-managed repo through its governed pipeline (dedup, failure caps, norms, worktree) - prefer over teamclaw_create_task for repos listed by teamclaw_teamauto_status",
   ];
 }
 

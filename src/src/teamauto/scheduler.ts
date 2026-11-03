@@ -439,6 +439,46 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     return deadLettered ? "dead-lettered" : createdId;
   }
 
+  /**
+   * Agent-facing manual proposal: inject a candidate directly (bypassing the
+   * GitHub-object sweep) while reusing the full pipeline - idempotency dedup,
+   * dead-letter caps, budget accounting, norms blocks, worktree checkout.
+   * No writeback is registered (there is no GitHub object to write back to);
+   * the result stays in the task system, visible via teamclaw_list_tasks.
+   */
+  async function proposeManual(
+    repoId: string,
+    input: { kind: Candidate["kind"]; title: string; context: string; role?: string; writeMode?: "read-only" | "write" },
+  ): Promise<string> {
+    const s = await ensureStore();
+    const repo = s.repos.find((r) => r.id === repoId);
+    if (!repo) {
+      throw new Error(`${repoId} not bound`);
+    }
+    const kind: Candidate["kind"] = input.kind === "takeOwnership" || input.kind === "issueReview" || input.kind === "prReview" || input.kind === "fullReview" ? input.kind : "issueReview";
+    const candidate: Candidate = {
+      repoId,
+      key: `${repoId}#manual-${Date.now()}`,
+      kind,
+      number: 0,
+      role: (input.role || (kind === "takeOwnership" ? "developer" : "architect")) as Candidate["role"],
+      writeMode: input.writeMode ?? (kind === "takeOwnership" ? "write" : "read-only"),
+      title: input.title.slice(0, 120),
+      reason: "manual proposal from agent tool",
+      context: input.context,
+    };
+    const taskId = enqueueCandidate(repo, candidate);
+    if (taskId === "dead-lettered") {
+      throw new Error(`proposal dead-lettered (${kind} exceeded failure caps for this repo)`);
+    }
+    if (taskId) {
+      recordActivity(s, { at: Date.now(), repoId, kind: "task", text: `manual ${kind}: ${candidate.title}` });
+      await saveTeamAutoStore(s);
+      return taskId;
+    }
+    return "duplicate-active-skipped";
+  }
+
   // ---------- write-back reconciler ----------
 
   async function reconcileWritebacks(): Promise<void> {
@@ -690,7 +730,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     return (s.activity ?? []).slice().reverse();
   }
 
-  return { addRepo, removeRepo, setRepoEnabled, updateRepo, runSweepNow, registerWriteback, reconcileWritebacks, start, stop, getStatus, getActivity, ensureWriteWorktree, removeWriteWorktree };
+  return { addRepo, removeRepo, setRepoEnabled, updateRepo, runSweepNow, registerWriteback, reconcileWritebacks, start, stop, getStatus, getActivity, ensureWriteWorktree, removeWriteWorktree, proposeManual };
 
   /** Collaboration contract: dispatch asks for a task-scoped worktree dir (rel to projects root). */
   async function ensureWriteWorktree(repoId: string, taskId: string): Promise<string> {

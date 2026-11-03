@@ -33,6 +33,8 @@ export type ControllerServiceDeps = {
   onActualPort?: (port: number) => void;
   /** Called once the kickoff handler is ready. */
   onKickoffHandlerAvailable?: (handler: KickoffHandler) => void;
+  /** Late-binding getter for the TeamAuto scheduler (created during service start). */
+  onTeamAutoSchedulerAvailable?: (getter: () => import("../teamauto/scheduler.js").TeamAutoScheduler | null) => void;
 };
 
 function getPreferredLanUiUrl(port: number): string | null {
@@ -274,6 +276,7 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
           },
         });
         await teamAutoSchedulerRef.start();
+        deps.onTeamAutoSchedulerAvailable?.(() => teamAutoSchedulerRef);
       } catch (err) {
         logger.warn(`Controller: TeamAuto scheduler failed to start: ${err instanceof Error ? err.message : String(err)}`);
       }
