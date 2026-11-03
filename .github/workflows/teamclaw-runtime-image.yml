@@ -113,6 +113,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ${{ steps.context.outputs.context_dir }}
+          no-cache: true
           file: ${{ steps.context.outputs.dockerfile_path }}
           build-args: |
             OPENCLAW_EXTENSIONS=teamclaw
