@@ -174,7 +174,11 @@ async function main() {
     if (!dockerfileSource.includes(needle)) {
       throw new Error(`Expected Dockerfile command not found: ${needle}`);
     }
-    dockerfileSource = dockerfileSource.replace(needle, replacement);
+    // replaceAll: upstream 2026.10.10 carries the SAME install command in
+    // TWO stages (production-deps and build); a single replace patched only
+    // the first occurrence and the build stage kept --frozen-lockfile
+    // (ERR_PNPM_PACKAGE_MANAGER_NO_IMPORTER, three burned CI runs).
+    dockerfileSource = dockerfileSource.replaceAll(needle, replacement);
   }
   // Output guards: the patched Dockerfile MUST carry our semantic changes.
   // If an upstream edit silently no-ops a replacement (or a cache/checkout
