@@ -4252,7 +4252,8 @@ function closeModelSettings() {
         + '<span class="tunnel-note">requires GitHub login</span>'
         + '<div class="tunnel-note">— or —</div>'
         + '<button class="btn btn-small" data-act="start-quick">Anonymous one-off tunnel (trycloudflare.com)</button>'
-        + '<div class="tunnel-note">No account needed. Random URL, dies on restart, anyone with the link can open the dashboard - use for quick demos only.</div>';
+        + '<button class="btn btn-small" data-act="start-quick-lhr">Anonymous one-off tunnel (localhost.run)</button>'
+        + '<div class="tunnel-note">No account needed. Random URL, dies on restart, anyone with the link can open the dashboard - use for quick demos only. trycloudflare needs the cloudflared binary; localhost.run uses plain ssh.</div>';
       wrap.querySelector(".tunnel-state").innerHTML = html;
     };
     const refresh = () => apiGet("/tunnel/status").then((st) => render(st || {})).catch(() => {});
@@ -4261,8 +4262,8 @@ function closeModelSettings() {
       if (!act) return;
       e.target.disabled = true;
       var call;
-      if (act === "start-quick") {
-        call = apiRequest("/tunnel/start-quick", { method: "POST" });
+      if (act === "start-quick" || act === "start-quick-lhr") {
+        call = apiRequest(act === "start-quick-lhr" ? "/tunnel/start-quick-lhr" : "/tunnel/start-quick", { method: "POST" });
       } else if (act === "start-self" || act === "start-self-token") {
         const opts = { method: "POST", headers: { "Content-Type": "application/json" } };
         if (act === "start-self-token") {
