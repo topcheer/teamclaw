@@ -325,7 +325,20 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
         const now = Date.now();
 
         for (const [workerId, worker] of Object.entries(teamState.workers)) {
-          if (worker.status === "offline") continue;
+          if (worker.status === "offline") {
+            // Stale offline entries are dead session workers (provisioned
+            // per-task workers exit when their task ends; their registry
+            // entries used to linger forever and pile up - observed live:
+            // the intake agent read a wall of offline developers and
+            // misreported the repos they had served as "repo offline").
+            // Same reap semantics as the startup sweep, applied at runtime.
+            if (now - worker.lastHeartbeat > WORKER_TIMEOUT_MS) {
+              delete teamState.workers[workerId];
+              changed = true;
+              logger.info(`Controller: reaped stale offline worker ${workerId}`);
+            }
+            continue;
+          }
           if (now - worker.lastHeartbeat > WORKER_TIMEOUT_MS) {
             logger.info(`Controller: worker ${workerId} timed out`);
             const activeTaskId = worker.currentTaskId;
