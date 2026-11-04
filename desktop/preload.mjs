@@ -7,6 +7,12 @@ contextBridge.exposeInMainWorld("teamclawDesktop", {
   getLocalSetupInfo: () => ipcRenderer.invoke("controller:get-setup-info"),
   installLocalTeamClaw: (options) => ipcRenderer.invoke("controller:install-local", options),
   installOpenClaw: (options) => ipcRenderer.invoke("openclaw:install-local", options),
+  bootstrapInstall: (options) => ipcRenderer.invoke("bootstrap:install", options),
+  onBootstrapEvent: (cb) => {
+    const handler = (_e, payload) => cb(payload);
+    ipcRenderer.on("bootstrap:install-event", handler);
+    return () => ipcRenderer.removeListener("bootstrap:install-event", handler);
+  },
   openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url),
   openPath: (targetPath) => ipcRenderer.invoke("shell:openPath", targetPath),
   showNotification: (payload) => ipcRenderer.invoke("notification:show", payload),

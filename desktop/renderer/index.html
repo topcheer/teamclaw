@@ -355,6 +355,35 @@
         <section class="bootstrap-card bootstrap-command-card">
           <div id="bootstrap-command-label" class="bootstrap-label">One-line install command</div>
           <pre class="worker-install-command bootstrap-command"><code id="bootstrap-install-command"></code></pre>
+          <section class="bootstrap-card bootstrap-llm-card">
+            <div class="bootstrap-label">LLM provider (everything else defaults)</div>
+            <div class="bootstrap-llm-row">
+              <select id="bootstrap-llm-provider" class="compact-input">
+                <option value="">Detect / keep existing</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="openai">OpenAI</option>
+                <option value="openrouter">OpenRouter</option>
+                <option value="zai">Z.ai</option>
+                <option value="deepseek">DeepSeek</option>
+                <option value="google">Google</option>
+              </select>
+              <input id="bootstrap-llm-endpoint" class="compact-input" type="text" placeholder="Endpoint URL (optional)">
+              <input id="bootstrap-llm-apikey" class="compact-input" type="password" placeholder="API key">
+            </div>
+            <div class="bootstrap-label" style="margin-top:10px">Install source</div>
+            <select id="bootstrap-source" class="compact-input">
+              <option value="auto">Auto (bundled if present, else official)</option>
+              <option value="bundled">Bundled with this app</option>
+              <option value="official">Official registry (npm)</option>
+              <option value="gitlab">GitLab artifact (tar/zip URL)</option>
+            </select>
+            <input id="bootstrap-gitlab-url" class="compact-input" type="text" placeholder="GitLab artifact URL" hidden>
+            <div class="bootstrap-note">Sandboxed install - your existing OpenClaw/TeamClaw installation and ~/.openclaw are never modified.</div>
+          </section>
+          <section class="bootstrap-card bootstrap-log-card" hidden id="bootstrap-log-card">
+            <div class="bootstrap-label">Install progress</div>
+            <pre id="bootstrap-log" class="bootstrap-log"></pre>
+          </section>
           <div class="bootstrap-actions">
             <button class="btn" type="button" data-bootstrap-copy-install="true">Copy install command</button>
             <button id="bootstrap-install-btn" class="btn btn-primary" type="button" data-bootstrap-install="true">Install now</button>

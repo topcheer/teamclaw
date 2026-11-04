@@ -3962,17 +3962,44 @@
 
     const bootstrapInstall = target.closest('[data-bootstrap-install]');
     if (bootstrapInstall) {
+      // Sandboxed orchestrated install (never touches the user's global
+      // installs): OpenClaw runtime -> TeamClaw extension -> LLM config,
+      // with every step streamed into the progress log.
       const hasOpenClaw = Boolean(state.localSetupInfo && state.localSetupInfo.hasOpenClaw);
-      if (hasOpenClaw) {
-        state.isInstallingLocal = true;
-      } else {
-        state.isInstallingOpenClaw = true;
-      }
+      state.isInstallingLocal = hasOpenClaw;
+      state.isInstallingOpenClaw = !hasOpenClaw;
       state.unavailableReason = t("bootstrap.installing");
       renderUnavailableScreen();
-      const installPromise = hasOpenClaw
-        ? desktop.installLocalTeamClaw({ mode: state.localSetupMode })
-        : desktop.installOpenClaw({ command: (state.localSetupInfo && state.localSetupInfo.openClawInstallCommand) || 'npm install -g openclaw@latest' });
+
+      const logCard = document.getElementById('bootstrap-log-card');
+      const logEl = document.getElementById('bootstrap-log');
+      if (logCard && logEl) { logCard.hidden = false; logEl.textContent = ''; }
+      const appendLog = (payload) => {
+        if (!logEl) return;
+        const { phase = '', line = '' } = payload || {};
+        const row = document.createElement('div');
+        if (phase === 'error') row.className = 'log-error';
+        row.textContent = line ? `[${phase}] ${line}` : `[${phase}]`;
+        logEl.appendChild(row);
+        logEl.scrollTop = logEl.scrollHeight;
+      };
+      const unsub = window.teamclawDesktop && window.teamclawDesktop.onBootstrapEvent
+        ? window.teamclawDesktop.onBootstrapEvent(appendLog)
+        : null;
+
+      const providerEl = document.getElementById('bootstrap-llm-provider');
+      const endpointEl = document.getElementById('bootstrap-llm-endpoint');
+      const apikeyEl = document.getElementById('bootstrap-llm-apikey');
+      const sourceEl = document.getElementById('bootstrap-source');
+      const gitlabEl = document.getElementById('bootstrap-gitlab-url');
+      const source = sourceEl && sourceEl.value !== 'auto' ? sourceEl.value : undefined;
+      const gitlabUrl = source === 'gitlab' && gitlabEl ? gitlabEl.value.trim() : undefined;
+      const llm = (providerEl && providerEl.value)
+        ? { provider: providerEl.value, endpoint: endpointEl ? endpointEl.value.trim() : '', apiKey: apikeyEl ? apikeyEl.value.trim() : '' }
+        : {};
+
+      const installPromise = desktop.bootstrapInstall({ llm, source, gitlabUrl })
+        .finally(() => { if (unsub) unsub(); });
       installPromise.then(async () => {
         state.isInstallingLocal = false;
         state.isInstallingOpenClaw = false;
@@ -4424,6 +4451,12 @@
   setConnectionPill("disconnected", t("connection.disconnected"));
   setupGithubCorner();
   bindTeamAutoControls();
+  // Bootstrap: gitlab source reveals the artifact URL input.
+  {
+    const sel = document.getElementById('bootstrap-source');
+    const gl = document.getElementById('bootstrap-gitlab-url');
+    if (sel && gl) sel.addEventListener('change', () => { gl.hidden = sel.value !== 'gitlab'; });
+  }
   connectSavedController();
   renderConversation();
   activateView('mission');
