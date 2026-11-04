@@ -39,6 +39,16 @@ assert.match(mgr, /tunnels\/\$\{gone\.tunnelId\}\?user=[^`]*&token=/, "stop() pr
 assert.match(mgr, /tunnel-state\.json/, "tunnel handle (connector token + pid) persisted for boot recovery");
 assert.match(mgr, /async function recover/, "manager implements boot recovery (reconnect same tunnel, preserve gate token)");
 assert.match(mgr, /connectorPidIsCloudflared/, "orphan reaping is pid-reuse safe (binary verified before kill)");
+
+// Container install path (2026-11-04 audit, ghcr.io/openclaw/openclaw base):
+// linux releases have NO .tgz asset (the old URL 404s) and the ~/.local/bin
+// install target was invisible to detection (existsSync("cloudflared") is a
+// CWD check, not a PATH lookup).
+assert.match(mgr, /cloudflaredInstallTarget\(\)/, "detection checks the install target ($HOME/.local/bin/cloudflared)");
+assert.match(mgr, /path\.delimiter/, "detection scans PATH entries (real PATH lookup, not CWD)");
+assert.match(mgr, /cloudflared-linux-" \+ arch/, "linux install downloads the RAW binary asset");
+assert.doesNotMatch(mgr, /cloudflared-linux-" \+ arch \+ "\.tgz"/, "linux has no .tgz release asset (404)");
+assert.match(mgr, /nativeDownload/, "curl-less https download fallback exists (distroless images)");
 assert.match(http, /tunnelManagerSingleton\.recover\(\)/, "controller reconnects a persisted share at boot");
 assert.match(http, /\/api\/v1\/tunnel\/start/, "start endpoint present");
 assert.match(http, /serveVersionedHtml/, "index.html is served with content-versioned asset URLs (?v=<hash>) so tunnel/CDN browser-cache freezes cannot pin a stale app.js");

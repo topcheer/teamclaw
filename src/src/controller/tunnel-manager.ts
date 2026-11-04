@@ -65,11 +65,41 @@ export type TunnelHandle = {
 };
 
 const CLOUDFLARED_CANDIDATES = [
-  "cloudflared",
   "/opt/homebrew/bin/cloudflared",
   "/usr/local/bin/cloudflared",
   "/usr/bin/cloudflared",
 ];
+function cloudflaredInstallTarget(): string {
+  // Keep in sync with installCloudflared(): the one-click install drops the
+  // binary at $HOME/.local/bin/cloudflared (no sudo needed, non-root friendly
+  // in containers where HOME is writable but /usr/local/bin is not).
+  const home = process.env.HOME ?? "/tmp";
+  return path.join(home, ".local", "bin", "cloudflared");
+}
+// curl-less download fallback (distroless images): plain https.get with
+// redirect following. GitHub release URLs 302 to objects.githubusercontent.com.
+function nativeDownload(url: string, dest: string, redirects = 0): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (redirects > 5) return reject(new Error("too many redirects"));
+    const req = https.get(url, (res: import("node:http").IncomingMessage) => {
+      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        nativeDownload(res.headers.location, dest, redirects + 1).then(resolve, reject);
+        return;
+      }
+      if (res.statusCode !== 200) {
+        res.resume();
+        reject(new Error("HTTP " + res.statusCode));
+        return;
+      }
+      const file = fs.createWriteStream(dest);
+      res.pipe(file);
+      file.on("finish", () => file.close((err?: NodeJS.ErrnoException | null) => (err ? reject(err) : resolve())));
+      file.on("error", reject);
+    });
+    req.on("error", reject);
+  });
+}
 function tunnelRuntimeHome(): string {
   try {
     const dir = path.join(os.tmpdir(), "teamclaw-cloudflared-home");
@@ -125,7 +155,15 @@ function connectorPidIsCloudflared(pid: number): boolean {
 }
 
 function findCloudflared(): string | null {
-  for (const bin of CLOUDFLARED_CANDIDATES) {
+  // The install target first: installCloudflared() puts the binary in
+  // $HOME/.local/bin, which is on PATH in stock images (Debian node images
+  // prepend it) but must be found even when PATH is minimal (K8s pods).
+  const candidates = [cloudflaredInstallTarget(), ...CLOUDFLARED_CANDIDATES];
+  // Real PATH scan. (fs.existsSync("cloudflared") checks CWD, not PATH -
+  // the old behavior missed every PATH-resolvable install.)
+  const pathDirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  for (const dir of pathDirs) candidates.push(path.join(dir, "cloudflared"));
+  for (const bin of candidates) {
     try {
       if (fs.existsSync(bin) && fs.accessSync(bin, fs.constants.X_OK) === undefined) {
         return bin;
@@ -283,7 +321,10 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
   /**
    * One-click cloudflared install across platforms:
    *   darwin  -> brew install cloudflared (Homebrew), tarball fallback
-   *   linux   -> official tarball into ~/.local/bin (no sudo needed)
+   *   linux   -> official RAW binary into ~/.local/bin (no sudo needed;
+   *              cloudflared ships NO .tgz asset for linux - only darwin
+   *              has tgz packages, and the binary is statically linked so
+   *              it runs on any distro without glibc concerns)
    *   win32   -> winget install Cloudflare.cloudflared
    */
 
@@ -325,7 +366,10 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
         if (brew.code === 0) return { ok: true, detail: "installed via Homebrew" };
       }
       const arch = process.arch === "arm64" ? "arm64" : process.arch === "ia32" ? "386" : "amd64";
-      const name = process.platform === "darwin" ? "cloudflared-darwin-" + arch + ".tgz" : "cloudflared-linux-" + arch + ".tgz";
+      const isDarwin = process.platform === "darwin";
+      // Linux assets are RAW binaries (no .tgz exists for linux - verified
+      // against the official release page; the old .tgz URL 404s there).
+      const name = isDarwin ? "cloudflared-darwin-" + arch + ".tgz" : "cloudflared-linux-" + arch;
       fs.mkdirSync(userBin, { recursive: true });
       const tgz = path.join(userBin, name);
       const url = "https://github.com/cloudflare/cloudflared/releases/latest/download/" + name;
@@ -338,19 +382,35 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
         total = Number(head.headers["content-length"] ?? 0);
       } catch { total = 0; }
       setPhase("downloading", 0, url);
-      const timer = setInterval(() => {
+      const watch = (file: string) => {
+        const timer = setInterval(() => {
+          try {
+            const size = fs.statSync(file).size;
+            if (total > 0) setPhase("downloading", Math.min(99, Math.floor((size / total) * 100)), null);
+          } catch { /* file not created yet */ }
+        }, 500);
+        return () => clearInterval(timer);
+      };
+      // curl first (resume/retry flags), native https fallback for images
+      // without curl (distroless etc.). GitHub releases redirect - follow them.
+      const dlPath = isDarwin ? tgz : target;
+      const stopWatch = watch(dlPath);
+      const dl = await run("curl", ["-fsSL", "--retry", "3", "-o", dlPath, url]);
+      stopWatch();
+      if (dl.code !== 0) {
+        setPhase("downloading", null, "native https fallback");
         try {
-          const size = fs.statSync(tgz).size;
-          if (total > 0) setPhase("downloading", Math.min(99, Math.floor((size / total) * 100)), null);
-        } catch { /* file not created yet */ }
-      }, 500);
-      const dl = await run("curl", ["-fsSL", "--retry", "3", "-o", tgz, url]);
-      clearInterval(timer);
-      if (dl.code !== 0) return { ok: false, detail: "download: " + tail(dl.out) };
-      setPhase("extracting", 99, null);
-      const ex = await run("tar", ["xzf", tgz, "-C", userBin]);
-      fs.rmSync(tgz, { force: true });
-      if (ex.code !== 0) return { ok: false, detail: "extract: " + tail(ex.out) };
+          await nativeDownload(url, dlPath);
+        } catch (e) {
+          return { ok: false, detail: "download: " + (e instanceof Error ? e.message : String(e)) };
+        }
+      }
+      if (isDarwin) {
+        setPhase("extracting", 99, null);
+        const ex = await run("tar", ["xzf", tgz, "-C", userBin]);
+        fs.rmSync(tgz, { force: true });
+        if (ex.code !== 0) return { ok: false, detail: "extract: " + tail(ex.out) };
+      }
       fs.chmodSync(target, 0o755);
       return { ok: true, detail: "installed to " + target };
     })();
