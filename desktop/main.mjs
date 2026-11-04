@@ -253,8 +253,15 @@ async function writeLlmConfig(_openclawBin, { provider, endpoint, apiKey }, onEv
   const cfgPath = path.join(stateDir, "openclaw.json");
   let cfg = {};
   try { cfg = JSON.parse(await fs.readFile(cfgPath, "utf8")); } catch { cfg = {}; }
-  cfg.vendors = cfg.vendors || {};
-  cfg.vendors[provider] = { ...(cfg.vendors[provider] || {}), apiKey, ...(endpoint ? { baseUrl: endpoint } : {}) };
+  // Real OpenClaw schema: models.providers.<id> (NOT a top-level "vendors"
+  // key - that fails config validation and blocks every CLI command).
+  cfg.models = cfg.models || {};
+  cfg.models.providers = cfg.models.providers || {};
+  cfg.models.providers[provider] = {
+    ...(cfg.models.providers[provider] || {}),
+    apiKey,
+    ...(endpoint ? { baseUrl: endpoint } : {}),
+  };
   await fs.writeFile(cfgPath, JSON.stringify(cfg, null, 2), { mode: 0o600 });
   onEvent({ phase: "llm", line: `LLM config written for ${provider} (sandbox only).` });
 }
