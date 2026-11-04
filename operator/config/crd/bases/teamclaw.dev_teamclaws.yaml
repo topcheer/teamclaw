@@ -318,11 +318,21 @@ spec:
                     required:
                     - host
                     type: object
+                  nodePort:
+                    description: NodePort sets the nodePort when ServiceType is NodePort.
+                      Empty = auto.
+                    format: int32
+                    type: integer
                   servicePort:
                     default: 80
                     description: ServicePort is the controller Service port.
                     format: int32
                     type: integer
+                  serviceType:
+                    description: |-
+                      ServiceType overrides the controller Service type. Empty = ClusterIP.
+                      Valid: ClusterIP, NodePort, LoadBalancer.
+                    type: string
                 type: object
               teamName:
                 description: TeamName is the teamclaw team identifier persisted in
