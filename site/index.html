@@ -542,6 +542,23 @@ h2{font-weight:900;text-transform:uppercase;letter-spacing:-.02em;line-height:1;
   </div>
 </section>
 
+<section class="section" id="operator">
+  <div class="wrap">
+    <div class="sec-kicker rv">05 - ON KUBERNETES</div>
+    <h2 class="rv" style="--d:.05s">One <span class="u">helm install</span>. Every team a CR.</h2>
+    <p class="sec-sub rv" style="--d:.1s">The TeamClaw operator runs in your cluster with a built-in management UI. Each team becomes a TeamClaw custom resource - controller, service, workspace and readiness, all reconciled for you.</p>
+    <div class="rv" style="--d:.16s;max-width:720px;margin:26px auto 0">
+      <pre>$ helm install teamclaw-operator \
+    oci://ghcr.io/topcheer/charts/teamclaw-operator \
+    --create-namespace -n teamclaw \
+    --set token.token=$(openssl rand -hex 24)
+
+→ operator up - UI on :30990 - teams from the web form</pre>
+      <p class="sec-sub" style="margin-top:16px">Charts publish to GHCR on every merge. The runtime image layers TeamClaw onto the official openclaw base (2026.10.10) - one schema generation, no drift.</p>
+    </div>
+  </div>
+</section>
+
 <section class="section clarify-band" id="clarify">
   <div class="wrap clarify-grid">
     <div>

@@ -105,6 +105,30 @@ flowchart TD
     E --> G[Move to docker or kubernetes after process works]
 ```
 
+## Option 0: Kubernetes (operator + helm, one command)
+
+If you run a cluster (k3s/minikube/cloud), the operator installs everything
+and gives you a web UI to manage teams:
+
+```bash
+helm install teamclaw-operator oci://ghcr.io/topcheer/charts/teamclaw-operator \
+  --version 0.1.0 --create-namespace -n teamclaw \
+  --set token.token=$(openssl rand -hex 24)
+```
+
+Then open the operator UI (NodePort 30990 by default:
+`http://<node-ip>:30990`), paste the token, and create your first team
+from the form - inline `openclaw.json` becomes the team's config Secret
+automatically. The operator deploys each team's controller Deployment,
+Service and workspace PVC, and reports `Ready`/workers on the CR.
+
+Notes for openclaw >= 2026.10.10 configs:
+
+- `gateway.bind: "lan"` requires auth - set `gateway.auth.token` in the
+  config you paste (the UI stores it in a Secret, it never leaves the cluster)
+- model provider `apiKey` values must be inline strings; `file:` secret
+  references do not resolve inside the pod
+
 ## Install options
 
 ### Option 1: Guided installer (recommended)

@@ -1,5 +1,44 @@
 # Changelog
 
+## 2026.11.0
+
+Released 2026-11-04. This cycle spans PRs #85-#108 (all merged to main).
+
+### Kubernetes operator (GA path)
+
+- Full operator with embedded management UI: token login, team dashboard
+  (Ready/ConfigReady/worker pills), create/edit/delete forms with inline
+  `openclaw.json` (auto-creates the backing Secret) (#68, #75, #80)
+- Helm charts published to GHCR as OCI artifacts
+  (`oci://ghcr.io/topcheer/charts/teamclaw{,-operator}`); chart changes
+  auto-publish via CI (#105, #107, #108)
+- Operator hardening: PVC reconcile idempotency (bound claims expand-only),
+  roles/rolebindings watch verbs, controller `imagePullPolicy: Always` for
+  `:latest`, plugin symlink baked into the controller bootstrap (#104, #80, #106)
+
+### Runtime image rebuilt on the official base
+
+- `Dockerfile.teamclaw` layers the plugin onto `ghcr.io/openclaw/openclaw`
+  (upstream 2026.10.10) - minutes per build instead of a 40-60min full
+  source build; bootstrap uses the official `openclaw.mjs` entrypoint (#98, #103)
+- openclaw submodule now tracks upstream `openclaw/openclaw` main directly
+  (fork retired); fork main was synced 84,260 commits forward before the
+  switch (#87, #88)
+
+### Worker provisioning fixes
+
+- Baked-in plugin root resolution for process workers (image-layout probing
+  via `process.argv[1]`) (#86)
+- Per-backend `agents.entries` handling: process workers keep the teamclaw
+  entry (same-runtime requirement), container backends fold to legacy
+  defaults (#66, #82)
+- TeamAuto wall-clock aligned schedules with strict cron parsing (#77, #82)
+
+### Site & docs
+
+- teamclaw.dev updated with the Kubernetes deployment story; README/INSTALL
+  gained the helm/operator quick-start paths
+
 ## 2026.7.0
 
 Released 2026-11-03. This cycle spans PRs #77–#84 (all merged to main).
