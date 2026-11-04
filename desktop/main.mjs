@@ -213,19 +213,27 @@ async function ensureOpenClawRuntime({ source, gitlabUrl }, onEvent) {
 }
 
 async function ensureTeamClawPlugin(openclawBin, onEvent) {
-  const res = await runShellCommand(`"${openclawBin}" plugin list 2>/dev/null || true`, { cwd: process.cwd() });
-  if ((res.stdout || "").includes("@teamclaws/teamclaw")) {
+  // FULLY SANDBOXED (user vetoed global writes): registration and runtime
+  // both use the desktop state dir; ~/.openclaw is never written. The user's
+  // global config is only ever READ (LLM seeding happens elsewhere).
+  const sandboxEnv = { ...process.env, OPENCLAW_STATE_DIR: path.join(app.getPath("userData"), "openclaw-state") };
+  const runtimeDir = path.join(app.getPath("userData"), "runtime");
+  const pluginDir = path.join(runtimeDir, "node_modules", "@teamclaws", "teamclaw");
+  const res = await runShellCommand(`"${openclawBin}" plugins list 2>/dev/null || true`, { cwd: runtimeDir, env: sandboxEnv });
+  if ((res.stdout || "").includes("teamclaw")) {
     onEvent({ phase: "teamclaw", line: "TeamClaw plugin already installed." });
     return;
   }
-  const runtimeDir = path.join(app.getPath("userData"), "runtime");
   await runShellStream(`npm install --prefix "${runtimeDir}" @teamclaws/teamclaw@latest`, runtimeDir, (line) =>
     onEvent({ phase: "teamclaw", line }),
   );
-  onEvent({ phase: "teamclaw", line: "Registering the TeamClaw extension..." });
-  await runShellStream(`"${openclawBin}" extensions add "${runtimeDir}/node_modules/@teamclaws/teamclaw"`, runtimeDir, (line) =>
-    onEvent({ phase: "teamclaw", line }),
-  );
+  onEvent({ phase: "teamclaw", line: "Registering the TeamClaw plugin..." });
+  // npm spec install ships compiled dist (local-path installs trip the
+  // "compiled runtime output" packaging check); force skips the local-path
+  // trust prompt. Registration lands in the SANDBOX state dir only.
+  await runShellStream(`"${openclawBin}" plugins install @teamclaws/teamclaw --force --accept-capabilities`, runtimeDir, (line) => {
+    onEvent({ phase: "teamclaw", line });
+  }, sandboxEnv);
 }
 
 // Minimal LLM config: write the DESKTOP-SANDBOX openclaw.json directly
@@ -249,10 +257,10 @@ async function writeLlmConfig(_openclawBin, { provider, endpoint, apiKey }, onEv
 
 // Streamed variant: emits every stdout/stderr line through onLine and
 // resolves with the same result shape as runShellCommand.
-async function runShellStream(command, cwd, onLine) {
+async function runShellStream(command, cwd, onLine, envOverride) {
   const child = spawn(command, {
     cwd,
-    env: process.env,
+    env: envOverride || process.env,
     shell: true,
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
