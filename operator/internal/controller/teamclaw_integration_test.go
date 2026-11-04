@@ -34,8 +34,15 @@ func startEnvTest(t *testing.T) client.Client {
 		t.Skip("KUBEBUILDER_ASSETS not set; run `make test-integration` (setup-envtest) to enable")
 	}
 	logf.SetLogger(zap.New(zap.WriteTo(testWriter(t))))
+	// go test runs with cwd = <operator>/internal/controller; resolve the CRD
+	// dir relative to the actual working directory so it works from anywhere.
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	crdDir := filepath.Join(filepath.Dir(filepath.Dir(wd)), "config", "crd", "bases")
 	testEnv := &envtest.Environment{
-		CRDDirectoryPaths:     []string{filepath.Join("..", "config", "crd", "bases")},
+		CRDDirectoryPaths:     []string{crdDir},
 		ErrorIfCRDPathMissing: true,
 	}
 	cfg, err := testEnv.Start()
