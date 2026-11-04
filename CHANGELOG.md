@@ -17,6 +17,38 @@ Released 2026-11-04. Patch release over 2026.7.0.
 - Docker provisioning documentation with the full environment-variable
   matrix (#111)
 
+## 2026.8.0
+
+Released 2026-11-04. Minor release over 2026.7.1: web-UI internet
+tunnel feature set.
+
+### Added
+
+- Self-hosted Cloudflare tunnel: connector token via UI input or
+  TEAMCLAW_TUNNEL_TOKEN env injection (panel detects injection and
+  offers one-click start); hostname stays in the user's Cloudflare
+  dashboard (#121)
+- Tunnel settings popover: the Internet Tunnel panel moved out of the
+  workspace tab into a header-triggered popover (#123)
+- Header live-URL pill: managed (*.teamclaw.dev) tunnel URL shown in
+  the top-right header while active (#123)
+- Anonymous one-off tunnel (trycloudflare.com): zero account, zero
+  token, random URL, dies on restart (#124)
+
+### Fixed
+
+- Stale-live tunnel state: an unexpectedly dead connector no longer
+  reports active=true forever; state clears within one poll interval
+  (#124)
+- Task-list density: long Result/description text clamps to 3 lines on
+  cards, tunnel setup guidance folds behind a summary (#122)
+
+### Changed
+
+- Docs/site/npm metadata now cover the tunnel feature matrix
+  (README, npm README, package description/keywords, image labels,
+  site, k8s guide) (#126)
+
 ## 2026.11.0
 
 Released 2026-11-04. This cycle spans PRs #85-#108 (all merged to main).
