@@ -55,6 +55,8 @@ assert.match(http, /serveVersionedHtml/, "index.html is served with content-vers
 assert.match(http, /\/api\/v1\/tunnel\/stop/, "stop endpoint present");
 assert.match(http, /GitHub login required/, "sharing requires github login (server-derived username)");
 
+const tunnelManagerSrc = await read("src/src/controller/tunnel-manager.ts");
+
 // UI: settings popover (header-triggered) + managed-URL pill; the panel no
 // longer lives in the workspace tab (moved out 2026-11 by request).
 assert.match(uiHtml, /tunnel-settings-toggle/, "header hosts the Tunnel settings button");
@@ -64,5 +66,13 @@ assert.match(uiHtml, /tunnel-live-pill/, "header hosts the live managed tunnel U
 assert.match(uiApp, /initTunnelPanel/, "panel logic initialized");
 assert.match(uiApp, /st\.mode === "managed"/, "pill shows managed (*.teamclaw.dev) URLs only");
 assert.match(uiApp, /Gate token/, "gate token displayed for sharing");
+// Unexpected connector exits must clear active state (dead tunnel never
+// reports live) - regression guard for the "UI stuck on live after stop".
+assert.match(tunnelManagerSrc, /exited unexpectedly/, "unexpected connector exit clears active state");
+assert.match(tunnelManagerSrc, /userStopping/, "planned stops are distinguished from crashes");
+// Quick anonymous tunnel (trycloudflare.com).
+assert.match(tunnelManagerSrc, /startQuick/, "anonymous quick tunnel supported");
+assert.match(tunnelManagerSrc, /trycloudflare\.com/, "quick tunnel announces trycloudflare.com URL");
+assert.match(uiApp, /start-quick/, "quick tunnel button in the settings popover");
 
 console.log("test-tunnel-contracts: ok");

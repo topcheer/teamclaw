@@ -4208,6 +4208,13 @@ function closeModelSettings() {
           ? '<div class="tunnel-note">cloudflared ' + escapeHtml(st.install.phase) + (st.install.percent != null ? ' ' + st.install.percent + '%' : '') + '…</div>'
           : '');
       if (progress) { wrap.querySelector(".tunnel-state").innerHTML = progress; return; }
+      if (st.active && st.mode === "quick") {
+        wrap.querySelector(".tunnel-state").innerHTML =
+          '<div class="tunnel-on">Quick tunnel: ' + (st.hostname ? '<a href="https://' + st.hostname + '" target="_blank" rel="noopener">https://' + st.hostname + '</a>' : 'waiting for URL…') + '</div>'
+          + '<div class="tunnel-note">One-off URL - dies on restart. Anyone with the link can open the dashboard.</div>'
+          + '<button class="btn btn-small" data-act="stop">Stop sharing</button>';
+        return;
+      }
       if (st.active && st.mode === "self-hosted") {
         wrap.querySelector(".tunnel-state").innerHTML =
           '<div class="tunnel-on">Self-hosted Cloudflare tunnel: live on your own domain</div>'
@@ -4242,7 +4249,10 @@ function closeModelSettings() {
       }
       html += '<div class="tunnel-note">— or —</div>'
         + '<button class="btn btn-small" data-act="start">Share via *.teamclaw.dev</button>'
-        + '<span class="tunnel-note">requires GitHub login</span>';
+        + '<span class="tunnel-note">requires GitHub login</span>'
+        + '<div class="tunnel-note">— or —</div>'
+        + '<button class="btn btn-small" data-act="start-quick">Anonymous one-off tunnel (trycloudflare.com)</button>'
+        + '<div class="tunnel-note">No account needed. Random URL, dies on restart, anyone with the link can open the dashboard - use for quick demos only.</div>';
       wrap.querySelector(".tunnel-state").innerHTML = html;
     };
     const refresh = () => apiGet("/tunnel/status").then((st) => render(st || {})).catch(() => {});
@@ -4251,7 +4261,9 @@ function closeModelSettings() {
       if (!act) return;
       e.target.disabled = true;
       var call;
-      if (act === "start-self" || act === "start-self-token") {
+      if (act === "start-quick") {
+        call = apiRequest("/tunnel/start-quick", { method: "POST" });
+      } else if (act === "start-self" || act === "start-self-token") {
         const opts = { method: "POST", headers: { "Content-Type": "application/json" } };
         if (act === "start-self-token") {
           const input = wrap.querySelector('[data-input="token"]');

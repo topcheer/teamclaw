@@ -54,7 +54,7 @@ export type TunnelStatus = {
   active: boolean;
   /** "managed": platform tunnel on *.teamclaw.dev (gate-protected).
    *  "self-hosted": user-owned Cloudflare tunnel via connector token. */
-  mode: "managed" | "self-hosted" | null;
+  mode: "managed" | "self-hosted" | "quick" | null;
   hostname: string | null;
   gateToken: string | null;
   connectorRunning: boolean;
@@ -197,6 +197,11 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
   let child: ChildProcess | null = null;
   let handle: TunnelHandle | null = null;
   let lastError: string | null = null;
+  // True while stop()/a restart path intentionally kills the connector; the
+  // cloudflared exit handler uses this to distinguish planned teardown from
+  // an unexpected crash (which must clear the active state so /tunnel/status
+  // never reports a dead tunnel as live).
+  let userStopping = false;
   let startOp: { running: boolean; phase: string; detail: string | null } = { running: false, phase: "idle", detail: null };
   let installState: { running: boolean; phase: string; percent: number | null; detail: string | null } = { running: false, phase: "idle", percent: null, detail: null };
 
@@ -270,6 +275,64 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
     return { launched: true, error: null };
   }
 
+  /** Anonymous one-off tunnel: `cloudflared tunnel --url`, no Cloudflare
+   * account, no token, no platform server. Cloudflare assigns a random
+   * trycloudflare.com URL (printed on stderr) which dies with the process -
+   * it is NOT recovered on restart and must not be treated as stable. No
+   * TeamClaw gate: anyone with the URL can reach the dashboard. */
+  function startQuick(): { launched: boolean; error: string | null } {
+    if (handle && child) return { launched: true, error: null };
+    const bin = findCloudflared();
+    if (!bin) return { launched: false, error: "cloudflared not found (brew install cloudflared)" };
+    startOp = { running: true, phase: "starting-connector", detail: "quick tunnel" };
+    stopConnector();
+    const proc = spawn(bin, ["tunnel", "--no-autoupdate", "--url", "http://127.0.0.1:" + deps.localPort], {
+      stdio: ["ignore", "ignore", "pipe"],
+      detached: false,
+      env: { ...process.env, HOME: tunnelRuntimeHome() },
+    });
+    child = proc;
+    handle = { tunnelId: "quick", hostname: "", gateToken: "", deleteToken: "" };
+    lastError = null;
+    // The trycloudflare.com URL appears on stderr once the edge assigns it.
+    let announced = false;
+    const urlRe = /https:\/\/([a-z0-9-]+\.trycloudflare\.com)/i;
+    const timer = setTimeout(() => {
+      if (!announced) {
+        lastError = "quick tunnel did not announce its URL within 20s";
+        startOp = { running: false, phase: "error", detail: lastError };
+      }
+    }, 20000);
+    proc.stderr?.on("data", (c: Buffer) => {
+      const m = c.toString().match(urlRe);
+      if (m && !announced) {
+        announced = true;
+        clearTimeout(timer);
+        if (handle) handle.hostname = m[1]!;
+        startOp = { running: false, phase: "done", detail: m[1] };
+        logger.info(`TeamClaw tunnel: quick tunnel live at https://${m[1]}`);
+      }
+      try { fs.appendFileSync(path.join(tunnelRuntimeHome(), "cloudflared.log"), c); } catch { /* best effort */ }
+    });
+    // Quick tunnels are one-off: no persistent state, no recovery - but the
+    // connector-exit contract still applies: a dead connector must clear the
+    // active state so status() never reports a dead tunnel as live.
+    proc.on("exit", (code: number | null) => {
+      clearTimeout(timer);
+      logger.warn(`TeamClaw tunnel: cloudflared exited (code ${code})`);
+      if (child !== proc) return;
+      child = null;
+      if (!userStopping && handle) {
+        handle = null;
+        lastError = `tunnel connector exited unexpectedly (code ${code ?? "null"})`;
+        startOp = { running: false, phase: "error", detail: lastError };
+        clearTunnelState();
+        logger.warn("TeamClaw tunnel: state cleared after unexpected exit (quick)");
+      }
+    });
+    return { launched: true, error: null };
+  }
+
   function spawnConnector(bin: string, connectorToken: string): ChildProcess {
     const proc = spawn(bin, ["tunnel", "--no-autoupdate", "--protocol", "http2", "run", "--token", connectorToken], {
       stdio: ["ignore", "ignore", "pipe"],
@@ -281,7 +344,22 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
     });
     proc.on("exit", (code: number | null) => {
       logger.warn(`TeamClaw tunnel: cloudflared exited (code ${code})`);
-      if (child === proc) child = null;
+      if (child !== proc) return;
+      child = null;
+      // Unexpected exit (crash, network loss, cloudflared auto-kill): tear
+      // the logical state down too, otherwise status() keeps reporting
+      // active=true and the UI shows a dead tunnel as live forever.
+      if (!userStopping && handle) {
+        const gone = handle;
+        handle = null;
+        lastError = `tunnel connector exited unexpectedly (code ${code ?? "null"})`;
+        startOp = { running: false, phase: "error", detail: lastError };
+        if (gone.tunnelId !== "self-hosted" && gone.tunnelId !== "quick") {
+          void tunnelFetch(`/tunnels/${gone.tunnelId}?user=${encodeURIComponent(gone.hostname.split(".")[0]!.replace(/^team-/, ""))}&token=${encodeURIComponent(gone.deleteToken)}`, "DELETE").catch(() => undefined);
+        }
+        clearTunnelState();
+        logger.warn(`TeamClaw tunnel: state cleared after unexpected exit (${gone.tunnelId})`);
+      }
     });
     // cloudflared logs (stderr) land in a single file for diagnosis.
     // (stdout is "ignore" in stdio above, so there is nothing to pipe.)
@@ -298,18 +376,20 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
   }
 
   async function stop(): Promise<void> {
+    userStopping = true;
     stopConnector();
     if (handle) {
       const gone = handle;
       handle = null;
       // Self-hosted tunnels live in the user's CF account - nothing to
       // delete server-side; the connector stop is the whole teardown.
-      if (gone.tunnelId !== "self-hosted") {
+      if (gone.tunnelId !== "self-hosted" && gone.tunnelId !== "quick") {
         await tunnelFetch(`/tunnels/${gone.tunnelId}?user=${encodeURIComponent(gone.hostname.split(".")[0]!.replace(/^team-/, ""))}&token=${encodeURIComponent(gone.deleteToken)}`, "DELETE").catch(() => undefined);
       }
       clearTunnelState();
-      logger.info(gone.tunnelId === "self-hosted" ? "TeamClaw tunnel: self-hosted connector stopped" : `TeamClaw tunnel: stopped ${gone.hostname}`);
+      logger.info(gone.tunnelId === "self-hosted" || gone.tunnelId === "quick" ? "TeamClaw tunnel: connector stopped" : `TeamClaw tunnel: stopped ${gone.hostname}`);
     }
+    userStopping = false;
   }
 
   // Boot reconciliation: reconnect the share persisted by a previous run.
@@ -319,7 +399,7 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
   async function recover(): Promise<TunnelHandle | null> {
     if (handle) return handle;
     const st = readTunnelState();
-    if (!st) return null;
+    if (!st || st.tunnelId === "quick") return null; // one-off, not recoverable
     const bin = findCloudflared();
     if (!bin) {
       logger.warn("TeamClaw tunnel: previous share found but cloudflared is not installed; not recovering");
@@ -348,7 +428,7 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
   function status(): TunnelStatus {
     return {
       active: Boolean(handle),
-      mode: handle ? (handle.tunnelId === "self-hosted" ? "self-hosted" : "managed") : null,
+      mode: handle ? (handle.tunnelId === "self-hosted" ? "self-hosted" : handle.tunnelId === "quick" ? "quick" : "managed") : null,
       hostname: handle?.hostname || null,
       gateToken: handle?.gateToken || null,
       connectorRunning: Boolean(child),
@@ -467,7 +547,7 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
   }
 
 
-  return { start: launchStart, startSelfHosted, stop, recover, status, installCloudflared, isTunnelRequest, gateAllows };
+  return { start: launchStart, startSelfHosted, startQuick, stop, recover, status, installCloudflared, isTunnelRequest, gateAllows };
 }
 
 export type TunnelManager = ReturnType<typeof createTunnelManager>;
