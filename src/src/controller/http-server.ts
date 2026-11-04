@@ -4805,6 +4805,14 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
         sendJson(res, 202, { launched: true, status: tunnelManager.status() });
         return;
       }
+      // Quick tunnel: anonymous one-off trycloudflare.com URL; no login, no
+      // token, no platform server. Anyone with the URL reaches the UI.
+      if (req.method === "POST" && pathname === "/api/v1/tunnel/start-quick") {
+        const r = tunnelManager.startQuick();
+        if (!r.launched) { sendError(res, 400, r.error ?? "failed to start quick tunnel"); return; }
+        sendJson(res, 202, { launched: true, status: tunnelManager.status() });
+        return;
+      }
       if (req.method === "POST" && pathname === "/api/v1/tunnel/stop") {
         await tunnelManager.stop();
         sendJson(res, 200, tunnelManager.status());
