@@ -1,0 +1,62 @@
+name: Helm Chart Release (GHCR OCI)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "deploy/helm/**"
+      - ".github/workflows/helm-chart-release.yml"
+  workflow_dispatch:
+
+env:
+  CHART_NAMESPACE: ghcr.io/topcheer/charts
+
+jobs:
+  publish_charts:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.16.2  # OCI push GA (>=3.8)
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Package and push charts
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for chart in deploy/helm/*/; do
+            name=$(yq '.name' "${chart}Chart.yaml")
+            version=$(yq '.version' "${chart}Chart.yaml")
+            echo "::group::${name}-${version}"
+            helm lint "${chart}"
+            helm package "${chart}" -d dist/
+            helm push "dist/${name}-${version}.tgz" "oci://${CHART_NAMESPACE}"
+            echo "::endgroup::"
+          done
+
+      - name: Usage summary
+        run: |
+          {
+            echo "## Helm Charts (GHCR OCI)"
+            echo ""
+            for chart in deploy/helm/*/; do
+              name=$(yq '.name' "${chart}Chart.yaml")
+              version=$(yq '.version' "${chart}Chart.yaml")
+              echo '```'
+              echo "helm install ${name} oci://${CHART_NAMESPACE}/${name} --version ${version} --create-namespace -n teamclaw"
+              echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
