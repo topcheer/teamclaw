@@ -6,8 +6,9 @@ metadata:
     app.kubernetes.io/name: teamclaw-operator
     app.kubernetes.io/instance: {{ .Release.Name }}
   annotations:
-    # Let helm skip pruning on upgrade diff noise; content is owned here.
-    helm.sh/hook: crd-install
+    # Helm 3: no hook annotation - CRD installs/updates as a regular release
+    # asset (install creates it, upgrade refreshes the schema, uninstall
+    # removes it and cascades all TeamClaw CRs - see docs/deploy/k8s.md).
 spec:
   group: teamclaw.dev
   names:
@@ -68,7 +69,9 @@ spec:
                           x-kubernetes-preserve-unknown-fields: true
                         tolerations:
                           type: array
-                          x-kubernetes-preserve-unknown-fields: true
+                          items:
+                            type: object
+                            x-kubernetes-preserve-unknown-fields: true
                 workspace:
                   type: object
                   properties:
@@ -106,6 +109,14 @@ spec:
                           type: string
                         tlsSecretName:
                           type: string
+                        certManager:
+                          type: object
+                          required: [issuerRef]
+                          properties:
+                            issuerRef:
+                              type: string
+                            kind:
+                              type: string
                         annotations:
                           type: object
                           additionalProperties:
