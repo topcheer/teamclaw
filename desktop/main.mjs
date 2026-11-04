@@ -198,9 +198,9 @@ async function createMainWindow() {
 }
 
 app.whenReady().then(async () => {
-  if (process.platform === "darwin" && app.dock) {
-    app.dock.setIcon(getDesktopIconPath());
-  }
+  // No app.dock.setIcon here: the Dock icon comes from the bundle icns
+  // (build/icon.icns = site claw mark). The old runtime override pointed at
+  // a legacy PNG and masked the bundle icon on every launch.
   await createMainWindow();
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
