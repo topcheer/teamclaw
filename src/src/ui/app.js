@@ -2481,14 +2481,14 @@
         ? '<span class="task-origin-badge">' + escapeHtml(task.createdBy) + "</span>"
         : "";
       const contractSummary = task.resultContract
-        ? '<div class="task-contract-summary"><strong>Result:</strong> ' + escapeHtml(task.resultContract.summary || "") + "</div>"
+        ? '<div class="task-contract-summary clamp"><strong>Result:</strong> ' + escapeHtml(task.resultContract.summary || "") + "</div>"
         : task.lastHandoff
-          ? '<div class="task-contract-summary"><strong>Handoff:</strong> ' + escapeHtml(task.lastHandoff.summary || "") + "</div>"
+          ? '<div class="task-contract-summary clamp"><strong>Handoff:</strong> ' + escapeHtml(task.lastHandoff.summary || "") + "</div>"
           : task.progressContract
-            ? '<div class="task-contract-summary"><strong>Progress:</strong> ' + escapeHtml(task.progressContract.summary || "") + "</div>"
+            ? '<div class="task-contract-summary clamp"><strong>Progress:</strong> ' + escapeHtml(task.progressContract.summary || "") + "</div>"
             : "";
       const note = task.progress
-        ? '<div class="task-note">' + escapeHtml(task.progress).slice(0, 220) + "</div>"
+        ? '<div class="task-note clamp">' + escapeHtml(task.progress).slice(0, 220) + "</div>"
         : "";
       const clarification = task.clarificationRequestId
         ? '<span>Clarification: ' + escapeHtml(task.clarificationRequestId) + "</span>"
@@ -2500,7 +2500,7 @@
         '  <span class="task-priority ' + escapeHtml(priority) + '">' + escapeHtml(priority) + "</span>" +
         '  <div class="task-body">' +
         '    <div class="task-title-row"><div class="task-title">' + escapeHtml(task.title) + "</div>" + creatorBadge + "</div>" +
-        (task.description ? '<div class="task-desc">' + escapeHtml(task.description).slice(0, 220) + "</div>" : "") +
+        (task.description ? '<div class="task-desc clamp">' + escapeHtml(task.description).slice(0, 220) + "</div>" : "") +
         renderSkillPills(recommendedSkills, "skill-pills task-skill-pills") +
         contractSummary +
         note +
@@ -4213,7 +4213,8 @@ function closeModelSettings() {
         html += '<div class="tunnel-note">Self-hosted tunnel (your own Cloudflare account/domain):</div>'
           + '<input type="password" class="tunnel-token-input" data-input="token" placeholder="Cloudflare connector token" autocomplete="off">'
           + '<button class="btn btn-small btn-primary" data-act="start-self-token">Start self-hosted tunnel</button>'
-          + '<div class="tunnel-note">Get the token: Cloudflare Zero Trust → Networks → Tunnels → your tunnel → copy token. Point its public hostname at this machine’s URL (Service: HTTP + the controller port shown in the docs). Protect it with Cloudflare Access — self-hosted domains skip the TeamClaw gate.</div>';
+          + '<details class="tunnel-setup-help"><summary>How to get a token &amp; set up the tunnel</summary>'
+          + '<div class="tunnel-note">Cloudflare Zero Trust → Networks → Tunnels → your tunnel → copy token. Point its public hostname at this machine’s URL (Service: HTTP + the controller port shown in the docs). Protect it with Cloudflare Access — self-hosted domains skip the TeamClaw gate.</div></details>';
       }
       html += '<div class="tunnel-note">— or —</div>'
         + '<button class="btn btn-small" data-act="start">Share via *.teamclaw.dev</button>'
