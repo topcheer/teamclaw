@@ -43,8 +43,7 @@
         "zip"
       ],
       "hardenedRuntime": true,
-      "notarize": true,
-      "teamId": "EGZFS7M525"
+      "notarize": true
     },
     "win": {
       "icon": "build/icon.ico",
@@ -62,7 +61,7 @@
     }
   },
   "devDependencies": {
-    "electron": "^36.2.1",
-    "electron-builder": "^24.13.3"
+    "electron": "^45.2.2",
+    "electron-builder": "^26.18.0"
   }
 }

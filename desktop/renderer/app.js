@@ -3831,9 +3831,12 @@
     }
     renderChrome();
     renderUnavailableScreen();
-    if (state.settings.controllerUrl) {
+    // Always auto-connect on boot: saved URL or the local default. The boot
+    // gate (inside connectController) covers the window until first data
+    // renders; failures fall through to the setup screen.
+    {
       try {
-        await connectController(state.settings.controllerUrl, { skipConversation: true });
+        await connectController(defaultUrl, { skipConversation: true });
       } catch (error) {
         state.unavailableScreenVisible = true;
         state.unavailableReason = error instanceof Error ? error.message : 'Failed to connect';
