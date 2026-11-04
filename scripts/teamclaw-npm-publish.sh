@@ -60,6 +60,27 @@ echo "Publish registry: ${npm_registry}"
 echo "Publish auth: ${publish_auth}"
 echo "Publish provenance: ${provenance_status}"
 
+# Build before packing: the published files list includes dist/, but a fresh
+# CI checkout has no dist - publishing without this step shipped tarballs
+# with ZERO compiled output (2026.7.x/2026.8.0 all broken for
+# `openclaw plugins install`: "publisher ships compiled JavaScript").
+# Fail the publish if dist is still missing after the build.
+(
+  cd "${package_dir}"
+  if [[ -f package.json ]] && node -e 'const s=require("./package.json").scripts||{}; if(!s.build){process.exit(1)}' 2>/dev/null; then
+    if [[ ! -d node_modules ]]; then
+      echo "Installing dependencies before build..."
+      npm install --no-audit --no-fund
+    fi
+    echo "Running package build before publish..."
+    npm run build
+  fi
+  if [[ ! -f dist/index.js && ! -f dist/index.mjs ]]; then
+    echo "FATAL: dist/index.js missing after build - refusing to publish a source-only tarball." >&2
+    exit 1
+  fi
+)
+
 printf 'Publish command:'
 printf ' %q' "${publish_cmd[@]}"
 printf '\n'

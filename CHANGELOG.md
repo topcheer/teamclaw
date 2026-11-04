@@ -17,6 +17,19 @@ Released 2026-11-04. Patch release over 2026.7.0.
 - Docker provisioning documentation with the full environment-variable
   matrix (#111)
 
+## 2026.8.1
+
+Released 2026-11-04. Critical fix over 2026.8.0.
+
+### Fixed
+
+- Published npm tarballs carried NO compiled output (dist/) - every
+  release shipped source-only because the publish script never ran the
+  build and the CI workspace has no dist. `openclaw plugins install`
+  failed with "publisher ships compiled JavaScript" for all 2026.7.x
+  and 2026.8.0. The publish script now installs deps, builds, and
+  REFUSES to publish unless dist/index.js exists.
+
 ## 2026.8.0
 
 Released 2026-11-04. Minor release over 2026.7.1: web-UI internet
