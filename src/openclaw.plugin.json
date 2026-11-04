@@ -2,7 +2,7 @@
   "id": "teamclaw",
   "name": "TeamClaw",
   "description": "Virtual team collaboration - multiple OpenClaw instances form a virtual software company with role-based task routing.",
-  "version": "2026.7.0",
+  "version": "2026.7.1",
   "activation": {
     "onStartup": true
   },
@@ -63,7 +63,7 @@
     "maxConcurrentTasks": {
       "label": "Max Concurrent Tasks",
       "hint": "number",
-      "help": "Maximum number of tasks that can be in 'in_progress' status at the same time (1–50)"
+      "help": "Maximum number of tasks that can be in 'in_progress' status at the same time (1\u201350)"
     },
     "gitEnabled": {
       "label": "Git Collaboration",
