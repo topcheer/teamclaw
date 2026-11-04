@@ -4163,21 +4163,45 @@ function closeModelSettings() {
   }, 10000);
 
 
-// Tunnel sharing (internet gate for the local web UI).
+// Tunnel sharing (internet gate for the local web UI). The settings UI is
+// a header-triggered popover; while the MANAGED tunnel (*.teamclaw.dev) is
+// active its URL surfaces as #tunnel-live-pill in the header (self-hosted
+// hostnames live in the user's Cloudflare dashboard and are not shown).
   function initTunnelPanel() {
-    const wrap = document.getElementById("tunnel-panel");
+    const wrap = document.getElementById("tunnel-popover");
+    const pill = document.getElementById("tunnel-live-pill");
+    const toggleBtn = document.getElementById("tunnel-settings-toggle");
     if (!wrap || wrap.dataset.bound) return;
     wrap.dataset.bound = "true";
+    const openPopover = () => { wrap.hidden = false; };
+    const closePopover = () => { wrap.hidden = true; };
+    if (toggleBtn) toggleBtn.addEventListener("click", () => { wrap.hidden = !wrap.hidden; });
+    wrap.addEventListener("click", (e) => {
+      if (e.target.getAttribute && e.target.getAttribute("data-act") === "close") closePopover();
+    });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !wrap.hidden) closePopover(); });
     // Visitor view: when the dashboard itself is reached through a tunnel
-    // domain, management APIs are gated - degrade to a provenance badge
+    // domain, management APIs are gated - degrade to a provenance note
     // instead of a spinner that can never resolve.
     const host = (location.hostname || "").toLowerCase();
     const isLocalView = host === "127.0.0.1" || host === "localhost" || host.endsWith(".local");
     if (!isLocalView) {
-      wrap.innerHTML = '<h3>Internet Tunnel</h3><div class="tunnel-state"><span class="tunnel-note">This dashboard is shared via a TeamClaw tunnel.</span></div>';
+      wrap.querySelector(".tunnel-state").innerHTML = '<span class="tunnel-note">This dashboard is shared via a TeamClaw tunnel.</span>';
+      if (toggleBtn) toggleBtn.hidden = true;
       return;
     }
     const render = (st) => {
+      // Header pill: managed tunnel only (*.teamclaw.dev). Self-hosted
+      // hostnames are managed in the user's Cloudflare dashboard.
+      if (pill) {
+        if (st.active && st.mode === "managed" && st.hostname) {
+          pill.href = "https://" + st.hostname;
+          pill.textContent = st.hostname;
+          pill.hidden = false;
+        } else {
+          pill.hidden = true;
+        }
+      }
       var progress = st.startOp && st.startOp.running
         ? '<div class="tunnel-note">Starting tunnel: ' + escapeHtml(st.startOp.phase) + '…</div>'
         : (st.install && st.install.running

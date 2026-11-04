@@ -24,6 +24,8 @@
     </div>
     <div class="header-status">
       <span id="connection-status" class="status-dot disconnected"></span>
+      <a id="tunnel-live-pill" class="tunnel-live-pill" hidden target="_blank" rel="noopener" title="Managed tunnel is live - open in a new tab"></a>
+      <button id="tunnel-settings-toggle" class="header-mini-btn" type="button" title="Internet tunnel settings">Tunnel</button>
       <button id="language-toggle" class="header-mini-btn" type="button">中文</button>
       <button id="toast-settings-toggle" class="header-mini-btn" type="button" title="Toast notifications">Toasts</button>
       <button id="worker-install-toggle" class="header-mini-btn" type="button" hidden>Add worker</button>
@@ -131,10 +133,6 @@
 
         <!-- Workspace Tab -->
         <div id="tab-workspace" class="tab-panel">
-          <div class="tunnel-card" id="tunnel-panel">
-            <h3>Internet Tunnel</h3>
-            <div class="tunnel-state"><span class="tunnel-note">loading…</span></div>
-          </div>
           <div class="workspace-browser">
             <aside class="workspace-sidebar-panel">
               <div class="workspace-panel-header">
@@ -396,6 +394,20 @@
         <button id="command-send" class="btn btn-small">Send to Controller</button>
       </div>
     </footer>
+
+  <!-- Internet tunnel configuration popover (opened from the header
+       Tunnel button; the managed URL surfaces as #tunnel-live-pill while
+       active). -->
+  <div id="tunnel-popover" class="tunnel-popover" hidden>
+    <div class="tunnel-popover-backdrop" data-act="close"></div>
+    <div class="tunnel-popover-card" role="dialog" aria-modal="true" aria-label="Internet tunnel settings">
+      <div class="tunnel-popover-head">
+        <h3>Internet Tunnel</h3>
+        <button class="tunnel-popover-close" data-act="close" type="button" aria-label="Close">×</button>
+      </div>
+      <div class="tunnel-state"><span class="tunnel-note">loading…</span></div>
+    </div>
+  </div>
 
   <script src="/ui/app.js"></script>
 </body>
