@@ -24,7 +24,7 @@
     "smoke": "node --check main.mjs && node --check preload.mjs && node --check renderer/app.js"
   },
   "build": {
-    "appId": "gg.ai.teamclaw",
+    "appId": "dev.ggcode.teamclaw",
     "productName": "TeamClaw Desktop",
     "files": [
       "main.mjs",
@@ -43,7 +43,8 @@
         "zip"
       ],
       "hardenedRuntime": true,
-      "notarize": true
+      "notarize": true,
+      "teamId": "EGZFS7M525"
     },
     "win": {
       "icon": "build/icon.ico",
