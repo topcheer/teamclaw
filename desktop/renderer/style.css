@@ -289,6 +289,9 @@ button, input, textarea { font: inherit; }
   color: var(--text-soft);
 }
 .pill-connected { background: var(--ok-bg); color: var(--ok-text); }
+#connection-pill.is-clickable { cursor: pointer; }
+#connection-pill.is-clickable:hover { filter: brightness(1.15); }
+#connection-pill { min-width: 34px; text-align: center; user-select: none; }
 .pill-connecting, .pill-running { background: var(--warn-bg); color: var(--warn-text); }
 .pill-disconnected, .pill-stopped { background: var(--danger-bg); color: var(--danger-text); }
 .btn, .mini-btn, .filter-btn, .deck-filter, .seg-btn, .nav-btn, .inline-action, .notification-actions button {

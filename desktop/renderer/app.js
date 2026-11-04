@@ -74,6 +74,7 @@
       "connection.waiting": "Waiting for a controller connection…",
       "connection.noSummary": "No controller summary yet.",
       "connection.connectedTo": "Connected to {url}",
+      "connection.changeServer": "Connected - click to change server",
       "connection.retrying": "Controller unavailable. Retrying in {seconds}s…",
       "connection.controller": "Controller",
       "connection.edit": "Edit",
@@ -297,6 +298,7 @@
       "connection.waiting": "等待连接 controller…",
       "connection.noSummary": "暂无 controller 摘要。",
       "connection.connectedTo": "已连接到 {url}",
+      "connection.changeServer": "已连接 - 点击更换服务器",
       "connection.retrying": "Controller 不可用，{seconds} 秒后重试…",
       "connection.controller": "Controller",
       "connection.edit": "编辑",
@@ -1225,9 +1227,22 @@
   function setConnectionPill(kind, text) {
     state.connectionState = kind;
     const el = $("#connection-pill");
-    if (!el) return;
-    el.className = `pill pill-${kind}`;
-    el.textContent = text;
+    if (el) {
+      // Icon-only when connected (click = change server); status word otherwise.
+      if (kind === "connected") {
+        el.textContent = "\u2713";
+        el.title = t("connection.changeServer");
+      } else {
+        el.textContent = text;
+        el.title = text;
+      }
+    }
+    const summary = $("#connection-summary");
+    if (summary) {
+      // Connected: no URL/description shown (pill icon carries the state).
+      summary.textContent = kind === "connected" ? "" : (state.controllerUrl || t("connection.notConnected"));
+      summary.hidden = kind === "connected";
+    }
     renderChrome();
   }
 
@@ -2051,7 +2066,7 @@
     const card = $("#connection-card");
     const body = $("#connection-body");
     const summary = $("#connection-summary");
-    const edit = $("#connection-edit-btn");
+    const pillEl = $("#connection-pill");
     const connectBtn = $("#connect-btn");
     const refreshBtn = $("#refresh-btn");
     const drawer = $("#notice-drawer");
@@ -2061,14 +2076,15 @@
     const condensed = connected && !state.connectionExpanded;
     if (card) card.classList.toggle("is-condensed", condensed);
     if (body) body.style.display = condensed ? "none" : "";
+    if (pillEl) {
+      pillEl.className = `pill pill-${state.connectionState}`;
+      pillEl.classList.toggle("is-clickable", connected);
+    }
     if (summary) {
       summary.textContent = connected
-        ? state.controllerUrl
+        ? ""
         : (state.controllerUrl || t("connection.notConnected"));
-    }
-    if (edit) {
-      edit.hidden = !connected || state.isConnecting;
-      edit.textContent = condensed ? t("connection.edit") : t("connection.done");
+      summary.hidden = connected;
     }
     if (connectBtn) {
       connectBtn.disabled = state.isConnecting;
@@ -3859,9 +3875,16 @@
     $('#composer-input').focus();
   });
   $('#composer-send').addEventListener('click', submitComposer);
-  $('#connection-edit-btn').addEventListener('click', function () {
+  // Pill click = change-server entry: connected pill expands the URL editor
+  // (was the Edit button, now removed from the chrome).
+  $('#connection-pill').addEventListener('click', function () {
+    if (state.connectionState !== 'connected') return;
     state.connectionExpanded = !state.connectionExpanded;
     renderChrome();
+    if (state.connectionExpanded) {
+      const input = $('#controller-url');
+      if (input) { input.focus(); input.select(); }
+    }
   });
   $('#notice-toggle').addEventListener('click', function () {
     state.noticeDrawerOpen = !state.noticeDrawerOpen;
