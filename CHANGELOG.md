@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026.7.1
+
+Released 2026-11-04. Patch release over 2026.7.0.
+
+### Fixes
+
+- Tunnel (Linux/containers): one-click cloudflared install downloaded a
+  `.tgz` asset that does not exist for Linux (100% 404 failure), and
+  detection used a CWD check that missed every PATH-resolvable install.
+  Raw-binary install + install-target/PATH scanning now (base image E2E
+  verified) (#112)
+- Runtime image: plugin skills now COPYed into the image (workers
+  logged "plugin skill path not found" on boot); official-entrypoint and
+  plugin-symlink bootstrap fixes (#114, #103, #106)
+- Docker provisioning documentation with the full environment-variable
+  matrix (#111)
+
 ## 2026.11.0
 
 Released 2026-11-04. This cycle spans PRs #85-#108 (all merged to main).
