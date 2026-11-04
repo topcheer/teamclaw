@@ -4457,6 +4457,38 @@
     const gl = document.getElementById('bootstrap-gitlab-url');
     if (sel && gl) sel.addEventListener('change', () => { gl.hidden = sel.value !== 'gitlab'; });
   }
+  // Standalone instance controls (fully isolated OpenClaw+TeamClaw).
+  {
+    const pill = document.getElementById('standalone-pill');
+    const startBtn = document.getElementById('standalone-start-btn');
+    const connectBtn = document.getElementById('standalone-connect-btn');
+    const vendorSel = document.getElementById('standalone-vendor');
+    const refreshStandalone = async () => {
+      try {
+        const st = await desktop.standaloneStatus();
+        if (pill) pill.className = 'pill ' + (st.running ? 'pill-connected' : 'pill-stopped');
+        if (pill) pill.textContent = st.running ? 'Running :' + st.port : 'Stopped';
+        if (startBtn) startBtn.hidden = st.running;
+        if (connectBtn) connectBtn.hidden = !st.running;
+        if (connectBtn) connectBtn.dataset.url = st.controllerUrl || '';
+      } catch { /* ipc gone */ }
+    };
+    if (startBtn) startBtn.addEventListener('click', async () => {
+      startBtn.disabled = true;
+      try {
+        const r = await desktop.standaloneStart(vendorSel && vendorSel.value ? { preferredVendor: vendorSel.value } : {});
+        setStatusLine('Standalone instance on port ' + r.port);
+      } catch (e) { setStatusLine(e instanceof Error ? e.message : 'start failed'); }
+      startBtn.disabled = false;
+      refreshStandalone();
+    });
+    if (connectBtn) connectBtn.addEventListener('click', () => {
+      const url = connectBtn.dataset.url;
+      if (url) connectController(url, { skipConversation: true }).catch(() => {});
+    });
+    refreshStandalone();
+    setInterval(refreshStandalone, 5000);
+  }
   connectSavedController();
   renderConversation();
   activateView('mission');

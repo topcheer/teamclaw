@@ -57,6 +57,25 @@
             <button id="connect-btn" class="btn btn-primary" type="button">Connect</button>
             <button id="refresh-btn" class="btn" type="button">Refresh</button>
           </div>
+          <div class="standalone-box">
+            <div class="standalone-head">
+              <span class="bootstrap-label">Standalone instance (isolated)</span>
+              <div id="standalone-pill" class="pill pill-stopped">Stopped</div>
+            </div>
+            <div class="standalone-row">
+              <select id="standalone-vendor" class="compact-input" title="LLM provider (defaults to your current OpenClaw config)">
+                <option value="">Use current OpenClaw config</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="openai">OpenAI</option>
+                <option value="openrouter">OpenRouter</option>
+                <option value="zai">Z.ai</option>
+                <option value="deepseek">DeepSeek</option>
+              </select>
+              <button id="standalone-start-btn" class="btn btn-primary" type="button">Start</button>
+              <button id="standalone-connect-btn" class="btn" type="button" hidden>Use this</button>
+            </div>
+            <div class="bootstrap-note">Own state dir, own port, dies with this app - your existing OpenClaw install is never touched.</div>
+          </div>
         </div>
       </section>
 

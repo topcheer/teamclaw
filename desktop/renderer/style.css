@@ -1596,3 +1596,9 @@ textarea { padding: 14px 16px; min-height: 188px; resize: vertical; line-height:
 .bootstrap-log .log-phase { color: var(--ok-text, #6cbe80); font-weight: 600; }
 .bootstrap-log .log-error { color: var(--danger-text, #c96f5e); }
 .bootstrap-note { margin-top: 8px; font-size: 11.5px; color: var(--muted, #a8a49a); }
+
+/* Standalone instance box (Controller settings card) */
+.standalone-box { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--line, #2d2b27); }
+.standalone-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.standalone-row { display: flex; gap: 8px; }
+.standalone-row .compact-input { flex: 1; }

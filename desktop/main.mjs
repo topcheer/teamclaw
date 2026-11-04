@@ -390,6 +390,129 @@ ipcMain.handle("window:apply-theme", async (_event, theme) => {
 });
 ipcMain.handle("settings:get", async () => loadSettings());
 ipcMain.handle("settings:save", async (_event, settings) => saveSettings(settings));
+/* ---------------- Standalone instance (fully isolated) ----------------
+ * A desktop-owned OpenClaw+TeamClaw instance:
+ *   - state dir: userData/standalone-state (OPENCLAW_STATE_DIR) - never the
+ *     user's ~/.openclaw
+ *   - runtime: the sandboxed npm-prefix binaries from bootstrap (or the
+ *     user-installed openclaw binary, executed read-only)
+ *   - its own port (auto-picked free port)
+ *   - LLM config defaults to a READ-ONLY COPY of the user's config; the
+ *     desktop may override the vendor - written only into the sandbox copy
+ *   - started/stopped with the desktop app; killed on quit, pid-guarded
+ */
+const STANDALONE = { child: null, port: null, pid: null };
+
+function standaloneStateDir() {
+  return path.join(app.getPath("userData"), "standalone-state");
+}
+function standalonePidFile() {
+  return path.join(standaloneStateDir(), "gateway.pid");
+}
+
+async function findFreePort() {
+  const net = await import("node:net");
+  return await new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.listen(0, "127.0.0.1", () => {
+      const { port } = srv.address();
+      srv.close(() => resolve(port));
+    });
+    srv.on("error", reject);
+  });
+}
+
+async function standaloneBinary() {
+  // Prefer the desktop sandbox runtime; fall back to the user-installed
+  // openclaw (executed read-only - we never modify its installation).
+  const sandboxBin = path.join(app.getPath("userData"), "runtime", "node_modules", ".bin", "openclaw");
+  if (fsSync.existsSync(sandboxBin)) return sandboxBin;
+  if (await hasOpenClawInstalled()) return "openclaw";
+  throw new Error("No OpenClaw runtime available - run the one-click install first.");
+}
+
+async function seedStandaloneConfig(preferredVendor) {
+  // Copy the user's LLM config (READ-ONLY source) into the sandbox state;
+  // optionally pin a preferred vendor. Never writes the user's file.
+  const stateDir = standaloneStateDir();
+  await fs.mkdir(stateDir, { recursive: true });
+  const dst = path.join(stateDir, "openclaw.json");
+  let cfg = {};
+  try { cfg = JSON.parse(await fs.readFile(dst, "utf8")); } catch { cfg = {}; }
+  const userCfgPath = path.join(process.env.HOME || "", ".openclaw", "openclaw.json");
+  try {
+    const userCfg = JSON.parse(await fs.readFile(userCfgPath, "utf8"));
+    cfg.vendors = { ...(userCfg.vendors || {}), ...(cfg.vendors || {}) };
+  } catch { /* no user config - empty start */ }
+  if (preferredVendor && cfg.vendors && cfg.vendors[preferredVendor]) {
+    cfg.preferredVendor = preferredVendor;
+  }
+  await fs.writeFile(dst, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+  return dst;
+}
+
+async function standaloneStart(preferredVendor) {
+  if (STANDALONE.child) return { ok: true, alreadyRunning: true, port: STANDALONE.port };
+  const bin = await standaloneBinary();
+  await seedStandaloneConfig(preferredVendor);
+  STANDALONE.port = await findFreePort();
+  const logPath = path.join(standaloneStateDir(), "gateway.log");
+  const logFd = fsSync.openSync(logPath, "a");
+  const child = spawn(`"${bin}" gateway --port ${STANDALONE.port}`, {
+    cwd: standaloneStateDir(),
+    env: { ...process.env, OPENCLAW_STATE_DIR: standaloneStateDir() },
+    shell: true,
+    stdio: ["ignore", logFd, logFd],
+    detached: false,
+  });
+  STANDALONE.child = child;
+  STANDALONE.pid = child.pid ?? null;
+  await fs.writeFile(standalonePidFile(), String(child.pid ?? ""), { mode: 0o600 });
+  child.on("exit", () => {
+    STANDALONE.child = null;
+    STANDALONE.pid = null;
+    try { fsSync.rmSync(standalonePidFile(), { force: true }); } catch { /* gone */ }
+  });
+  return { ok: true, port: STANDALONE.port, pid: child.pid ?? null, controllerUrl: `http://127.0.0.1:${STANDALONE.port}` };
+}
+
+async function standaloneStop() {
+  if (!STANDALONE.child) {
+    // Stale pid from a previous run (crashed desktop): reap if alive.
+    try {
+      const pid = Number((await fs.readFile(standalonePidFile(), "utf8")).trim());
+      if (pid) process.kill(pid, 0); // throws if dead
+      process.kill(pid, "SIGTERM");
+    } catch { /* not running */ }
+    try { fsSync.rmSync(standalonePidFile(), { force: true }); } catch { /* gone */ }
+    return { ok: true, alreadyRunning: false };
+  }
+  const child = STANDALONE.child;
+  await new Promise((resolve) => {
+    child.once("exit", resolve);
+    child.kill("SIGTERM");
+    setTimeout(resolve, 4000);
+  });
+  return { ok: true };
+}
+
+function standaloneStatus() {
+  return {
+    running: Boolean(STANDALONE.child),
+    port: STANDALONE.port,
+    pid: STANDALONE.pid,
+    controllerUrl: STANDALONE.port ? `http://127.0.0.1:${STANDALONE.port}` : null,
+    stateDir: standaloneStateDir(),
+  };
+}
+
+ipcMain.handle("standalone:start", async (_e, options) => standaloneStart(options?.preferredVendor));
+ipcMain.handle("standalone:stop", () => standaloneStop());
+ipcMain.handle("standalone:status", () => standaloneStatus());
+
+// App lifecycle: the desktop-owned instance dies with the app (no orphans).
+app.on("before-quit", () => { try { STANDALONE.child?.kill("SIGTERM"); } catch { /* gone */ } });
+
 ipcMain.handle("bootstrap:install", async (event, options) => {
   // Orchestrate the sandboxed bootstrap with streamed progress events.
   // NEVER touches the user's global installs or ~/.openclaw (hard rule).
