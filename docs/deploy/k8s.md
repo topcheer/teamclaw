@@ -156,20 +156,19 @@ Per team, `spec.network.ingress` accepts:
 | `tlsSecretName` | Existing TLS secret; enables HTTPS on the ingress |
 | `annotations` | Free-form map merged onto the Ingress |
 
-**cert-manager**: there is no first-class `cert-manager` field yet - use the
-annotation escape hatch, which covers every issuer style:
+**cert-manager** (first-class since 2026.11): set `certManager` on the
+ingress and the operator injects the issuer annotations plus an
+auto-named TLS secret (`<team>-controller-tls`):
 
 ```yaml
 network:
   ingress:
     host: demo-team.example.com
-    annotations:
-      cert-manager.io/cluster-issuer: letsencrypt-prod
-    tlsSecretName: demo-team-tls   # cert-manager fills this secret
+    certManager:
+      issuerRef: letsencrypt-prod   # or kind: Issuer + a namespaced ref
 ```
 
-A dedicated `spec.network.ingress.certManager.issuerRef` field is a natural
-follow-up; annotations work with all cert-manager versions in the meantime.
+Plain `annotations` remain available for anything else.
 
 ### Storage (workspace PVC, storage class)
 
@@ -209,9 +208,13 @@ secret and restarting the operator; sessions re-lock on the next 401.
 
 ### Resources, scheduling, tolerations
 
-Operator-level values apply to the operator pod. Per-team controller
-resources use `spec.controller.resources` (standard ResourceRequirements);
-affinity/nodeSelector/tolerations for team pods are not yet exposed.
+Operator-level values apply to the operator pod. Per-team:
+
+- resources: `spec.controller.resources` (standard ResourceRequirements)
+- scheduling: `spec.controller.scheduling` with `nodeSelector`, `affinity`
+  and `tolerations` (standard corev1 objects, applied verbatim)
+- LoadBalancer fine-tuning: `spec.network.serviceAnnotations` merges onto
+  the controller Service (cloud LB annotations etc.)
 
 ## TeamClaw CR reference
 

@@ -56,6 +56,19 @@ spec:
                   properties:
                     modelConfigSecretRef:
                       type: string
+                    scheduling:
+                      type: object
+                      properties:
+                        nodeSelector:
+                          type: object
+                          additionalProperties:
+                            type: string
+                        affinity:
+                          type: object
+                          x-kubernetes-preserve-unknown-fields: true
+                        tolerations:
+                          type: array
+                          x-kubernetes-preserve-unknown-fields: true
                 workspace:
                   type: object
                   properties:
@@ -79,6 +92,10 @@ spec:
                       enum: [ClusterIP, NodePort, LoadBalancer]
                     nodePort:
                       type: integer
+                    serviceAnnotations:
+                      type: object
+                      additionalProperties:
+                        type: string
                     ingress:
                       type: object
                       required: [host]
