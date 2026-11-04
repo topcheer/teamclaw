@@ -54,7 +54,7 @@ import type { WorkerProvisioningManager } from "./worker-provisioning.js";
 import type { PreviewManager } from "./preview-manager.js";
 import { createControllerPromptInjector } from "./prompt-injector.js";
 import { getGithubAuthManager } from "./github-auth.js";
-import { createTunnelManager, gatePageHtml, computeGateCookie, GATE_COOKIE_NAME, type TunnelManager } from "./tunnel-manager.js";
+import { createTunnelManager, gatePageHtml, computeGateCookie, GATE_COOKIE_NAME, selfHostedTokenFromEnv, type TunnelManager } from "./tunnel-manager.js";
 import { createGithubClient } from "../teamauto/github-client.js";
 import type { TeamAutoScheduler } from "../teamauto/scheduler.js";
 import { buildControllerNoWorkersMessage, shouldBlockControllerWithoutWorkers } from "./controller-capacity.js";
@@ -4784,6 +4784,25 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
         // resulting hostname/gateToken once startOp.phase === "done".
         const launched = tunnelManager.start(account.login);
         sendJson(res, 202, { launched, status: tunnelManager.status() });
+        return;
+      }
+      // Self-hosted: user-owned Cloudflare tunnel via connector token (no
+      // GitHub login, no platform tunnel server). Token from the request
+      // body, or the TEAMCLAW_TUNNEL_TOKEN env injection when body is empty.
+      if (req.method === "POST" && pathname === "/api/v1/tunnel/start-self-hosted") {
+        let token = "";
+        try {
+          const body = await readFormBody(req) as { token?: unknown };
+          token = String(body.token ?? "");
+        } catch { /* fall through to env */ }
+        if (!token.trim()) {
+          const envToken = selfHostedTokenFromEnv();
+          if (!envToken) { sendError(res, 400, "connector token required (or set TEAMCLAW_TUNNEL_TOKEN)"); return; }
+          token = envToken;
+        }
+        const r = tunnelManager.startSelfHosted(token);
+        if (!r.launched) { sendError(res, 400, r.error ?? "failed to start self-hosted tunnel"); return; }
+        sendJson(res, 202, { launched: true, status: tunnelManager.status() });
         return;
       }
       if (req.method === "POST" && pathname === "/api/v1/tunnel/stop") {

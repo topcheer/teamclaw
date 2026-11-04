@@ -42,14 +42,27 @@ export const TUNNEL_SERVER_URL = "https://apps.teamclaw.dev/api";
 const TUNNEL_HOST_SUFFIX = ".teamclaw.dev";
 const GATE_COOKIE = "tc_tunnel_gate";
 
+/** Env var that injects a user-owned Cloudflare connector token. When set,
+ * the UI skips the token input and offers direct one-click start. */
+export const SELF_HOSTED_TOKEN_ENV = "TEAMCLAW_TUNNEL_TOKEN";
+export function selfHostedTokenFromEnv(): string | null {
+  const v = process.env[SELF_HOSTED_TOKEN_ENV]?.trim();
+  return v ? v : null;
+}
+
 export type TunnelStatus = {
   active: boolean;
+  /** "managed": platform tunnel on *.teamclaw.dev (gate-protected).
+   *  "self-hosted": user-owned Cloudflare tunnel via connector token. */
+  mode: "managed" | "self-hosted" | null;
   hostname: string | null;
   gateToken: string | null;
   connectorRunning: boolean;
   tunnelId: string | null;
   cloudflaredInstalled: boolean;
   cloudflaredPath: string | null;
+  /** True when SELF_HOSTED_TOKEN_ENV carries a token (UI hint: skip input). */
+  envTokenDetected: boolean;
   startOp: { running: boolean; phase: string; detail: string | null };
   install: { running: boolean; phase: string; percent: number | null; detail: string | null };
   error: string | null;
@@ -232,6 +245,31 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
     return handle;
   }
 
+  /** Start a user-owned Cloudflare tunnel from a connector token (Zero Trust
+   * dashboard -> Tunnels -> <tunnel> -> copy token). The public hostname lives
+   * in the user's own CF zone, so it does NOT pass the .teamclaw.dev gate -
+   * protect it with Cloudflare Access if needed. Returns immediately; poll
+   * status() for connectorRunning. */
+  function startSelfHosted(rawToken: string): { launched: boolean; error: string | null } {
+    const token = rawToken.trim();
+    if (!token) return { launched: false, error: "empty connector token" };
+    if (token.length < 40 || !/^[A-Za-z0-9_\-=]+$/.test(token)) {
+      return { launched: false, error: "not a Cloudflare connector token (expected a long base64url string from the Zero Trust dashboard)" };
+    }
+    if (handle && child) return { launched: true, error: null };
+    const bin = findCloudflared();
+    if (!bin) return { launched: false, error: "cloudflared not found (brew install cloudflared)" };
+    startOp = { running: true, phase: "starting-connector", detail: "self-hosted tunnel" };
+    stopConnector();
+    child = spawnConnector(bin, token);
+    handle = { tunnelId: "self-hosted", hostname: "", gateToken: "", deleteToken: "" };
+    writeTunnelState({ tunnelId: "self-hosted", hostname: "", gateToken: "", deleteToken: "", connectorToken: token, pid: child.pid ?? null, savedAt: Date.now() });
+    startOp = { running: false, phase: "done", detail: "self-hosted tunnel" };
+    lastError = null;
+    logger.info("TeamClaw tunnel: self-hosted Cloudflare tunnel connector started");
+    return { launched: true, error: null };
+  }
+
   function spawnConnector(bin: string, connectorToken: string): ChildProcess {
     const proc = spawn(bin, ["tunnel", "--no-autoupdate", "--protocol", "http2", "run", "--token", connectorToken], {
       stdio: ["ignore", "ignore", "pipe"],
@@ -264,9 +302,13 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
     if (handle) {
       const gone = handle;
       handle = null;
-      await tunnelFetch(`/tunnels/${gone.tunnelId}?user=${encodeURIComponent(gone.hostname.split(".")[0]!.replace(/^team-/, ""))}&token=${encodeURIComponent(gone.deleteToken)}`, "DELETE").catch(() => undefined);
+      // Self-hosted tunnels live in the user's CF account - nothing to
+      // delete server-side; the connector stop is the whole teardown.
+      if (gone.tunnelId !== "self-hosted") {
+        await tunnelFetch(`/tunnels/${gone.tunnelId}?user=${encodeURIComponent(gone.hostname.split(".")[0]!.replace(/^team-/, ""))}&token=${encodeURIComponent(gone.deleteToken)}`, "DELETE").catch(() => undefined);
+      }
       clearTunnelState();
-      logger.info(`TeamClaw tunnel: stopped ${gone.hostname}`);
+      logger.info(gone.tunnelId === "self-hosted" ? "TeamClaw tunnel: self-hosted connector stopped" : `TeamClaw tunnel: stopped ${gone.hostname}`);
     }
   }
 
@@ -283,35 +325,37 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
       logger.warn("TeamClaw tunnel: previous share found but cloudflared is not installed; not recovering");
       return null;
     }
-    // kill -9 of the gateway leaves an orphaned connector behind (SIGKILL
-    // cannot run the close handler). Reap it before reconnecting - pid-reuse
-    // safe: only when the binary still matches.
     if (st.pid && connectorPidIsCloudflared(st.pid)) {
       try {
         process.kill(st.pid, "SIGKILL");
         logger.warn(`TeamClaw tunnel: killed orphaned connector (pid ${st.pid})`);
       } catch { /* already gone */ }
     }
-    startOp = { running: true, phase: "starting-connector", detail: st.hostname };
+    startOp = { running: true, phase: "starting-connector", detail: st.hostname || "self-hosted tunnel" };
     stopConnector();
     child = spawnConnector(bin, st.connectorToken);
-    handle = { tunnelId: st.tunnelId, hostname: st.hostname, gateToken: st.gateToken, deleteToken: st.deleteToken };
+    const selfHosted = st.tunnelId === "self-hosted";
+    handle = selfHosted
+      ? { tunnelId: "self-hosted", hostname: "", gateToken: "", deleteToken: "" }
+      : { tunnelId: st.tunnelId, hostname: st.hostname, gateToken: st.gateToken, deleteToken: st.deleteToken };
     writeTunnelState({ ...st, pid: child.pid ?? null, savedAt: Date.now() });
-    startOp = { running: false, phase: "done", detail: st.hostname };
+    startOp = { running: false, phase: "done", detail: st.hostname || "self-hosted tunnel" };
     lastError = null;
-    logger.info(`TeamClaw tunnel: recovered https://${st.hostname} (tunnel id and gate token preserved)`);
+    logger.info(selfHosted ? "TeamClaw tunnel: recovered self-hosted Cloudflare tunnel" : `TeamClaw tunnel: recovered https://${st.hostname} (tunnel id and gate token preserved)`);
     return handle;
   }
 
   function status(): TunnelStatus {
     return {
       active: Boolean(handle),
-      tunnelId: handle?.tunnelId ?? null,
-      hostname: handle?.hostname ?? null,
-      gateToken: handle?.gateToken ?? null,
+      mode: handle ? (handle.tunnelId === "self-hosted" ? "self-hosted" : "managed") : null,
+      hostname: handle?.hostname || null,
+      gateToken: handle?.gateToken || null,
       connectorRunning: Boolean(child),
+      tunnelId: handle?.tunnelId ?? null,
       cloudflaredInstalled: findCloudflared() !== null,
       cloudflaredPath: findCloudflared(),
+      envTokenDetected: selfHostedTokenFromEnv() !== null,
       startOp: { ...startOp },
       install: { ...installState },
       error: lastError,
@@ -423,7 +467,7 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
   }
 
 
-  return { start: launchStart, stop, recover, status, installCloudflared, isTunnelRequest, gateAllows };
+  return { start: launchStart, startSelfHosted, stop, recover, status, installCloudflared, isTunnelRequest, gateAllows };
 }
 
 export type TunnelManager = ReturnType<typeof createTunnelManager>;

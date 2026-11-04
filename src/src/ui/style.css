@@ -2558,5 +2558,11 @@ body {
 .tunnel-on a { color: var(--accent); font-family: var(--mono); }
 .tunnel-token { margin: 8px 0; font-size: 13px; }
 .tunnel-token b { font-family: var(--mono); letter-spacing: .15em; color: var(--accent); }
+.tunnel-token-input {
+  display: block; width: 100%; box-sizing: border-box; margin: 6px 0;
+  padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border, #3a3731);
+  background: var(--surface-2, #232120); color: var(--text, #ecebe6);
+  font-size: 12.5px; font-family: var(--mono, monospace);
+}
 .tunnel-note { margin-left: 10px; color: var(--text-muted); font-size: 12px; }
 .tunnel-err { color: var(--danger); font-size: 12.5px; margin-top: 8px; }

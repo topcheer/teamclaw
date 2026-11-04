@@ -174,6 +174,25 @@ against Helm 3:
   `kubectl apply -f operator/config/crd/bases/teamclaw.dev_teamclaws.yaml`
   on upgrades.
 
+**Security boundary / TLS**: public exposure of the operator UI must go
+through Ingress + cert-manager (`network.ingress.host` + `certManager`) -
+that is the TLS-termination path and it keeps ingress-to-pod traffic on
+the cluster network. `serviceType: NodePort` is an internal-network
+access method (same trust domain as the kube-apiserver); do NOT expose a
+NodePort directly to the internet. For VMs/desktops without a public
+ingress, the built-in tunnel can now run against your own Cloudflare
+account (see below) instead of exposing any port.
+
+**Self-hosted tunnel (custom domain on your own Cloudflare account)**:
+set `TEAMCLAW_TUNNEL_TOKEN=<connector token>` in the controller
+environment (or paste the token in the web UI tunnel panel - the panel
+shows a "token detected" hint and skips the input when the env var is
+set). In the Cloudflare Zero Trust dashboard you need: a named Tunnel,
+its connector token, and a Public Hostname on that tunnel pointing at
+the controller's local URL (Service type HTTP, port = controller port).
+The hostname lives in your zone and skips the TeamClaw gate - protect it
+with Cloudflare Access if the dashboard should not be public.
+
 **cert-manager** (first-class since 2026.11): set `certManager` on the
 ingress and the operator injects the issuer annotations plus an
 auto-named TLS secret (`<team>-controller-tls`):

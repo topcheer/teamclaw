@@ -4184,24 +4184,64 @@ function closeModelSettings() {
           ? '<div class="tunnel-note">cloudflared ' + escapeHtml(st.install.phase) + (st.install.percent != null ? ' ' + st.install.percent + '%' : '') + '…</div>'
           : '');
       if (progress) { wrap.querySelector(".tunnel-state").innerHTML = progress; return; }
-      wrap.querySelector(".tunnel-state").innerHTML = st.active
-        ? '<div class="tunnel-on">Live: <a href="https://' + st.hostname + '" target="_blank" rel="noopener">https://' + st.hostname + '</a></div>'
+      if (st.active && st.mode === "self-hosted") {
+        wrap.querySelector(".tunnel-state").innerHTML =
+          '<div class="tunnel-on">Self-hosted Cloudflare tunnel: live on your own domain</div>'
+          + '<div class="tunnel-note">Public hostname is managed in your Cloudflare Zero Trust dashboard.</div>'
+          + '<button class="btn btn-small" data-act="stop">Stop sharing</button>';
+        return;
+      }
+      if (st.active) {
+        wrap.querySelector(".tunnel-state").innerHTML =
+          '<div class="tunnel-on">Live: <a href="https://' + st.hostname + '" target="_blank" rel="noopener">https://' + st.hostname + '</a></div>'
           + '<div class="tunnel-token">Gate token: <b>' + st.gateToken + '</b></div>'
-          + '<button class="btn btn-small" data-act="stop">Stop sharing</button>'
-        : st.cloudflaredInstalled === false
-        ? '<div class="tunnel-note">cloudflared connector is not installed.</div>'
-          + '<button class="btn btn-small btn-primary" data-act="install">Install cloudflared</button>'
-        : '<button class="btn btn-small btn-primary" data-act="start">Share via tunnel</button>'
-          + '<span class="tunnel-note">requires GitHub login</span>';
+          + '<button class="btn btn-small" data-act="stop">Stop sharing</button>';
+        return;
+      }
+      if (st.cloudflaredInstalled === false) {
+        wrap.querySelector(".tunnel-state").innerHTML = '<div class="tunnel-note">cloudflared connector is not installed.</div>'
+          + '<button class="btn btn-small btn-primary" data-act="install">Install cloudflared</button>';
+        return;
+      }
+      // Idle: self-hosted (env token detected -> one click; otherwise token
+      // input) alongside the managed share button.
+      var html = '';
+      if (st.envTokenDetected) {
+        html += '<div class="tunnel-note">Connector token detected via TEAMCLAW_TUNNEL_TOKEN — ready to start.</div>'
+          + '<button class="btn btn-small btn-primary" data-act="start-self">Start self-hosted tunnel</button>';
+      } else {
+        html += '<div class="tunnel-note">Self-hosted tunnel (your own Cloudflare account/domain):</div>'
+          + '<input type="password" class="tunnel-token-input" data-input="token" placeholder="Cloudflare connector token" autocomplete="off">'
+          + '<button class="btn btn-small btn-primary" data-act="start-self-token">Start self-hosted tunnel</button>'
+          + '<div class="tunnel-note">Get the token: Cloudflare Zero Trust → Networks → Tunnels → your tunnel → copy token. Point its public hostname at this machine’s URL (Service: HTTP + the controller port shown in the docs). Protect it with Cloudflare Access — self-hosted domains skip the TeamClaw gate.</div>';
+      }
+      html += '<div class="tunnel-note">— or —</div>'
+        + '<button class="btn btn-small" data-act="start">Share via *.teamclaw.dev</button>'
+        + '<span class="tunnel-note">requires GitHub login</span>';
+      wrap.querySelector(".tunnel-state").innerHTML = html;
     };
     const refresh = () => apiGet("/tunnel/status").then((st) => render(st || {})).catch(() => {});
     wrap.addEventListener("click", (e) => {
       const act = e.target.getAttribute && e.target.getAttribute("data-act");
       if (!act) return;
       e.target.disabled = true;
-      var call = act === "start" ? apiRequest("/tunnel/start", { method: "POST" })
-        : act === "install" ? apiRequest("/tunnel/install-cloudflared", { method: "POST" })
-        : apiRequest("/tunnel/stop", { method: "POST" });
+      var call;
+      if (act === "start-self" || act === "start-self-token") {
+        const opts = { method: "POST", headers: { "Content-Type": "application/json" } };
+        if (act === "start-self-token") {
+          const input = wrap.querySelector('[data-input="token"]');
+          if (!input || !input.value.trim()) {
+            wrap.querySelector(".tunnel-state").innerHTML = '<div class="tunnel-err">Paste a Cloudflare connector token first.</div>';
+            return;
+          }
+          opts.body = JSON.stringify({ token: input.value.trim() });
+        }
+        call = apiRequest("/tunnel/start-self-hosted", opts);
+      } else {
+        call = act === "start" ? apiRequest("/tunnel/start", { method: "POST" })
+          : act === "install" ? apiRequest("/tunnel/install-cloudflared", { method: "POST" })
+          : apiRequest("/tunnel/stop", { method: "POST" });
+      }
       call.then(refresh).catch((err) => { wrap.querySelector(".tunnel-state").innerHTML = '<div class="tunnel-err">' + escapeHtml(String(err.message || err)) + "</div>"; });
     });
     refresh();
