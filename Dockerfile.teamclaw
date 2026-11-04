@@ -9,6 +9,9 @@
 #             -t registry.iot2.win/openclaw:teamclaw-test --push .
 
 ARG BASE_IMAGE=ghcr.io/openclaw/openclaw:latest  # 2026.10.10 at time of switch; pin a digest for reproducibility
+# OCI image metadata (also the image-store description)
+LABEL org.opencontainers.image.title="teamclaw-openclaw" \       org.opencontainers.image.description="TeamClaw runtime on OpenClaw: virtual software team (controller + role workers) with a Web UI, internet tunnel sharing (managed / self-hosted Cloudflare / anonymous trycloudflare) and teamauto GitHub automation." \       org.opencontainers.image.source="https://github.com/topcheer/teamclaw"
+
 FROM ${BASE_IMAGE}
 
 USER root

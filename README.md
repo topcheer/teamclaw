@@ -139,6 +139,20 @@ Controller mode manages the team:
 - performs intake and clarification routing
 - tracks worker state and task status
 - owns the Web UI and WebSocket broadcast channel
+
+### Internet tunnel (share the Web UI)
+
+The controller Web UI can be shared beyond localhost without opening any
+inbound port. Configure from the header `Tunnel` button (popover):
+
+| Mode | Requires | URL | Notes |
+|---|---|---|---|
+| Managed `*.teamclaw.dev` | GitHub login | stable, gate-token protected | platform tunnel server; live URL shows as a pill in the header |
+| Self-hosted Cloudflare | connector token (Zero Trust -> Tunnels) | your own domain | or inject `TEAMCLAW_TUNNEL_TOKEN`; hostname managed in your CF dashboard, protect with Cloudflare Access |
+| Anonymous one-off | nothing | random `*.trycloudflare.com` (cloudflared) | dies on restart, no gate - anyone with the link can open the dashboard; quick demos only |
+
+Tunnels survive controller restarts (except anonymous one-offs) and
+stale "live" state is cleared automatically when a connector dies.
 - creates execution-ready tasks and continues the flow when prior stages finish
 
 Minimal controller configuration:

@@ -333,69 +333,6 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
     return { launched: true, error: null };
   }
 
-  /** Anonymous one-off tunnel via localhost.run (ssh -R relay, random
-   * *.lhr.life URL). Uses the system ssh client - no cloudflared needed,
-   * no account. Same one-off semantics as the quick tunnel: URL dies with
-   * the process, not recovered, no TeamClaw gate. */
-  function startQuickLhr(): { launched: boolean; error: string | null } {
-    if (handle && child) return { launched: true, error: null };
-    startOp = { running: true, phase: "starting-connector", detail: "localhost.run tunnel" };
-    stopConnector();
-    const proc = spawn("ssh", [
-      "-o", "StrictHostKeyChecking=no",
-      "-o", "ExitOnForwardFailure=yes",
-      "-o", "ServerAliveInterval=30",
-      "-o", "ServerAliveCountMax=3",
-      "-R", "80:127.0.0.1:" + deps.localPort,
-      "nokey@localhost.run",
-    ], {
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: false,
-      env: { ...process.env, HOME: tunnelRuntimeHome() },
-    });
-    child = proc;
-    handle = { tunnelId: "quick", hostname: "", gateToken: "", deleteToken: "" };
-    lastError = null;
-    // localhost.run prints the assigned https://<hash>.lhr.life URL in its
-    // welcome banner (stdout).
-    let announced = false;
-    const urlRe = /https:\/\/([a-z0-9-]+\.lhr\.life)/i;
-    const timer = setTimeout(() => {
-      if (!announced) {
-        lastError = "localhost.run did not announce its URL within 20s";
-        startOp = { running: false, phase: "error", detail: lastError };
-      }
-    }, 20000);
-    const onChunk = (c: Buffer) => {
-      const m = c.toString().match(urlRe);
-      if (m && !announced) {
-        announced = true;
-        clearTimeout(timer);
-        if (handle) handle.hostname = m[1]!;
-        startOp = { running: false, phase: "done", detail: m[1] };
-        logger.info(`TeamClaw tunnel: localhost.run live at https://${m[1]}`);
-      }
-      try { fs.appendFileSync(path.join(tunnelRuntimeHome(), "cloudflared.log"), c); } catch { /* best effort */ }
-    };
-    proc.stdout?.on("data", onChunk);
-    proc.stderr?.on("data", onChunk);
-    // Same connector-exit contract as startQuick.
-    proc.on("exit", (code: number | null) => {
-      clearTimeout(timer);
-      logger.warn(`TeamClaw tunnel: localhost.run connector exited (code ${code})`);
-      if (child !== proc) return;
-      child = null;
-      if (!userStopping && handle) {
-        handle = null;
-        lastError = `tunnel connector exited unexpectedly (code ${code ?? "null"})`;
-        startOp = { running: false, phase: "error", detail: lastError };
-        clearTunnelState();
-        logger.warn("TeamClaw tunnel: state cleared after unexpected exit (localhost.run)");
-      }
-    });
-    return { launched: true, error: null };
-  }
-
   function spawnConnector(bin: string, connectorToken: string): ChildProcess {
     const proc = spawn(bin, ["tunnel", "--no-autoupdate", "--protocol", "http2", "run", "--token", connectorToken], {
       stdio: ["ignore", "ignore", "pipe"],
@@ -610,7 +547,7 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
   }
 
 
-  return { start: launchStart, startSelfHosted, startQuick, startQuickLhr, stop, recover, status, installCloudflared, isTunnelRequest, gateAllows };
+  return { start: launchStart, startSelfHosted, startQuick, stop, recover, status, installCloudflared, isTunnelRequest, gateAllows };
 }
 
 export type TunnelManager = ReturnType<typeof createTunnelManager>;

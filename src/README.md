@@ -118,6 +118,14 @@ For a first-time setup, the safest path is:
 
 When on-demand provisioning is enabled, TeamClaw now treats controller startup as a readiness phase, not just a process-up check. During that warm-up, `/api/v1/health` returns a non-OK status until the controller has verified writable runtime paths and successfully brought the configured startup worker roles online. If `workerProvisioningRoles` is empty, startup readiness defaults to waiting for a warm `developer` worker.
 
+## Internet tunnel sharing
+
+The Web UI ships with zero-config internet sharing (header `Tunnel` button):
+managed `*.teamclaw.dev` (GitHub login, gate token), self-hosted Cloudflare
+tunnels via connector token (`TEAMCLAW_TUNNEL_TOKEN` env or UI input), and
+anonymous one-off tunnels (`*.trycloudflare.com` via cloudflared). See
+the repo README's "Internet tunnel" section for the full matrix.
+
 ## Documentation
 
 - Website: <https://topcheer.github.io/teamclaw/>
