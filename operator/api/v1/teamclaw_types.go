@@ -40,6 +40,17 @@ type ControllerSpec struct {
 
 	// Env adds extra environment variables for the controller container.
 	Env []corev1.EnvVar `json:"env,omitempty"`
+
+	// Scheduling constraints for the controller pod (nodeSelector,
+	// affinity, tolerations) - standard corev1 objects, applied verbatim.
+	Scheduling *SchedulingSpec `json:"scheduling,omitempty"`
+}
+
+// SchedulingSpec carries pod placement constraints.
+type SchedulingSpec struct {
+	NodeSelector map[string]string      `json:"nodeSelector,omitempty"`
+	Affinity     *corev1.Affinity       `json:"affinity,omitempty"`
+	Tolerations  []corev1.Toleration    `json:"tolerations,omitempty"`
 }
 
 // WorkspaceSpec configures the shared workspace volume.
@@ -88,6 +99,10 @@ type NetworkSpec struct {
 	// NodePort sets the nodePort when ServiceType is NodePort. Empty = auto.
 	NodePort int32 `json:"nodePort,omitempty"`
 
+	// ServiceAnnotations are merged onto the controller Service (e.g. cloud
+	// load-balancer configuration for ServiceType LoadBalancer).
+	ServiceAnnotations map[string]string `json:"serviceAnnotations,omitempty"`
+
 	// Ingress optionally exposes the controller through an Ingress.
 	Ingress *IngressSpec `json:"ingress,omitempty"`
 }
@@ -105,6 +120,21 @@ type IngressSpec struct {
 
 	// TLSSecretName enables TLS with the given certificate secret.
 	TLSSecretName string `json:"tlsSecretName,omitempty"`
+
+	// CertManager requests a certificate via cert-manager instead of a
+	// pre-provisioned TLSSecretName.
+	CertManager *CertManagerSpec `json:"certManager,omitempty"`
+}
+
+// CertManagerSpec drives cert-manager certificate issuance for the ingress.
+type CertManagerSpec struct {
+	// IssuerRef is the cert-manager issuer/cluster-issuer reference
+	// (e.g. "letsencrypt-prod").
+	IssuerRef string `json:"issuerRef"`
+
+	// Kind of the issuer reference: "ClusterIssuer" (default) or "Issuer".
+	// +kubebuilder:default="ClusterIssuer"
+	Kind string `json:"kind,omitempty"`
 }
 
 // WorkerPodsStatus reports worker pod counts reconciled from the cluster.

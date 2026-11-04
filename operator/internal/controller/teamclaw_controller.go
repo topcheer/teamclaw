@@ -223,6 +223,17 @@ func (r *TeamClawReconciler) reconcileDeployment(ctx context.Context, tc *teav1.
 				Volumes:            r.volumes(tc),
 			},
 		}
+		if sch := tc.Spec.Controller.Scheduling; sch != nil {
+			if sch.NodeSelector != nil {
+				dep.Spec.Template.Spec.NodeSelector = sch.NodeSelector
+			}
+			if sch.Affinity != nil {
+				dep.Spec.Template.Spec.Affinity = sch.Affinity
+			}
+			if len(sch.Tolerations) > 0 {
+				dep.Spec.Template.Spec.Tolerations = sch.Tolerations
+			}
+		}
 		return controllerutil.SetControllerReference(tc, dep, r.Scheme)
 	})
 	return err
@@ -289,6 +300,12 @@ func (r *TeamClawReconciler) reconcileService(ctx context.Context, tc *teav1.Tea
 			TargetPort: intstr.FromString("http"),
 			Protocol:   corev1.ProtocolTCP,
 		}}
+		for k, v := range tc.Spec.Network.ServiceAnnotations {
+			if svc.Annotations == nil {
+				svc.Annotations = map[string]string{}
+			}
+			svc.Annotations[k] = v
+		}
 		if svcType == corev1.ServiceTypeNodePort && tc.Spec.Network.NodePort != 0 {
 			svc.Spec.Ports[0].NodePort = tc.Spec.Network.NodePort
 		}
@@ -334,10 +351,26 @@ func (r *TeamClawReconciler) reconcileIngress(ctx context.Context, tc *teav1.Tea
 		if spec.IngressClassName != "" {
 			ing.Spec.IngressClassName = &spec.IngressClassName
 		}
-		if spec.TLSSecretName != "" {
-			ing.Spec.TLS = []networkingv1.IngressTLS{{Hosts: []string{spec.Host}, SecretName: spec.TLSSecretName}}
+		annotations := map[string]string{}
+		for k, v := range spec.Annotations {
+			annotations[k] = v
 		}
-		ing.Annotations = spec.Annotations
+		tlsSecret := spec.TLSSecretName
+		if cm := spec.CertManager; cm != nil && cm.IssuerRef != "" {
+			kind := cm.Kind
+			if kind == "" {
+				kind = "ClusterIssuer"
+			}
+			annotations["cert-manager.io/issuer-kind"] = kind
+			annotations["cert-manager.io/issuer-name"] = cm.IssuerRef
+			if tlsSecret == "" {
+				tlsSecret = tc.Name + "-controller-tls"
+			}
+		}
+		if tlsSecret != "" {
+			ing.Spec.TLS = []networkingv1.IngressTLS{{Hosts: []string{spec.Host}, SecretName: tlsSecret}}
+		}
+		ing.Annotations = annotations
 		return controllerutil.SetControllerReference(tc, &ing, r.Scheme)
 	})
 	return err
