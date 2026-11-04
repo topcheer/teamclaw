@@ -8,6 +8,9 @@ contextBridge.exposeInMainWorld("teamclawDesktop", {
   installLocalTeamClaw: (options) => ipcRenderer.invoke("controller:install-local", options),
   installOpenClaw: (options) => ipcRenderer.invoke("openclaw:install-local", options),
   bootstrapInstall: (options) => ipcRenderer.invoke("bootstrap:install", options),
+  standaloneStart: (options) => ipcRenderer.invoke("standalone:start", options),
+  standaloneStop: () => ipcRenderer.invoke("standalone:stop"),
+  standaloneStatus: () => ipcRenderer.invoke("standalone:status"),
   onBootstrapEvent: (cb) => {
     const handler = (_e, payload) => cb(payload);
     ipcRenderer.on("bootstrap:install-event", handler);
