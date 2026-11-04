@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+// DEPRECATED: the runtime image builds FROM the official openclaw base
+// (Dockerfile.teamclaw, PR #98). This from-source prepare script is no
+// longer referenced by any workflow and is kept for archaeology only.
 
 import { appendFileSync } from "node:fs";
 import fs from "node:fs/promises";

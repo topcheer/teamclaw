@@ -37,6 +37,8 @@ COPY src/cli.mjs /app/extensions/teamclaw/cli.mjs
 COPY src/tsconfig.json /app/extensions/teamclaw/tsconfig.json
 COPY src/src/ /app/extensions/teamclaw/src/
 COPY src/README.md /app/extensions/teamclaw/README.md
+# Plugin skills (worker skill discovery expects extensions/teamclaw/skills)
+COPY src/skills/ /app/extensions/teamclaw/skills/
 
 # Note: the legacy baked-in patch was removed - the plugin's
 # resolveBakedTeamClawPluginRootDir() (PR #86) probes the image layout

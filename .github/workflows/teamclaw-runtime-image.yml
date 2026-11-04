@@ -12,8 +12,9 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Commit SHA on main to publish from
-        required: true
+        description: Commit SHA on main to publish from (defaults to main HEAD)
+        required: false
+        default: main
         type: string
 
 concurrency:
