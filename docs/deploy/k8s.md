@@ -156,6 +156,24 @@ Per team, `spec.network.ingress` accepts:
 | `tlsSecretName` | Existing TLS secret; enables HTTPS on the ingress |
 | `annotations` | Free-form map merged onto the Ingress |
 
+**CRD lifecycle**: the chart ships the TeamClaw CRD as a regular release
+asset (no Helm 2 `crd-install` hook - that hook point is dead in Helm 3
+and silently skipped CRD installation entirely). Consequences, verified
+against Helm 3:
+
+- `helm install` creates the CRD; `helm upgrade` refreshes its schema
+  (new spec fields land on upgrade, no manual apply needed)
+- `helm uninstall` deletes the CRD, and deleting a CRD cascades **all
+  TeamClaw CRs in every namespace**. To keep team definitions across an
+  operator reinstall, back them up first
+  (`kubectl get teamclaws -A -o yaml > teams-backup.yaml`) and restore
+  after, or `kubectl patch crd teamclaws.teamclaw.dev -p '{"metadata":{"finalizers":[]}}'`
+  is NOT needed - simply avoid uninstalling when you want data kept.
+- If the CRD pre-exists from a kubectl apply (ownership outside Helm),
+  Helm skips it silently - manage that copy with
+  `kubectl apply -f operator/config/crd/bases/teamclaw.dev_teamclaws.yaml`
+  on upgrades.
+
 **cert-manager** (first-class since 2026.11): set `certManager` on the
 ingress and the operator injects the issuer annotations plus an
 auto-named TLS secret (`<team>-controller-tls`):
