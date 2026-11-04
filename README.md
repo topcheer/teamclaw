@@ -57,6 +57,30 @@ The key design constraint is that TeamClaw creates **execution-ready work**, not
 
 For requirements that look medium or complex, TeamClaw can also run a **team kickoff meeting** before execution. The controller provisions candidate roles, gathers lightweight kickoff assessments from each role, and then synthesizes those assessments into a clearer task plan, dependency view, and risk summary that is visible in the UI.
 
+## Deploy on Kubernetes (operator)
+
+The fastest path on any cluster (k3s/minikube/cloud) is the TeamClaw
+operator. It installs from GHCR as an OCI helm chart, ships a built-in
+management UI, and turns each team into a `TeamClaw` custom resource -
+the controller Deployment, Service, workspace PVC, and readiness status
+are all managed for you:
+
+```bash
+helm install teamclaw-operator oci://ghcr.io/topcheer/charts/teamclaw-operator \
+  --version 0.1.0 --create-namespace -n teamclaw \
+  --set token.token=$(openssl rand -hex 24)
+```
+
+Open `http://<node-ip>:30990`, sign in with that token, and create teams
+from the web form (paste an `openclaw.json` inline; the operator creates
+the backing Secret). Details and per-option values: [`INSTALL.md`](./INSTALL.md).
+
+The runtime image (`ghcr.io/topcheer/teamclaw-openclaw`) layers the
+TeamClaw plugin onto the official `ghcr.io/openclaw/openclaw` base
+(2026.10.10) - keeping the plugin and runtime schema in the same
+generation. The `teamclaw` helm chart deploys a standalone controller
+without the operator if you prefer plain helm.
+
 ## Topology overview
 
 | Topology | What it is | Best first use | Current status |
