@@ -218,6 +218,10 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
   // global config is only ever READ (LLM seeding happens elsewhere).
   const sandboxEnv = { ...process.env, OPENCLAW_STATE_DIR: path.join(app.getPath("userData"), "openclaw-state") };
   const runtimeDir = path.join(app.getPath("userData"), "runtime");
+  // The "reusing existing OpenClaw" path skips the runtime install, so the
+  // runtime dir may not exist yet - spawn cwd must exist or every command
+  // below fails with ENOENT.
+  await fs.mkdir(runtimeDir, { recursive: true });
   const pluginDir = path.join(runtimeDir, "node_modules", "@teamclaws", "teamclaw");
   const res = await runShellCommand(`"${openclawBin}" plugins list 2>/dev/null || true`, { cwd: runtimeDir, env: sandboxEnv });
   if ((res.stdout || "").includes("teamclaw")) {
