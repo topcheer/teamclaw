@@ -66,7 +66,7 @@
 
   const TRANSLATIONS = {
     en: {
-      "connection.notConnected": "Not connected",
+      "boot.connecting": "Connecting to the controller and loading team data...",
       "connection.disconnected": "Disconnected",
       "connection.connecting": "Connecting",
       "connection.reconnecting": "Reconnecting",
@@ -290,6 +290,7 @@
       "action.languageToggleEn": "English"
     },
     zh: {
+      "boot.connecting": "正在连接控制器并加载团队数据...",
       "connection.notConnected": "未连接",
       "connection.disconnected": "已断开",
       "connection.connecting": "连接中",
@@ -1222,6 +1223,24 @@
       throw new Error(message);
     }
     return response.json();
+  }
+
+  function bootShell(msgKey) {
+    const shell = $(".app-shell");
+    const ov = $("#boot-screen");
+    if (!ov || !shell || shell.dataset.bootShellReady === "1") return;
+    const line = ov.querySelector(".boot-line");
+    if (line) line.textContent = t(msgKey);
+    ov.classList.remove("is-hidden");
+    shell.classList.add("is-booting");
+  }
+  function unveilShell() {
+    const shell = $(".app-shell");
+    const ov = $("#boot-screen");
+    if (!shell || !ov) return;
+    ov.classList.add("is-hidden");
+    shell.classList.remove("is-booting");
+    shell.dataset.bootShellReady = "1";
   }
 
   function setConnectionPill(kind, text) {
@@ -3631,6 +3650,7 @@
     clearReconnectTimer();
     state.reconnectAttempt = 0;
     state.isConnecting = true;
+    bootShell("boot.connecting");
     renderChrome();
     try {
       state.controllerUrl = normalizeBaseUrl(url);
@@ -3638,6 +3658,7 @@
       $("#controller-url").value = state.controllerUrl;
       state.settings = await desktop.saveSettings({ ...(state.settings || {}), controllerUrl: state.controllerUrl });
       await refreshAll(false);
+      unveilShell();
       state.unavailableScreenVisible = false;
       state.unavailableReason = "";
       connectWs();
@@ -3646,6 +3667,9 @@
       renderChrome();
     } finally {
       state.isConnecting = false;
+      // Failed connect: lift the boot gate so the disconnect state (and the
+      // URL editor) is reachable - the gate only stays for a successful boot.
+      if (state.connectionState !== "connected") unveilShell();
       renderChrome();
     }
   }
@@ -3807,9 +3831,12 @@
     }
     renderChrome();
     renderUnavailableScreen();
-    if (state.settings.controllerUrl) {
+    // Always auto-connect on boot: saved URL or the local default. The boot
+    // gate (inside connectController) covers the window until first data
+    // renders; failures fall through to the setup screen.
+    {
       try {
-        await connectController(state.settings.controllerUrl, { skipConversation: true });
+        await connectController(defaultUrl, { skipConversation: true });
       } catch (error) {
         state.unavailableScreenVisible = true;
         state.unavailableReason = error instanceof Error ? error.message : 'Failed to connect';
