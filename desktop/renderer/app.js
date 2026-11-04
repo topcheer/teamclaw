@@ -1954,8 +1954,12 @@
 
     const statusPill = $("#local-pill");
     if (statusPill) {
-      statusPill.className = `pill ${hasOpenClaw ? "pill-connected" : "pill-disconnected"}`;
-      statusPill.textContent = hasOpenClaw ? "OpenClaw detected" : "OpenClaw missing";
+      // Detection degrades to "detected (degraded)" instead of "missing" when the
+      // openclaw binary resolves but --help kept failing under load (#140).
+      const probeWarning = state.localSetupInfo && state.localSetupInfo.openClawProbeWarning;
+      statusPill.className = `pill ${hasOpenClaw ? (probeWarning ? "pill-connecting" : "pill-connected") : "pill-disconnected"}`;
+      statusPill.title = hasOpenClaw && probeWarning ? String(probeWarning) : "";
+      statusPill.textContent = hasOpenClaw ? (probeWarning ? "OpenClaw detected (degraded)" : "OpenClaw detected") : "OpenClaw missing";
     }
 
     const modeCard = $("#bootstrap-mode-card");
