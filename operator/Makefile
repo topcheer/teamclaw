@@ -28,3 +28,10 @@ crd-install:
 deploy: crd-install
 	kubectl apply -f config/rbac/operator-rbac.yaml
 	kubectl apply -f config/manager/deployment.yaml
+
+# Integration tests (envtest): reconciler regressions behind the
+# `integration` build tag. Downloads kubebuilder assets once.
+.PHONY: test-integration
+test-integration:
+	go run sigs.k8s.io/controller-runtime/tools/setup-envtest@latest use 1.34.x --bin-dir /tmp/envtest -p path
+	KUBEBUILDER_ASSETS=$$(go run sigs.k8s.io/controller-runtime/tools/setup-envtest@latest use 1.34.x --bin-dir /tmp/envtest -p path)  		go test -tags integration ./internal/controller/ -run 'TestReconcile' -v
