@@ -74,8 +74,5 @@ assert.match(tunnelManagerSrc, /userStopping/, "planned stops are distinguished 
 assert.match(tunnelManagerSrc, /startQuick/, "anonymous quick tunnel supported");
 assert.match(tunnelManagerSrc, /trycloudflare\.com/, "quick tunnel announces trycloudflare.com URL");
 assert.match(uiApp, /start-quick/, "quick tunnel button in the settings popover");
-assert.match(tunnelManagerSrc, /startQuickLhr/, "localhost.run anonymous tunnel supported");
-assert.match(tunnelManagerSrc, /nokey@localhost\.run/, "localhost.run relay via ssh -R");
-assert.match(uiApp, /start-quick-lhr/, "localhost.run button in the settings popover");
 
 console.log("test-tunnel-contracts: ok");

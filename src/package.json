@@ -1,17 +1,19 @@
 {
   "name": "@teamclaws/teamclaw",
   "version": "2026.7.1",
-  "description": "OpenClaw virtual software team orchestration plugin",
+  "description": "OpenClaw virtual software team orchestration plugin - controller, role-based workers, Web UI with internet tunnel sharing",
   "private": false,
   "keywords": [
-    "openclaw",
-    "plugin",
-    "teamclaw",
+    "cloudflared",
     "multi-agent",
+    "multi-role",
+    "openclaw",
     "orchestration",
-    "virtual-team",
+    "plugin",
     "sdlc",
-    "multi-role"
+    "teamclaw",
+    "tunnel",
+    "virtual-team"
   ],
   "author": "Junjun Zhang <topcheer@me.com>",
   "homepage": "https://github.com/topcheer/teamclaw/tree/main/src#readme",

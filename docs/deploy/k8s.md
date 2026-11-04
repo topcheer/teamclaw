@@ -193,6 +193,12 @@ the controller's local URL (Service type HTTP, port = controller port).
 The hostname lives in your zone and skips the TeamClaw gate - protect it
 with Cloudflare Access if the dashboard should not be public.
 
+**Anonymous one-off tunnels** (web UI only, no config): the settings
+popover also offers zero-account `*.trycloudflare.com` tunnels via the
+cloudflared binary. Random URL per start, dies with the controller, no
+gate token - anyone with the link reaches the dashboard. On k8s prefer
+Ingress; anonymous tunnels are for demos and VMs without ingress.
+
 **cert-manager** (first-class since 2026.11): set `certManager` on the
 ingress and the operator injects the issuer annotations plus an
 auto-named TLS secret (`<team>-controller-tls`):
