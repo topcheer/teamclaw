@@ -81,6 +81,13 @@ type NetworkSpec struct {
 	// +kubebuilder:default=80
 	ServicePort int32 `json:"servicePort,omitempty"`
 
+	// ServiceType overrides the controller Service type. Empty = ClusterIP.
+	// Valid: ClusterIP, NodePort, LoadBalancer.
+	ServiceType string `json:"serviceType,omitempty"`
+
+	// NodePort sets the nodePort when ServiceType is NodePort. Empty = auto.
+	NodePort int32 `json:"nodePort,omitempty"`
+
 	// Ingress optionally exposes the controller through an Ingress.
 	Ingress *IngressSpec `json:"ingress,omitempty"`
 }

@@ -273,7 +273,15 @@ func (r *TeamClawReconciler) reconcileService(ctx context.Context, tc *teav1.Tea
 		port = 80
 	}
 	_, err := controllerutil.CreateOrPatch(ctx, r.Client, svc, func() error {
-		svc.Spec.Type = corev1.ServiceTypeClusterIP
+		svcType := corev1.ServiceTypeClusterIP
+		switch corev1.ServiceType(tc.Spec.Network.ServiceType) {
+		case corev1.ServiceTypeNodePort, corev1.ServiceTypeLoadBalancer:
+			svcType = corev1.ServiceType(tc.Spec.Network.ServiceType)
+		case "", corev1.ServiceTypeClusterIP:
+		default:
+			return fmt.Errorf("unsupported network.serviceType %q (use ClusterIP, NodePort or LoadBalancer)", tc.Spec.Network.ServiceType)
+		}
+		svc.Spec.Type = svcType
 		svc.Spec.Selector = labelsFor(tc)
 		svc.Spec.Ports = []corev1.ServicePort{{
 			Name:       "http",
@@ -281,6 +289,9 @@ func (r *TeamClawReconciler) reconcileService(ctx context.Context, tc *teav1.Tea
 			TargetPort: intstr.FromString("http"),
 			Protocol:   corev1.ProtocolTCP,
 		}}
+		if svcType == corev1.ServiceTypeNodePort && tc.Spec.Network.NodePort != 0 {
+			svc.Spec.Ports[0].NodePort = tc.Spec.Network.NodePort
+		}
 		return controllerutil.SetControllerReference(tc, svc, r.Scheme)
 	})
 	return err

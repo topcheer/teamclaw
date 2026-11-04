@@ -72,6 +72,13 @@ spec:
                 network:
                   type: object
                   properties:
+                    servicePort:
+                      type: integer
+                    serviceType:
+                      type: string
+                      enum: [ClusterIP, NodePort, LoadBalancer]
+                    nodePort:
+                      type: integer
                     ingress:
                       type: object
                       required: [host]
