@@ -1589,3 +1589,10 @@ textarea { padding: 14px 16px; min-height: 188px; resize: vertical; line-height:
 .boot-kicker { font-size: 15px; font-weight: 700; letter-spacing: 0.4px; }
 .boot-line { font-size: 12.5px; color: var(--muted, #a8a49a); }
 .app-shell.is-booting { visibility: hidden; }
+
+/* Bootstrap LLM/source form + streamed install log */
+.bootstrap-llm-row { display: grid; grid-template-columns: 1fr 1.4fr 1.2fr; gap: 8px; }
+.bootstrap-log { max-height: 220px; overflow: auto; font-size: 11.5px; line-height: 1.5; margin: 0; white-space: pre-wrap; word-break: break-all; }
+.bootstrap-log .log-phase { color: var(--ok-text, #6cbe80); font-weight: 600; }
+.bootstrap-log .log-error { color: var(--danger-text, #c96f5e); }
+.bootstrap-note { margin-top: 8px; font-size: 11.5px; color: var(--muted, #a8a49a); }

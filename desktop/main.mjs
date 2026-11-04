@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, nativeTheme, Notification, shell } from "electron";
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -82,7 +83,7 @@ async function getLocalSetupInfo() {
   const hasOpenClaw = await hasOpenClawInstalled();
   return {
     hasOpenClaw,
-    openClawInstallCommand: "npm install -g openclaw@latest",
+    openClawInstallCommand: "sandboxed: desktop-managed runtime (never global)",
     openClawQuickstartCommand: "openclaw onboard --flow quickstart --install-daemon",
     modes: LOCAL_SETUP_MODES.map((entry) => ({
       ...entry,
@@ -95,7 +96,7 @@ async function runShellCommand(command, options = {}) {
   const cwd = String(options.cwd || "").trim() || process.cwd();
   const child = spawn(command, {
     cwd,
-    env: process.env,
+    env: options.env || process.env,
     shell: true,
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
@@ -133,6 +134,161 @@ async function runShellCommand(command, options = {}) {
   });
 }
 
+/* ---------------- Bootstrap installer (streamed) ---------------- */
+
+// Install sources for the OpenClaw + TeamClaw runtimes.
+//   bundled  - ships inside this app (extraResources/bin; offline install)
+//   official - npm registry (@latest)
+//   gitlab   - prebuilt tar/zip from a GitLab artifact URL
+const BUNDLED_BIN_DIR = () => path.join(process.resourcesPath || "", "bin");
+
+function bundledBinary(name) {
+  const candidate = path.join(BUNDLED_BIN_DIR(), name);
+  return fsSync.existsSync(candidate) ? candidate : null;
+}
+
+function resolveInstallSource(source) {
+  switch (source) {
+    case "bundled":
+    case "official":
+    case "gitlab":
+      return source;
+    default:
+      // Auto: prefer a bundled binary when present, else npm.
+      return bundledBinary("openclaw") ? "bundled" : "official";
+  }
+}
+
+async function ensureOpenClawRuntime({ source, gitlabUrl }, onEvent) {
+  // Returns the openclaw command (bundled path or global CLI name).
+  const existing = await hasOpenClawInstalled();
+  if (existing) {
+    onEvent({ phase: "openclaw", line: "OpenClaw already installed - reusing." });
+    return "openclaw";
+  }
+  const src = resolveInstallSource(source);
+  if (src === "bundled") {
+    const bin = bundledBinary("openclaw");
+    if (!bin) throw new Error("Bundled OpenClaw binary missing from the app package.");
+    onEvent({ phase: "openclaw", line: "Using bundled OpenClaw binary: " + bin });
+    return bin;
+  }
+  if (src === "gitlab") {
+    if (!gitlabUrl) throw new Error("GitLab artifact URL is required for the gitlab source.");
+    const workDir = path.join(app.getPath("userData"), "downloads");
+    await fs.mkdir(workDir, { recursive: true });
+    const fileName = gitlabUrl.split("/").pop() || "artifact.tgz";
+    const dest = path.join(workDir, fileName);
+    onEvent({ phase: "openclaw", line: `Downloading GitLab artifact ${fileName}...` });
+    await runShellStream(`curl -fSL --retry 3 -o "${dest}" "${gitlabUrl}"`, workDir, (line) =>
+      onEvent({ phase: "openclaw", line }),
+    );
+    const extractDir = path.join(workDir, fileName.replace(/\.(tar\.gz|tgz|zip)$/, ""));
+    await fs.mkdir(extractDir, { recursive: true });
+    onEvent({ phase: "openclaw", line: `Extracting to ${extractDir}...` });
+    if (/\.(tar\.gz|tgz)$/.test(fileName)) {
+      await runShellStream(`tar xzf "${dest}" -C "${extractDir}"`, workDir, (line) => onEvent({ phase: "openclaw", line }));
+    } else if (/\.zip$/.test(fileName)) {
+      await runShellStream(`unzip -oq "${dest}" -d "${extractDir}"`, workDir, (line) => onEvent({ phase: "openclaw", line }));
+    }
+    // Locate the openclaw binary inside the extracted tree.
+    const found = await runShellCommand(`find "${extractDir}" -name openclaw -type f -perm +111 | head -1`, { cwd: workDir });
+    const bin = (found.stdout || "").trim();
+    if (!bin) throw new Error("No openclaw binary found inside the GitLab artifact.");
+    await fs.chmod(bin, 0o755).catch(() => {});
+    onEvent({ phase: "openclaw", line: "GitLab artifact ready: " + bin });
+    return bin;
+  }
+  // official: npm install into the DESKTOP-OWNED prefix - the user's global
+  // installation is never touched (hard requirement from the user).
+  const runtimeDir = path.join(app.getPath("userData"), "runtime");
+  await fs.mkdir(runtimeDir, { recursive: true });
+  onEvent({ phase: "openclaw", line: `Installing OpenClaw into desktop runtime (${runtimeDir})...` });
+  await runShellStream(`npm install --prefix "${runtimeDir}" openclaw@latest`, runtimeDir, (line) =>
+    onEvent({ phase: "openclaw", line }),
+  );
+  const bin = path.join(runtimeDir, "node_modules", ".bin", "openclaw");
+  if (!fsSync.existsSync(bin)) throw new Error("OpenClaw install finished but binary not found at " + bin);
+  return bin;
+}
+
+async function ensureTeamClawPlugin(openclawBin, onEvent) {
+  const res = await runShellCommand(`"${openclawBin}" plugin list 2>/dev/null || true`, { cwd: process.cwd() });
+  if ((res.stdout || "").includes("@teamclaws/teamclaw")) {
+    onEvent({ phase: "teamclaw", line: "TeamClaw plugin already installed." });
+    return;
+  }
+  const runtimeDir = path.join(app.getPath("userData"), "runtime");
+  await runShellStream(`npm install --prefix "${runtimeDir}" @teamclaws/teamclaw@latest`, runtimeDir, (line) =>
+    onEvent({ phase: "teamclaw", line }),
+  );
+  onEvent({ phase: "teamclaw", line: "Registering the TeamClaw extension..." });
+  await runShellStream(`"${openclawBin}" extensions add "${runtimeDir}/node_modules/@teamclaws/teamclaw"`, runtimeDir, (line) =>
+    onEvent({ phase: "teamclaw", line }),
+  );
+}
+
+// Minimal LLM config: write the DESKTOP-SANDBOX openclaw.json directly
+// (userData/openclaw-state). The user's own ~/.openclaw is never touched -
+// hard requirement. Provider + endpoint + apiKey only, all else defaults.
+async function writeLlmConfig(_openclawBin, { provider, endpoint, apiKey }, onEvent) {
+  if (!provider || !apiKey) {
+    onEvent({ phase: "llm", line: "No LLM credentials provided - keeping defaults." });
+    return;
+  }
+  const stateDir = path.join(app.getPath("userData"), "openclaw-state");
+  await fs.mkdir(stateDir, { recursive: true });
+  const cfgPath = path.join(stateDir, "openclaw.json");
+  let cfg = {};
+  try { cfg = JSON.parse(await fs.readFile(cfgPath, "utf8")); } catch { cfg = {}; }
+  cfg.vendors = cfg.vendors || {};
+  cfg.vendors[provider] = { ...(cfg.vendors[provider] || {}), apiKey, ...(endpoint ? { baseUrl: endpoint } : {}) };
+  await fs.writeFile(cfgPath, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+  onEvent({ phase: "llm", line: `LLM config written for ${provider} (sandbox only).` });
+}
+
+// Streamed variant: emits every stdout/stderr line through onLine and
+// resolves with the same result shape as runShellCommand.
+async function runShellStream(command, cwd, onLine) {
+  const child = spawn(command, {
+    cwd,
+    env: process.env,
+    shell: true,
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  let stdout = "";
+  let stderr = "";
+  const makePump = (isErr) => {
+    let pending = "";
+    return (stream) => {
+      stream?.on("data", (chunk) => {
+        pending += String(chunk || "");
+        const captured = isErr ? (stderr += pending) : null;
+        void captured;
+        let idx;
+        while ((idx = pending.indexOf("\n")) >= 0) {
+          const line = pending.slice(0, idx).trim();
+          if (line) onLine(line);
+          pending = pending.slice(idx + 1);
+        }
+      });
+    };
+  };
+  makePump(false)(child.stdout);
+  makePump(true)(child.stderr);
+  return await new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      const result = { ok: code === 0, code, signal, stdout: stdout.trim(), stderr: stderr.trim() };
+      if (code === 0) return resolve(result);
+      const failure = new Error(stderr.trim() || stdout.trim() || `Command failed: ${command}`);
+      Object.assign(failure, result);
+      reject(failure);
+    });
+  });
+}
+
 async function installLocalTeamClaw(options) {
   const mode = String(options?.mode || "controller-manual").trim();
   const command = buildLocalInstallCommand(mode);
@@ -140,9 +296,12 @@ async function installLocalTeamClaw(options) {
 }
 
 async function installOpenClawLocally(options) {
-  const command = String(options?.command || "npm install -g openclaw@latest").trim();
+  let command = String(options?.command || "").trim();
   if (!command) {
-    throw new Error("OpenClaw install command is required");
+    throw new Error("OpenClaw install command is required (sandboxed installs use bootstrap:install)");
+  }
+  if (/(^|\s)npm\s+install\s+-g\b/.test(command)) {
+    throw new Error("Global installs are disabled: use the sandboxed bootstrap installer.");
   }
   return await runShellCommand(command, { cwd: String(options?.cwd || "").trim() || process.cwd() });
 }
@@ -231,6 +390,26 @@ ipcMain.handle("window:apply-theme", async (_event, theme) => {
 });
 ipcMain.handle("settings:get", async () => loadSettings());
 ipcMain.handle("settings:save", async (_event, settings) => saveSettings(settings));
+ipcMain.handle("bootstrap:install", async (event, options) => {
+  // Orchestrate the sandboxed bootstrap with streamed progress events.
+  // NEVER touches the user's global installs or ~/.openclaw (hard rule).
+  const onEvent = (e) => {
+    try { event.sender.send("bootstrap:install-event", e); } catch { /* window gone */ }
+  };
+  const { llm, source, gitlabUrl } = options || {};
+  try {
+    onEvent({ phase: "start", line: "Starting sandboxed bootstrap..." });
+    const openclawBin = await ensureOpenClawRuntime({ source, gitlabUrl }, onEvent);
+    await ensureTeamClawPlugin(openclawBin, onEvent);
+    await writeLlmConfig(openclawBin, llm || {}, onEvent);
+    onEvent({ phase: "done", line: "Bootstrap complete.", openclawBin });
+    return { ok: true, openclawBin };
+  } catch (err) {
+    onEvent({ phase: "error", line: err instanceof Error ? err.message : String(err) });
+    throw err;
+  }
+});
+
 ipcMain.handle("controller:get-setup-info", async () => getLocalSetupInfo());
 ipcMain.handle("controller:install-local", async (_event, options) => installLocalTeamClaw(options));
 ipcMain.handle("openclaw:install-local", async (_event, options) => installOpenClawLocally(options));
