@@ -55,9 +55,14 @@ assert.match(http, /serveVersionedHtml/, "index.html is served with content-vers
 assert.match(http, /\/api\/v1\/tunnel\/stop/, "stop endpoint present");
 assert.match(http, /GitHub login required/, "sharing requires github login (server-derived username)");
 
-// UI: panel with share/stop + token display.
-assert.match(uiHtml, /tunnel-panel/, "workspace tab hosts the tunnel panel");
+// UI: settings popover (header-triggered) + managed-URL pill; the panel no
+// longer lives in the workspace tab (moved out 2026-11 by request).
+assert.match(uiHtml, /tunnel-settings-toggle/, "header hosts the Tunnel settings button");
+assert.match(uiHtml, /tunnel-popover/, "tunnel settings live in a popover");
+assert.doesNotMatch(uiHtml, /id="tunnel-panel"/, "workspace tab no longer hosts the tunnel panel");
+assert.match(uiHtml, /tunnel-live-pill/, "header hosts the live managed tunnel URL pill");
 assert.match(uiApp, /initTunnelPanel/, "panel logic initialized");
+assert.match(uiApp, /st\.mode === "managed"/, "pill shows managed (*.teamclaw.dev) URLs only");
 assert.match(uiApp, /Gate token/, "gate token displayed for sharing");
 
 console.log("test-tunnel-contracts: ok");
