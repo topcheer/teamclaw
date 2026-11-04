@@ -112,8 +112,8 @@ controller:
       set -eu
       cp /tmp/config/openclaw.json /home/node/.openclaw/openclaw.json
       mkdir -p /home/node/.openclaw/extensions
-ln -sfn /app/extensions/teamclaw /home/node/.openclaw/extensions/teamclaw
-exec node /app/openclaw.mjs gateway --allow-unconfigured
+      ln -sfn /app/extensions/teamclaw /home/node/.openclaw/extensions/teamclaw
+      exec node /app/openclaw.mjs gateway --allow-unconfigured
 
 resources: {}
 
