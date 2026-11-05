@@ -844,8 +844,8 @@ import { createT as i18nCreateT } from "./i18n.js";
       if (row) row.hidden = !m.checked || m.getAttribute("data-bootstrap-mode") !== "remote";
     }));
     const sel = document.getElementById("bootstrap-source");
-    const gl = document.getElementById("bootstrap-gitlab-url");
-    if (sel && gl) sel.addEventListener("change", () => { gl.hidden = sel.value !== "gitlab"; });
+    const gl = document.getElementById("bootstrap-artifact-url");
+    if (sel && gl) sel.addEventListener("change", () => { gl.hidden = sel.value !== "artifact"; });
   }
 
   function bootShell(msgKey) {
@@ -3513,14 +3513,14 @@ import { createT as i18nCreateT } from "./i18n.js";
       const endpointEl = document.getElementById('bootstrap-llm-endpoint');
       const apikeyEl = document.getElementById('bootstrap-llm-apikey');
       const sourceEl = document.getElementById('bootstrap-source');
-      const gitlabEl = document.getElementById('bootstrap-gitlab-url');
+      const artifactEl = document.getElementById('bootstrap-artifact-url');
       const source = sourceEl && sourceEl.value !== 'auto' ? sourceEl.value : undefined;
-      const gitlabUrl = source === 'gitlab' && gitlabEl ? gitlabEl.value.trim() : undefined;
+      const artifactUrl = source === 'artifact' && artifactEl ? artifactEl.value.trim() : undefined;
       const llm = (providerEl && providerEl.value)
         ? { provider: providerEl.value, endpoint: endpointEl ? endpointEl.value.trim() : '', apiKey: apikeyEl ? apikeyEl.value.trim() : '' }
         : {};
 
-      const installPromise = desktop.bootstrapInstall({ llm, source, gitlabUrl })
+      const installPromise = desktop.bootstrapInstall({ llm, source, artifactUrl })
         .finally(() => { if (unsub) unsub(); });
       installPromise.then(async () => {
         state.isInstallingLocal = false;
@@ -3973,11 +3973,11 @@ import { createT as i18nCreateT } from "./i18n.js";
   setConnectionPill("disconnected", t("connection.disconnected"));
   setupGithubCorner();
   bindTeamAutoControls();
-  // Bootstrap: gitlab source reveals the artifact URL input.
+  // Bootstrap: artifact source reveals the URL input (fixed GitHub release by default).
   {
     const sel = document.getElementById('bootstrap-source');
-    const gl = document.getElementById('bootstrap-gitlab-url');
-    if (sel && gl) sel.addEventListener('change', () => { gl.hidden = sel.value !== 'gitlab'; });
+    const gl = document.getElementById('bootstrap-artifact-url');
+    if (sel && gl) sel.addEventListener('change', () => { gl.hidden = sel.value !== 'artifact'; });
   }
   // Standalone instance controls (fully isolated OpenClaw+TeamClaw).
   {

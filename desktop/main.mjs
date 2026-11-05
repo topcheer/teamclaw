@@ -149,19 +149,30 @@ async function runShellCommand(command, options = {}) {
 // Install sources for the OpenClaw + TeamClaw runtimes.
 //   bundled  - ships inside this app (extraResources/bin; offline install)
 //   official - npm registry (@latest)
-//   gitlab   - prebuilt tar/zip from a GitLab artifact URL
+//   artifact - prebuilt tar from the FIXED-URL GitHub release (runtime-latest)
 const BUNDLED_BIN_DIR = () => path.join(process.resourcesPath || "", "bin");
 
 function bundledBinary(name) {
-  const candidate = path.join(BUNDLED_BIN_DIR(), name);
-  return fsSync.existsSync(candidate) ? candidate : null;
+  // extraResources embeds build/bundle -> Resources/bin. NOTE: the .bin
+  // entries are SYMLINKS and electron-builder's copy breaks them (lstat
+  // hits, existsSync false), so resolve the REAL files instead:
+  //   openclaw  -> node_modules/openclaw/openclaw.mjs
+  //   (any pkg) -> node_modules/<name>/... resolved per-package below
+  if (name === "openclaw") {
+    const real = path.join(BUNDLED_BIN_DIR(), "runtime", "node_modules", "openclaw", "openclaw.mjs");
+    return fsSync.existsSync(real) ? real : null;
+  }
+  const direct = path.join(BUNDLED_BIN_DIR(), name);
+  if (fsSync.existsSync(direct)) return direct;
+  const tree = path.join(BUNDLED_BIN_DIR(), "runtime", "node_modules", ".bin", name);
+  return fsSync.existsSync(tree) ? tree : null;
 }
 
 function resolveInstallSource(source) {
   switch (source) {
     case "bundled":
     case "official":
-    case "gitlab":
+    case "artifact":
       return source;
     default:
       // Auto: prefer a bundled binary when present, else npm.
@@ -169,8 +180,17 @@ function resolveInstallSource(source) {
   }
 }
 
-async function ensureOpenClawRuntime({ source, gitlabUrl }, onEvent) {
+async function ensureOpenClawRuntime({ source, artifactUrl }, onEvent) {
   // Returns the openclaw command (bundled path or global CLI name).
+  // Bundled tree WINS over reusing the global install: the embedded runtime
+  // keeps openclaw+teamclaw peers resolvable inside one tree, which is what
+  // makes fully-offline plugin registration work (a local-path plugins
+  // install otherwise resolves its openclaw peer over npm).
+  const bundled = bundledBinary("openclaw");
+  if (bundled) {
+    onEvent({ phase: "openclaw", line: "Using bundled OpenClaw runtime: " + bundled });
+    return bundled;
+  }
   const existing = await hasOpenClawInstalled();
   if (existing) {
     onEvent({ phase: "openclaw", line: "OpenClaw already installed - reusing." });
@@ -183,30 +203,36 @@ async function ensureOpenClawRuntime({ source, gitlabUrl }, onEvent) {
     onEvent({ phase: "openclaw", line: "Using bundled OpenClaw binary: " + bin });
     return bin;
   }
-  if (src === "gitlab") {
-    if (!gitlabUrl) throw new Error("GitLab artifact URL is required for the gitlab source.");
+  if (src === "artifact") {
+    // Fixed-URL rolling release (user design): tag never moves, CI replaces
+    // assets. Default URL, user-overridable; sha256 verified when available.
+    const plat = `${process.platform}-${process.arch}`;
+    const url = artifactUrl || `https://github.com/topcheer/teamclaw/releases/download/runtime-latest/teamclaw-runtime-${plat}.tar.gz`;
     const workDir = path.join(app.getPath("userData"), "downloads");
     await fs.mkdir(workDir, { recursive: true });
-    const fileName = gitlabUrl.split("/").pop() || "artifact.tgz";
+    const fileName = url.split("/").pop() || "artifact.tar.gz";
     const dest = path.join(workDir, fileName);
-    onEvent({ phase: "openclaw", line: `Downloading GitLab artifact ${fileName}...` });
-    await runShellStream(`curl -fSL --retry 3 -o "${dest}" "${gitlabUrl}"`, workDir, (line) =>
+    onEvent({ phase: "openclaw", line: `Downloading runtime artifact ${fileName}...` });
+    await runShellStream(`curl -fSL --retry 3 -o "${dest}" "${url}"`, workDir, (line) =>
       onEvent({ phase: "openclaw", line }),
     );
-    const extractDir = path.join(workDir, fileName.replace(/\.(tar\.gz|tgz|zip)$/, ""));
-    await fs.mkdir(extractDir, { recursive: true });
-    onEvent({ phase: "openclaw", line: `Extracting to ${extractDir}...` });
-    if (/\.(tar\.gz|tgz)$/.test(fileName)) {
-      await runShellStream(`tar xzf "${dest}" -C "${extractDir}"`, workDir, (line) => onEvent({ phase: "openclaw", line }));
-    } else if (/\.zip$/.test(fileName)) {
-      await runShellStream(`unzip -oq "${dest}" -d "${extractDir}"`, workDir, (line) => onEvent({ phase: "openclaw", line }));
+    onEvent({ phase: "openclaw", line: "Verifying sha256..." });
+    const sum = await runShellCommand(`shasum -a 256 "${dest}"`, { cwd: workDir });
+    const digest = (sum.stdout || "").split(" ")[0];
+    try {
+      const expect = (await (await fetch(url + ".sha256")).text()).split(" ")[0];
+      if (expect && digest !== expect) throw new Error(`sha256 mismatch: ${digest} != ${expect}`);
+      onEvent({ phase: "openclaw", line: "sha256 OK: " + digest.slice(0, 12) });
+    } catch (e) {
+      if (String(e.message || "").startsWith("sha256 mismatch")) throw e;
+      onEvent({ phase: "openclaw", line: "checksum file unavailable - continuing without verification" });
     }
-    // Locate the openclaw binary inside the extracted tree.
-    const found = await runShellCommand(`find "${extractDir}" -name openclaw -type f -perm +111 | head -1`, { cwd: workDir });
-    const bin = (found.stdout || "").trim();
-    if (!bin) throw new Error("No openclaw binary found inside the GitLab artifact.");
-    await fs.chmod(bin, 0o755).catch(() => {});
-    onEvent({ phase: "openclaw", line: "GitLab artifact ready: " + bin });
+    const extractDir = path.join(workDir, "runtime-extracted");
+    await fs.mkdir(extractDir, { recursive: true });
+    await runShellStream(`tar xzf "${dest}" -C "${extractDir}"`, workDir, (line) => onEvent({ phase: "openclaw", line }));
+    const bin = path.join(extractDir, "runtime", "node_modules", ".bin", "openclaw");
+    if (!fsSync.existsSync(bin)) throw new Error("Runtime tree malformed (no openclaw bin).");
+    onEvent({ phase: "openclaw", line: "Artifact runtime ready: " + bin });
     return bin;
   }
   // official: npm install into the DESKTOP-OWNED prefix - the user's global
@@ -234,8 +260,23 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
   await fs.mkdir(runtimeDir, { recursive: true });
   const pluginDir = path.join(runtimeDir, "node_modules", "@teamclaws", "teamclaw");
   const res = await runShellCommand(`"${openclawBin}" plugins list 2>/dev/null || true`, { cwd: runtimeDir, env: sandboxEnv });
-  if ((res.stdout || "").includes("teamclaw")) {
+  // Precise: match the plugins-list TABLE row (│ TeamClaw │), not any
+  // teamclaw substring - the stock-extensions path line also contains it.
+  if (/│\s*TeamClaw\s*│/.test(res.stdout || "")) {
     onEvent({ phase: "teamclaw", line: "TeamClaw plugin already installed." });
+    return;
+  }
+  // Fully-offline registration when a bundled tree exists: install the
+  // plugin from the EMBEDDED runtime tree (same tar shape) - no npm, no
+  // network. Only falls back to npm when the bundle is absent.
+  const bundledOpenclaw = bundledBinary("openclaw");
+  const bundledPlugin = bundledOpenclaw
+    ? path.join(BUNDLED_BIN_DIR(), "runtime", "node_modules", "@teamclaws", "teamclaw")
+    : null;
+  if (bundledPlugin && fsSync.existsSync(bundledPlugin)) {
+    onEvent({ phase: "teamclaw", line: "Registering the bundled TeamClaw plugin (offline)..." });
+    await runShellStream(`"${openclawBin}" plugins install "${bundledPlugin}" --force --accept-capabilities`, runtimeDir, (line) =>
+      onEvent({ phase: "teamclaw", line }), sandboxEnv);
     return;
   }
   await runShellStream(`npm install --prefix "${runtimeDir}" @teamclaws/teamclaw@latest`, runtimeDir, (line) =>
@@ -286,6 +327,18 @@ async function runShellStream(command, cwd, onLine, envOverride) {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
+  // Watchdog: grandchildren can inherit and hold the stdio pipes, so the
+  // child's 'exit' may fire but 'close' never does and callers hang. If the
+  // stream goes silent for 20s AFTER the child exits, force-settle.
+  let exited = false;
+  let lastActivity = Date.now();
+  child.on("exit", () => { exited = true; lastActivity = Date.now(); });
+  const watchdog = setInterval(() => {
+    if (exited && Date.now() - lastActivity > 20000) {
+      try { child.kill("SIGKILL"); } catch { /* gone */ }
+    }
+  }, 5000);
+  const bump = () => { lastActivity = Date.now(); };
   let stdout = "";
   let stderr = "";
   const makePump = (isErr) => {
@@ -298,7 +351,7 @@ async function runShellStream(command, cwd, onLine, envOverride) {
         let idx;
         while ((idx = pending.indexOf("\n")) >= 0) {
           const line = pending.slice(0, idx).trim();
-          if (line) onLine(line);
+          if (line) { onLine(line); bump(); }
           pending = pending.slice(idx + 1);
         }
       });
@@ -309,6 +362,7 @@ async function runShellStream(command, cwd, onLine, envOverride) {
   return await new Promise((resolve, reject) => {
     child.on("error", reject);
     child.on("exit", (code, signal) => {
+      clearInterval(watchdog);
       const result = { ok: code === 0, code, signal, stdout: stdout.trim(), stderr: stderr.trim() };
       if (code === 0) return resolve(result);
       const failure = new Error(stderr.trim() || stdout.trim() || `Command failed: ${command}`);
@@ -661,10 +715,16 @@ ipcMain.handle("bootstrap:install", async (event, options) => {
   const onEvent = (e) => {
     try { event.sender.send("bootstrap:install-event", e); } catch { /* window gone */ }
   };
-  const { llm, source, gitlabUrl } = options || {};
+  const { llm, source, artifactUrl } = options || {};
   try {
     onEvent({ phase: "start", line: "Starting sandboxed bootstrap..." });
-    const openclawBin = await ensureOpenClawRuntime({ source, gitlabUrl }, onEvent);
+    onEvent({ phase: "diag", line: "rp=" + (process.resourcesPath||"none") });
+    {
+      const base = path.join(process.resourcesPath || "", "bin");
+      const t1 = path.join(base, "runtime", "node_modules", ".bin", "openclaw");
+      onEvent({ phase: "diag", line: "bin-dir=" + fsSync.existsSync(base) + " tree=" + fsSync.existsSync(t1) + " lstat=" + (() => { try { return fsSync.lstatSync(t1).isSymbolicLink(); } catch { return "ERR:"; } })() });
+    }
+    const openclawBin = await ensureOpenClawRuntime({ source, artifactUrl }, onEvent);
     await ensureTeamClawPlugin(openclawBin, onEvent);
     await writeLlmConfig(openclawBin, llm || {}, onEvent);
     onEvent({ phase: "done", line: "Bootstrap complete.", openclawBin });
