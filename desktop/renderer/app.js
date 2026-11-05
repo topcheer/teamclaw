@@ -3527,6 +3527,26 @@ import { createT as i18nCreateT } from "./i18n.js";
         state.isInstallingOpenClaw = false;
         state.unavailableReason = "";
         state.localSetupInfo = await desktop.getLocalSetupInfo();
+        // Last hop (the "it just works" moment): after a successful install,
+        // start the private instance, wait for the controller announce, connect
+        // - and open the dashboard in the browser like a running install does.
+        try {
+          const st = await desktop.standaloneStart({}).catch(() => null);
+          if (st && st.controllerUrl) {
+            let ok = false;
+            for (let i = 0; i < 45 && !ok; i++) {
+              try { const res = await fetch(`${st.controllerUrl}/api/v1/tunnel/status`, { signal: AbortSignal.timeout(1500) }); ok = res.ok; } catch {}
+              if (!ok) await new Promise((w) => setTimeout(w, 1500));
+            }
+            if (ok) {
+              await desktop.instanceSet({ mode: "private", lifecycle: "app", controllerUrl: st.controllerUrl, llmConfigured: true }).catch(() => {});
+              await connectController(st.controllerUrl, { skipConversation: true }).catch(() => {});
+              // Desktop private instance intentionally does NOT open the
+              // web UI in a browser - the desktop app IS the UI (user ruling).
+              return;
+            }
+          }
+        } catch { /* fall through to the wizard screen */ }
         if (hasOpenClaw) {
           await reconnectAfterLocalInstall();
           return;
