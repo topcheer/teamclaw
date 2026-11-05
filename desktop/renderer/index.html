@@ -376,9 +376,9 @@
               <option value="auto">自动（优先内置）</option>
               <option value="bundled">随应用内置（离线）</option>
               <option value="official">官方源（npm）</option>
-              <option value="gitlab">Artifact（tar/zip URL）</option>
+              <option value="artifact">Artifact（默认固定源，可自定义 URL）</option>
             </select>
-            <input id="bootstrap-gitlab-url" class="compact-input" type="text" placeholder="Artifact URL" hidden>
+            <input id="bootstrap-artifact-url" class="compact-input" type="text" placeholder="Artifact URL（默认 runtime-latest 固定源）" hidden>
             <div class="bootstrap-label" style="margin-top:8px">运行模式</div>
             <label class="bootstrap-mode"><input type="radio" name="bootstrap-adv-mode" value="controller-manual" checked><span><strong>简洁</strong><small>按需拉起本地 worker</small></span></label>
             <label class="bootstrap-mode"><input type="radio" name="bootstrap-adv-mode" value="controller-process"><span><strong>多进程</strong><small>更强隔离，占用更多</small></span></label>
