@@ -1602,3 +1602,12 @@ textarea { padding: 14px 16px; min-height: 188px; resize: vertical; line-height:
 .standalone-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
 .standalone-row { display: flex; gap: 8px; }
 .standalone-row .compact-input { flex: 1; }
+
+/* Wizard (3-step bootstrap) */
+.wizard-steps { display: flex; gap: 8px; margin: 4px 0 12px; }
+.step-ind { font-size: 12px; color: var(--muted, #a8a49a); padding: 3px 10px; border-radius: 999px; border: 1px solid var(--line, #2d2b27); }
+.step-ind.active { color: var(--ok-text, #6cbe80); border-color: var(--ok-text, #6cbe80); }
+.step-ind.done { color: var(--ok-text, #6cbe80); border-style: dashed; }
+.wizard-advanced { margin-top: 10px; }
+.wizard-advanced summary { cursor: pointer; font-size: 12px; color: var(--muted, #a8a49a); user-select: none; }
+.wizard-advanced[open] summary { margin-bottom: 8px; }

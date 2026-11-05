@@ -420,10 +420,14 @@ ipcMain.handle("settings:save", async (_event, settings) => saveSettings(setting
  *     desktop may override the vendor - written only into the sandbox copy
  *   - started/stopped with the desktop app; killed on quit, pid-guarded
  */
-const STANDALONE = { child: null, port: null, pid: null };
+const STANDALONE = { child: null, port: null, pid: null, controllerUrl: null };
 
 function standaloneStateDir() {
-  return path.join(app.getPath("userData"), "standalone-state");
+  // The private instance RUNS on the bootstrap sandbox state - one sandbox
+  // holds both the registered plugin and the running gateway. A separate
+  // standalone-state dir used to split them (plugin registered in one,
+  // gateway in the other - controller never came up).
+  return path.join(app.getPath("userData"), "openclaw-state");
 }
 function standalonePidFile() {
   return path.join(standaloneStateDir(), "gateway.pid");
@@ -451,21 +455,38 @@ async function standaloneBinary() {
 }
 
 async function seedStandaloneConfig(preferredVendor) {
-  // Copy the user's LLM config (READ-ONLY source) into the sandbox state;
-  // optionally pin a preferred vendor. Never writes the user's file.
+  // Minimal-config seeding: a full copy of the user's config made the
+  // gateway normalize production-specific fields at startup, tripping its
+  // own config-guard ("config changed during startup") in a loop. Instead
+  // write ONLY {gateway.mode:local} + the LLM providers already configured
+  // in the bootstrap sandbox (read-only source; user config never read or
+  // written here).
   const stateDir = standaloneStateDir();
   await fs.mkdir(stateDir, { recursive: true });
   const dst = path.join(stateDir, "openclaw.json");
   let cfg = {};
   try { cfg = JSON.parse(await fs.readFile(dst, "utf8")); } catch { cfg = {}; }
-  const userCfgPath = path.join(process.env.HOME || "", ".openclaw", "openclaw.json");
+  cfg.gateway = { ...(cfg.gateway || {}), mode: "local" };
+  cfg.models = cfg.models || { providers: {} };
+  cfg.models.providers = cfg.models.providers || {};
+  const bootstrapCfg = path.join(app.getPath("userData"), "openclaw-state", "openclaw.json");
   try {
-    const userCfg = JSON.parse(await fs.readFile(userCfgPath, "utf8"));
-    cfg.vendors = { ...(userCfg.vendors || {}), ...(cfg.vendors || {}) };
-  } catch { /* no user config - empty start */ }
-  if (preferredVendor && cfg.vendors && cfg.vendors[preferredVendor]) {
-    cfg.preferredVendor = preferredVendor;
-  }
+    const b = JSON.parse(await fs.readFile(bootstrapCfg, "utf8"));
+    for (const [id, p] of Object.entries(b?.models?.providers || {})) {
+      cfg.models.providers[id] = { ...(cfg.models.providers[id] || {}), ...p };
+    }
+  } catch { /* bootstrap not run yet - empty providers */ }
+  if (preferredVendor && cfg.models.providers[preferredVendor]) cfg.preferredVendor = preferredVendor;
+  // Declare the plugin in controller mode - without this the gateway starts
+  // the teamclaw plugin as a WORKER (it just polls for a controller and the
+  // desktop dashboard never gets its API).
+  cfg.plugins = cfg.plugins || { entries: {} };
+  cfg.plugins.entries = cfg.plugins.entries || {};
+  cfg.plugins.entries.teamclaw = {
+    ...(cfg.plugins.entries.teamclaw || {}),
+    enabled: true,
+    config: { ...(cfg.plugins.entries.teamclaw?.config || {}), mode: "controller", teamName: "private" },
+  };
   await fs.writeFile(dst, JSON.stringify(cfg, null, 2), { mode: 0o600 });
   return dst;
 }
@@ -473,7 +494,19 @@ async function seedStandaloneConfig(preferredVendor) {
 async function standaloneStart(preferredVendor) {
   if (STANDALONE.child) return { ok: true, alreadyRunning: true, port: STANDALONE.port };
   const bin = await standaloneBinary();
-  await seedStandaloneConfig(preferredVendor);
+  // Idempotent seed: a rewrite (even identical) trips the gateway config-guard
+  // ("config changed during startup") and kills the spawn. Only seed when the
+  // sandbox config is missing or lacks any models.providers entry.
+  const sandboxCfgPath = path.join(standaloneStateDir(), "openclaw.json");
+  let needsSeed = true;
+  try {
+    const c = JSON.parse(await fs.readFile(sandboxCfgPath, "utf8"));
+    const noLlm = !c?.models?.providers || Object.keys(c.models.providers).length === 0;
+    const noGateway = !c?.gateway?.mode;
+    const noController = c?.plugins?.entries?.teamclaw?.config?.mode !== "controller";
+    needsSeed = noLlm || noGateway || noController;
+  } catch { /* missing -> seed */ }
+  if (needsSeed) await seedStandaloneConfig(preferredVendor);
   STANDALONE.port = await findFreePort();
   const logPath = path.join(standaloneStateDir(), "gateway.log");
   const logFd = fsSync.openSync(logPath, "a");
@@ -492,7 +525,20 @@ async function standaloneStart(preferredVendor) {
     STANDALONE.pid = null;
     try { fsSync.rmSync(standalonePidFile(), { force: true }); } catch { /* gone */ }
   });
-  return { ok: true, port: STANDALONE.port, pid: child.pid ?? null, controllerUrl: `http://127.0.0.1:${STANDALONE.port}` };
+  // The teamclaw controller picks its own HTTP port (9527, auto-shifted when
+  // occupied - e.g. 9537 next to a production controller). Wait for its
+  // announce line in the gateway log and surface THAT as the controllerUrl.
+  let controllerUrl = null;
+  for (let i = 0; i < 40 && !controllerUrl; i++) {
+    try {
+      const log = await fs.readFile(logPath, "utf8");
+      const m = log.match(/Controller: Web UI available at http:\/\/127\.0\.0\.1:(\d+)/);
+      if (m) controllerUrl = `http://127.0.0.1:${m[1]}`;
+    } catch { /* log not written yet */ }
+    if (!controllerUrl) await new Promise((r) => setTimeout(r, 1000));
+  }
+  STANDALONE.controllerUrl = controllerUrl;
+  return { ok: true, port: STANDALONE.port, pid: child.pid ?? null, controllerUrl: controllerUrl || `http://127.0.0.1:${STANDALONE.port}` };
 }
 
 async function standaloneStop() {
@@ -520,7 +566,7 @@ function standaloneStatus() {
     running: Boolean(STANDALONE.child),
     port: STANDALONE.port,
     pid: STANDALONE.pid,
-    controllerUrl: STANDALONE.port ? `http://127.0.0.1:${STANDALONE.port}` : null,
+    controllerUrl: STANDALONE.controllerUrl || null,
     stateDir: standaloneStateDir(),
   };
 }
@@ -531,6 +577,26 @@ ipcMain.handle("standalone:status", () => standaloneStatus());
 
 // App lifecycle: the desktop-owned instance dies with the app (no orphans).
 app.on("before-quit", () => { try { STANDALONE.child?.kill("SIGTERM"); } catch { /* gone */ } });
+
+// Readiness gate: fully-offline two probes against the DESKOP SANDBOX state.
+// ready = LLM configured (any models.providers[*].apiKey) AND teamclaw registered.
+ipcMain.handle("runtime:is-ready", async () => {
+  const stateDir = path.join(app.getPath("userData"), "openclaw-state");
+  let llm = false, plugin = false;
+  try {
+    const cfg = JSON.parse(await fs.readFile(path.join(stateDir, "openclaw.json"), "utf8"));
+    llm = Object.values(cfg?.models?.providers || {}).some((p) => p && p.apiKey);
+  } catch { /* no cfg */ }
+  try {
+    const bin = path.join(app.getPath("userData"), "runtime", "node_modules", ".bin", "openclaw");
+    const cand = fsSync.existsSync(bin) ? bin : (await hasOpenClawInstalled() ? "openclaw" : null);
+    if (cand) {
+      const res = await runShellCommand(`"${cand}" plugins list 2>/dev/null || true`, { cwd: path.join(app.getPath("userData"), "runtime"), env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } });
+      plugin = (res.stdout || "").includes("teamclaw");
+    }
+  } catch { /* no runtime */ }
+  return { ready: llm && plugin, llm, plugin };
+});
 
 ipcMain.handle("bootstrap:install", async (event, options) => {
   // Orchestrate the sandboxed bootstrap with streamed progress events.
@@ -553,8 +619,6 @@ ipcMain.handle("bootstrap:install", async (event, options) => {
 });
 
 ipcMain.handle("controller:get-setup-info", async () => getLocalSetupInfo());
-ipcMain.handle("controller:install-local", async (_event, options) => installLocalTeamClaw(options));
-ipcMain.handle("openclaw:install-local", async (_event, options) => installOpenClawLocally(options));
 ipcMain.handle("shell:openExternal", async (_event, url) => {
   await shell.openExternal(String(url || ""));
 });
