@@ -10,6 +10,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_SETTINGS = {
   controllerUrl: "http://127.0.0.1:9527",
   theme: "system",
+  // instance = the app's single source of truth for what to run/connect:
+  //   mode: "private"  - bundled/sandbox runtime, own state dir, own port
+  //                       lifecycle "app" (die with app) | "persistent"
+  //         "global"   - the machine-level OpenClaw (system PATH binary,
+  //                       default state dir). Reuses any pre-existing state
+  //                       and NEVER overwrites its LLM config.
+  //         "external" - just connect to a controller URL, manage nothing.
+  //   controllerUrl - resolved/known URL for this instance
+  //   llmConfigured - whether the wizard already wrote LLM config for it
+  instance: null,
 };
 
 let mainWindow = null;
@@ -575,11 +585,58 @@ ipcMain.handle("standalone:start", async (_e, options) => standaloneStart(option
 ipcMain.handle("standalone:stop", () => standaloneStop());
 ipcMain.handle("standalone:status", () => standaloneStatus());
 
-// App lifecycle: the desktop-owned instance dies with the app (no orphans).
-app.on("before-quit", () => { try { STANDALONE.child?.kill("SIGTERM"); } catch { /* gone */ } });
+// App lifecycle: the private instance dies with the app UNLESS the user
+// chose "persistent" (keep it running in the background so the next app
+// start reconnects instantly). Global gateways are always left running.
+app.on("before-quit", async () => {
+  const settings = await loadSettings().catch(() => null);
+  const lifecycle = settings?.instance?.lifecycle || "app";
+  if (lifecycle === "app") {
+    try { STANDALONE.child?.kill("SIGTERM"); } catch { /* gone */ }
+  }
+});
 
 // Readiness gate: fully-offline two probes against the DESKOP SANDBOX state.
 // ready = LLM configured (any models.providers[*].apiKey) AND teamclaw registered.
+// ---- Instance manager: one IPC family driven ONLY by settings.instance ----
+ipcMain.handle("instance:get", async () => (await loadSettings()).instance);
+ipcMain.handle("instance:set", async (_e, instance) => {
+  const settings = await loadSettings();
+  settings.instance = instance || null;
+  await saveSettings(settings);
+  return settings.instance;
+});
+// Global-mode detection for the wizard: does the machine-level OpenClaw have
+// a pre-existing state (LLM already configured)? Read-only.
+ipcMain.handle("global:probe", async () => {
+  const statePath = path.join(process.env.HOME || "", ".openclaw", "openclaw.json");
+  try {
+    const cfg = JSON.parse(await fs.readFile(statePath, "utf8"));
+    const llm = Object.values(cfg?.models?.providers || {}).some((p) => p && p.apiKey);
+    return { present: true, llmConfigured: llm, binary: await hasOpenClawInstalled() };
+  } catch {
+    return { present: false, llmConfigured: false, binary: await hasOpenClawInstalled() };
+  }
+});
+// Global-mode gateway: spawn the system openclaw gateway (default state dir,
+// NO sandbox env). Fresh installs get LLM written by the wizard first;
+// pre-existing state is reused untouched.
+async function globalGatewayStart() {
+  const port = await findFreePort();
+  const logFd = fsSync.openSync(path.join(app.getPath("userData"), "global-gateway.log"), "a");
+  const child = spawn(`openclaw gateway --port ${port}`, {
+    cwd: process.env.HOME || process.cwd(),
+    env: process.env,
+    shell: true,
+    stdio: ["ignore", logFd, logFd],
+  });
+  GLOBAL_GATEWAY.child = child;
+  GLOBAL_GATEWAY.port = port;
+  return { ok: true, port, pid: child.pid ?? null };
+}
+const GLOBAL_GATEWAY = { child: null, port: null };
+ipcMain.handle("instance:start-global", () => globalGatewayStart());
+
 ipcMain.handle("runtime:is-ready", async () => {
   const stateDir = path.join(app.getPath("userData"), "openclaw-state");
   let llm = false, plugin = false;

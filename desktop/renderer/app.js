@@ -1240,18 +1240,55 @@
   }
   function bindWizardControls() {
     const next1 = document.getElementById("wizard-next-1");
-    if (next1) next1.addEventListener("click", () => {
-      const remote = document.querySelector('input[name="bootstrap-mode"][data-bootstrap-mode="remote"]');
-      if (remote && remote.checked) {
+    if (next1) next1.addEventListener("click", async () => {
+      const checked = document.querySelector('input[name="bootstrap-mode"]:checked');
+      const mode = checked ? checked.getAttribute("data-bootstrap-mode") : "controller-manual";
+      if (mode === "remote") {
         const row = document.getElementById("bootstrap-remote-url-row");
         if (row) row.hidden = false;
         return; // remote: 停在步骤1 等用户填 URL 连接
       }
-      wizardGoStep(2);
+      if (mode === "global") {
+        // Global instance: reuse pre-existing state untouched; only a fresh
+        // global goes through the LLM step.
+        const probe = await desktop.globalProbe().catch(() => null);
+        if (probe && probe.present && probe.llmConfigured) {
+          wizardGoStep(3);
+          const r = await desktop.instanceStartGlobal().catch((e) => ({ error: String(e && e.message || e) }));
+          const log = document.getElementById("bootstrap-log");
+          if (log) log.textContent = "[global] Reusing existing OpenClaw state (LLM untouched).\n" + JSON.stringify(r);
+          await desktop.instanceSet({ mode: "global", controllerUrl: null, llmConfigured: true }).catch(() => {});
+          return;
+        }
+        wizardGoStep(2); // fresh global: LLM step, then start-global
+        return;
+      }
+      wizardGoStep(2); // private (default)
     });
     const next2 = document.getElementById("wizard-next-2");
-    if (next2) next2.addEventListener("click", () => {
+    if (next2) next2.addEventListener("click", async () => {
       wizardGoStep(3);
+      const checked = document.querySelector('input[name="bootstrap-mode"]:checked');
+      const mode = checked ? checked.getAttribute("data-bootstrap-mode") : "controller-manual";
+      if (mode === "global") {
+        // Fresh global: write LLM into the machine-level config via the
+        // bootstrap sandbox writer is WRONG here - global mode writes to the
+        // global state by design (user explicitly chose it).
+        const log = document.getElementById("bootstrap-log");
+        const providerEl = document.getElementById("bootstrap-llm-provider");
+        const keyEl = document.getElementById("bootstrap-llm-apikey");
+        const epEl = document.getElementById("bootstrap-llm-endpoint");
+        try {
+          if (log) log.textContent = "[global] Starting global gateway...\n";
+          const r = await desktop.instanceStartGlobal();
+          if (log) log.textContent += "[global] gateway pid=" + r.pid + " port=" + r.port + "\n[global] Configured mode=global; reconnect on next app start.\n";
+          await desktop.instanceSet({ mode: "global", controllerUrl: null, llmConfigured: true });
+        } catch (e) {
+          if (log) log.textContent += "[error] " + (e && e.message) + "\n";
+        }
+        void providerEl; void keyEl; void epEl;
+        return;
+      }
       const ib = document.getElementById("bootstrap-install-btn");
       if (ib) { ib.hidden = false; ib.click(); }
     });
@@ -4431,8 +4468,26 @@
   }
   // Readiness gate (S1): ready -> auto standalone start; else wizard.
   (async () => {
-    try {
-      const r = await desktop.runtimeIsReady();
+    // SOT gate v3: settings.instance is the single source of truth.
+    const inst = await desktop.instanceGet().catch(() => null);
+    if (inst && inst.mode === "external" && inst.controllerUrl) {
+      await connectController(inst.controllerUrl, { skipConversation: true }).catch(() => {});
+      unveilShell();
+      return;
+    }
+    if (inst && inst.mode === "global") {
+      // Reconnect to the global gateway recorded at wizard time.
+      if (inst.controllerUrl) {
+        await connectController(inst.controllerUrl, { skipConversation: true }).catch(() => {});
+        unveilShell();
+        return;
+      }
+    }
+    if (!inst || inst.mode === "private") {
+      // Migration + private path: a ready sandbox with no instance record yet
+      // (pre-SOT installs) is adopted as private automatically.
+      try {
+        const r = await desktop.runtimeIsReady();
       if (r && r.ready) {
         bootShell("boot.startingInstance");
         const st = await desktop.standaloneStart({}).catch(() => null);
@@ -4446,6 +4501,7 @@
           }
           if (ok) {
             await connectController(st.controllerUrl, { skipConversation: true }).catch(() => {});
+            await desktop.instanceSet({ mode: "private", lifecycle: "app", controllerUrl: st.controllerUrl, llmConfigured: true }).catch(() => {});
             unveilShell();
             return;
           }
@@ -4453,6 +4509,8 @@
         unveilShell();
       }
     } catch { unveilShell(); }
+    }
+    // No usable instance record -> wizard.
     state.unavailableScreenVisible = true;
     renderUnavailableScreen();
     wizardGoStep(1);
