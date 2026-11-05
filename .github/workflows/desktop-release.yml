@@ -1,0 +1,89 @@
+name: Desktop bundles (desktop-latest)
+
+# Rolling fixed-URL desktop installers, same design as runtime-latest:
+# the release tag `desktop-latest` never moves; every push to main (and
+# manual dispatch) rebuilds and REPLACES the per-platform installer assets.
+# Stable URLs:
+#   https://github.com/topcheer/teamclaw/releases/download/desktop-latest/TeamClaw-Desktop-<version>-<plat>.<ext>
+#
+# Platform natives are staged per-target via scripts/prepare-bundle.mjs
+# (TC_OS/TC_CPU + --ignore-scripts), then electron-builder packages each
+# platform. Installers are unsigned (SmartScreen/Gatekeeper show a prompt).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-latest
+  cancel-in-progress: true
+
+jobs:
+  build-desktop:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - { os: macos-latest, plat: darwin-arm64, tc_os: darwin, tc_cpu: arm64, args: "--mac dmg zip --arm64" }
+          - { os: macos-latest, plat: darwin-x64, tc_os: darwin, tc_cpu: x64, args: "--mac dmg zip --x64" }
+          - { os: windows-latest, plat: win32-x64, tc_os: win32, tc_cpu: x64, args: "--win nsis --x64" }
+          - { os: ubuntu-latest, plat: linux-x64, tc_os: linux, tc_cpu: x64, args: "--linux AppImage deb --x64" }
+    env:
+      TC_OS: ${{ matrix.tc_os }}
+      TC_CPU: ${{ matrix.tc_cpu }}
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install desktop toolchain
+        run: npm ci
+        working-directory: desktop
+      - name: Stage target runtime (platform natives)
+        run: node scripts/prepare-bundle.mjs
+        working-directory: desktop
+      - name: Package
+        run: npx electron-builder ${{ matrix.args }}
+        working-directory: desktop
+      - name: Normalize asset names
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd desktop/dist
+          V=$(node -p "require('../package.json').version")
+          PLAT=${{ matrix.plat }}
+          # electron-builder emits per-job single-arch artifacts ("TeamClaw
+          # Desktop-0.1.0-arm64.dmg", "TeamClaw Desktop Setup 0.1.0.exe",
+          # "teamclaw-desktop_0.1.0_amd64.deb", ...). Map each extension to
+          # one dash-joined, URL-safe, platform-tagged name.
+          for f in *.dmg *.zip *.exe *.AppImage *.deb; do
+            [ -e "$f" ] || continue
+            ext="${f##*.}"
+            case "$ext" in
+              dmg) dst="TeamClaw-Desktop-${V}-${PLAT}.dmg" ;;
+              zip) dst="TeamClaw-Desktop-${V}-${PLAT}-mac.zip" ;;
+              exe) dst="TeamClaw-Desktop-${V}-${PLAT}-Setup.exe" ;;
+              AppImage) dst="TeamClaw-Desktop-${V}-${PLAT}.AppImage" ;;
+              deb) dst="TeamClaw-Desktop-${V}-${PLAT}.deb" ;;
+            esac
+            mv "$f" "$dst"
+          done
+          ls -lh TeamClaw-Desktop-*
+      - name: Replace assets on desktop-latest release
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd desktop/dist
+          # Create the rolling release once; then swap OUR platform's assets
+          # (delete-asset per file avoids clobbering other matrix jobs).
+          gh release view desktop-latest >/dev/null 2>&1 || gh release create desktop-latest --title "Desktop bundles (rolling)" --notes "Auto-replaced on every main push. Fixed URL by design. Unsigned installers." --prerelease
+          for f in TeamClaw-Desktop-*; do
+            gh release delete-asset desktop-latest "$f" --yes 2>/dev/null || true
+          done
+          gh release upload desktop-latest TeamClaw-Desktop-*
+        env:
+          GH_TOKEN: ${{ github.token }}
