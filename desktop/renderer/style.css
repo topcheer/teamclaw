@@ -1443,7 +1443,11 @@ textarea { padding: 14px 16px; min-height: 188px; resize: vertical; line-height:
   }
 }
 
-/* Controller settings view */
+/* Controller settings view: four functions as tabs (was a 2x2 card grid
+   that crowded every panel into half width). */
+.ctl-card { background: var(--panel-2); border: 1px solid var(--border); }
+.controller-grid { display: none; }
+.ctl-tabs { margin-bottom: 14px; }
 .controller-grid {
   /* 4 cards: a balanced 2x2 fills wide windows; narrow windows fall back to
      a single column. min(100%,...) guards the 1-column fallback below 560px

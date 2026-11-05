@@ -128,6 +128,10 @@ import { createT as i18nCreateT } from "./i18n.js";
       ["#ta-bind", "teamauto.bind"],
       ["[data-ta-tab='repos']", "teamauto.tabRepos"],
       ["[data-ta-tab='activity']", "teamauto.activity"],
+      ["[data-ctl-tab='models']", "ctl.tab.models"],
+      ["[data-ctl-tab='workspace']", "ctl.tab.workspace"],
+      ["[data-ctl-tab='github']", "ctl.tab.github"],
+      ["[data-ctl-tab='tunnel']", "ctl.tab.tunnel"],
       ["#ta-activity-title", "teamauto.activity"],
       ["#ctl-models-title", "ctl.models.title"],
       ["#ctl-models-hint", "ctl.models.hint"],
@@ -1320,6 +1324,15 @@ import { createT as i18nCreateT } from "./i18n.js";
         const tab = btn.getAttribute("data-ta-tab");
         document.querySelectorAll(".ta-tab[data-ta-tab]").forEach((b) => b.classList.toggle("active", b === btn));
         document.querySelectorAll(".ta-tabpane[data-ta-pane]").forEach((p) => p.classList.toggle("active", p.getAttribute("data-ta-pane") === tab));
+      });
+    });
+    // Controller settings tabs (models | workspace | github | tunnel): same
+    // toggle semantics; every pane keeps rendering from its own pollers.
+    document.querySelectorAll(".ta-tab[data-ctl-tab]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const tab = btn.getAttribute("data-ctl-tab");
+        document.querySelectorAll(".ta-tab[data-ctl-tab]").forEach((b) => b.classList.toggle("active", b === btn));
+        document.querySelectorAll(".ta-tabpane[data-ctl-pane]").forEach((p) => p.classList.toggle("active", p.getAttribute("data-ctl-pane") === tab));
       });
     });
     const bindBtn = document.getElementById("ta-bind");

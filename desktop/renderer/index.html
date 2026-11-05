@@ -256,8 +256,16 @@
       </section>
 
       <section id="view-controller" class="stage-view">
-        <div class="view-grid controller-grid">
-          <section class="panel detail-card">
+        <section class="panel large-card">
+          <div class="section-head"><h2>Controller</h2></div>
+          <div class="ta-tabs ctl-tabs" role="tablist">
+            <button class="ta-tab active" data-ctl-tab="models" type="button" data-i18n="ctl.tab.models">Team models</button>
+            <button class="ta-tab" data-ctl-tab="workspace" type="button" data-i18n="ctl.tab.workspace">Workspace</button>
+            <button class="ta-tab" data-ctl-tab="github" type="button" data-i18n="ctl.tab.github">GitHub</button>
+            <button class="ta-tab" data-ctl-tab="tunnel" type="button" data-i18n="ctl.tab.tunnel">Tunnel</button>
+          </div>
+          <div class="ta-tabpane active" data-ctl-pane="models">
+          <section class="detail-card ctl-card">
             <div class="section-head compact"><h2 id="ctl-models-title">Team models</h2></div>
             <p id="ctl-models-hint" class="ctl-hint">Default model applies to the controller and every role; per-role selections override it for that role.</p>
             <label class="ctl-field"><span id="ctl-default-label">Default model</span><select id="ctl-default"></select></label>
@@ -267,7 +275,9 @@
               <span id="ctl-models-result" class="ctl-result"></span>
             </div>
           </section>
-          <section class="panel detail-card">
+          </div>
+          <div class="ta-tabpane" data-ctl-pane="workspace">
+          <section class="detail-card ctl-card">
             <div class="section-head compact"><h2 id="ctl-ws-title">Workspace directory</h2></div>
             <p class="ctl-hint"><span id="ctl-ws-current-label">Current:</span> <code id="ctl-ws-path">...</code> <span id="ctl-ws-default" class="ctl-badge is-hidden">default</span></p>
             <p id="ctl-ws-hint" class="ctl-hint">Point the team workspace at any absolute path on the controller machine. Applies after a gateway restart.</p>
@@ -277,7 +287,9 @@
               <span id="ctl-ws-result" class="ctl-result"></span>
             </div>
           </section>
-          <section class="panel detail-card">
+          </div>
+          <div class="ta-tabpane" data-ctl-pane="github">
+          <section class="detail-card ctl-card">
             <div class="section-head compact"><h2 id="ctl-gh-title">GitHub login</h2></div>
             <p class="ctl-hint"><span id="ctl-gh-current-label">Current:</span> <code id="ctl-gh-account">-</code></p>
             <p id="ctl-gh-hint" class="ctl-hint">Authorizes TeamClaw to access the GitHub API on your behalf. The token is stored only on the controller machine.</p>
@@ -287,7 +299,9 @@
               <span id="ctl-gh-result" class="ctl-result"></span>
             </div>
           </section>
-          <section class="panel detail-card">
+          </div>
+          <div class="ta-tabpane" data-ctl-pane="tunnel">
+          <section class="detail-card ctl-card">
             <div class="section-head compact"><h2 id="ctl-tunnel-title">Internet tunnel</h2></div>
             <p id="ctl-tunnel-hint" class="ctl-hint">Share the local web UI at a public HTTPS URL. Visitors must enter the gate token shown below.</p>
             <div id="ctl-tunnel-state" class="ctl-tunnel-state ctl-hint">Loading…</div>
@@ -298,7 +312,8 @@
               <span id="ctl-tunnel-result" class="ctl-result"></span>
             </div>
           </section>
-        </div>
+          </div>
+        </section>
       </section>
     </main>
   </div>
