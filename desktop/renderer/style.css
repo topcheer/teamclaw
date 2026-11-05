@@ -482,6 +482,7 @@ button, input, textarea { font: inherit; }
   overflow: auto;
 }
 .bootstrap-panel {
+  position: relative;
   width: min(1240px, 100%);
   margin: 0 auto;
   padding: 28px;
@@ -914,11 +915,41 @@ textarea { padding: 14px 16px; min-height: 188px; resize: vertical; line-height:
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
+/* Wizard cancel: dismiss the overlay without running any step. */
+.bootstrap-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.bootstrap-close:hover { color: var(--text); border-color: var(--text); }
+
+/* Task list cards: the leading dot already encodes status; the text badge
+   was redundant noise that also fought the row for width. */
+.task-list-item .status-tag { display: none; }
+
 .compact-list-row .status-tag,
 .compact-list-row .list-indicator {
   flex: 0 0 auto;
 }
+.compact-list-row .status-tag {
+  white-space: nowrap;
+}
+.task-list-item {
+  overflow: hidden;
+}
+/* Task list never scrolls horizontally: titles/meta clamp with ellipsis, so
+   a transient wide child must clip, not spawn an x-scrollbar. */
+.side-list { overflow-x: hidden; }
 .list-indicator {
   width: 10px;
   height: 10px;

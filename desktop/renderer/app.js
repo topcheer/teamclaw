@@ -109,6 +109,7 @@ import { createT as i18nCreateT } from "./i18n.js";
     const texts = [
       [".connection-card h2", "connection.title"],
       ["#wizard-open-btn", "connection.setup"],
+      ["#wizard-cancel-btn", "wizard.cancel"],
       [".connection-group .connection-group-label", "connection.prodGroup"],
       [".standalone-box .connection-group-label", "connection.privateGroup"],
       ["#standalone-start-btn", "connection.privateStart"],
@@ -2506,7 +2507,10 @@ import { createT as i18nCreateT } from "./i18n.js";
                 `${renderListIndicator(task.status || "unknown")}` +
                 `<div class="list-copy">` +
                 `<div class="list-title">${escapeHtml(task.title || task.id || t("task.title"))}</div>` +
-                `<div class="list-meta">${escapeHtml(meta || compactText(task.description, 120))}</div>` +
+              // renderWorkerLabel/formatTime return SAFE html (internally
+              // escaped) - escaping the joined string double-escapes it and
+              // leaks literal <span title=...> text into the list row.
+              `<div class="list-meta">${meta || escapeHtml(compactText(task.description, 120))}</div>` +
                 `</div>` +
                 `${renderStatusTag(task.status || "unknown")}` +
                 `</div>` +
@@ -4054,6 +4058,16 @@ import { createT as i18nCreateT } from "./i18n.js";
       state.unavailableScreenVisible = true;
       renderUnavailableScreen();
       wizardGoStep(1);
+    });
+    const wizCancel = document.getElementById('wizard-cancel-btn');
+    if (wizCancel) wizCancel.addEventListener('click', () => {
+      state.unavailableScreenVisible = false;
+      renderUnavailableScreen();
+      // Explicit user dismissal wins over the boot-gate keep-open: without
+      // this the "not connected yet" branch re-shows the overlay instantly
+      // and cancel appears dead.
+      const ov = document.getElementById('bootstrap-overlay');
+      if (ov) ov.classList.add('hidden');
     });
     const stopBtn = document.getElementById('standalone-stop-btn');
     if (stopBtn) stopBtn.addEventListener('click', async () => {
