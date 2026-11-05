@@ -67,6 +67,7 @@
   const TRANSLATIONS = {
     en: {
       "boot.connecting": "Connecting to the controller and loading team data...",
+      "boot.startingInstance": "Starting your private instance...",
       "connection.disconnected": "Disconnected",
       "connection.connecting": "Connecting",
       "connection.reconnecting": "Reconnecting",
@@ -291,6 +292,7 @@
     },
     zh: {
       "boot.connecting": "正在连接控制器并加载团队数据...",
+      "boot.startingInstance": "正在启动你的私有实例...",
       "connection.notConnected": "未连接",
       "connection.disconnected": "已断开",
       "connection.connecting": "连接中",
@@ -1225,6 +1227,45 @@
     return response.json();
   }
 
+  // ---- Wizard (3 steps) ----
+  function wizardGoStep(n) {
+    document.querySelectorAll("[data-wizard-step]").forEach((el) => {
+      el.hidden = el.getAttribute("data-wizard-step") !== String(n);
+    });
+    document.querySelectorAll("#wizard-steps .step-ind").forEach((el) => {
+      const on = el.getAttribute("data-step-ind") === String(n);
+      el.classList.toggle("active", on);
+      el.classList.toggle("done", Number(el.getAttribute("data-step-ind")) < n);
+    });
+  }
+  function bindWizardControls() {
+    const next1 = document.getElementById("wizard-next-1");
+    if (next1) next1.addEventListener("click", () => {
+      const remote = document.querySelector('input[name="bootstrap-mode"][data-bootstrap-mode="remote"]');
+      if (remote && remote.checked) {
+        const row = document.getElementById("bootstrap-remote-url-row");
+        if (row) row.hidden = false;
+        return; // remote: 停在步骤1 等用户填 URL 连接
+      }
+      wizardGoStep(2);
+    });
+    const next2 = document.getElementById("wizard-next-2");
+    if (next2) next2.addEventListener("click", () => {
+      wizardGoStep(3);
+      const ib = document.getElementById("bootstrap-install-btn");
+      if (ib) { ib.hidden = false; ib.click(); }
+    });
+    document.querySelectorAll("[data-wizard-back]").forEach((b) => b.addEventListener("click", () => wizardGoStep(Number(b.getAttribute("data-wizard-back")) || 1)));
+    const modes = document.querySelectorAll('input[name="bootstrap-mode"]');
+    modes.forEach((m) => m.addEventListener("change", () => {
+      const row = document.getElementById("bootstrap-remote-url-row");
+      if (row) row.hidden = !m.checked || m.getAttribute("data-bootstrap-mode") !== "remote";
+    }));
+    const sel = document.getElementById("bootstrap-source");
+    const gl = document.getElementById("bootstrap-gitlab-url");
+    if (sel && gl) sel.addEventListener("change", () => { gl.hidden = sel.value !== "gitlab"; });
+  }
+
   function bootShell(msgKey) {
     const shell = $(".app-shell");
     const ov = $("#boot-screen");
@@ -1886,114 +1927,13 @@
   }
 
   function renderUnavailableScreen() {
-    const shell = $(".app-shell");
-    const overlay = $("#bootstrap-overlay");
-    const commandEl = $("#bootstrap-install-command");
-    const mode = selectedLocalSetupMode();
-    const modeId = mode ? mode.id : state.localSetupMode;
-    const hasOpenClaw = Boolean(state.localSetupInfo && state.localSetupInfo.hasOpenClaw);
-    const installCommand = hasOpenClaw
-      ? (mode && mode.installCommand ? String(mode.installCommand) : "npx -y @teamclaws/teamclaw install --yes --install-mode controller-manual")
-      : String((state.localSetupInfo && state.localSetupInfo.openClawInstallCommand) || "npm install -g openclaw@latest");
-    const quickstartCommand = String((state.localSetupInfo && state.localSetupInfo.openClawQuickstartCommand) || "openclaw onboard --flow quickstart --install-daemon");
-    const remoteInput = $("#bootstrap-controller-url");
-    const visible = state.unavailableScreenVisible;
-
-    if (shell) shell.classList.toggle("app-shell-blocked", visible);
-    if (!overlay) return;
-    overlay.classList.toggle("hidden", !visible);
-    overlay.setAttribute("aria-hidden", visible ? "false" : "true");
-    if (!visible) {
-      return;
-    }
-
-    overlay.querySelectorAll("[data-bootstrap-mode]").forEach((input) => {
-      input.checked = input.getAttribute("data-bootstrap-mode") === modeId;
-    });
-
-    if (remoteInput && !remoteInput.value) {
-      remoteInput.value = state.controllerUrl || (state.settings && state.settings.controllerUrl) || "http://127.0.0.1:9527";
-    }
-    if (commandEl) {
-      commandEl.textContent = installCommand;
-    }
-
-    const startCommandEl = $("#bootstrap-start-command");
-    if (startCommandEl) {
-      startCommandEl.textContent = quickstartCommand;
-    }
-
-    const titleEl = $("#bootstrap-title");
-    const subtitleEl = $("#bootstrap-subtitle");
-    const commandLabelEl = $("#bootstrap-command-label");
-    const nextStepLabelEl = $("#bootstrap-start-command-label");
-    const componentsEl = $("#bootstrap-local-log");
-    const openClawQuickstartCard = $("#bootstrap-openclaw-quickstart-card");
-    const openClawComponentsCard = $("#bootstrap-openclaw-components-card");
-    if (titleEl) titleEl.textContent = hasOpenClaw ? t("bootstrap.teamclawDetectedTitle") : t("bootstrap.openclawMissingTitle");
-    if (subtitleEl) subtitleEl.textContent = hasOpenClaw ? t("bootstrap.teamclawDetectedSubtitle") : t("bootstrap.openclawMissingSubtitle");
-    if (commandLabelEl) commandLabelEl.textContent = hasOpenClaw ? t("bootstrap.teamclawInstallLabel") : t("bootstrap.openclawInstallLabel");
-    if (nextStepLabelEl) nextStepLabelEl.textContent = t("bootstrap.openclawQuickstartLabel");
-    if (componentsEl) {
-      componentsEl.textContent = String((state.localSetupInfo && state.localSetupInfo.openClawInstallCommand) || "npm install -g openclaw@latest");
-    }
-    if (openClawQuickstartCard) {
-      openClawQuickstartCard.classList.toggle("hidden", hasOpenClaw);
-    }
-    if (openClawComponentsCard) {
-      openClawComponentsCard.classList.toggle("hidden", hasOpenClaw);
-    }
-
-    const reasonEl = $("#bootstrap-status-detail");
-    if (reasonEl) {
-      const fallback = state.isConnecting
-          ? t("bootstrap.connecting")
-          : t("bootstrap.failed");
-      reasonEl.textContent = state.unavailableReason || fallback;
-    }
-
-    const statusPill = $("#local-pill");
-    if (statusPill) {
-      statusPill.className = `pill ${hasOpenClaw ? "pill-connected" : "pill-disconnected"}`;
-      statusPill.textContent = hasOpenClaw ? "OpenClaw detected" : "OpenClaw missing";
-    }
-
-    const modeCard = $("#bootstrap-mode-card");
-    if (modeCard) {
-      modeCard.classList.toggle("hidden", !hasOpenClaw);
-    }
-
-    const warningEl = $("#bootstrap-mode-warning");
-    if (warningEl) {
-      const warningText = modeId === "controller-process" ? t("bootstrap.modeWarning") : t("bootstrap.manualWarning");
-      warningEl.textContent = warningText;
-    }
-
-    const installBtn = $("#bootstrap-install-btn");
-    if (installBtn) {
-      const busy = hasOpenClaw ? state.isInstallingLocal : state.isInstallingOpenClaw;
-      installBtn.disabled = busy;
-      installBtn.textContent = busy
-        ? t("bootstrap.installing")
-        : (hasOpenClaw ? t("bootstrap.installNow") : t("bootstrap.openclawInstallNow"));
-    }
-    const copyBtn = $('[data-bootstrap-copy-install]');
-    if (copyBtn) {
-      copyBtn.textContent = t("bootstrap.copyInstall");
-    }
-    const remoteConnectBtn = $('[data-bootstrap-connect]');
-    if (remoteConnectBtn) {
-      remoteConnectBtn.textContent = t("bootstrap.connectRemote");
-    }
-
-    const manualTitle = $("#bootstrap-mode-manual-title");
-    const manualHint = $("#bootstrap-mode-manual-hint");
-    const processTitle = $("#bootstrap-mode-process-title");
-    const processHint = $("#bootstrap-mode-process-hint");
-    if (manualTitle) manualTitle.textContent = t("bootstrap.manualMode");
-    if (manualHint) manualHint.textContent = t("bootstrap.manualModeHint");
-    if (processTitle) processTitle.textContent = t("bootstrap.processMode");
-    if (processHint) processHint.textContent = t("bootstrap.processModeHint");
+    // v3.1 S1: overlay is the 3-step wizard; keep busy/visibility semantics only.
+    const ov = $("#bootstrap-overlay");
+    if (ov) ov.classList.toggle("hidden", !state.unavailableScreenVisible && state.connectionState === "connected");
+    const busy = Boolean(state.localSetupInfo && state.localSetupInfo.hasOpenClaw ? state.isInstallingLocal : state.isInstallingOpenClaw);
+    const log = $("#bootstrap-log");
+    if (log) log.parentElement && (log.parentElement.hidden = false);
+    void busy;
   }
 
   function buildExternalWorkerCommand(info, roleId, discoveryMode) {
@@ -4489,6 +4429,35 @@
     refreshStandalone();
     setInterval(refreshStandalone, 5000);
   }
+  // Readiness gate (S1): ready -> auto standalone start; else wizard.
+  (async () => {
+    try {
+      const r = await desktop.runtimeIsReady();
+      if (r && r.ready) {
+        bootShell("boot.startingInstance");
+        const st = await desktop.standaloneStart({}).catch(() => null);
+        if (st && st.controllerUrl) {
+          // Gateway just spawned: poll until the controller answers (<=30s),
+          // then connect. Transient failures retry inside the window.
+          let ok = false;
+          for (let i = 0; i < 30 && !ok; i++) {
+            try { const res = await fetch(`${st.controllerUrl}/api/v1/tunnel/status`, { signal: AbortSignal.timeout(1500) }); ok = res.ok; } catch {}
+            if (!ok) await new Promise((w) => setTimeout(w, 1000));
+          }
+          if (ok) {
+            await connectController(st.controllerUrl, { skipConversation: true }).catch(() => {});
+            unveilShell();
+            return;
+          }
+        }
+        unveilShell();
+      }
+    } catch { unveilShell(); }
+    state.unavailableScreenVisible = true;
+    renderUnavailableScreen();
+    wizardGoStep(1);
+  })();
+  bindWizardControls();
   connectSavedController();
   renderConversation();
   activateView('mission');
