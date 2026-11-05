@@ -125,6 +125,8 @@ import { createT as i18nCreateT } from "./i18n.js";
       ["#teamauto-hint", "teamauto.hint"],
       ["#ta-repos-refresh", "teamauto.refreshRepos"],
       ["#ta-bind", "teamauto.bind"],
+      ["[data-ta-tab='repos']", "teamauto.tabRepos"],
+      ["[data-ta-tab='activity']", "teamauto.activity"],
       ["#ta-activity-title", "teamauto.activity"],
       ["#ctl-models-title", "ctl.models.title"],
       ["#ctl-models-hint", "ctl.models.hint"],
@@ -1310,6 +1312,15 @@ import { createT as i18nCreateT } from "./i18n.js";
   function bindTeamAutoControls() {
     if (teamAutoBtnBound) return;
     teamAutoBtnBound = true;
+    // Sub-tabs (Repositories | Activity): plain class toggling; both panes
+    // keep rendering so switching tabs never needs a refetch.
+    document.querySelectorAll(".ta-tab[data-ta-tab]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const tab = btn.getAttribute("data-ta-tab");
+        document.querySelectorAll(".ta-tab[data-ta-tab]").forEach((b) => b.classList.toggle("active", b === btn));
+        document.querySelectorAll(".ta-tabpane[data-ta-pane]").forEach((p) => p.classList.toggle("active", p.getAttribute("data-ta-pane") === tab));
+      });
+    });
     const bindBtn = document.getElementById("ta-bind");
     if (bindBtn) {
       bindBtn.addEventListener("click", async () => {

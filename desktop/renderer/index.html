@@ -221,14 +221,25 @@
       <section id="view-teamauto" class="stage-view">
         <section class="panel large-card">
           <div class="section-head"><h2 id="teamauto-title">TeamAuto</h2></div>
-          <p id="teamauto-hint" class="detail-subtitle">Pick one of your GitHub repositories. TeamClaw sweeps it on its own schedule, reviews issues/PRs, takes ownership of unassigned issues, and posts results with teamclaw markers.</p>
-          <div class="teamauto-bind-row">
-            <select id="ta-repo-select" class="teamauto-select"></select>
-            <button id="ta-repos-refresh" class="btn" type="button">Refresh repos</button>
-            <input id="ta-schedule" class="teamauto-schedule-input" type="text" placeholder="*/30 * * * *" spellcheck="false" />
-            <button id="ta-bind" class="btn btn-primary" type="button">Bind</button>
+          <div class="ta-tabs" role="tablist">
+            <button class="ta-tab active" data-ta-tab="repos" type="button" data-i18n="teamauto.tabRepos">Repositories</button>
+            <button class="ta-tab" data-ta-tab="activity" type="button" data-i18n="teamauto.activity">Activity</button>
           </div>
-          <div id="ta-bind-msg" class="teamauto-msg"></div>
+          <div class="ta-tabpane active" data-ta-pane="repos">
+            <p id="teamauto-hint" class="detail-subtitle">Pick one of your GitHub repositories. TeamClaw sweeps it on its own schedule, reviews issues/PRs, takes ownership of unassigned issues, and posts results with teamclaw markers.</p>
+            <div class="teamauto-bind-row">
+              <select id="ta-repo-select" class="teamauto-select"></select>
+              <button id="ta-repos-refresh" class="btn" type="button">Refresh repos</button>
+              <input id="ta-schedule" class="teamauto-schedule-input" type="text" placeholder="*/30 * * * *" spellcheck="false" />
+              <button id="ta-bind" class="btn btn-primary" type="button">Bind</button>
+            </div>
+            <div id="ta-bind-msg" class="teamauto-msg"></div>
+            <div id="ta-repos" class="teamauto-repos"></div>
+          </div>
+          <div class="ta-tabpane" data-ta-pane="activity">
+            <h3 class="teamauto-section-title" id="ta-activity-title">Activity</h3>
+            <div id="ta-activity" class="teamauto-activity"></div>
+          </div>
           <div id="ta-bind-overlay" class="ta-bind-overlay is-hidden" role="dialog" aria-modal="true">
             <div class="ta-bind-dialog">
               <div class="ta-bind-title" id="ta-bind-overlay-title">Binding...</div>
@@ -241,9 +252,6 @@
               <button id="ta-bind-overlay-close" class="btn btn-small is-hidden" type="button" data-i18n="teamauto.close">Close</button>
             </div>
           </div>
-          <div id="ta-repos" class="teamauto-repos"></div>
-          <h3 class="teamauto-section-title" id="ta-activity-title">Activity</h3>
-          <div id="ta-activity" class="teamauto-activity"></div>
         </section>
       </section>
 
