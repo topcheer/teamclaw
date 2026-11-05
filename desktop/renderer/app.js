@@ -107,7 +107,13 @@ import { createT as i18nCreateT } from "./i18n.js";
       languageToggle.textContent = state.language === "zh" ? t("action.languageToggleEn") : t("action.languageToggleZh");
     }
     const texts = [
-      [".connection-card h2", "connection.controller"],
+      [".connection-card h2", "connection.title"],
+      ["#wizard-open-btn", "connection.setup"],
+      [".connection-group .connection-group-label", "connection.prodGroup"],
+      [".standalone-box .connection-group-label", "connection.privateGroup"],
+      ["#standalone-start-btn", "connection.privateStart"],
+      ["#standalone-stop-btn", "connection.privateStop"],
+      [".standalone-box .bootstrap-note", "connection.privateNote"],
       [".nav-btn[data-view='mission'] .nav-label", "mission.title"],
       [".nav-btn[data-view='planning'] .nav-label", "tab.planning"],
       [".nav-btn[data-view='tasks'] .nav-label", "tab.tasks"],
@@ -3992,6 +3998,21 @@ import { createT as i18nCreateT } from "./i18n.js";
   setSummaryLine(t("connection.noSummary"));
   setConnectionPill("disconnected", t("connection.disconnected"));
   setupGithubCorner();
+  // S2: connection card - wizard entry + private instance stop button.
+  {
+    const wizBtn = document.getElementById('wizard-open-btn');
+    if (wizBtn) wizBtn.addEventListener('click', () => {
+      state.unavailableScreenVisible = true;
+      renderUnavailableScreen();
+      wizardGoStep(1);
+    });
+    const stopBtn = document.getElementById('standalone-stop-btn');
+    if (stopBtn) stopBtn.addEventListener('click', async () => {
+      stopBtn.disabled = true;
+      try { await desktop.standaloneStop(); } catch { /* ipc gone */ }
+      stopBtn.disabled = false;
+    });
+  }
   bindTeamAutoControls();
   // Bootstrap: artifact source reveals the URL input (fixed GitHub release by default).
   {
@@ -4012,6 +4033,8 @@ import { createT as i18nCreateT } from "./i18n.js";
         if (pill) pill.textContent = st.running ? 'Running :' + st.port : 'Stopped';
         if (startBtn) startBtn.hidden = st.running;
         if (connectBtn) connectBtn.hidden = !st.running;
+        const stopBtn2 = document.getElementById('standalone-stop-btn');
+        if (stopBtn2) stopBtn2.hidden = !st.running;
         if (connectBtn) connectBtn.dataset.url = st.controllerUrl || '';
       } catch { /* ipc gone */ }
     };

@@ -1611,3 +1611,7 @@ textarea { padding: 14px 16px; min-height: 188px; resize: vertical; line-height:
 .wizard-advanced { margin-top: 10px; }
 .wizard-advanced summary { cursor: pointer; font-size: 12px; color: var(--muted, #a8a49a); user-select: none; }
 .wizard-advanced[open] summary { margin-bottom: 8px; }
+
+/* Connection card groups (S2): production connect vs private instance */
+.connection-group { margin-bottom: 10px; }
+.connection-group-label { font-size: 11.5px; font-weight: 600; color: var(--muted, #a8a49a); margin-bottom: 5px; letter-spacing: .3px; }
