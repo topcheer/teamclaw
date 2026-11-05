@@ -1,0 +1,40 @@
+name: Runtime tar (runtime-latest)
+
+# Rolling fixed-URL artifact: the release tag `runtime-latest` never moves;
+# every push to main (and manual dispatch) rebuilds and REPLACES the tar
+# assets on that release. Desktop "artifact" installs pin this URL:
+#   https://github.com/topcheer/teamclaw/releases/download/runtime-latest/teamclaw-runtime-<plat>.tar.gz
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: runtime-latest
+  cancel-in-progress: true
+
+jobs:
+  build-tars:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - { os: macos-latest, plat: darwin-arm64 }
+          - { os: macos-13, plat: darwin-x64 }
+          - { os: ubuntu-latest, plat: linux-x64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Build runtime tar
+        run: node scripts/build-runtime-tar.mjs dist-runtime
+      - name: Replace asset on runtime-latest release
+        run: |
+          gh release delete runtime-latest --cleanup-tag --yes 2>/dev/null || true
+          gh release create runtime-latest dist-runtime/teamclaw-runtime-${{ matrix.plat }}.tar.gz*              --title "Runtime bundle (rolling)" --notes "Auto-replaced on every main push. Fixed URL by design."              --prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
