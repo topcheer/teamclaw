@@ -259,24 +259,49 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
   // below fails with ENOENT.
   await fs.mkdir(runtimeDir, { recursive: true });
   const pluginDir = path.join(runtimeDir, "node_modules", "@teamclaws", "teamclaw");
-  const res = await runShellCommand(`"${openclawBin}" plugins list 2>/dev/null || true`, { cwd: runtimeDir, env: sandboxEnv });
-  // Precise: match the plugins-list TABLE row (│ TeamClaw │), not any
-  // teamclaw substring - the stock-extensions path line also contains it.
-  if (/│\s*TeamClaw\s*│/.test(res.stdout || "")) {
+  const res = await runShellCommand(`"${openclawBin}" plugins list --json 2>/dev/null || true`, { cwd: runtimeDir, env: sandboxEnv });
+  // Precise: match on the plugin ROW (id === "teamclaw"), not any teamclaw
+  // substring - the stock-extensions path line also contains it. A row in
+  // error-state is NOT "installed": the copying file: install (#147) left
+  // deps missing, so fall through and re-register from the bundled tree.
+  let existingRow = null;
+  try {
+    existingRow = (JSON.parse(res.stdout || "").plugins || []).find((p) => p && p.id === "teamclaw") || null;
+  } catch { existingRow = null; }
+  if (existingRow && existingRow.status !== "error") {
     onEvent({ phase: "teamclaw", line: "TeamClaw plugin already installed." });
     return;
   }
-  // Fully-offline registration when a bundled tree exists: install the
+  // Fully-offline registration when a bundled tree exists: LINK the
   // plugin from the EMBEDDED runtime tree (same tar shape) - no npm, no
-  // network. Only falls back to npm when the bundle is absent.
+  // network, no copy. A copy install ("file:<dir>" / plain path) breaks on
+  // this tree shape: the runtime tar hoists most plugin deps to the tree
+  // root (runtime/node_modules/<dep>), while only version-conflicted deps
+  // stay nested under @teamclaws/teamclaw/node_modules. The copy carries
+  // just the nested set, so the dependency scan finds @sinclair/typebox,
+  // bonjour-service and json5 missing and the plugin lands error-state
+  // after enable (#147). A linked install keeps loading from the bundled
+  // tree, where Node resolves every hoisted dep one directory up.
   const bundledOpenclaw = bundledBinary("openclaw");
   const bundledPlugin = bundledOpenclaw
     ? path.join(BUNDLED_BIN_DIR(), "runtime", "node_modules", "@teamclaws", "teamclaw")
     : null;
+  // Older installs registered via a COPYING file: install and now sit in
+  // error-state with a broken extensions/teamclaw copy. Fresh installs
+  // (either path) refuse to replace an existing copy ("plugin already
+  // exists ... delete it first"), so clear it first: uninstall removes the
+  // record + directory. Runs for BOTH the bundled and npm paths.
+  if (existingRow) {
+    onEvent({ phase: "teamclaw", line: "Replacing the broken (error-state) plugin registration..." });
+    await runShellCommand(`"${openclawBin}" plugins uninstall teamclaw --force`, { cwd: runtimeDir, env: sandboxEnv });
+  }
   if (bundledPlugin && fsSync.existsSync(bundledPlugin)) {
     onEvent({ phase: "teamclaw", line: "Registering the bundled TeamClaw plugin (offline)..." });
-    await runShellStream(`"${openclawBin}" plugins install "${bundledPlugin}" --force --accept-capabilities`, runtimeDir, (line) =>
+    await runShellStream(`"${openclawBin}" plugins install --link "${bundledPlugin}" --force --accept-capabilities`, runtimeDir, (line) =>
       onEvent({ phase: "teamclaw", line }), sandboxEnv);
+    // Uninstall (repair path) drops the enable state; install --link does
+    // not always restore it. Enable explicitly - idempotent either way.
+    await runShellCommand(`"${openclawBin}" plugins enable teamclaw`, { cwd: runtimeDir, env: sandboxEnv });
     return;
   }
   await runShellStream(`npm install --prefix "${runtimeDir}" @teamclaws/teamclaw@latest`, runtimeDir, (line) =>
@@ -702,8 +727,11 @@ ipcMain.handle("runtime:is-ready", async () => {
     const bin = path.join(app.getPath("userData"), "runtime", "node_modules", ".bin", "openclaw");
     const cand = fsSync.existsSync(bin) ? bin : (await hasOpenClawInstalled() ? "openclaw" : null);
     if (cand) {
-      const res = await runShellCommand(`"${cand}" plugins list 2>/dev/null || true`, { cwd: path.join(app.getPath("userData"), "runtime"), env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } });
-      plugin = (res.stdout || "").includes("teamclaw");
+      const res = await runShellCommand(`"${cand}" plugins list --json 2>/dev/null || true`, { cwd: path.join(app.getPath("userData"), "runtime"), env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } });
+      // Registered is not enough: an error-state row means the plugin fails
+      // to load (#147) - only a non-error row counts as ready.
+      const row = (JSON.parse(res.stdout || "").plugins || []).find((p) => p && p.id === "teamclaw");
+      plugin = Boolean(row && row.status !== "error");
     }
   } catch { /* no runtime */ }
   return { ready: llm && plugin, llm, plugin };

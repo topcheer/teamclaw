@@ -327,6 +327,42 @@ assert.match(
 );
 
 assert.match(
+  desktopMainSource,
+  /plugins list --json[\s\S]*existingRow = \(JSON\.parse\(res\.stdout \|\| ""\)\.plugins \|\| \[\]\)\.find\(\(p\) => p && p\.id === "teamclaw"\) \|\| null/,
+  "desktop bundled plugin registration should parse the plugins-list JSON row instead of substring-matching table output",
+);
+
+assert.match(
+  desktopMainSource,
+  /if \(existingRow && existingRow\.status !== "error"\) \{[\s\S]*TeamClaw plugin already installed/,
+  "desktop main process should treat an error-state TeamClaw row as not-installed so the broken copy install gets repaired instead of skipped",
+);
+
+assert.doesNotMatch(
+  desktopMainSource,
+  /plugins install "\$\{bundledPlugin\}"/,
+  "desktop bundled plugin registration must not copy-install from the bundled tree (copy loses hoisted deps and lands error-state after enable, #147)",
+);
+
+assert.match(
+  desktopMainSource,
+  /if \(existingRow\) \{[\s\S]*plugins uninstall teamclaw --force[\s\S]*plugins install --link "\$\{bundledPlugin\}" --force --accept-capabilities/,
+  "desktop main process should clear a broken copy install before link-installing the bundled tree (link refuses to replace an existing extensions dir)",
+);
+
+assert.match(
+  desktopMainSource,
+  /plugins install --link "\$\{bundledPlugin\}" --force --accept-capabilities[\s\S]*plugins enable teamclaw/,
+  "desktop bundled registration should explicitly enable teamclaw after link-install because uninstall drops the enable state",
+);
+
+assert.match(
+  desktopMainSource,
+  /ipcMain\.handle\("runtime:is-ready"[\s\S]*plugins list --json[\s\S]*row && row\.status !== "error"/,
+  "desktop readiness probe should only count a non-error TeamClaw row as ready so the wizard does not stall on an error-state plugin",
+);
+
+assert.match(
   desktopRendererSource,
   /function canOpenProjectInFinder\(\) \{[\s\S]*isLoopbackControllerUrl\(state\.controllerUrl\)[\s\S]*async function openProjectInFinder\(projectDir, sourceLabel\) \{[\s\S]*\/workspace\/project-path\?projectDir=\$\{encodeURIComponent\(projectDir\)\}[\s\S]*desktop\.openPath\(data\.absolutePath \|\| ""\)/,
   "desktop renderer should only offer Finder opening for local controllers and resolve the project path via the controller before opening it",
