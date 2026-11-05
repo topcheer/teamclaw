@@ -262,6 +262,20 @@ import { createT as i18nCreateT } from "./i18n.js";
     return "neutral";
   }
 
+  // Worker display label: the full provisioned-developer-xxxx machine id
+  // never renders raw. With a role, show a role chip + short id tail; the
+  // full id stays available via title attr.
+  function renderWorkerLabel(task, { chip = false } = {}) {
+    const id = task?.assignedWorkerId || "";
+    const role = task?.assignedRole || "";
+    const short = id ? id.replace(/^provisioned-/, "").slice(0, 14) : "";
+    const title = id || role;
+    if (chip && role) return renderRoleChip(role);
+    if (role) return `<span title="${escapeHtml(title)}">${escapeHtml(humanize(role))}${short ? " · " + escapeHtml(short) : ""}</span>`;
+    if (short) return `<span title="${escapeHtml(title)}">${escapeHtml(short)}</span>`;
+    return "";
+  }
+
   function renderRoleChip(role) {
     return `<span class="role-chip tone-${escapeHtml(roleTone(role))}">${escapeHtml(humanize(role || "role"))}</span>`;
   }
@@ -1985,7 +1999,7 @@ import { createT as i18nCreateT } from "./i18n.js";
   }
 
   function buildTaskLiveMeta(task) {
-    return [humanize(task.status || "unknown"), task.assignedWorkerId, formatTime(task.updatedAt)].filter(Boolean).join(" • ");
+    return [humanize(task.status || "unknown"), renderWorkerLabel(task), formatTime(task.updatedAt)].filter(Boolean).join(" • ");
   }
 
   function applyLiveTaskUpdate(task) {
@@ -2181,7 +2195,7 @@ import { createT as i18nCreateT } from "./i18n.js";
       roleEl.innerHTML = task.assignedRole ? renderRoleChip(task.assignedRole) : `<span class="mini-pill">${escapeHtml(t("task.auto"))}</span>`;
     }
     if (pillRowEl) {
-      pillRowEl.innerHTML = [task.priority, task.assignedWorkerId].filter(Boolean).map((v) => `<span class="mini-pill">${escapeHtml(v)}</span>`).join("");
+      pillRowEl.innerHTML = [task.priority, task.assignedWorkerId ? renderWorkerLabel(task) : null].filter(Boolean).map((v) => `<span class="mini-pill">${v}</span>`).join("");
     }
 
     if (state.selectedTaskDetailTab === "timeline" && state.taskTimelineAutoFollow) {
@@ -2198,7 +2212,7 @@ import { createT as i18nCreateT } from "./i18n.js";
       `<section class="detail-block task-hero task-detail-header">` +
       `<div class="detail-kicker">${escapeHtml(t("task.title"))}</div>` +
       `<div class="list-headline"><div class="detail-title" data-task-detail-title>${escapeHtml(task.title || task.id || t("task.title"))}</div><div data-task-hero-status>${renderStatusTag(task.status || "unknown")}</div></div>` +
-      `<div class="task-meta-row"><div data-task-detail-role>${task.assignedRole ? renderRoleChip(task.assignedRole) : `<span class="mini-pill">${escapeHtml(t("task.auto"))}</span>`}</div><div class="pill-row" data-task-detail-pills>${[task.priority, task.assignedWorkerId].filter(Boolean).map((v) => `<span class="mini-pill">${escapeHtml(v)}</span>`).join("")}</div></div>` +
+      `<div class="task-meta-row"><div data-task-detail-role>${task.assignedRole ? renderRoleChip(task.assignedRole) : `<span class="mini-pill">${escapeHtml(t("task.auto"))}</span>`}</div><div class="pill-row" data-task-detail-pills>${[task.priority, task.assignedWorkerId ? renderWorkerLabel(task) : null].filter(Boolean).map((v) => `<span class="mini-pill">${v}</span>`).join("")}</div></div>` +
       `<div class="detail-subtitle" data-task-live-meta>${escapeHtml(buildTaskLiveMeta(task))}</div>` +
       `<div class="row-actions">` +
       `<button class="btn" type="button" data-delete-task="${escapeHtml(task.id || "")}">Delete task</button>` +
@@ -2458,7 +2472,7 @@ import { createT as i18nCreateT } from "./i18n.js";
             `<div class="task-group-title">${escapeHtml(group.title || t("task.groupProject"))}</div>` +
             group.tasks.map((task) => {
               const selected = task.id === state.selectedTaskId ? " active" : "";
-              const meta = [task.assignedRole, task.assignedWorkerId, formatTime(task.updatedAt || task.createdAt)].filter(Boolean).join(" • ");
+              const meta = [renderWorkerLabel(task), formatTime(task.updatedAt || task.createdAt)].filter(Boolean).join(" • ");
               return (
                 `<button type="button" class="list-item task-list-item${selected}" data-task-id="${escapeHtml(task.id)}">` +
                 `<div class="compact-list-row">` +
@@ -2876,7 +2890,7 @@ import { createT as i18nCreateT } from "./i18n.js";
           category: status === "completed" ? "delivery" : ((status === "blocked" || status === "failed") ? "attention" : "active"),
           title: task.title || `Task ${task.id || ""}`,
           body: summary,
-          meta: [task.assignedRole, task.assignedWorkerId].filter(Boolean).join(" • "),
+          meta: [renderWorkerLabel(task)].filter(Boolean).join(" • "),
           actions: notificationActionsForTask(task.id || ""),
           desktopAlert: false,
           updatedAt: task.updatedAt || task.completedAt || task.createdAt,
@@ -3003,7 +3017,7 @@ import { createT as i18nCreateT } from "./i18n.js";
           category: status === "completed" ? "delivery" : ((status === "blocked" || status === "failed") ? "attention" : "active"),
           title: task.title || `Task ${task.id || ""}`,
           body: status === "completed" ? "Completed and ready for review." : `Now ${status || "updated"}.`,
-          meta: [task.assignedRole, task.assignedWorkerId].filter(Boolean).join(" • "),
+          meta: [renderWorkerLabel(task)].filter(Boolean).join(" • "),
           actions: notificationActionsForTask(task.id || task.taskId || ""),
           desktopAlert: status === "completed" || status === "blocked" || status === "failed",
         });
