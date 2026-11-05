@@ -44,37 +44,34 @@
       <section id="connection-card" class="panel connection-card">
         <div class="section-head compact">
           <div>
-            <h2>Controller</h2>
+            <h2 data-i18n="connection.title">连接</h2>
             <div id="connection-summary" class="detail-subtitle">Not connected</div>
           </div>
           <div class="head-actions">
             <div id="connection-pill" class="pill pill-disconnected" title="">Disconnected</div>
+            <button id="wizard-open-btn" class="btn btn-small" type="button" data-i18n="connection.setup">设置向导</button>
           </div>
         </div>
         <div id="connection-body" class="connection-body">
-          <input id="controller-url" class="compact-input" type="text" placeholder="http://127.0.0.1:9527">
-          <div class="row-actions">
-            <button id="connect-btn" class="btn btn-primary" type="button">Connect</button>
-            <button id="refresh-btn" class="btn" type="button">Refresh</button>
+          <div class="connection-group">
+            <div class="connection-group-label" data-i18n="connection.prodGroup">连接已有服务</div>
+            <input id="controller-url" class="compact-input" type="text" placeholder="http://127.0.0.1:9527">
+            <div class="row-actions">
+              <button id="connect-btn" class="btn btn-primary" type="button" data-i18n="connection.connect">连接</button>
+              <button id="refresh-btn" class="btn" type="button" data-i18n="connection.refresh">刷新</button>
+            </div>
           </div>
           <div class="standalone-box">
             <div class="standalone-head">
-              <span class="bootstrap-label">Standalone instance (isolated)</span>
+              <span class="connection-group-label" data-i18n="connection.privateGroup">私有本地实例</span>
               <div id="standalone-pill" class="pill pill-stopped">Stopped</div>
             </div>
             <div class="standalone-row">
-              <select id="standalone-vendor" class="compact-input" title="LLM provider (defaults to your current OpenClaw config)">
-                <option value="">Use current OpenClaw config</option>
-                <option value="anthropic">Anthropic</option>
-                <option value="openai">OpenAI</option>
-                <option value="openrouter">OpenRouter</option>
-                <option value="zai">Z.ai</option>
-                <option value="deepseek">DeepSeek</option>
-              </select>
-              <button id="standalone-start-btn" class="btn btn-primary" type="button">Start</button>
+              <button id="standalone-start-btn" class="btn btn-primary" type="button" data-i18n="connection.privateStart">启动 / 初始化</button>
               <button id="standalone-connect-btn" class="btn" type="button" hidden>Use this</button>
+              <button id="standalone-stop-btn" class="btn" type="button" hidden data-i18n="connection.privateStop">停止</button>
             </div>
-            <div class="bootstrap-note">Own state dir, own port, dies with this app - your existing OpenClaw install is never touched.</div>
+            <div class="bootstrap-note" data-i18n="connection.privateNote">独立目录与端口，不触碰你机器上已有的 OpenClaw。</div>
           </div>
         </div>
       </section>
