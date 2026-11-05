@@ -275,8 +275,36 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
     : null;
   if (bundledPlugin && fsSync.existsSync(bundledPlugin)) {
     onEvent({ phase: "teamclaw", line: "Registering the bundled TeamClaw plugin (offline)..." });
-    await runShellStream(`"${openclawBin}" plugins install "${bundledPlugin}" --force --accept-capabilities`, runtimeDir, (line) =>
+    await runShellStream(`"${openclawBin}" plugins install "file:${bundledPlugin}" --force --accept-capabilities`, runtimeDir, (line) =>
       onEvent({ phase: "teamclaw", line }), sandboxEnv);
+    // #147: openclaw's dependency probe enforces the plugin rootDir BOUNDARY -
+    // hoisted deps (npm layout in the runtime tree) resolve OUTSIDE it and
+    // the plugin lands error-state "required dependencies are missing".
+    // Seal the runtime tree's node_modules INTO the installed plugin dir
+    // (pure file copy, zero network). Symlinks copied verbatim; the .bin
+    // entries in the plugin subtree were already materialized at bundle time.
+    const extRoot = path.join(sandboxEnv.OPENCLAW_STATE_DIR, "extensions", "teamclaw");
+    const extDeps = path.join(extRoot, "node_modules");
+    if (fsSync.existsSync(extRoot)) {
+      // Precise seal: the plugin's own declared dependencies only (5 pkgs,
+      // incl. the openclaw peer) - copied one-by-one from the bundled tree so
+      // a single bad entry can never abort the whole copy (#147: whole-tree
+      // cp died silently after ~10 entries; the boundary probe needs deps
+      // INSIDE the plugin rootDir, hoisted layout does not satisfy it).
+      const manifest = JSON.parse(await fs.readFile(path.join(extRoot, "package.json"), "utf8"));
+      const wanted = Object.keys(manifest.dependencies || {});
+      const runtimeNM = path.join(BUNDLED_BIN_DIR(), "runtime", "node_modules");
+      onEvent({ phase: "teamclaw", line: `Sealing ${wanted.length} offline deps into the plugin dir...` });
+      for (const name of wanted) {
+        const src = path.join(runtimeNM, ...name.split("/"));
+        const dst = path.join(extDeps, ...name.split("/"));
+        if (!fsSync.existsSync(src)) { onEvent({ phase: "teamclaw", line: `dep ${name}: absent in bundle, skipped` }); continue; }
+        if (fsSync.existsSync(dst)) continue;
+        await fs.cp(src, dst, { recursive: true, verbatimSymlinks: true, force: true }).catch((e) => {
+          onEvent({ phase: "teamclaw", line: `dep ${name}: ${e.message}` });
+        });
+      }
+    }
     return;
   }
   await runShellStream(`npm install --prefix "${runtimeDir}" @teamclaws/teamclaw@latest`, runtimeDir, (line) =>
@@ -510,8 +538,12 @@ async function findFreePort() {
 }
 
 async function standaloneBinary() {
-  // Prefer the desktop sandbox runtime; fall back to the user-installed
-  // openclaw (executed read-only - we never modify its installation).
+  // Same resolution order as the installer (bundled > sandbox runtime >
+  // global read-only). A bundled install wrote the sandbox state with the
+  // bundled (newer) openclaw - running the OLDER global binary against it
+  // is refused by the gateway ("older than the config last written by").
+  const bundled = bundledBinary("openclaw");
+  if (bundled) return bundled;
   const sandboxBin = path.join(app.getPath("userData"), "runtime", "node_modules", ".bin", "openclaw");
   if (fsSync.existsSync(sandboxBin)) return sandboxBin;
   if (await hasOpenClawInstalled()) return "openclaw";
@@ -699,8 +731,15 @@ ipcMain.handle("runtime:is-ready", async () => {
     llm = Object.values(cfg?.models?.providers || {}).some((p) => p && p.apiKey);
   } catch { /* no cfg */ }
   try {
-    const bin = path.join(app.getPath("userData"), "runtime", "node_modules", ".bin", "openclaw");
-    const cand = fsSync.existsSync(bin) ? bin : (await hasOpenClawInstalled() ? "openclaw" : null);
+    // Same resolution order as the installer: bundled real-file first, then
+    // sandbox runtime, then global. A bundled install has no sandbox runtime
+    // dir, so the old .bin-first check missed it and readiness read false.
+    const candidates = [
+      bundledBinary("openclaw"),
+      path.join(app.getPath("userData"), "runtime", "node_modules", ".bin", "openclaw"),
+      (await hasOpenClawInstalled()) ? "openclaw" : null,
+    ];
+    const cand = candidates.find(Boolean) || null;
     if (cand) {
       const res = await runShellCommand(`"${cand}" plugins list 2>/dev/null || true`, { cwd: path.join(app.getPath("userData"), "runtime"), env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } });
       plugin = (res.stdout || "").includes("teamclaw");
