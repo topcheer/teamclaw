@@ -814,18 +814,34 @@ import { createT as i18nCreateT } from "./i18n.js";
         return; // remote: 停在步骤1 等用户填 URL 连接
       }
       if (mode === "global") {
-        // Global instance: reuse pre-existing state untouched; only a fresh
-        // global goes through the LLM step.
-        const probe = await desktop.globalProbe().catch(() => null);
-        if (probe && probe.present && probe.llmConfigured) {
+        // Three cases (user spec):
+        //  a) global already HAS teamclaw  -> just connect & remember
+        //  b) global openclaw, no teamclaw -> install INTO it (backup first)
+        //  c) no openclaw at all           -> full install, LLM step first
+        const env = state.envDetect || (await desktop.envDetect().catch(() => null));
+        const log = document.getElementById("bootstrap-log");
+        if (env && env.openclaw && env.teamclawInGlobal) {
           wizardGoStep(3);
-          const r = await desktop.instanceStartGlobal().catch((e) => ({ error: String(e && e.message || e) }));
-          const log = document.getElementById("bootstrap-log");
-          if (log) log.textContent = "[global] Reusing existing OpenClaw state (LLM untouched).\n" + JSON.stringify(r);
-          await desktop.instanceSet({ mode: "global", controllerUrl: null, llmConfigured: true }).catch(() => {});
+          if (log) log.textContent = "[global] TeamClaw already present in the global instance.\n";
+          const url = env.globalControllerUrl || "http://127.0.0.1:9527";
+          await desktop.instanceSet({ mode: "global", controllerUrl: url, llmConfigured: true }).catch(() => {});
+          await connectController(url, { skipConversation: true }).catch(() => {});
+          unveilShell();
           return;
         }
-        wizardGoStep(2); // fresh global: LLM step, then start-global
+        if (env && env.openclaw && !env.teamclawInGlobal) {
+          wizardGoStep(3);
+          try {
+            const r = await desktop.instanceInstallIntoGlobal();
+            await desktop.instanceSet({ mode: "global", controllerUrl: r.controllerUrl, llmConfigured: true }).catch(() => {});
+            await connectController(r.controllerUrl, { skipConversation: true }).catch(() => {});
+            unveilShell();
+          } catch (e) {
+            if (log) log.textContent += "[error] " + (e && e.message) + "\n";
+          }
+          return;
+        }
+        wizardGoStep(2); // case c: fresh global -> LLM step, then start-global
         return;
       }
       wizardGoStep(2); // private (default)
@@ -3361,9 +3377,17 @@ import { createT as i18nCreateT } from "./i18n.js";
   async function connectSavedController() {
     state.settings = await desktop.getSettings();
     state.localSetupInfo = await desktop.getLocalSetupInfo();
-    const defaultUrl = state.settings.controllerUrl || 'http://127.0.0.1:9527';
+    // No implicit localhost fallback: connecting somewhere the user never
+    // chose (a host production controller on 9527) is worse than showing the
+    // setup screen. Only an explicitly saved URL is used here.
+    const defaultUrl = state.settings.controllerUrl || '';
     $('#controller-url').value = defaultUrl;
     state.controllerUrl = defaultUrl;
+    if (!defaultUrl) {
+      renderChrome();
+      renderUnavailableScreen();
+      return;
+    }
     state.localSetupMode = 'controller-manual';
     if (state.localSetupInfo && Array.isArray(state.localSetupInfo.modes)) {
       const preferredMode = state.localSetupInfo.modes.find((entry) => entry.recommended) || state.localSetupInfo.modes[0];
@@ -3551,7 +3575,7 @@ import { createT as i18nCreateT } from "./i18n.js";
         // start the private instance, wait for the controller announce, connect
         // - and open the dashboard in the browser like a running install does.
         try {
-          const st = await desktop.standaloneStart({}).catch(() => null);
+          const st = await desktop.standaloneStart({}, inst || null).catch(() => null);
           if (st && st.controllerUrl) {
             let ok = false;
             for (let i = 0; i < 45 && !ok; i++) {
@@ -3559,7 +3583,7 @@ import { createT as i18nCreateT } from "./i18n.js";
               if (!ok) await new Promise((w) => setTimeout(w, 1500));
             }
             if (ok) {
-              await desktop.instanceSet({ mode: "private", lifecycle: "app", controllerUrl: st.controllerUrl, llmConfigured: true }).catch(() => {});
+              await desktop.instanceSet({ mode: "private", lifecycle: (inst && inst.lifecycle) || "app", controllerUrl: st.controllerUrl, gatewayPort: st.port || null, controllerPort: st.controllerPort || null, llmConfigured: true }).catch(() => {});
               await connectController(st.controllerUrl, { skipConversation: true }).catch(() => {});
               // Desktop private instance intentionally does NOT open the
               // web UI in a browser - the desktop app IS the UI (user ruling).
@@ -4092,7 +4116,7 @@ import { createT as i18nCreateT } from "./i18n.js";
         const r = await desktop.runtimeIsReady();
       if (r && r.ready) {
         bootShell("boot.startingInstance");
-        const st = await desktop.standaloneStart({}).catch(() => null);
+        const st = await desktop.standaloneStart({}, inst || null).catch(() => null);
         if (st && st.controllerUrl) {
           // Gateway just spawned: poll until the controller answers (<=30s),
           // then connect. Transient failures retry inside the window.
@@ -4103,7 +4127,7 @@ import { createT as i18nCreateT } from "./i18n.js";
           }
           if (ok) {
             await connectController(st.controllerUrl, { skipConversation: true }).catch(() => {});
-            await desktop.instanceSet({ mode: "private", lifecycle: "app", controllerUrl: st.controllerUrl, llmConfigured: true }).catch(() => {});
+            await desktop.instanceSet({ mode: "private", lifecycle: (inst && inst.lifecycle) || "app", controllerUrl: st.controllerUrl, gatewayPort: st.port || null, controllerPort: st.controllerPort || null, llmConfigured: true }).catch(() => {});
             unveilShell();
             return;
           }
@@ -4112,9 +4136,30 @@ import { createT as i18nCreateT } from "./i18n.js";
       }
     } catch { unveilShell(); }
     }
-    // No usable instance record -> wizard.
+    // No usable instance record -> wizard, with the DEFAULT option chosen
+    // from a read-only environment probe (user spec):
+    //   global openclaw + teamclaw -> connect existing (option 3 selected)
+    //   openclaw only              -> install into it (global) by default
+    //   neither                    -> full global install by default
     state.unavailableScreenVisible = true;
     renderUnavailableScreen();
+    try {
+      const env = await desktop.envDetect();
+      state.envDetect = env;
+      const pick = (mode) => {
+        const el = document.querySelector(`input[name="bootstrap-mode"][data-bootstrap-mode="${mode}"]`);
+        if (el) { el.checked = true; el.dispatchEvent(new Event("change")); }
+      };
+      if (env.openclaw && env.teamclawInGlobal) {
+        pick("remote");
+        const urlEl = document.getElementById("bootstrap-controller-url");
+        if (urlEl && env.globalControllerUrl) urlEl.value = env.globalControllerUrl;
+      } else if (env.openclaw) {
+        pick("global"); // install into the existing global instance
+      } else {
+        pick("global"); // full global install is the default path
+      }
+    } catch { /* keep defaults */ }
     wizardGoStep(1);
   })();
   bindWizardControls();

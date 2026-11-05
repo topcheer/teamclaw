@@ -10,8 +10,10 @@ contextBridge.exposeInMainWorld("teamclawDesktop", {
   instanceGet: () => ipcRenderer.invoke("instance:get"),
   instanceSet: (instance) => ipcRenderer.invoke("instance:set", instance),
   globalProbe: () => ipcRenderer.invoke("global:probe"),
+  envDetect: () => ipcRenderer.invoke("env:detect"),
+  instanceInstallIntoGlobal: () => ipcRenderer.invoke("instance:install-into-global"),
   instanceStartGlobal: () => ipcRenderer.invoke("instance:start-global"),
-  standaloneStart: (options) => ipcRenderer.invoke("standalone:start", options),
+  standaloneStart: (options, instance) => ipcRenderer.invoke("standalone:start", { ...(options || {}), instance: instance || null }),
   standaloneStop: () => ipcRenderer.invoke("standalone:stop"),
   standaloneStatus: () => ipcRenderer.invoke("standalone:status"),
   onBootstrapEvent: (cb) => {
