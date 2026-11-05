@@ -291,19 +291,29 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
       // a single bad entry can never abort the whole copy (#147: whole-tree
       // cp died silently after ~10 entries; the boundary probe needs deps
       // INSIDE the plugin rootDir, hoisted layout does not satisfy it).
-      const manifest = JSON.parse(await fs.readFile(path.join(extRoot, "package.json"), "utf8"));
-      const wanted = Object.keys(manifest.dependencies || {});
+      // Seal ALL real package dirs from the bundled tree (not just direct
+      // deps): the plugin loads its transitive dependencies at runtime
+      // (fast-deep-equal etc.) and openclaw refuses the load on ANY missing
+      // one. Per-package try/catch: a single dangling entry must not abort
+      // the rest (whole-tree cp died that way).
       const runtimeNM = path.join(BUNDLED_BIN_DIR(), "runtime", "node_modules");
-      onEvent({ phase: "teamclaw", line: `Sealing ${wanted.length} offline deps into the plugin dir...` });
-      for (const name of wanted) {
-        const src = path.join(runtimeNM, ...name.split("/"));
-        const dst = path.join(extDeps, ...name.split("/"));
-        if (!fsSync.existsSync(src)) { onEvent({ phase: "teamclaw", line: `dep ${name}: absent in bundle, skipped` }); continue; }
-        if (fsSync.existsSync(dst)) continue;
-        await fs.cp(src, dst, { recursive: true, verbatimSymlinks: true, force: true }).catch((e) => {
-          onEvent({ phase: "teamclaw", line: `dep ${name}: ${e.message}` });
-        });
-      }
+      let sealed = 0, skipped = 0;
+      const sealDir = async (dir) => {
+        for (const entry of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+          if (entry.name === ".bin" || entry.name === ".package-lock.json") continue;
+          const src = path.join(dir, entry.name);
+          if (entry.isDirectory() && entry.name.startsWith("@")) { await sealDir(src); continue; }
+          if (!entry.isDirectory()) continue;
+          const hasManifest = fsSync.existsSync(path.join(src, "package.json"));
+          if (!hasManifest) continue;
+          const dst = path.join(extDeps, path.relative(runtimeNM, src));
+          if (fsSync.existsSync(dst)) { continue; }
+          await fs.cp(src, dst, { recursive: true, verbatimSymlinks: true, force: true }).then(() => { sealed++; }, () => { skipped++; });
+        }
+      };
+      onEvent({ phase: "teamclaw", line: "Sealing offline deps (full closure) into the plugin dir..." });
+      await sealDir(runtimeNM);
+      onEvent({ phase: "teamclaw", line: `Deps sealed: ${sealed} packages (${skipped} skipped).` });
     }
     return;
   }
@@ -740,10 +750,11 @@ ipcMain.handle("runtime:is-ready", async () => {
       (await hasOpenClawInstalled()) ? "openclaw" : null,
     ];
     const cand = candidates.find(Boolean) || null;
-    if (cand) {
-      const res = await runShellCommand(`"${cand}" plugins list 2>/dev/null || true`, { cwd: path.join(app.getPath("userData"), "runtime"), env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } });
-      plugin = (res.stdout || "").includes("teamclaw");
-    }
+    // File-based probe (no CLI): after a bundled install the sealed tree is
+    // 300+ packages and `plugins list` takes tens of seconds - it stalled the
+    // readiness gate entirely. The installed-plugin marker on disk is
+    // equivalent and instant.
+    plugin = fsSync.existsSync(path.join(stateDir, "extensions", "teamclaw", "dist", "index.js"));
   } catch { /* no runtime */ }
   return { ready: llm && plugin, llm, plugin };
 });
