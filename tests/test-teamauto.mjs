@@ -20,6 +20,7 @@ const uiHtmlPath = path.join(projectRoot, "src", "src", "ui", "index.html");
 const uiAppSrcPath = path.join(projectRoot, "src", "src", "ui", "app.js");
 const desktopHtmlPath = path.join(projectRoot, "desktop", "renderer", "index.html");
 const desktopAppPath = path.join(projectRoot, "desktop", "renderer", "app.js");
+const desktopI18nPath = path.join(projectRoot, "desktop", "renderer", "i18n.js");
 
 async function sourceContracts() {
   const [scheduler, scanner, store, client, sync, norms, httpServer, service, page, uiHtml, desktopHtml, desktopApp, uiAppSrc] = await Promise.all([
@@ -129,7 +130,14 @@ async function sourceContracts() {
   for (const src of [desktopApp, uiAppSrc]) {
     const isDesktop = src === desktopApp;
     assert.match(src, isDesktop ? /taRunBindWithOverlay/ : /teamAutoBindWithOverlay/, "bind click must drive the stage overlay");
-    assert.match(src, /bindStageVerify/, "stage labels must be localized");
+    if (isDesktop) {
+      // #145 extracted desktop TRANSLATIONS to renderer/i18n.js - the
+      // localized stage labels live there now, not in app.js.
+      const desktopI18n = await fs.readFile(desktopI18nPath, "utf8");
+      assert.match(desktopI18n, /bindStageVerify/, "stage labels must be localized");
+    } else {
+      assert.match(src, /bindStageVerify/, "stage labels must be localized");
+    }
     assert.match(src, /provision\.status === "failed"/, "overlay must surface provision failures");
     assert.match(src, /provision\.status === "ready"/, "overlay must close on ready");
   }
