@@ -72,7 +72,8 @@
       "entitlementsInherit": "build/entitlements.mas.plist",
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
-      "provisioningProfile": "build/embedded.provisionprofile"
+      "provisioningProfile": "build/embedded.provisionprofile",
+      "notarize": false
     }
   },
   "devDependencies": {
