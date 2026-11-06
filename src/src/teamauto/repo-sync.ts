@@ -207,10 +207,22 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     const base = await repoDir(repoId);
     const wtName = taskWorktreeDirName(repoId, taskId);
     const wtPath = path.join(path.dirname(base), path.basename(wtName));
+    const branch = taskBranchName(taskId);
     if (!(await fs.access(wtPath).then(() => true, () => false))) {
+      // Review F4: the dir is gone but a stale local branch can survive an
+      // earlier removal whose branch -D failed. Reap it when the remote tip
+      // still matches (work provably on the remote); otherwise leave it.
+      try {
+        const refs = await run(["ls-remote", "origin", `refs/heads/${branch}`], base);
+        const remoteTip = refs.split("\t")[0]?.trim() ?? "";
+        const localTip = remoteTip ? (await run(["rev-parse", branch], base).catch(() => "")).trim() : "";
+        if (remoteTip && localTip === remoteTip) {
+          await run(["branch", "-D", branch], base);
+          return { removed: true, reason: "worktree already gone; reaped stale branch (tip matches remote)" };
+        }
+      } catch { /* conservative: leave the branch */ }
       return { removed: false, reason: "already gone" };
     }
-    const branch = taskBranchName(taskId);
     try {
       const remoteRefs = await run(["ls-remote", "origin", `refs/heads/${branch}`], base);
       const remoteTip = remoteRefs.split("\t")[0]?.trim() ?? "";

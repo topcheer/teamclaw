@@ -726,7 +726,12 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           if (!repo.enabled) continue;
           const isTerminal = (taskId: string): boolean => {
             const t = deps.getTeamState()?.tasks[taskId];
-            return !t || t.status === "completed" || t.status === "failed";
+            if (t && t.status !== "completed" && t.status !== "failed") return false;
+            // Review F1: a terminal task with a pending write-back (push
+            // ok / PR failed, 20s-retry window) still needs its worktree -
+            // the retry delivers the PR from the surviving branch. Do not
+            // GC until the write-back settles (doneAt or dropped).
+            return !s.writebacks.some((w) => w.taskId === taskId && !w.doneAt);
           };
           const r = await sync.gcTaskWorktrees(repo.id, isTerminal);
           removed += r.removed.length;
