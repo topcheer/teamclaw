@@ -154,13 +154,15 @@ jobs:
           # true (DMG lane) and APPLE_API_KEY_ID set job-wide, its
           # any-but-not-all env validation aborts after the 22-min sign.
           npx electron-builder --mac mas -c.buildVersion="${MAS_BUILD_VERSION}" -c.mac.notarize=false
-          ls -l dist/mas-arm64/*.pkg dist/*.pkg 2>/dev/null || true
+          find dist -name "*.pkg" -maxdepth 2 -exec ls -l {} +
 
       - name: Locate package
         shell: bash
         working-directory: desktop
         run: |
-          PKG=$(ls dist/mas-arm64/*.pkg dist/*.pkg 2>/dev/null | head -1)
+          # find (not ls): under `set -o pipefail`, a non-matching ls pattern
+          # exits 2 and kills the pipeline before head can pick the match.
+          PKG=$(find dist -name "*.pkg" -maxdepth 2 | head -1)
           [[ -n "${PKG}" ]] || { echo "::error::no .pkg produced"; exit 1; }
           echo "PKG_PATH=${GITHUB_WORKSPACE}/desktop/${PKG}" >> "${GITHUB_ENV}"
           echo "pkg: ${PKG}"
