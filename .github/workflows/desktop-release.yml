@@ -91,10 +91,16 @@ jobs:
         working-directory: desktop
       - name: Package
         shell: bash
-        # macOS runners default to ulimit -n 256: signing the ~380-package
-        # embedded runtime exhausts file handles (EMFILE, run 42139804651).
+        # macOS runners default to soft 256 fds; signing the ~380-package
+        # embedded runtime exhausts handles (EMFILE twice: runs 42139804651,
+        # 42140592255 - ulimit alone did not clear the hard limit). Raise the
+        # SYSTEM ceiling first, then the shell limit, and echo diagnostics.
         run: |
-          ulimit -n 10240 2>/dev/null || true
+          if [ "$(uname -s)" = "Darwin" ]; then
+            sudo sysctl -w kern.maxfiles=65536 kern.maxfilesperproc=65536 || true
+          fi
+          ulimit -n 65536 2>/dev/null || ulimit -n hard 2>/dev/null || true
+          echo "fd limits: soft=$(ulimit -Sn) hard=$(ulimit -Hn)"
           npx electron-builder ${{ matrix.args }}
         working-directory: desktop
         env:
