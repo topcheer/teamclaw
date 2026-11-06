@@ -75,8 +75,12 @@ jobs:
           # codesign can build the full chain to the Apple root.
           security import "${GITHUB_WORKSPACE}/desktop/scripts/certs/AppleWWDRCAG3.pem" -k "${KEYCHAIN}" -T /usr/bin/codesign
           security find-certificate -c "Apple Worldwide Developer Relations" "${KEYCHAIN}" >/dev/null || { echo "::error::WWDR G3 import failed"; exit 1; }
-          # set-partition-list avoids the GUI partition prompt on access
-          security set-key-partition-list -S apple-tool:,apple: -s -k "" "${KEYCHAIN}" >/dev/null 2>&1 || true
+          # set-partition-list MUST include codesign: in the ACL - without it
+          # codesign's key access raises a GUI authorization prompt and the
+          # headless Package step hangs forever (runs 42142275888/42150804699,
+          # both stuck pre-notarization; recipe proven in ggcode release-mas).
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "${KEYCHAIN}" >/dev/null 2>&1 || \
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k action "${KEYCHAIN}" >/dev/null 2>&1 || true
           security find-identity -v -p codesigning | grep -q "Developer ID Application" || { echo "::error::Developer ID identity not importable"; exit 1; }
           printf '%s' "${APPLE_API_KEY_P8}" | base64 -d > "${RUNNER_TEMP}/AuthKey.p8"
           {
