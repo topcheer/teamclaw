@@ -488,16 +488,32 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     // never deliver - drop them instead of accumulating forever.
     if (state0) {
       const before = s.writebacks.length;
+      const deadOnes: typeof s.writebacks = [];
       s.writebacks = s.writebacks.filter((w) => {
         if (w.doneAt) { return true; }
         const t = state0.tasks[w.taskId];
         const dead = !t || (t.status === "failed" && !t.result);
         if (dead) {
           logger.warn(`TeamAuto: dropping dead write-back ${w.taskId} (${t ? "task failed without result" : "task missing"})`);
+          deadOnes.push(w);
         }
         return !dead;
       });
       if (s.writebacks.length !== before) { await saveTeamAutoStore(s); }
+      // Live-verified gap (mw5aun1l, 2026-11-07): this drop path fires for
+      // failed-without-result tasks BEFORE the pending loop below, so the
+      // terminal worktree cleanup there never ran for them - the single
+      // largest leak source. Safety-clean here too (same contract). The
+      // filter callback cannot await, hence the post-filter pass.
+      for (const w of deadOnes) {
+        const t = state0.tasks[w.taskId];
+        if (t && t.writeMode === "write" && t.projectDir?.includes("__task-")) {
+          const r = await sync.safeRemoveTaskWorktree(w.repoId, w.taskId);
+          if (!r.removed && !r.reason.includes("already gone")) {
+            logger.warn(`TeamAuto: terminal task ${w.taskId} worktree kept: ${r.reason}`);
+          }
+        }
+      }
     }
     // Self-heal: an entry whose task later COMPLETED with a result (e.g. the
     // completion gate rejected an early submission, then a retry succeeded)
