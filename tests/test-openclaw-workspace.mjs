@@ -232,14 +232,14 @@ assert.match(
 
 assert.match(
   desktopRendererSource,
-  /function renderUnavailableScreen\([\s\S]*#bootstrap-install-command[\s\S]*bootstrap\.connectRemote/,
-  "desktop renderer should render a full-screen bootstrap experience when the local controller is unavailable",
+  /function renderUnavailableScreen\(\)[\s\S]*#bootstrap-overlay[\s\S]*data-bootstrap-install/,
+  "desktop renderer should render a full-screen bootstrap wizard when the local controller is unavailable",
 );
 
 assert.match(
-  desktopRendererSource,
-  /bootstrap-openclaw-quickstart-card[\s\S]*bootstrap-openclaw-components-card[\s\S]*classList\.toggle\("hidden", hasOpenClaw\)/,
-  "desktop renderer should hide OpenClaw install and quickstart cards once OpenClaw is already installed",
+  desktopIndexSource,
+  /id="bootstrap-source"[\s\S]*value="bundled"[\s\S]*value="official"[\s\S]*value="artifact"[\s\S]*id="bootstrap-artifact-url"/,
+  "desktop wizard should keep install-source selection (bundled/offline vs npm vs artifact) in the advanced options",
 );
 
 assert.match(
@@ -436,8 +436,8 @@ assert.match(
 
 assert.match(
   desktopRendererSource,
-  /localSetupMode: "controller-manual"[\s\S]*install --yes --install-mode controller-manual[\s\S]*state\.localSetupMode = 'controller-manual';/,
-  "desktop renderer should default the bootstrap selection and fallback install command to local quickstart",
+  /localSetupMode: "controller-manual"[\s\S]*data-bootstrap-mode[\s\S]*desktop\.bootstrapInstall\(\{ llm, source, artifactUrl \}\)/,
+  "desktop renderer should default the wizard to the private local mode and install through the sandboxed bootstrap API",
 );
 
   assert.doesNotMatch(
@@ -454,14 +454,36 @@ assert.match(
 
 assert.match(
   desktopMainSource,
-  /ipcMain\.handle\("controller:get-setup-info"[\s\S]*ipcMain\.handle\("controller:install-local"[\s\S]*ipcMain\.handle\("openclaw:install-local"/,
-  "desktop main process should expose OpenClaw detection plus one-click OpenClaw and TeamClaw install handlers",
+  /ipcMain\.handle\("bootstrap:install"[\s\S]*ensureOpenClawRuntime\(\{ source, artifactUrl \}, onEvent\)[\s\S]*ensureTeamClawPlugin\(openclawBin, onEvent\)[\s\S]*writeLlmConfig\(openclawBin, llm \|\| \{\}, onEvent\)[\s\S]*ipcMain\.handle\("controller:get-setup-info"/,
+  "desktop main process should expose setup detection plus the unified sandboxed bootstrap install handler",
+);
+
+// #150: file:-installed plugin must survive the gateway-side dependency
+// probe - the seal copies the FULL transitive closure (not just direct deps)
+// with per-package fault isolation, and readiness must NOT shell out to the
+// slow `plugins list` on a 300+-package sealed tree.
+assert.match(
+  desktopMainSource,
+  /const sealDir = async \(dir\) => \{[\s\S]*entry\.name === "\.bin" \|\| entry\.name === "\.package-lock\.json"[\s\S]*entry\.name\.startsWith\("@"\)[\s\S]*path\.relative\(runtimeNM, src\)[\s\S]*verbatimSymlinks: true, force: true \}\)\.then\(\(\) => \{ sealed\+\+; \}, \(\) => \{ skipped\+\+; \}\)/,
+  "desktop bundled install should seal the full transitive dependency closure into the extensions dir with per-package fault isolation (#150)",
+);
+
+assert.match(
+  desktopMainSource,
+  /ipcMain\.handle\("runtime:is-ready"[\s\S]*File-based probe \(no CLI\)[\s\S]*fsSync\.existsSync\(path\.join\(stateDir, "extensions", "teamclaw", "dist", "index\.js"\)\)/,
+  "desktop readiness gate should use the instant file-based installed-plugin marker instead of the slow plugins-list CLI probe (#150)",
+);
+
+assert.match(
+  desktopRendererSource,
+  /standaloneStart\(\{\}\)[\s\S]*tunnel\/status[\s\S]*instanceSet\(\{ mode: "private", lifecycle: "app"[\s\S]*connectController\(st\.controllerUrl, \{ skipConversation: true \}\)/,
+  "desktop wizard should auto-start the private instance after a successful install, wait for the controller, and connect (#150)",
 );
 
 assert.match(
   desktopPreloadSource,
-  /getLocalSetupInfo: \(\) => ipcRenderer\.invoke\("controller:get-setup-info"\),[\s\S]*installLocalTeamClaw: \(options\) => ipcRenderer\.invoke\("controller:install-local", options\),[\s\S]*installOpenClaw: \(options\) => ipcRenderer\.invoke\("openclaw:install-local", options\)/,
-  "desktop preload should expose both TeamClaw and OpenClaw setup APIs to the renderer",
+  /getLocalSetupInfo: \(\) => ipcRenderer\.invoke\("controller:get-setup-info"\),[\s\S]*bootstrapInstall: \(options\) => ipcRenderer\.invoke\("bootstrap:install", options\),[\s\S]*runtimeIsReady: \(\) => ipcRenderer\.invoke\("runtime:is-ready"\)/,
+  "desktop preload should expose the sandboxed bootstrap install, readiness, and setup-detection APIs to the renderer",
 );
 
 assert.doesNotMatch(
