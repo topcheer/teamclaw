@@ -153,7 +153,7 @@ jobs:
           # mac platform, not its own platform config) - with mac.notarize
           # true (DMG lane) and APPLE_API_KEY_ID set job-wide, its
           # any-but-not-all env validation aborts after the 22-min sign.
-          npx electron-builder --mac mas pkg -c.buildVersion="${MAS_BUILD_VERSION}" -c.mac.notarize=false
+          npx electron-builder --mac mas -c.buildVersion="${MAS_BUILD_VERSION}" -c.mac.notarize=false
           ls -l dist/*.pkg
 
       - name: Locate package
