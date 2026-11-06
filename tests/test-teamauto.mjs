@@ -20,9 +20,10 @@ const uiHtmlPath = path.join(projectRoot, "src", "src", "ui", "index.html");
 const uiAppSrcPath = path.join(projectRoot, "src", "src", "ui", "app.js");
 const desktopHtmlPath = path.join(projectRoot, "desktop", "renderer", "index.html");
 const desktopAppPath = path.join(projectRoot, "desktop", "renderer", "app.js");
+const desktopI18nPath = path.join(projectRoot, "desktop", "renderer", "i18n.js");
 
 async function sourceContracts() {
-  const [scheduler, scanner, store, client, sync, norms, httpServer, service, page, uiHtml, desktopHtml, desktopApp, uiAppSrc] = await Promise.all([
+  const [scheduler, scanner, store, client, sync, norms, httpServer, service, page, uiHtml, desktopHtml, desktopApp, desktopI18n, uiAppSrc] = await Promise.all([
     fs.readFile(schedulerSrc, "utf8"),
     fs.readFile(scannerSrc, "utf8"),
     fs.readFile(storeSrc, "utf8"),
@@ -35,6 +36,7 @@ async function sourceContracts() {
     fs.readFile(uiHtmlPath, "utf8"),
     fs.readFile(desktopHtmlPath, "utf8"),
     fs.readFile(desktopAppPath, "utf8"),
+    fs.readFile(desktopI18nPath, "utf8"),
     fs.readFile(uiAppSrcPath, "utf8"),
   ]);
 
@@ -129,7 +131,15 @@ async function sourceContracts() {
   for (const src of [desktopApp, uiAppSrc]) {
     const isDesktop = src === desktopApp;
     assert.match(src, isDesktop ? /taRunBindWithOverlay/ : /teamAutoBindWithOverlay/, "bind click must drive the stage overlay");
-    assert.match(src, /bindStageVerify/, "stage labels must be localized");
+    if (isDesktop) {
+      // Desktop localized stage labels via data-i18n + bilingual catalogs
+      // (#146-155); the literal moved from app.js into i18n.js.
+      assert.match(desktopHtml, /data-i18n="teamauto\.bindStageVerify"/, "stage labels must be localized (data-i18n)");
+      assert.match(desktopI18n, /"teamauto\.bindStageVerify": "Verifying access"/, "stage label catalog must exist (en)");
+      assert.match(desktopI18n, /"teamauto\.bindStageVerify": "验证访问权限"/, "stage label catalog must exist (zh)");
+    } else {
+      assert.match(src, /bindStageVerify/, "stage labels must be localized");
+    }
     assert.match(src, /provision\.status === "failed"/, "overlay must surface provision failures");
     assert.match(src, /provision\.status === "ready"/, "overlay must close on ready");
   }
