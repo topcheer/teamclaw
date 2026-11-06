@@ -90,7 +90,12 @@ jobs:
         run: node scripts/prepare-bundle.mjs
         working-directory: desktop
       - name: Package
-        run: npx electron-builder ${{ matrix.args }}
+        shell: bash
+        # macOS runners default to ulimit -n 256: signing the ~380-package
+        # embedded runtime exhausts file handles (EMFILE, run 42139804651).
+        run: |
+          ulimit -n 10240 2>/dev/null || true
+          npx electron-builder ${{ matrix.args }}
         working-directory: desktop
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ runner.os == 'macOS' && 'true' || 'false' }}
