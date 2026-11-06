@@ -49,7 +49,6 @@
           </div>
           <div class="head-actions">
             <div id="connection-pill" class="pill pill-disconnected" title="">Disconnected</div>
-            <button id="wizard-open-btn" class="btn btn-small" type="button" data-i18n="connection.setup">设置向导</button>
           </div>
         </div>
         <div id="connection-body" class="connection-body">
@@ -106,6 +105,7 @@
         <div class="header-actions">
           <button id="gh-corner-login" class="btn" type="button" hidden>Login</button>
           <button id="gh-corner-user" class="btn gh-corner-user" type="button" hidden title="GitHub: click to sign out"><img id="gh-corner-avatar" class="gh-corner-avatar is-hidden" alt=""><span id="gh-corner-name">-</span></button>
+          <button id="wizard-open-btn" class="btn btn-small" type="button" data-i18n="connection.setup">设置向导</button>
           <button id="compose-focus-btn" class="btn" type="button">New requirement</button>
           <button id="notice-toggle" class="btn notice-toggle" type="button">Notifications <span id="notice-badge" class="notice-badge">0</span></button>
         </div>
@@ -221,14 +221,25 @@
       <section id="view-teamauto" class="stage-view">
         <section class="panel large-card">
           <div class="section-head"><h2 id="teamauto-title">TeamAuto</h2></div>
-          <p id="teamauto-hint" class="detail-subtitle">Pick one of your GitHub repositories. TeamClaw sweeps it on its own schedule, reviews issues/PRs, takes ownership of unassigned issues, and posts results with teamclaw markers.</p>
-          <div class="teamauto-bind-row">
-            <select id="ta-repo-select" class="teamauto-select"></select>
-            <button id="ta-repos-refresh" class="btn" type="button">Refresh repos</button>
-            <input id="ta-schedule" class="teamauto-schedule-input" type="text" placeholder="*/30 * * * *" spellcheck="false" />
-            <button id="ta-bind" class="btn btn-primary" type="button">Bind</button>
+          <div class="ta-tabs" role="tablist">
+            <button class="ta-tab active" data-ta-tab="repos" type="button" data-i18n="teamauto.tabRepos">Repositories</button>
+            <button class="ta-tab" data-ta-tab="activity" type="button" data-i18n="teamauto.activity">Activity</button>
           </div>
-          <div id="ta-bind-msg" class="teamauto-msg"></div>
+          <div class="ta-tabpane active" data-ta-pane="repos">
+            <p id="teamauto-hint" class="detail-subtitle">Pick one of your GitHub repositories. TeamClaw sweeps it on its own schedule, reviews issues/PRs, takes ownership of unassigned issues, and posts results with teamclaw markers.</p>
+            <div class="teamauto-bind-row">
+              <select id="ta-repo-select" class="teamauto-select"></select>
+              <button id="ta-repos-refresh" class="btn" type="button">Refresh repos</button>
+              <input id="ta-schedule" class="teamauto-schedule-input" type="text" placeholder="*/30 * * * *" spellcheck="false" />
+              <button id="ta-bind" class="btn btn-primary" type="button">Bind</button>
+            </div>
+            <div id="ta-bind-msg" class="teamauto-msg"></div>
+            <div id="ta-repos" class="teamauto-repos"></div>
+          </div>
+          <div class="ta-tabpane" data-ta-pane="activity">
+            <h3 class="teamauto-section-title" id="ta-activity-title">Activity</h3>
+            <div id="ta-activity" class="teamauto-activity"></div>
+          </div>
           <div id="ta-bind-overlay" class="ta-bind-overlay is-hidden" role="dialog" aria-modal="true">
             <div class="ta-bind-dialog">
               <div class="ta-bind-title" id="ta-bind-overlay-title">Binding...</div>
@@ -241,15 +252,20 @@
               <button id="ta-bind-overlay-close" class="btn btn-small is-hidden" type="button" data-i18n="teamauto.close">Close</button>
             </div>
           </div>
-          <div id="ta-repos" class="teamauto-repos"></div>
-          <h3 class="teamauto-section-title" id="ta-activity-title">Activity</h3>
-          <div id="ta-activity" class="teamauto-activity"></div>
         </section>
       </section>
 
       <section id="view-controller" class="stage-view">
-        <div class="view-grid controller-grid">
-          <section class="panel detail-card">
+        <section class="panel large-card">
+          <div class="section-head"><h2>Controller</h2></div>
+          <div class="ta-tabs ctl-tabs" role="tablist">
+            <button class="ta-tab active" data-ctl-tab="models" type="button" data-i18n="ctl.tab.models">Team models</button>
+            <button class="ta-tab" data-ctl-tab="workspace" type="button" data-i18n="ctl.tab.workspace">Workspace</button>
+            <button class="ta-tab" data-ctl-tab="github" type="button" data-i18n="ctl.tab.github">GitHub</button>
+            <button class="ta-tab" data-ctl-tab="tunnel" type="button" data-i18n="ctl.tab.tunnel">Tunnel</button>
+          </div>
+          <div class="ta-tabpane active" data-ctl-pane="models">
+          <section class="detail-card ctl-card">
             <div class="section-head compact"><h2 id="ctl-models-title">Team models</h2></div>
             <p id="ctl-models-hint" class="ctl-hint">Default model applies to the controller and every role; per-role selections override it for that role.</p>
             <label class="ctl-field"><span id="ctl-default-label">Default model</span><select id="ctl-default"></select></label>
@@ -259,7 +275,9 @@
               <span id="ctl-models-result" class="ctl-result"></span>
             </div>
           </section>
-          <section class="panel detail-card">
+          </div>
+          <div class="ta-tabpane" data-ctl-pane="workspace">
+          <section class="detail-card ctl-card">
             <div class="section-head compact"><h2 id="ctl-ws-title">Workspace directory</h2></div>
             <p class="ctl-hint"><span id="ctl-ws-current-label">Current:</span> <code id="ctl-ws-path">...</code> <span id="ctl-ws-default" class="ctl-badge is-hidden">default</span></p>
             <p id="ctl-ws-hint" class="ctl-hint">Point the team workspace at any absolute path on the controller machine. Applies after a gateway restart.</p>
@@ -269,7 +287,9 @@
               <span id="ctl-ws-result" class="ctl-result"></span>
             </div>
           </section>
-          <section class="panel detail-card">
+          </div>
+          <div class="ta-tabpane" data-ctl-pane="github">
+          <section class="detail-card ctl-card">
             <div class="section-head compact"><h2 id="ctl-gh-title">GitHub login</h2></div>
             <p class="ctl-hint"><span id="ctl-gh-current-label">Current:</span> <code id="ctl-gh-account">-</code></p>
             <p id="ctl-gh-hint" class="ctl-hint">Authorizes TeamClaw to access the GitHub API on your behalf. The token is stored only on the controller machine.</p>
@@ -279,7 +299,9 @@
               <span id="ctl-gh-result" class="ctl-result"></span>
             </div>
           </section>
-          <section class="panel detail-card">
+          </div>
+          <div class="ta-tabpane" data-ctl-pane="tunnel">
+          <section class="detail-card ctl-card">
             <div class="section-head compact"><h2 id="ctl-tunnel-title">Internet tunnel</h2></div>
             <p id="ctl-tunnel-hint" class="ctl-hint">Share the local web UI at a public HTTPS URL. Visitors must enter the gate token shown below.</p>
             <div id="ctl-tunnel-state" class="ctl-tunnel-state ctl-hint">Loading…</div>
@@ -290,7 +312,8 @@
               <span id="ctl-tunnel-result" class="ctl-result"></span>
             </div>
           </section>
-        </div>
+          </div>
+        </section>
       </section>
     </main>
   </div>
@@ -330,6 +353,7 @@
 
   <div id="bootstrap-overlay" class="bootstrap-overlay hidden" aria-hidden="true">
     <section class="bootstrap-panel">
+      <button id="wizard-cancel-btn" class="bootstrap-close" type="button" data-i18n="wizard.cancel">取消</button>
       <div class="bootstrap-hero">
         <div class="bootstrap-kicker">TeamClaw Desktop</div>
         <h1 id="bootstrap-title">Let's get started</h1>

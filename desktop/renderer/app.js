@@ -109,6 +109,7 @@ import { createT as i18nCreateT } from "./i18n.js";
     const texts = [
       [".connection-card h2", "connection.title"],
       ["#wizard-open-btn", "connection.setup"],
+      ["#wizard-cancel-btn", "wizard.cancel"],
       [".connection-group .connection-group-label", "connection.prodGroup"],
       [".standalone-box .connection-group-label", "connection.privateGroup"],
       ["#standalone-start-btn", "connection.privateStart"],
@@ -125,6 +126,12 @@ import { createT as i18nCreateT } from "./i18n.js";
       ["#teamauto-hint", "teamauto.hint"],
       ["#ta-repos-refresh", "teamauto.refreshRepos"],
       ["#ta-bind", "teamauto.bind"],
+      ["[data-ta-tab='repos']", "teamauto.tabRepos"],
+      ["[data-ta-tab='activity']", "teamauto.activity"],
+      ["[data-ctl-tab='models']", "ctl.tab.models"],
+      ["[data-ctl-tab='workspace']", "ctl.tab.workspace"],
+      ["[data-ctl-tab='github']", "ctl.tab.github"],
+      ["[data-ctl-tab='tunnel']", "ctl.tab.tunnel"],
       ["#ta-activity-title", "teamauto.activity"],
       ["#ctl-models-title", "ctl.models.title"],
       ["#ctl-models-hint", "ctl.models.hint"],
@@ -814,18 +821,34 @@ import { createT as i18nCreateT } from "./i18n.js";
         return; // remote: 停在步骤1 等用户填 URL 连接
       }
       if (mode === "global") {
-        // Global instance: reuse pre-existing state untouched; only a fresh
-        // global goes through the LLM step.
-        const probe = await desktop.globalProbe().catch(() => null);
-        if (probe && probe.present && probe.llmConfigured) {
+        // Three cases (user spec):
+        //  a) global already HAS teamclaw  -> just connect & remember
+        //  b) global openclaw, no teamclaw -> install INTO it (backup first)
+        //  c) no openclaw at all           -> full install, LLM step first
+        const env = state.envDetect || (await desktop.envDetect().catch(() => null));
+        const log = document.getElementById("bootstrap-log");
+        if (env && env.openclaw && env.teamclawInGlobal) {
           wizardGoStep(3);
-          const r = await desktop.instanceStartGlobal().catch((e) => ({ error: String(e && e.message || e) }));
-          const log = document.getElementById("bootstrap-log");
-          if (log) log.textContent = "[global] Reusing existing OpenClaw state (LLM untouched).\n" + JSON.stringify(r);
-          await desktop.instanceSet({ mode: "global", controllerUrl: null, llmConfigured: true }).catch(() => {});
+          if (log) log.textContent = "[global] TeamClaw already present in the global instance.\n";
+          const url = env.globalControllerUrl || "http://127.0.0.1:9527";
+          await desktop.instanceSet({ mode: "global", controllerUrl: url, llmConfigured: true }).catch(() => {});
+          await connectController(url, { skipConversation: true }).catch(() => {});
+          unveilShell();
           return;
         }
-        wizardGoStep(2); // fresh global: LLM step, then start-global
+        if (env && env.openclaw && !env.teamclawInGlobal) {
+          wizardGoStep(3);
+          try {
+            const r = await desktop.instanceInstallIntoGlobal();
+            await desktop.instanceSet({ mode: "global", controllerUrl: r.controllerUrl, llmConfigured: true }).catch(() => {});
+            await connectController(r.controllerUrl, { skipConversation: true }).catch(() => {});
+            unveilShell();
+          } catch (e) {
+            if (log) log.textContent += "[error] " + (e && e.message) + "\n";
+          }
+          return;
+        }
+        wizardGoStep(2); // case c: fresh global -> LLM step, then start-global
         return;
       }
       wizardGoStep(2); // private (default)
@@ -1294,6 +1317,24 @@ import { createT as i18nCreateT } from "./i18n.js";
   function bindTeamAutoControls() {
     if (teamAutoBtnBound) return;
     teamAutoBtnBound = true;
+    // Sub-tabs (Repositories | Activity): plain class toggling; both panes
+    // keep rendering so switching tabs never needs a refetch.
+    document.querySelectorAll(".ta-tab[data-ta-tab]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const tab = btn.getAttribute("data-ta-tab");
+        document.querySelectorAll(".ta-tab[data-ta-tab]").forEach((b) => b.classList.toggle("active", b === btn));
+        document.querySelectorAll(".ta-tabpane[data-ta-pane]").forEach((p) => p.classList.toggle("active", p.getAttribute("data-ta-pane") === tab));
+      });
+    });
+    // Controller settings tabs (models | workspace | github | tunnel): same
+    // toggle semantics; every pane keeps rendering from its own pollers.
+    document.querySelectorAll(".ta-tab[data-ctl-tab]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const tab = btn.getAttribute("data-ctl-tab");
+        document.querySelectorAll(".ta-tab[data-ctl-tab]").forEach((b) => b.classList.toggle("active", b === btn));
+        document.querySelectorAll(".ta-tabpane[data-ctl-pane]").forEach((p) => p.classList.toggle("active", p.getAttribute("data-ctl-pane") === tab));
+      });
+    });
     const bindBtn = document.getElementById("ta-bind");
     if (bindBtn) {
       bindBtn.addEventListener("click", async () => {
@@ -2479,7 +2520,10 @@ import { createT as i18nCreateT } from "./i18n.js";
                 `${renderListIndicator(task.status || "unknown")}` +
                 `<div class="list-copy">` +
                 `<div class="list-title">${escapeHtml(task.title || task.id || t("task.title"))}</div>` +
-                `<div class="list-meta">${escapeHtml(meta || compactText(task.description, 120))}</div>` +
+              // renderWorkerLabel/formatTime return SAFE html (internally
+              // escaped) - escaping the joined string double-escapes it and
+              // leaks literal <span title=...> text into the list row.
+              `<div class="list-meta">${meta || escapeHtml(compactText(task.description, 120))}</div>` +
                 `</div>` +
                 `${renderStatusTag(task.status || "unknown")}` +
                 `</div>` +
@@ -3361,9 +3405,17 @@ import { createT as i18nCreateT } from "./i18n.js";
   async function connectSavedController() {
     state.settings = await desktop.getSettings();
     state.localSetupInfo = await desktop.getLocalSetupInfo();
-    const defaultUrl = state.settings.controllerUrl || 'http://127.0.0.1:9527';
+    // No implicit localhost fallback: connecting somewhere the user never
+    // chose (a host production controller on 9527) is worse than showing the
+    // setup screen. Only an explicitly saved URL is used here.
+    const defaultUrl = state.settings.controllerUrl || '';
     $('#controller-url').value = defaultUrl;
     state.controllerUrl = defaultUrl;
+    if (!defaultUrl) {
+      renderChrome();
+      renderUnavailableScreen();
+      return;
+    }
     state.localSetupMode = 'controller-manual';
     if (state.localSetupInfo && Array.isArray(state.localSetupInfo.modes)) {
       const preferredMode = state.localSetupInfo.modes.find((entry) => entry.recommended) || state.localSetupInfo.modes[0];
@@ -3551,7 +3603,7 @@ import { createT as i18nCreateT } from "./i18n.js";
         // start the private instance, wait for the controller announce, connect
         // - and open the dashboard in the browser like a running install does.
         try {
-          const st = await desktop.standaloneStart({}).catch(() => null);
+          const st = await desktop.standaloneStart({}, inst || null).catch(() => null);
           if (st && st.controllerUrl) {
             let ok = false;
             for (let i = 0; i < 45 && !ok; i++) {
@@ -3559,7 +3611,7 @@ import { createT as i18nCreateT } from "./i18n.js";
               if (!ok) await new Promise((w) => setTimeout(w, 1500));
             }
             if (ok) {
-              await desktop.instanceSet({ mode: "private", lifecycle: "app", controllerUrl: st.controllerUrl, llmConfigured: true }).catch(() => {});
+              await desktop.instanceSet({ mode: "private", lifecycle: (inst && inst.lifecycle) || "app", controllerUrl: st.controllerUrl, gatewayPort: st.port || null, controllerPort: st.controllerPort || null, llmConfigured: true }).catch(() => {});
               await connectController(st.controllerUrl, { skipConversation: true }).catch(() => {});
               // Desktop private instance intentionally does NOT open the
               // web UI in a browser - the desktop app IS the UI (user ruling).
@@ -4020,6 +4072,16 @@ import { createT as i18nCreateT } from "./i18n.js";
       renderUnavailableScreen();
       wizardGoStep(1);
     });
+    const wizCancel = document.getElementById('wizard-cancel-btn');
+    if (wizCancel) wizCancel.addEventListener('click', () => {
+      state.unavailableScreenVisible = false;
+      renderUnavailableScreen();
+      // Explicit user dismissal wins over the boot-gate keep-open: without
+      // this the "not connected yet" branch re-shows the overlay instantly
+      // and cancel appears dead.
+      const ov = document.getElementById('bootstrap-overlay');
+      if (ov) ov.classList.add('hidden');
+    });
     const stopBtn = document.getElementById('standalone-stop-btn');
     if (stopBtn) stopBtn.addEventListener('click', async () => {
       stopBtn.disabled = true;
@@ -4092,7 +4154,7 @@ import { createT as i18nCreateT } from "./i18n.js";
         const r = await desktop.runtimeIsReady();
       if (r && r.ready) {
         bootShell("boot.startingInstance");
-        const st = await desktop.standaloneStart({}).catch(() => null);
+        const st = await desktop.standaloneStart({}, inst || null).catch(() => null);
         if (st && st.controllerUrl) {
           // Gateway just spawned: poll until the controller answers (<=30s),
           // then connect. Transient failures retry inside the window.
@@ -4103,7 +4165,7 @@ import { createT as i18nCreateT } from "./i18n.js";
           }
           if (ok) {
             await connectController(st.controllerUrl, { skipConversation: true }).catch(() => {});
-            await desktop.instanceSet({ mode: "private", lifecycle: "app", controllerUrl: st.controllerUrl, llmConfigured: true }).catch(() => {});
+            await desktop.instanceSet({ mode: "private", lifecycle: (inst && inst.lifecycle) || "app", controllerUrl: st.controllerUrl, gatewayPort: st.port || null, controllerPort: st.controllerPort || null, llmConfigured: true }).catch(() => {});
             unveilShell();
             return;
           }
@@ -4112,9 +4174,30 @@ import { createT as i18nCreateT } from "./i18n.js";
       }
     } catch { unveilShell(); }
     }
-    // No usable instance record -> wizard.
+    // No usable instance record -> wizard, with the DEFAULT option chosen
+    // from a read-only environment probe (user spec):
+    //   global openclaw + teamclaw -> connect existing (option 3 selected)
+    //   openclaw only              -> install into it (global) by default
+    //   neither                    -> full global install by default
     state.unavailableScreenVisible = true;
     renderUnavailableScreen();
+    try {
+      const env = await desktop.envDetect();
+      state.envDetect = env;
+      const pick = (mode) => {
+        const el = document.querySelector(`input[name="bootstrap-mode"][data-bootstrap-mode="${mode}"]`);
+        if (el) { el.checked = true; el.dispatchEvent(new Event("change")); }
+      };
+      if (env.openclaw && env.teamclawInGlobal) {
+        pick("remote");
+        const urlEl = document.getElementById("bootstrap-controller-url");
+        if (urlEl && env.globalControllerUrl) urlEl.value = env.globalControllerUrl;
+      } else if (env.openclaw) {
+        pick("global"); // install into the existing global instance
+      } else {
+        pick("global"); // full global install is the default path
+      }
+    } catch { /* keep defaults */ }
     wizardGoStep(1);
   })();
   bindWizardControls();

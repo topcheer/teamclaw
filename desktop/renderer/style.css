@@ -482,6 +482,7 @@ button, input, textarea { font: inherit; }
   overflow: auto;
 }
 .bootstrap-panel {
+  position: relative;
   width: min(1240px, 100%);
   margin: 0 auto;
   padding: 28px;
@@ -914,11 +915,41 @@ textarea { padding: 14px 16px; min-height: 188px; resize: vertical; line-height:
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   overflow: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
+/* Wizard cancel: dismiss the overlay without running any step. */
+.bootstrap-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 5px 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.bootstrap-close:hover { color: var(--text); border-color: var(--text); }
+
+/* Task list cards: the leading dot already encodes status; the text badge
+   was redundant noise that also fought the row for width. */
+.task-list-item .status-tag { display: none; }
+
 .compact-list-row .status-tag,
 .compact-list-row .list-indicator {
   flex: 0 0 auto;
 }
+.compact-list-row .status-tag {
+  white-space: nowrap;
+}
+.task-list-item {
+  overflow: hidden;
+}
+/* Task list never scrolls horizontally: titles/meta clamp with ellipsis, so
+   a transient wide child must clip, not spawn an x-scrollbar. */
+.side-list { overflow-x: hidden; }
 .list-indicator {
   width: 10px;
   height: 10px;
@@ -1412,7 +1443,11 @@ textarea { padding: 14px 16px; min-height: 188px; resize: vertical; line-height:
   }
 }
 
-/* Controller settings view */
+/* Controller settings view: four functions as tabs (was a 2x2 card grid
+   that crowded every panel into half width). */
+.ctl-card { background: var(--panel-2); border: 1px solid var(--border); }
+.controller-grid { display: none; }
+.ctl-tabs { margin-bottom: 14px; }
 .controller-grid {
   /* 4 cards: a balanced 2x2 fills wide windows; narrow windows fall back to
      a single column. min(100%,...) guards the 1-column fallback below 560px
@@ -1523,6 +1558,14 @@ textarea { padding: 14px 16px; min-height: 188px; resize: vertical; line-height:
 .teamauto-msg { font-size: 13px; min-height: 18px; margin: 6px 0; }
 .teamauto-msg.ok { color: #3fb950; }
 .teamauto-msg.err { color: #f85149; }
+/* TeamAuto sub-tabs: config and activity each get their OWN scroll container
+   (the parent large-card is overflow:hidden - without this panes clip). */
+.ta-tabs { display: flex; gap: 8px; margin: 4px 0 12px; flex: none; }
+.ta-tab { border: 1px solid var(--border); background: var(--surface); color: var(--muted); border-radius: 8px; padding: 6px 14px; font-size: 12.5px; cursor: pointer; }
+.ta-tab:hover { color: var(--text); }
+.ta-tab.active { color: var(--text); border-color: var(--accent); font-weight: 600; }
+.ta-tabpane { display: none; }
+.ta-tabpane.active { display: block; overflow: auto; min-height: 0; flex: 1; padding-right: 4px; }
 .teamauto-repos { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
 .teamauto-card { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); padding: 16px 18px; }
 .teamauto-card-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }

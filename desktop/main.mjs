@@ -8,7 +8,10 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_SETTINGS = {
-  controllerUrl: "http://127.0.0.1:9527",
+  // NO silent localhost default: an empty URL means "no instance chosen yet".
+  // Boot must go through settings.instance; a hardcoded 9527 dials whatever
+  // else runs on this machine (e.g. a host production controller).
+  controllerUrl: "",
   theme: "system",
   // instance = the app's single source of truth for what to run/connect:
   //   mode: "private"  - bundled/sandbox runtime, own state dir, own port
@@ -510,7 +513,19 @@ ipcMain.handle("window:apply-theme", async (_event, theme) => {
   return { ok: true };
 });
 ipcMain.handle("settings:get", async () => loadSettings());
-ipcMain.handle("settings:save", async (_event, settings) => saveSettings(settings));
+ipcMain.handle("settings:save", async (_event, settings) => {
+  // `instance` is owned exclusively by instance:set. Renderer preferences are
+  // saved from a snapshot taken at boot, which would otherwise clobber the
+  // instance record written later (a real bug: mode/ports silently lost).
+  const current = await loadSettings().catch(() => ({}));
+  const next = { ...settings };
+  // HARD ownership rule: renderer snapshots carry a boot-time instance value
+  // (often explicit null) that would clobber a record written afterwards.
+  // instance belongs to instance:set alone.
+  delete next.instance;
+  next.instance = current.instance ?? null;
+  return saveSettings(next);
+});
 /* ---------------- Standalone instance (fully isolated) ----------------
  * A desktop-owned OpenClaw+TeamClaw instance:
  *   - state dir: userData/standalone-state (OPENCLAW_STATE_DIR) - never the
@@ -560,7 +575,7 @@ async function standaloneBinary() {
   throw new Error("No OpenClaw runtime available - run the one-click install first.");
 }
 
-async function seedStandaloneConfig(preferredVendor) {
+async function seedStandaloneConfig(preferredVendor, controllerPort) {
   // Minimal-config seeding: a full copy of the user's config made the
   // gateway normalize production-specific fields at startup, tripping its
   // own config-guard ("config changed during startup") in a loop. Instead
@@ -591,14 +606,35 @@ async function seedStandaloneConfig(preferredVendor) {
   cfg.plugins.entries.teamclaw = {
     ...(cfg.plugins.entries.teamclaw || {}),
     enabled: true,
-    config: { ...(cfg.plugins.entries.teamclaw?.config || {}), mode: "controller", teamName: "private" },
+    config: {
+      ...(cfg.plugins.entries.teamclaw?.config || {}),
+      mode: "controller",
+      teamName: "private",
+      // Pin the controller port so restarts land on the remembered one; the
+      // plugin auto-shifts (9527 -> 9627 ...) when it is occupied, and the
+      // actual bound port is recorded back into settings afterwards.
+      ...(controllerPort ? { port: controllerPort } : {}),
+    },
   };
   await fs.writeFile(dst, JSON.stringify(cfg, null, 2), { mode: 0o600 });
   return dst;
 }
 
-async function standaloneStart(preferredVendor) {
+async function standaloneStart(preferredVendor, remembered) {
   if (STANDALONE.child) return { ok: true, alreadyRunning: true, port: STANDALONE.port };
+  // Port memory: reuse the ports recorded in settings.instance so restarts
+  // land on the SAME gateway/controller ports; only re-probe when the
+  // remembered port is taken by someone else.
+  const wantGw = Number(remembered?.gatewayPort) || null;
+  const isFree = async (port) => {
+    if (!port) return false;
+    const net = await import("node:net");
+    return await new Promise((resolve) => {
+      const srv = net.createServer();
+      srv.once("error", () => resolve(false));
+      srv.listen(port, "127.0.0.1", () => srv.close(() => resolve(true)));
+    });
+  };
   const bin = await standaloneBinary();
   // Idempotent seed: a rewrite (even identical) trips the gateway config-guard
   // ("config changed during startup") and kills the spawn. Only seed when the
@@ -612,8 +648,17 @@ async function standaloneStart(preferredVendor) {
     const noController = c?.plugins?.entries?.teamclaw?.config?.mode !== "controller";
     needsSeed = noLlm || noGateway || noController;
   } catch { /* missing -> seed */ }
-  if (needsSeed) await seedStandaloneConfig(preferredVendor);
-  STANDALONE.port = await findFreePort();
+  const wantCtrl = Number(remembered?.controllerPort) || null;
+  if (needsSeed) await seedStandaloneConfig(preferredVendor, wantCtrl);
+  else if (wantCtrl) {
+    // Port memory must also hold when the rest of the config is intact.
+    try {
+      const c = JSON.parse(await fs.readFile(sandboxCfgPath, "utf8"));
+      const cur = c?.plugins?.entries?.teamclaw?.config?.port;
+      if (cur !== wantCtrl) await seedStandaloneConfig(preferredVendor, wantCtrl);
+    } catch { await seedStandaloneConfig(preferredVendor, wantCtrl); }
+  }
+  STANDALONE.port = (wantGw && await isFree(wantGw)) ? wantGw : await findFreePort();
   const logPath = path.join(standaloneStateDir(), "gateway.log");
   const logFd = fsSync.openSync(logPath, "a");
   const child = spawn(`"${bin}" gateway --port ${STANDALONE.port}`, {
@@ -644,7 +689,14 @@ async function standaloneStart(preferredVendor) {
     if (!controllerUrl) await new Promise((r) => setTimeout(r, 1000));
   }
   STANDALONE.controllerUrl = controllerUrl;
-  return { ok: true, port: STANDALONE.port, pid: child.pid ?? null, controllerUrl: controllerUrl || `http://127.0.0.1:${STANDALONE.port}` };
+  const mPort = controllerUrl ? Number(new URL(controllerUrl).port) : null;
+  return {
+    ok: true,
+    port: STANDALONE.port,
+    pid: child.pid ?? null,
+    controllerUrl: controllerUrl || `http://127.0.0.1:${STANDALONE.port}`,
+    controllerPort: Number.isFinite(mPort) ? mPort : null,
+  };
 }
 
 async function standaloneStop() {
@@ -677,7 +729,9 @@ function standaloneStatus() {
   };
 }
 
-ipcMain.handle("standalone:start", async (_e, options) => standaloneStart(options?.preferredVendor));
+ipcMain.handle("standalone:start", async (_e, options) =>
+  standaloneStart(options?.preferredVendor, options?.instance || null)
+);
 ipcMain.handle("standalone:stop", () => standaloneStop());
 ipcMain.handle("standalone:status", () => standaloneStatus());
 
@@ -702,6 +756,71 @@ ipcMain.handle("instance:set", async (_e, instance) => {
   await saveSettings(settings);
   return settings.instance;
 });
+// Environment detection for the wizard (READ-ONLY). Decides the DEFAULT
+// option: both present -> connect existing; openclaw only -> install into
+// it (or private); neither -> full global install (private optional).
+ipcMain.handle("env:detect", async () => {
+  const globalState = path.join(process.env.HOME || "", ".openclaw");
+  const cfgPath = path.join(globalState, "openclaw.json");
+  let cfg = null;
+  try { cfg = JSON.parse(await fs.readFile(cfgPath, "utf8")); } catch { /* none */ }
+  const openclaw = Boolean(cfg) || (await hasOpenClawInstalled());
+  // teamclaw registered in the GLOBAL state? plugins.entries or extensions dir.
+  const teamclawInGlobal = Boolean(
+    cfg?.plugins?.entries?.teamclaw ||
+    fsSync.existsSync(path.join(globalState, "plugins", "teamclaw"))
+  );
+  // Global controller URL is only inferred from the GLOBAL state, never
+  // probed on a fixed port: a sandboxed desktop must not mistake a
+  // foreign/production controller for its own. Liveness is checked later,
+  // at connect time, by the caller.
+  const globalControllerUrl = teamclawInGlobal
+    ? `http://127.0.0.1:${controllerPortFromConfig(cfg)}`
+    : null;
+  return { openclaw, teamclawInGlobal, globalControllerUrl, llmConfigured: Boolean(cfg && Object.values(cfg?.models?.providers || {}).some((p) => p && p.apiKey)) };
+});
+
+
+// Per-instance controller port: never assume the process-global 9527 - each
+// OpenClaw instance (global or private) may run its controller on its own
+// pinned/auto-shifted port. Read it from THAT state dir's config, then from
+// the gateway log announce line (the source of truth after auto-shift).
+function controllerPortFromConfig(cfg) {
+  const p = Number(cfg?.plugins?.entries?.teamclaw?.config?.port);
+  return Number.isFinite(p) && p > 0 ? p : 9527;
+}
+async function resolveInstanceControllerUrl(stateDir, cfgPort, logPaths) {
+  const candidates = logPaths || [path.join(stateDir, "gateway.log"), path.join(stateDir, "logs", "gateway.log")];
+  for (let i = 0; i < 45; i++) {
+    for (const lp of candidates) {
+      try {
+        const log = await fs.readFile(lp, "utf8");
+        // Announce line shape: "Controller: Web UI available at http://127.0.0.1:<port>/ui"
+        // The /ui suffix is part of the real message - never anchor on end-of-string.
+        const re = /Controller: Web UI available at http:\/\/127\.0\.0\.1:(\d+)/g;
+        let last = null;
+        for (let mm = re.exec(log); mm; mm = re.exec(log)) last = mm[1];
+        if (last) {
+          {
+            const url = `http://127.0.0.1:${last}`;
+            try {
+              const r = await fetch(`${url}/api/v1/tunnel/status`, { signal: AbortSignal.timeout(1500) });
+              if (r.ok) return url;
+            } catch { /* announced but not answering yet */ }
+          }
+        }
+      } catch { /* log not there yet */ }
+    }
+    // NO blind probe of the configured port: on a machine that already runs
+    // another controller, that port belongs to a DIFFERENT instance and
+    // accepting it silently attaches this app to a foreign gateway. The
+    // announce line is the only trustworthy source; cfgPort is just a hint
+    // for the caller's own diagnostics.
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  return null;
+}
+
 // Global-mode detection for the wizard: does the machine-level OpenClaw have
 // a pre-existing state (LLM already configured)? Read-only.
 ipcMain.handle("global:probe", async () => {
@@ -717,12 +836,15 @@ ipcMain.handle("global:probe", async () => {
 // Global-mode gateway: spawn the system openclaw gateway (default state dir,
 // NO sandbox env). Fresh installs get LLM written by the wizard first;
 // pre-existing state is reused untouched.
-async function globalGatewayStart() {
-  const port = await findFreePort();
+async function globalGatewayStart(preferredPort, extraEnv) {
+  const port = Number(preferredPort) || (await findFreePort());
   const logFd = fsSync.openSync(path.join(app.getPath("userData"), "global-gateway.log"), "a");
+  const env = { ...(extraEnv || process.env) };
+  delete env.OPENCLAW_STATE_DIR;
+  delete env.OPENCLAW_PROFILE;
   const child = spawn(`openclaw gateway --port ${port}`, {
-    cwd: process.env.HOME || process.cwd(),
-    env: process.env,
+    cwd: env.HOME || process.env.HOME || process.cwd(),
+    env,
     shell: true,
     stdio: ["ignore", logFd, logFd],
   });
@@ -731,6 +853,84 @@ async function globalGatewayStart() {
   return { ok: true, port, pid: child.pid ?? null };
 }
 const GLOBAL_GATEWAY = { child: null, port: null };
+// Install TeamClaw INTO the existing global OpenClaw (user-chosen path; the
+// only flow allowed to write the global state - explicit consent by choice).
+// Backs up the global cfg to the desktop dir first, then registers the plugin
+// with the system openclaw CLI (global state, no sandbox env) and restarts the
+// LaunchAgent gateway so the controller comes up.
+ipcMain.handle("instance:install-into-global", async (event) => {
+  const onEvent = (e) => { try { event.sender.send("bootstrap:install-event", e); } catch {} };
+  const globalCfg = path.join(process.env.HOME || "", ".openclaw", "openclaw.json");
+  try {
+    const bak = path.join(app.getPath("userData"), `global-cfg-backup-${Date.now()}.json`);
+    await fs.copyFile(globalCfg, bak).catch(() => {});
+    onEvent({ phase: "teamclaw", line: "Backed up global config to " + bak });
+  } catch { /* no cfg yet */ }
+  // Target the GLOBAL state explicitly: the app process may already carry a
+  // private instance's OPENCLAW_STATE_DIR, and inheriting it would install
+  // into the wrong instance.
+  const gHome = process.env.HOME || process.cwd();
+  const gEnv = { ...process.env, HOME: gHome, OPENCLAW_HOME: gHome };
+  delete gEnv.OPENCLAW_STATE_DIR;
+  delete gEnv.OPENCLAW_PROFILE;
+  onEvent({ phase: "teamclaw", line: "Installing TeamClaw into the global OpenClaw (explicit choice)..." });
+  await runShellStream("openclaw plugins install @teamclaws/teamclaw --force --accept-capabilities", gHome, (line) =>
+    onEvent({ phase: "teamclaw", line }), gEnv);
+  // The plugin defaults to WORKER mode; the desktop app needs this instance to
+  // BE the controller. Without this the global gateway loads teamclaw as a
+  // worker ("Identity: no controller found") and no dashboard API ever exists.
+  const gCfgPath = path.join(gHome, ".openclaw", "openclaw.json");
+  try {
+    const c = JSON.parse(await fs.readFile(gCfgPath, "utf8"));
+    c.plugins = c.plugins || {};
+    c.plugins.entries = c.plugins.entries || {};
+    const prev = c.plugins.entries.teamclaw || {};
+    c.plugins.entries.teamclaw = {
+      ...prev,
+      enabled: true,
+      config: { ...(prev.config || {}), mode: "controller", teamName: prev.config?.teamName || "global" },
+    };
+    await fs.writeFile(gCfgPath, JSON.stringify(c, null, 2), { mode: 0o600 });
+    onEvent({ phase: "teamclaw", line: "Global instance set to controller mode." });
+  } catch (e) {
+    onEvent({ phase: "teamclaw", line: "Could not set controller mode: " + (e && e.message) });
+  }
+  onEvent({ phase: "teamclaw", line: "Restarting the global gateway..." });
+  let restarted = true;
+  try {
+    await runShellStream("openclaw gateway restart", gHome, (line) =>
+      onEvent({ phase: "teamclaw", line }), gEnv);
+  } catch {
+    // No service manager (fresh machine, sandbox, Linux w/o systemd unit):
+    // restart is not available, so start the gateway ourselves instead of
+    // failing the whole install.
+    restarted = false;
+  }
+  if (!restarted) {
+    let gPort = 18789;
+    try {
+      const c = JSON.parse(await fs.readFile(path.join(gHome, ".openclaw", "openclaw.json"), "utf8"));
+      gPort = Number(c?.gateway?.port) || 18789;
+    } catch { /* default */ }
+    onEvent({ phase: "teamclaw", line: `No gateway service found - starting one on port ${gPort}...` });
+    await globalGatewayStart(gPort, { ...gEnv, HOME: gHome });
+  }
+  // Resolve THIS instance's controller (pinned or auto-shifted port) from its
+  // own config + gateway log - never the process-global 9527 default, which
+  // may be another instance entirely.
+  const gStateDir = process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME || "", ".openclaw");
+  let gCfg = null;
+  try { gCfg = JSON.parse(await fs.readFile(path.join(gStateDir, "openclaw.json"), "utf8")); } catch { /* none */ }
+  const controllerUrl = await resolveInstanceControllerUrl(gStateDir, controllerPortFromConfig(gCfg), [
+    path.join(app.getPath("userData"), "global-gateway.log"),
+    path.join(gStateDir, "gateway.log"),
+    path.join(gStateDir, "logs", "gateway.log"),
+  ]);
+  if (!controllerUrl) throw new Error(`Global controller did not come up in ${gStateDir} after install.`);
+  onEvent({ phase: "done", line: "Global TeamClaw ready at " + controllerUrl });
+  return { ok: true, controllerUrl };
+});
+
 ipcMain.handle("instance:start-global", () => globalGatewayStart());
 
 ipcMain.handle("runtime:is-ready", async () => {
