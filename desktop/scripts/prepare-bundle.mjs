@@ -47,6 +47,62 @@ execSync(
 );
 writeFileSync(path.join(out, "runtime", "RUNTIME-VERSION"), `openclaw@${openclawVersion}\nteamclaw@${teamclawVersion}\n`, "utf8");
 
+// Prune foreign-platform packages. The npm tree carries optional native
+// packages for EVERY platform (@esbuild/win32-x64, @openclaw/fs-safe-linux-*,
+// pi-tui/native/<os>/prebuilds). On macOS those foreign Mach-O/PE files
+// (a) bloat the bundle and (b) drag @electron/osx-sign through thousands of
+// extra binaries - the CI Package step ground >1h on them (run 42142275888).
+// Rule: a package dir whose NAME carries a platform[-arch] tag that is not
+// the target gets pruned; a prebuilds/<os>-<arch>/ or native/<os>/ dir for a
+// foreign os gets pruned. Everything else is untouched.
+const osNames = { darwin: "darwin", win32: "win32", linux: "linux" };
+const tc = osNames[tcOs] || tcOs;
+const arch = tcCpu;
+const nm = path.join(out, "runtime", "node_modules");
+const OS_TAG = /(darwin|linux|win32|freebsd|android|sunos)(?:[-_](arm64|x64|armv7l|ia32))?/;
+let prunedDirs = 0;
+const pruneDir = (p) => { rmSync(p, { recursive: true, force: true }); prunedDirs += 1; };
+// 1) platform-tagged package dirs, top level and one @scope deep.
+const scanPkgs = (dir, depth) => {
+  let entries;
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const e of entries) {
+    if (!e.isDirectory()) continue;
+    const p = path.join(dir, e.name);
+    const m = e.name.match(OS_TAG);
+    if (m) {
+      const foreign = m[1] !== tc || (m[2] && m[2] !== arch);
+      if (foreign) { pruneDir(p); continue; }
+    }
+    if (e.name.startsWith("@") && depth === 0) scanPkgs(p, 1);
+  }
+};
+scanPkgs(nm, 0);
+// 2) prebuilds/<os>-<arch>/ and pi-tui native/<os>/ subtrees, any depth.
+const prebuildRoots = [];
+const findPrebuilds = (dir, depth) => {
+  if (depth > 5) return;
+  let entries;
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const en of entries) {
+    const p = path.join(dir, en.name);
+    if (!en.isDirectory()) continue;
+    if (en.name === "prebuilds" || (en.name === "native" && dir.endsWith("pi-tui"))) prebuildRoots.push(p);
+    else if (!en.name.startsWith(".")) findPrebuilds(p, depth + 1);
+  }
+};
+findPrebuilds(nm, 0);
+for (const pb of prebuildRoots) {
+  let entries;
+  try { entries = readdirSync(pb, { withFileTypes: true }); } catch { continue; }
+  for (const en of entries) {
+    if (!en.isDirectory()) continue;
+    const os = en.name.split("-")[0];
+    if (os !== tc) pruneDir(path.join(pb, en.name));
+  }
+}
+console.log(`[prepare-bundle] pruned ${prunedDirs} foreign-platform dirs (target ${tc}-${arch})`);
+
 // Materialize symlinks across the whole runtime tree. In-tree links become
 // real files; dangling .bin links are rebuilt via the npm bin convention.
 let fixed = 0, rebuilt = 0, dropped = 0;
