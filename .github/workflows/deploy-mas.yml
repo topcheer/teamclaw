@@ -106,7 +106,11 @@ jobs:
           security find-identity -v -p codesigning "${KEYCHAIN}"
           # Fail-loud identity gate: both MAS identities must resolve HERE.
           security find-identity -v -p codesigning "${KEYCHAIN}" | grep -q "Apple Distribution" || { echo "::error::Apple Distribution identity missing"; exit 1; }
-          security find-identity -v -p codesigning "${KEYCHAIN}" | grep -q "3rd Party Mac Developer Installer" || { echo "::error::Installer identity missing"; exit 1; }
+          # Installer identities are NOT listed under the codesigning policy
+          # (verified: find-identity -p codesigning shows 0 for installer
+          # certs, unfiltered shows 1) - gate on the unfiltered list, which
+          # is exactly what @electron/osx-sign uses to resolve identities.
+          security find-identity -v "${KEYCHAIN}" | grep -q "3rd Party Mac Developer Installer" || { echo "::error::Installer identity missing"; exit 1; }
           # Probe sign before the 10-minute real build: catches ACL problems
           # cheaply (ggcode run-3 lesson).
           set +x
