@@ -223,7 +223,12 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
         return { removed: false, reason: "retained: local branch ahead of pushed tip (unpushed work)" };
       }
       // Branch never pushed: the worktree is the only copy. Keep it when it
-      // carries its own commits; drop it when the worker never committed.
+      // carries its own commits or any uncommitted files; drop it when the
+      // worker never committed anything at all.
+      const dirty = await run(["status", "--porcelain"], wtPath).catch(() => "x");
+      if (dirty.trim()) {
+        return { removed: false, reason: "retained: dirty worktree, branch never pushed" };
+      }
       const info = await run(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], base).catch(() => "");
       const defaultBranch = info.trim().replace(/^origin\//, "") || "main";
       const own = await run(["rev-list", "--count", `HEAD`, "--not", `origin/${defaultBranch}`], wtPath).catch(() => null);
