@@ -154,13 +154,13 @@ jobs:
           # true (DMG lane) and APPLE_API_KEY_ID set job-wide, its
           # any-but-not-all env validation aborts after the 22-min sign.
           npx electron-builder --mac mas -c.buildVersion="${MAS_BUILD_VERSION}" -c.mac.notarize=false
-          ls -l dist/*.pkg
+          ls -l dist/mas-arm64/*.pkg dist/*.pkg 2>/dev/null || true
 
       - name: Locate package
         shell: bash
         working-directory: desktop
         run: |
-          PKG=$(ls dist/*.pkg 2>/dev/null | head -1)
+          PKG=$(ls dist/mas-arm64/*.pkg dist/*.pkg 2>/dev/null | head -1)
           [[ -n "${PKG}" ]] || { echo "::error::no .pkg produced"; exit 1; }
           echo "PKG_PATH=${GITHUB_WORKSPACE}/desktop/${PKG}" >> "${GITHUB_ENV}"
           echo "pkg: ${PKG}"
