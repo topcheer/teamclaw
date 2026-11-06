@@ -110,6 +110,16 @@ async function sourceContracts() {
   assert.match(scheduler, /createPullRequest/, "write delivery must open a PR from the task branch");
   assert.match(scheduler, /Delivered as PR:/, "the task reply must link the delivery PR");
   assert.match(scheduler, /removeTaskWorktree/, "worktrees must be cleaned up after delivery");
+  // Worktree GC (2026-11-07: 31 leaked __task- worktrees / 3GB observed):
+  // terminal tasks and boot reconciliation must reclaim worktrees, but only
+  // when the work is provably safe (pushed tip or no own commits).
+  assert.match(scheduler, /safeRemoveTaskWorktree/, "terminal write tasks (failed / no result) must safety-clean their worktree");
+  assert.match(scheduler, /gcTaskWorktrees/, "scheduler start must reconcile leftover task worktrees");
+  assert.match(scheduler, /worktree GC removed/, "GC outcome must be logged + recorded as activity");
+  assert.match(sync, /safeRemoveTaskWorktree/, "repo-sync must expose safety-checked removal");
+  assert.match(sync, /local branch ahead of pushed tip/, "unpushed work must never be silently destroyed");
+  assert.match(sync, /no own commits, branch never pushed/, "empty never-pushed worktrees must be reclaimed");
+  assert.match(sync, /worktree", "prune"/, "cleanup must survive unregistered (stale) worktree dirs");
   assert.match(httpServer, /activeWriteRoots/, "auto-assign must serialize write tasks per repo checkout");
   assert.match(httpServer, /ensureWriteWorktree/, "dispatch must place write tasks in a task-scoped worktree");
   assert.match(scheduler, /cycleKey/, "write-backs must carry the joint review cycle key");

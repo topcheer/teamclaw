@@ -184,12 +184,114 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     const wtPath = path.join(path.dirname(base), path.basename(wtName));
     try {
       if (await fs.access(wtPath).then(() => true, () => false)) {
-        await run(["worktree", "remove", "--force", wtPath], base);
+        await run(["worktree", "remove", "--force", wtPath], base).catch(async () => {
+          // Not a registered worktree anymore (stale admin dir / manual mv):
+          // prune registrations and delete the directory directly.
+          await run(["worktree", "prune"], base).catch(() => undefined);
+          await fs.rm(wtPath, { recursive: true, force: true });
+        });
       }
       await run(["branch", "-D", taskBranchName(taskId)], base).catch(() => undefined);
     } catch (err) {
       logger.warn(`TeamAuto: worktree cleanup failed for ${taskId}: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  /**
+   * Terminal-state removal with a delivery-safety check: delete the task
+   * worktree only when its work is either already on the remote (branch tip
+   * matches) or nonexistent (no commits of its own). Undelivered local work
+   * is retained and reported - never silently destroyed.
+   */
+  async function safeRemoveTaskWorktree(repoId: string, taskId: string): Promise<{ removed: boolean; reason: string }> {
+    const base = await repoDir(repoId);
+    const wtName = taskWorktreeDirName(repoId, taskId);
+    const wtPath = path.join(path.dirname(base), path.basename(wtName));
+    const branch = taskBranchName(taskId);
+    if (!(await fs.access(wtPath).then(() => true, () => false))) {
+      // Review F4: the dir is gone but a stale local branch can survive an
+      // earlier removal whose branch -D failed. Reap it when the remote tip
+      // still matches (work provably on the remote); otherwise leave it.
+      try {
+        const refs = await run(["ls-remote", "origin", `refs/heads/${branch}`], base);
+        const remoteTip = refs.split("\t")[0]?.trim() ?? "";
+        const localTip = remoteTip ? (await run(["rev-parse", branch], base).catch(() => "")).trim() : "";
+        if (remoteTip && localTip === remoteTip) {
+          await run(["branch", "-D", branch], base);
+          return { removed: true, reason: "worktree already gone; reaped stale branch (tip matches remote)" };
+        }
+      } catch { /* conservative: leave the branch */ }
+      return { removed: false, reason: "already gone" };
+    }
+    try {
+      const remoteRefs = await run(["ls-remote", "origin", `refs/heads/${branch}`], base);
+      const remoteTip = remoteRefs.split("\t")[0]?.trim() ?? "";
+      if (remoteTip) {
+        const localTip = (await run(["rev-parse", branch], base).catch(() => "")).trim();
+        if (localTip && localTip === remoteTip) {
+          await removeTaskWorktree(repoId, taskId);
+          return { removed: true, reason: "delivered (branch tip on remote)" };
+        }
+        return { removed: false, reason: "retained: local branch ahead of pushed tip (unpushed work)" };
+      }
+      // Branch never pushed: the worktree is the only copy. Keep it when it
+      // carries its own commits or any uncommitted files; drop it when the
+      // worker never committed anything at all.
+      const dirty = await run(["status", "--porcelain"], wtPath).catch(() => "x");
+      if (dirty.trim()) {
+        return { removed: false, reason: "retained: dirty worktree, branch never pushed" };
+      }
+      const info = await run(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], base).catch(() => "");
+      const defaultBranch = info.trim().replace(/^origin\//, "") || "main";
+      const own = await run(["rev-list", "--count", `HEAD`, "--not", `origin/${defaultBranch}`], wtPath).catch(() => null);
+      if (own === null) {
+        // Cannot prove emptiness (fetch state unknown) - conservative keep.
+        return { removed: false, reason: "retained: could not verify emptiness" };
+      }
+      if (Number(own.trim()) === 0) {
+        await removeTaskWorktree(repoId, taskId);
+        return { removed: true, reason: "no own commits, branch never pushed" };
+      }
+      return { removed: false, reason: `retained: ${own.trim()} unpushed own commit(s)` };
+    } catch (err) {
+      return { removed: false, reason: `retained: gc check failed (${err instanceof Error ? err.message : String(err)})` };
+    }
+  }
+
+  /**
+   * Reconcile leftover task worktrees on disk: for every `<slug>__task-*`
+   * sibling whose task is terminal (or unknown), apply the delivery-safety
+   * removal. Heals the historical backlog that pre-dates terminal cleanup.
+   */
+  async function gcTaskWorktrees(repoId: string, isTerminal: (taskId: string) => boolean): Promise<{ removed: string[]; retained: { taskId: string; reason: string }[] }> {
+    const base = await repoDir(repoId);
+    const siblings = path.dirname(base);
+    // taskWorktreeDirName(repoId, "x") = "teamauto/<slug>__task-x"; the
+    // physical dir is its basename, so the scan prefix is basename minus "x".
+    const withSentinel = path.basename(taskWorktreeDirName(repoId, "x"));
+    const prefix = withSentinel.slice(0, withSentinel.length - 1);
+    const removed: string[] = [];
+    const retained: { taskId: string; reason: string }[] = [];
+    let entries: string[] = [];
+    try {
+      entries = (await fs.readdir(siblings)).filter((e) => e.startsWith(prefix));
+    } catch {
+      return { removed, retained };
+    }
+    for (const entry of entries) {
+      const taskId = entry.slice(prefix.length);
+      if (!taskId) continue;
+      if (!isTerminal(taskId)) continue; // active/resumable task - worktree is resume state
+      const r = await safeRemoveTaskWorktree(repoId, taskId);
+      if (r.removed) {
+        removed.push(taskId);
+        logger.warn(`TeamAuto: worktree GC removed ${taskId} (${r.reason})`);
+      } else if (!r.reason.includes("already gone")) {
+        retained.push({ taskId, reason: r.reason });
+        logger.warn(`TeamAuto: worktree GC kept ${taskId}: ${r.reason}`);
+      }
+    }
+    return { removed, retained };
   }
 
   function taskWorktreeRelDir(repoId: string, taskId: string): string {
@@ -212,7 +314,7 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     }
   }
 
-  return { ensureCloned, currentSha, recentCommitMessages, readFileIfPresent, safeRepoPath, createWorkBranch, commitAll, pushBranch, ensureTaskWorktree, removeTaskWorktree, taskWorktreeRelDir, taskBranchName, branchHasCommits, repoDir };
+  return { ensureCloned, currentSha, recentCommitMessages, readFileIfPresent, safeRepoPath, createWorkBranch, commitAll, pushBranch, ensureTaskWorktree, removeTaskWorktree, safeRemoveTaskWorktree, gcTaskWorktrees, taskWorktreeRelDir, taskBranchName, branchHasCommits, repoDir };
 }
 
 export type TeamAutoRepoSync = ReturnType<typeof createRepoSync>;
