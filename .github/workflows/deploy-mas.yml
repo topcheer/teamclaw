@@ -147,7 +147,13 @@ jobs:
           security unlock-keychain -p "${KC_PASSWORD}" "${KC_PATH}" 2>&1 || { echo "::error::re-unlock failed"; exit 1; }
           # No APPLE_API_* here: MAS apps are not notarized, and their
           # presence would trip electron-builder's notarize env validation.
-          npx electron-builder --mac mas pkg -c.buildVersion="${MAS_BUILD_VERSION}"
+          # -c.mac.notarize=false is REQUIRED even though build.mas.notarize
+          # is false: targets/pkg.js:87 calls notarizeIfProvided after
+          # productbuild, and that reads config.MAC (mas is a target of the
+          # mac platform, not its own platform config) - with mac.notarize
+          # true (DMG lane) and APPLE_API_KEY_ID set job-wide, its
+          # any-but-not-all env validation aborts after the 22-min sign.
+          npx electron-builder --mac mas pkg -c.buildVersion="${MAS_BUILD_VERSION}" -c.mac.notarize=false
           ls -l dist/*.pkg
 
       - name: Locate package
