@@ -232,14 +232,14 @@ assert.match(
 
 assert.match(
   desktopRendererSource,
-  /function renderUnavailableScreen\([\s\S]*#bootstrap-install-command[\s\S]*bootstrap\.connectRemote/,
+  /function renderUnavailableScreen\([\s\S]*#bootstrap-overlay[\s\S]*unavailableScreenVisible/,
   "desktop renderer should render a full-screen bootstrap experience when the local controller is unavailable",
 );
 
 assert.match(
   desktopRendererSource,
-  /bootstrap-openclaw-quickstart-card[\s\S]*bootstrap-openclaw-components-card[\s\S]*classList\.toggle\("hidden", hasOpenClaw\)/,
-  "desktop renderer should hide OpenClaw install and quickstart cards once OpenClaw is already installed",
+  /data-bootstrap-install\][\s\S]*hasOpenClaw[\s\S]*isInstallingLocal = hasOpenClaw[\s\S]*isInstallingOpenClaw = !hasOpenClaw/,
+  "desktop renderer should branch the install flow instead of reinstalling once OpenClaw is already installed",
 );
 
 assert.match(
@@ -436,8 +436,8 @@ assert.match(
 
 assert.match(
   desktopRendererSource,
-  /localSetupMode: "controller-manual"[\s\S]*install --yes --install-mode controller-manual[\s\S]*state\.localSetupMode = 'controller-manual';/,
-  "desktop renderer should default the bootstrap selection and fallback install command to local quickstart",
+  /localSetupMode: "controller-manual"[\s\S]*entry\.id === state\.localSetupMode\) \|\| modes\[0\][\s\S]*state\.localSetupMode = 'controller-manual';/,
+  "desktop renderer should default the bootstrap selection and fallback to the first local setup mode",
 );
 
   assert.doesNotMatch(
@@ -454,13 +454,13 @@ assert.match(
 
 assert.match(
   desktopMainSource,
-  /ipcMain\.handle\("controller:get-setup-info"[\s\S]*ipcMain\.handle\("controller:install-local"[\s\S]*ipcMain\.handle\("openclaw:install-local"/,
+  /ipcMain\.handle\("bootstrap:install"[\s\S]*ensureOpenClawRuntime[\s\S]*ensureTeamClawPlugin[\s\S]*ipcMain\.handle\("controller:get-setup-info"/,
   "desktop main process should expose OpenClaw detection plus one-click OpenClaw and TeamClaw install handlers",
 );
 
 assert.match(
   desktopPreloadSource,
-  /getLocalSetupInfo: \(\) => ipcRenderer\.invoke\("controller:get-setup-info"\),[\s\S]*installLocalTeamClaw: \(options\) => ipcRenderer\.invoke\("controller:install-local", options\),[\s\S]*installOpenClaw: \(options\) => ipcRenderer\.invoke\("openclaw:install-local", options\)/,
+  /getLocalSetupInfo: \(\) => ipcRenderer\.invoke\("controller:get-setup-info"\),[\s\S]*bootstrapInstall: \(options\) => ipcRenderer\.invoke\("bootstrap:install", options\),[\s\S]*bootstrap:install-event/,
   "desktop preload should expose both TeamClaw and OpenClaw setup APIs to the renderer",
 );
 
