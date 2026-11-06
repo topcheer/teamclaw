@@ -528,6 +528,15 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       try {
         if (task.status === "failed" || !task.result) {
           entry.error = task.status === "failed" ? (task.error ?? "task failed") : "task completed without a textual result";
+          // Terminal write task: its dispatch-time worktree has no delivery
+          // path left - remove it when the worker never produced deliverable
+          // commits (safety-checked, undelivered work is retained + logged).
+          if (task.writeMode === "write" && task.projectDir?.includes("__task-")) {
+            const r = await sync.safeRemoveTaskWorktree(entry.repoId, task.id);
+            if (!r.removed && !r.reason.includes("already gone")) {
+              logger.warn(`TeamAuto: terminal task ${task.id} worktree kept: ${r.reason}`);
+            }
+          }
         } else {
           const role = (task.assignedRole ?? "qa") as string;
           let body = `${task.result.trim()}\n${MARKER_FOOTER(role)}`;
@@ -706,6 +715,32 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       void reconcileWritebacks();
     }, 20_000);
     writebackTimer.unref?.();
+    // Boot reconciliation: heal leftover task worktrees whose task is
+    // terminal (or gone entirely) - the pre-cleanup backlog never shrinks
+    // on its own. Safety-checked: undelivered work is kept and logged.
+    void (async () => {
+      try {
+        let removed = 0;
+        let retained = 0;
+        for (const repo of s.repos) {
+          if (!repo.enabled) continue;
+          const isTerminal = (taskId: string): boolean => {
+            const t = deps.getTeamState()?.tasks[taskId];
+            return !t || t.status === "completed" || t.status === "failed";
+          };
+          const r = await sync.gcTaskWorktrees(repo.id, isTerminal);
+          removed += r.removed.length;
+          retained += r.retained.length;
+        }
+        if (removed || retained) {
+          recordActivity(s, { at: Date.now(), repoId: "*", kind: "task", text: `worktree GC: removed ${removed}, retained ${retained} (undelivered)` });
+          await saveTeamAutoStore(s);
+          logger.warn(`TeamAuto: worktree GC removed ${removed}, retained ${retained}`);
+        }
+      } catch (err) {
+        logger.warn(`TeamAuto: worktree GC failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    })();
   }
 
   async function stop(): Promise<void> {
