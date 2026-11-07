@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, nativeTheme, Notification, shell } from "e
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -511,7 +512,10 @@ ipcMain.handle("llm:list-models", async (_e, { provider, endpoint, apiKey }) => 
 ipcMain.handle("llm:write-global", async (_e, llm) => {
   const { provider, endpoint, apiKey, model } = llm || {};
   if (!provider || !apiKey) throw new Error("Provider and API key are required");
-  const globalCfg = path.join(process.env.HOME || "", ".openclaw", "openclaw.json");
+  // os.homedir(): process.env.HOME is empty on Windows, which silently
+  // redirected the wizard's LLM write to a relative path inside the app
+  // install dir instead of the user's ~/.openclaw.
+  const globalCfg = path.join(os.homedir(), ".openclaw", "openclaw.json");
   await fs.mkdir(path.dirname(globalCfg), { recursive: true });
   await writeLlmConfigFile(globalCfg, { provider, endpoint, apiKey, model });
   return { ok: true, path: globalCfg };
@@ -1030,7 +1034,7 @@ ipcMain.handle("instance:set", async (_e, instance) => {
 // option: both present -> connect existing; openclaw only -> install into
 // it (or private); neither -> full global install (private optional).
 ipcMain.handle("env:detect", async () => {
-  const globalState = path.join(process.env.HOME || "", ".openclaw");
+  const globalState = path.join(os.homedir(), ".openclaw");
   const cfgPath = path.join(globalState, "openclaw.json");
   let cfg = null;
   try { cfg = JSON.parse(await fs.readFile(cfgPath, "utf8")); } catch { /* none */ }
@@ -1094,7 +1098,7 @@ async function resolveInstanceControllerUrl(stateDir, cfgPort, logPaths) {
 // Global-mode detection for the wizard: does the machine-level OpenClaw have
 // a pre-existing state (LLM already configured)? Read-only.
 ipcMain.handle("global:probe", async () => {
-  const statePath = path.join(process.env.HOME || "", ".openclaw", "openclaw.json");
+  const statePath = path.join(os.homedir(), ".openclaw", "openclaw.json");
   try {
     const cfg = JSON.parse(await fs.readFile(statePath, "utf8"));
     const llm = Object.values(cfg?.models?.providers || {}).some((p) => p && p.apiKey);

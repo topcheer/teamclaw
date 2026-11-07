@@ -297,10 +297,12 @@ export type TeamClawModelReadiness = {
 
 /**
  * OpenClaw 2026.10+ moved model-provider auth out of the legacy per-agent
- * `auth-profiles.json` file and into the host config (models.providers[*]
- * with apiKey/auth, optionally backed by the secrets store). Treat a host
- * config with provider auth as ready so the readiness gate does not false-
- * negative on current hosts.
+ * `auth-profiles.json` file and into the host config. Two host shapes exist:
+ * 2026.10 wrote `models.providers[*]` with apiKey/auth (optionally backed by
+ * the secrets store); 2026.11 onboard writes `auth.profiles[*]` entries
+ * (`provider` + `mode`, the secret itself in the secrets store) and models
+ * reference profiles via the `<model>@<profile>` suffix. Treat either shape
+ * as ready so the readiness gate does not false-negative on current hosts.
  */
 function hostConfiguredProviderAuthExists(
   env: NodeJS.ProcessEnv = process.env,
@@ -311,13 +313,21 @@ function hostConfiguredProviderAuthExists(
     const parsed = JSON.parse(readFileSync(configPath, "utf8")) as {
       models?: { providers?: Record<string, unknown> };
       providers?: Record<string, unknown>;
+      auth?: { profiles?: Record<string, unknown> };
     };
     const providers = parsed.models?.providers ?? parsed.providers ?? {};
-    return Object.values(providers).some(
+    const inlineProviderAuth = Object.values(providers).some(
       (value) =>
         Boolean(value) &&
         typeof value === "object" &&
         ("apiKey" in (value as object) || "auth" in (value as object)),
+    );
+    if (inlineProviderAuth) {
+      return true;
+    }
+    const authProfiles = Object.values(parsed.auth?.profiles ?? {});
+    return authProfiles.some(
+      (value) => Boolean(value) && typeof value === "object",
     );
   } catch {
     return false;
