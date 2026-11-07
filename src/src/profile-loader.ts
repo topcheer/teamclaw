@@ -496,15 +496,18 @@ function getActiveRole(id: RoleId): ProfileRoleDefinition | undefined {
  * English label. Encoded here - the loading-validation layer - so UI
  * consumers (Phase 5) have a single backend source for the rule instead of
  * re-implementing `labelZh ?? label` per surface; the schema guarantees a
- * present labelZh is never an empty string (minLength 1), so the fallback
- * never competes with a blank. v1 is bilingual only (design 5.3: no
- * additional locales); "en" is accepted explicitly for symmetric rendering.
+ * present labelZh is never an EMPTY string (minLength 1), and a
+ * whitespace-only labelZh (which minLength cannot reject) also falls back
+ * here via trim - a blank chip must never win over the fallback. v1 is
+ * bilingual only (design 5.3: no additional locales); "en" is accepted
+ * explicitly for symmetric rendering.
  */
 function resolveRoleDisplayName(role: ProfileRoleDefinition, locale: "zh" | "en" = "zh"): string {
   if (locale === "en") {
     return role.label;
   }
-  return typeof role.labelZh === "string" && role.labelZh.length > 0 ? role.labelZh : role.label;
+  const labelZh = typeof role.labelZh === "string" ? role.labelZh.trim() : "";
+  return labelZh.length > 0 ? labelZh : role.label;
 }
 
 /**
