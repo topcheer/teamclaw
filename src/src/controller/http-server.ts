@@ -39,7 +39,7 @@ import {
   generateId,
 } from "../protocol.js";
 import { listWorkspaceTree, listWorkspaceSubtree, readWorkspaceFile, readWorkspaceRawFile } from "../workspace-browser.js";
-import { ROLES, normalizeRecommendedSkills, resolveRecommendedSkillsForRole } from "../roles.js";
+import { ROLES, DEFAULT_ROLE, normalizeRecommendedSkills, resolveRecommendedSkillsForRole } from "../roles.js";
 import {
   buildRepoSyncInfo,
   ensureControllerGitRepo,
@@ -1924,7 +1924,7 @@ function buildFallbackControllerTaskTitle(request: string, assignedRole?: RoleId
   if (assignedRole === "architect") {
     return "Analyze the repository and produce an architecture/feasibility plan";
   }
-  return assignedRole === "developer"
+  return assignedRole === DEFAULT_ROLE
     ? "Implement the requested software deliverable"
     : `Perform the requested ${assignedRole || "software"} work`;
 }

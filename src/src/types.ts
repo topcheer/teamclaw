@@ -1,5 +1,8 @@
 import { TEAMCLAW_PUBLISHED_RUNTIME_IMAGE } from "./install-defaults.js";
 import { DEFAULT_GITHUB_CLIENT_ID } from "./controller/github-auth.js";
+// Safe value import: roles.js only pulls prompt-policy.js -> openclaw-workspace.js
+// at runtime (its types.js import is type-only), so no module cycle is formed.
+import { DEFAULT_ROLE } from "./roles.js";
 
 export type TeamClawMode = "controller" | "worker";
 
@@ -640,7 +643,7 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
 
   const role = typeof raw.role === "string" && VALID_ROLES.includes(raw.role as RoleId)
     ? raw.role as RoleId
-    : "developer" as RoleId;
+    : DEFAULT_ROLE;
 
   const controllerUrl = typeof raw.controllerUrl === "string"
     ? raw.controllerUrl.trim()
