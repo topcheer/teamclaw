@@ -32,7 +32,7 @@ src/src/types.ts:67-78    RoleId = "pm" | "architect" | ... | "data-engineer"（
 src/src/types.ts:80-89    RoleDefinition = { id, label, icon, description, capabilities[], recommendedSkills[], systemPrompt, suggestedNextRoles[] }
 ```
 
-**直接 import ROLES / getRole / ROLE_IDS 的 12 个 TS 文件**：
+**直接依赖 roles.ts 的 12 个 TS 文件（11 个 import ROLES / getRole / ROLE_IDS 三符号 + skill-installer import normalizeRecommendedSkills）**：
 
 | 文件 | 用途 |
 |---|---|
@@ -66,7 +66,7 @@ src/src/types.ts:80-89    RoleDefinition = { id, label, icon, description, capab
 
 ```ts
 token = role.label.toLowerCase().split(/[^a-z0-9]+/)  // CJK 字符本身就是分隔符的一部分，根本不形成 token；`length > 2` 滤掉的是短 ASCII token（如 "qa"）
-score += text.includes(token) ? 1 : 0                 // 且 token.length > 2 会滤掉全部二字中文词
+score += text.includes(token) ? 1 : 0                 // （前瞻：Phase 0.1 加入 CJK token 后，length > 2 将滤掉全部二字中文词，修复须一并放宽——对现状而言中文根本不形成 token）
 // 零分返回 null（role-inference.ts:34）；导出的 FALLBACK_ROLE(:41) 是死代码，无任何调用方
 ```
 
@@ -254,7 +254,7 @@ POST /api/v1/team/profile { profileId }
 |---|---|---|---|
 | 1.1 | `RoleId` 闭集 → branded string | `type RoleId = string & { __roleId: true }`；TS 侧引用点约 18-20 文件机械改写（12 import 点 + §1.1 副本所在文件），运行时由 Profile 校验兜底 | 全仓 `tsc` 零错；现有软件团队行为零变化 |
 | 1.2 | **唯一事实源收敛** | §1.1 六处角色副本全部改为从 roles.ts 派生；`openclaw.plugin.json` 的手写 enum 与 config.ts 双源 → 由构建脚本从 roles.ts 生成或启动时一致性校验 | grep 全仓除 roles.ts 与生成物外无角色清单字面量 |
-| 1.3 | ROLES 调用点改 Profile 注入 | 12 个 import 点改为从"当前激活 Profile"取 | `/roles` 返回 profile 内容 |
+| 1.3 | ROLES 调用点改 Profile 注入 | 12 个依赖点（11 个三符号 import + skill-installer 的 normalizeRecommendedSkills）改为从"当前激活 Profile"取 | `/roles` 返回 profile 内容 |
 | 1.4 | **无类型文件数据驱动化**（v1.0 遗漏） | `ui/index.html` 硬编码 option、`ui/app.js` 默认角色与图标 map、`desktop/renderer/app.js`、`cli.mjs` 安装向导角色表 → 从 `/roles`（或 dist profiles JSON）驱动 | bankMock profile 下 UI 向导零软件角色残留（断言测试） |
 | 1.5 | **registry 测试重写** | `test-role-registry.mjs` 从 15 文件文本断言改为：角色 ID 唯一性 + 派生一致性 + UI/cli 数据驱动断言 | 新测试绿；人工 profile 可插拔不触发文本断言 |
 | 1.6 | config `teamProfile` + TeamState.profileId + 存量迁移 | 单一真相源语义（§2.3）：config 仅首次初始化生效；旧状态默认 software-rd；迁移幂等；状态文件名与 teamName 解耦 | 升级重启无感；切换后重启 profileId 保持 |
@@ -428,6 +428,6 @@ v1.1（2026-11-07 团队评审后）：
 
 ## 8. 修订记录
 
-- **v1.2（2026-11-07）**：外部评审版（v1.1）三源独立核实后增量修订。核实分工：gg_security（§1.1/§1.2 逐条 grep 复核）、gg_ui（§1.4/Phase5 落点验证）、gg_architect（§1.3 耦合面 + §2.3 切换机制）。v1.1 声称经核实全部属实，修正 8 处：skill-installer 实际 import normalizeRecommendedSkills（非三符号）；CJK 盲区归因精确化（CJK 即分隔符不形成 token，length>2 滤短 ASCII）；role-inference null 返回 :34（原 :38）；http-server 兜底 :1927-1928（原 :1924-1927）；drain 标注"现状无此机制，需新写"（现成仅 terminateManagedWorker 单点终止）；5.1 入口选型落定 header mini-button+modal（web UI 无 Settings tab）；5.3 补 i18n 双端字典分裂事实；§0.1 兜底行号同步。
+- **v1.2（2026-11-07）**：外部评审版（v1.1）三源独立核实后增量修订。核实分工：gg_security（§1.1/§1.2 逐条 grep 复核）、gg_ui（§1.4/Phase5 落点验证）、gg_architect（§1.3 耦合面 + §2.3 切换机制）。v1.1 声称经核实全部属实，修正 8 处：skill-installer 实际 import normalizeRecommendedSkills（非三符号）；CJK 盲区归因精确化（CJK 即分隔符不形成 token，length>2 滤短 ASCII）；role-inference null 返回 :34（原 :38）；http-server 兜底 :1927-1928（原 :1924-1927）；drain 标注"现状无此机制，需新写"（现成仅 terminateManagedWorker 单点终止）；5.1 入口选型落定 header mini-button+modal（web UI 无 Settings tab）；5.3 补 i18n 双端字典分裂事实；§0.1 兜底行号同步。**（同日终审复核：8 处修正逐条对代码再验证全部属实，含 model-settings-modal 实为 index.html:316；另清理 2 处 v1.2 遗留——§1.2 第二行陈旧注释与现状矛盾（中文词过滤是前瞻问题非现状），§1.1 表头/P1.3 的"12 个 import 三符号"计数改为"11+1"口径。）**
 - **v1.1（2026-11-07）**：吸收四路团队评审。§1 补入 6+ 处角色副本、registry 测试、UI/desktop/cli 硬编码、role-inference 三处兜底与 length 过滤、teamauto 类型收窄、状态文件命名等 v1.0 遗漏事实；§2 新增单一真相源/transition 状态机/WS 事件/归档 roles 快照/outputConstraints/knowledgePacks/workflows 分支语义，loader 改 fatal；§3 新增 Phase 0，P1 扩容至 7-9 天并纳入无类型文件与测试重写，P3 六包角色集按领域意见修订（对公信贷、贷后、研究所隔离、跟单/QC/审单归属、财务回款、traffic 泛化、平台多态），审校扩至六包；§4 补 WS 事件与 404/503 契约、归档列表提前到 v1；§7 出口标准全部改为可执行断言。
 - **v1.0（2026-11-07）**：初稿。
