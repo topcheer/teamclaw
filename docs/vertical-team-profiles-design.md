@@ -1,7 +1,7 @@
 # TeamClaw 多行业团队架构设计（TeamProfile）
 
-> 版本 v1.2 · 2026-11-07
-> 状态：v1.1 外部评审 + 三源独立核实（结论：声称全部属实，8 处行号/表述/机制修正已并入），待终审后按 Phase 实施
+> 版本 v1.3 · 2026-11-08
+> 状态：实施中（Phase 0 已完成，Phase 1 进行中）；v1.2 外部评审修正已并入，v1.3 含实施期勘误（§1.5 TS 5.9 事实 + Phase 1.1 混合 branded 裁决）
 > 范围：单实例单团队 + 可切换预置行业团队（软件研发 / 跨境电商 / 贸易 / 银行 / 证券 / 保险 / 自定义）
 
 ---
@@ -99,6 +99,7 @@ score += text.includes(token) ? 1 : 0                 // （前瞻：Phase 0.1 �
 - `tests/test-role-registry.mjs`：对 **15 个文件做文本级正则断言**（含 README.md、docs/index.html、ui/index.html、cli.mjs、plugin.json 必须出现各角色 ID）——**P1 落地必红，v1.0 未列，需同步重写为数据驱动断言**。
 - 无 prompt 逐字节 golden 测试，但 node:assert 脚本基建齐全（tests/run-tests.sh、test-worker-contracts 等），golden 可行（P1.7）。
 - branded string 可行性已核实：RoleId 未作 Record key、无 switch-case，20+ 处 `as RoleId` 强转与 branded 兼容（建议收敛为单一 `validateRoleId()`，Phase 0）。
+- **v1.3 勘误（P1.1 实施时实证）**：上条"字面量可赋 branded"在仓库锁定的 TypeScript 5.9 上**不成立**——TS 5.9 修复 #33050 不健全行为后，字符串字面量不能直接赋给 `string & { __roleId: true }`（严格形态将引爆 57 个编译错，其中 roles.ts 36 处，且与 manifest 生成器的数组字面量 JS 求值、single-source 测试的赋值形态 pin 两条文本契约死锁）。**改用混合形态**：`type RoleId = "pm" | ... | "data-engineer" | (string & { __roleId: true })`——种子联合保留、brand 分支经 validateRoleId 收纳任意 Profile 角色、未知字面量仍被编译器拒绝。已全量验证：编译零错、20 测试与基线字节级同态、防御性探针通过。
 
 ---
 
@@ -252,7 +253,7 @@ POST /api/v1/team/profile { profileId }
 
 | # | 任务 | 要点 | 验收 |
 |---|---|---|---|
-| 1.1 | `RoleId` 闭集 → branded string | `type RoleId = string & { __roleId: true }`；TS 侧引用点约 18-20 文件机械改写（12 import 点 + §1.1 副本所在文件），运行时由 Profile 校验兜底 | 全仓 `tsc` 零错；现有软件团队行为零变化 |
+| 1.1 | `RoleId` 闭集 → **混合 branded**（v1.3 修正） | `type RoleId = "pm" \| ... \| "data-engineer" \| (string & { __roleId: true })`——种子联合保留（TS 5.9 下字面量不可直赋纯 brand，见 §1.5 勘误），brand 分支收纳 Profile 任意角色（经 validateRoleId），未知字面量编译期拒绝；types.ts 单文件改动（G 已全量验证） | 全仓 `tsc` 零错；现有软件团队行为零变化；20 测试与基线同态 |
 | 1.2 | **唯一事实源收敛** | §1.1 六处角色副本全部改为从 roles.ts 派生；`openclaw.plugin.json` 的手写 enum 与 config.ts 双源 → 由构建脚本从 roles.ts 生成或启动时一致性校验 | grep 全仓除 roles.ts 与生成物外无角色清单字面量 |
 | 1.3 | ROLES 调用点改 Profile 注入 | 12 个依赖点（11 个三符号 import + skill-installer 的 normalizeRecommendedSkills）改为从"当前激活 Profile"取 | `/roles` 返回 profile 内容 |
 | 1.4 | **无类型文件数据驱动化**（v1.0 遗漏） | `ui/index.html` 硬编码 option、`ui/app.js` 默认角色与图标 map、`desktop/renderer/app.js`、`cli.mjs` 安装向导角色表 → 从 `/roles`（或 dist profiles JSON）驱动 | bankMock profile 下 UI 向导零软件角色残留（断言测试） |
@@ -400,6 +401,9 @@ v1.0（2026-11-07 上午）：
 - v1 仅内置 Profile，自定义留 v2。
 - 行业工具集成 P4 按需启动，不预建。
 
+v1.3（2026-11-08 实施期裁决）：
+- **RoleId 采用混合形态**：`种子 11 字面量联合 | (string & { __roleId: true })`。原设计的纯 branded string 在仓库锁定的 TS 5.9 下不可行（#33050 修复封死字面量直赋通道，严格形态 57 编译错且与 manifest 生成器/ single-source 测试两条文本契约死锁）；混合形态经全量验证达成 P1.1 全部目标（脱离闭集、Profile 角色经 validateRoleId 进入、未知字面量编译期拒绝），零越权改动。裁决人：编排者（Agent G 停工上报触发，探针证据见其实施报告）。
+
 v1.1（2026-11-07 团队评审后）：
 - **切换语义「归档 + 新建」经用户确认落定**（解除 v1.0 待确认状态）。
 - **TeamState.profileId 为唯一真相**；config `teamProfile` 仅首次初始化生效；状态文件名与 teamName 解耦。
@@ -428,6 +432,7 @@ v1.1（2026-11-07 团队评审后）：
 
 ## 8. 修订记录
 
+- **v1.3（2026-11-08）**：实施期勘误与裁决。§1.5 补 TS 5.9 勘误（#33050 修复后字面量不可直赋 branded string，原可行性记录不成立于仓库锁定版本）；Phase 1.1 改为混合 branded 形态（种子联合 | brand），§6 增对应决策记录。触发：Agent G 实施时按纪律停工上报 + 隔离探针证据（57 编译错清单、manifest 生成器 JS 求值约束、single-source 测试形态 pin），替代方案经全量验证后裁决采纳。
 - **v1.2（2026-11-07）**：外部评审版（v1.1）三源独立核实后增量修订。核实分工：gg_security（§1.1/§1.2 逐条 grep 复核）、gg_ui（§1.4/Phase5 落点验证）、gg_architect（§1.3 耦合面 + §2.3 切换机制）。v1.1 声称经核实全部属实，修正 8 处：skill-installer 实际 import normalizeRecommendedSkills（非三符号）；CJK 盲区归因精确化（CJK 即分隔符不形成 token，length>2 滤短 ASCII）；role-inference null 返回 :34（原 :38）；http-server 兜底 :1927-1928（原 :1924-1927）；drain 标注"现状无此机制，需新写"（现成仅 terminateManagedWorker 单点终止）；5.1 入口选型落定 header mini-button+modal（web UI 无 Settings tab）；5.3 补 i18n 双端字典分裂事实；§0.1 兜底行号同步。**（同日终审复核：8 处修正逐条对代码再验证全部属实，含 model-settings-modal 实为 index.html:316；另清理 2 处 v1.2 遗留——§1.2 第二行陈旧注释与现状矛盾（中文词过滤是前瞻问题非现状），§1.1 表头/P1.3 的"12 个 import 三符号"计数改为"11+1"口径。）**
 - **v1.1（2026-11-07）**：吸收四路团队评审。§1 补入 6+ 处角色副本、registry 测试、UI/desktop/cli 硬编码、role-inference 三处兜底与 length 过滤、teamauto 类型收窄、状态文件命名等 v1.0 遗漏事实；§2 新增单一真相源/transition 状态机/WS 事件/归档 roles 快照/outputConstraints/knowledgePacks/workflows 分支语义，loader 改 fatal；§3 新增 Phase 0，P1 扩容至 7-9 天并纳入无类型文件与测试重写，P3 六包角色集按领域意见修订（对公信贷、贷后、研究所隔离、跟单/QC/审单归属、财务回款、traffic 泛化、平台多态），审校扩至六包；§4 补 WS 事件与 404/503 契约、归档列表提前到 v1；§7 出口标准全部改为可执行断言。
 - **v1.0（2026-11-07）**：初稿。
