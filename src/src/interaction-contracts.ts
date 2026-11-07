@@ -1,4 +1,4 @@
-import { ROLES } from "./roles.js";
+import { validateRoleId } from "./roles.js";
 import type {
   RoleId,
   TaskHandoffContract,
@@ -14,7 +14,6 @@ import type {
 } from "./types.js";
 
 const CONTRACT_VERSION = "1.0";
-const ROLE_IDS = new Set<RoleId>(ROLES.map((role) => role.id));
 const RESULT_DELIVERABLE_KINDS = new Set<WorkerTaskResultDeliverable["kind"]>([
   "file",
   "directory",
@@ -56,11 +55,9 @@ export function normalizeOptionalContractText(raw: unknown): string | undefined 
 }
 
 export function normalizeContractRole(raw: unknown): RoleId | undefined {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const normalized = raw.trim() as RoleId;
-  return normalized && ROLE_IDS.has(normalized) ? normalized : undefined;
+  // Phase 0.3: single-source role validation lives in roles.ts
+  // (validateRoleId); this exported name keeps the contract-level API stable.
+  return validateRoleId(raw);
 }
 
 export function summarizeContractText(text: string, maxChars = 180): string {

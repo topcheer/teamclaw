@@ -7,6 +7,7 @@ import type {
   ControllerOrchestrationManifest,
   RoleId,
 } from "../types.js";
+import { validateRoleIdList } from "../roles.js";
 import { deriveStableProjectKey } from "../openclaw-workspace.js";
 
 const TEAMCLAW_ROLE_IDS = new Set<RoleId>([
@@ -24,21 +25,10 @@ const TEAMCLAW_ROLE_IDS = new Set<RoleId>([
 ]);
 
 export function normalizeManifestRoleList(raw: unknown): RoleId[] {
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  const roleIds: RoleId[] = [];
-  for (const entry of raw) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const normalized = entry.trim() as RoleId;
-    if (!normalized || !TEAMCLAW_ROLE_IDS.has(normalized) || roleIds.includes(normalized)) {
-      continue;
-    }
-    roleIds.push(normalized);
-  }
-  return roleIds;
+  // Phase 0.3: delegates to the shared validateRoleIdList guard in roles.ts.
+  // The hand-written TEAMCLAW_ROLE_IDS copy above intentionally stays until
+  // Phase 1.2 (single-source-of-truth convergence) removes it.
+  return validateRoleIdList(raw);
 }
 
 export function normalizeManifestStringList(raw: unknown): string[] {
