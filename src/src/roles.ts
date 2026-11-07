@@ -6,20 +6,6 @@ import { buildRoleOperatingRules, buildWorkerMemoryContractRules, composePrompt 
 // this registry and that list impossible to drift apart silently.
 import { ROLE_IDS as CANONICAL_ROLE_IDS } from "./role-ids.js";
 
-const TEAMCLAW_ROLE_IDS_TEXT = [
-  "pm",
-  "architect",
-  "developer",
-  "qa",
-  "release-engineer",
-  "infra-engineer",
-  "devops",
-  "security-engineer",
-  "designer",
-  "marketing",
-  "data-engineer",
-];
-
 const ROLES: RoleDefinition[] = [
   {
     id: "pm",

@@ -1,4 +1,32 @@
 #!/usr/bin/env node
+// Phase 1.5 (vertical-team-profiles-design.md section 1.5): the historical
+// per-file regex pins (15 files, one "must contain <role id>" pattern each)
+// are retired. They broke on every mechanical convergence step (Phase 1.2
+// removed the dead per-file TEAMCLAW_ROLE_IDS_TEXT copies, Phase 1.4 made the
+// UI/CLI/desktop role tables data-driven) and they would break again for
+// every profile-driven role set. This rewrite asserts the registry itself:
+//
+//   1. role-ids.ts is the only literal anchor - its ROLE_IDS array is the
+//      expected list everywhere else in this test (no second copy here).
+//   2. Runtime invariants via the dist build: 11 unique ids, registry,
+//      leaf, and ROLES entries all agree (test-side twin of the roles.ts
+//      module-init drift guard).
+//   3. Derived surfaces (openclaw.plugin.json enum, config schema enum,
+//      tool descriptions) carry exactly that role set - compared as sets at
+//      runtime / after JSON.parse, never as source regex pins, so refactors
+//      of the surrounding code cannot break these assertions.
+//   4. The untyped role surfaces (web UI app.js, installer CLI, desktop
+//      renderer) stay literal-free: no quoted role id may appear in them,
+//      with the two documented exemptions (cli.mjs migration sentinel,
+//      desktop roleTone() tone buckets). Adding a role to the registry must
+//      not require touching any of these files.
+//   5. The Phase 1.4 wiring pins are kept (registry-fed option rendering).
+//   6. The gateway lifecycle pins that used to live in this file are kept:
+//      they are unrelated to roles but this was their only coverage.
+//
+// This file deliberately does NOT pin types.ts: the RoleId union shape is
+// owned by test-role-single-source.mjs and is being reworked (branded
+// string); the runtime set checks below cover membership either way.
 
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -7,87 +35,176 @@ import { fileURLToPath } from "node:url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, "..");
-const rolesPath = path.join(projectRoot, "src", "src", "roles.ts");
-const typesPath = path.join(projectRoot, "src", "src", "types.ts");
-const configPath = path.join(projectRoot, "src", "src", "config.ts");
-const workerPromptPath = path.join(projectRoot, "src", "src", "worker", "prompt-injector.ts");
-const taskExecutorPath = path.join(projectRoot, "src", "src", "task-executor.ts");
-const controllerPromptPath = path.join(projectRoot, "src", "src", "controller", "prompt-injector.ts");
-const manifestPath = path.join(projectRoot, "src", "src", "controller", "orchestration-manifest.ts");
-const managedGatewayProcessPath = path.join(projectRoot, "src", "src", "controller", "managed-gateway-process.ts");
-const controllerToolsPath = path.join(projectRoot, "src", "src", "controller", "controller-tools.ts");
-const workerToolsPath = path.join(projectRoot, "src", "src", "worker", "tools.ts");
-const cliPath = path.join(projectRoot, "src", "cli.mjs");
-const uiIndexPath = path.join(projectRoot, "src", "src", "ui", "index.html");
-const uiAppPath = path.join(projectRoot, "src", "src", "ui", "app.js");
-const pluginJsonPath = path.join(projectRoot, "src", "openclaw.plugin.json");
-const readmePath = path.join(projectRoot, "README.md");
-const sitePath = path.join(projectRoot, "docs", "index.html");
+const readSource = (rel) => fs.readFile(path.join(projectRoot, rel), "utf8");
 
-const expectedRoles = [
-  "pm",
-  "architect",
-  "developer",
-  "qa",
-  "release-engineer",
-  "infra-engineer",
-  "devops",
-  "security-engineer",
-  "designer",
-  "marketing",
-  "data-engineer",
-];
+// Import a dist module, failing with a message that distinguishes "dist not
+// built yet" from "the roles.ts init drift guard fired at module load".
+async function importDist(rel, name) {
+  try {
+    return await import(path.join(projectRoot, "src", "dist", "src", rel));
+  } catch (error) {
+    assert.fail(
+      `${name} module failed to load (run npm --prefix src run build first; if the build is current, the roles.ts registry/leaf drift guard fired at module init: ${error?.message})`,
+    );
+  }
+}
+
+// Phase 1.5 pins the software-rd baseline role count as a conscious gate:
+// a role addition/removal must update this pin (and the Phase 1.2 golden
+// list in test-role-single-source.mjs) until TeamProfile makes the registry
+// profile-driven (design doc Phase 2+).
+const EXPECTED_ROLE_COUNT = 11;
+
+// Compare role collections as sets: membership is the contract, order of
+// derived surfaces is not (the registry order stays pinned by the deepEqual
+// checks in section 2 below).
+function assertSameRoleSet(actual, expected, message) {
+  assert.ok(Array.isArray(actual), `${message}: expected an array, got ${typeof actual}`);
+  assert.deepEqual([...actual].sort(), [...expected].sort(), message);
+}
+
+// Extract the parenthesized id list from a tool parameter description
+// ("Exact target role ID (pm, architect, ...)"). These descriptions are
+// hand-written source strings today; when they become generated from the
+// registry this extraction should be replaced by a runtime assertion.
+function extractDescribedRoleIds(source, name) {
+  const match = source.match(/Exact target role ID \(([^)]*)\)/);
+  assert.ok(
+    match,
+    `${name} must keep describing the target-role parameter with the parenthesized role id list (keep it in sync with the registry role ids)`,
+  );
+  return match[1].split(",").map((part) => part.trim()).filter(Boolean);
+}
 
 async function runRoleRegistrySmoke() {
-  const [
-    rolesSource,
-    typesSource,
-    configSource,
-    workerPromptSource,
-    taskExecutorSource,
-    controllerPromptSource,
-    manifestSource,
-    managedGatewayProcessSource,
-    controllerToolsSource,
-    workerToolsSource,
-    cliSource,
-    uiIndexSource,
-    uiAppSource,
-    pluginJsonSource,
-    readmeSource,
-    siteSource,
-  ] = await Promise.all([
-    fs.readFile(rolesPath, "utf8"),
-    fs.readFile(typesPath, "utf8"),
-    fs.readFile(configPath, "utf8"),
-    fs.readFile(workerPromptPath, "utf8"),
-    fs.readFile(taskExecutorPath, "utf8"),
-    fs.readFile(controllerPromptPath, "utf8"),
-    fs.readFile(manifestPath, "utf8"),
-    fs.readFile(managedGatewayProcessPath, "utf8"),
-    fs.readFile(controllerToolsPath, "utf8"),
-    fs.readFile(workerToolsPath, "utf8"),
-    fs.readFile(cliPath, "utf8"),
-    fs.readFile(uiIndexPath, "utf8"),
-    fs.readFile(uiAppPath, "utf8"),
-    fs.readFile(pluginJsonPath, "utf8"),
-    fs.readFile(readmePath, "utf8"),
-    fs.readFile(sitePath, "utf8"),
-  ]);
+  // -------------------------------------------------------------------------
+  // 1. Canonical literal anchor: the ROLE_IDS array in src/src/role-ids.ts.
+  // -------------------------------------------------------------------------
+  const roleIdsSource = await readSource("src/src/role-ids.ts");
+  const roleIdsLiteral = roleIdsSource.match(/export\s+const\s+ROLE_IDS[^=]*=\s*(\[[\s\S]*?\])\s*;/);
+  assert.ok(
+    roleIdsLiteral,
+    "role-ids.ts must export ROLE_IDS as an array literal (the single source this test and the manifest generator extract)",
+  );
+  const leafRoleIds = JSON.parse(roleIdsLiteral[1].replace(/,\s*\]/g, "]").replace(/'/g, '"'));
 
-  for (const role of expectedRoles) {
-    assert.match(rolesSource, new RegExp(`id:\\s*"${role}"`), `roles.ts should define ${role}`);
-    assert.match(typesSource, new RegExp(`\\|\\s*"${role}"`), `types.ts RoleId union should include ${role}`);
-    assert.match(typesSource, new RegExp(`"${role}"`), `types.ts VALID_ROLES should include ${role}`);
-    assert.match(readmeSource, new RegExp("`" + role + "`"), `README supported roles table should mention ${role}`);
+  // -------------------------------------------------------------------------
+  // 2. Runtime registry invariants (import the built dist modules, like
+  //    test-role-single-source.mjs - run npm --prefix src run build first).
+  // -------------------------------------------------------------------------
+  const rolesMod = await importDist("roles.js", "roles");
+  const roleIdsMod = await importDist("role-ids.js", "role-ids");
+  const configMod = await importDist("config.js", "config");
+
+  assert.equal(
+    rolesMod.ROLE_IDS.length,
+    EXPECTED_ROLE_COUNT,
+    `registry must expose exactly ${EXPECTED_ROLE_COUNT} roles (baseline pin - a deliberate role add/remove updates this)`,
+  );
+  assert.equal(
+    new Set(rolesMod.ROLE_IDS).size,
+    rolesMod.ROLE_IDS.length,
+    "role ids must be unique within the registry",
+  );
+  for (const roleId of rolesMod.ROLE_IDS) {
+    assert.match(
+      roleId,
+      /^[a-z][a-z0-9-]*$/,
+      "role ids must be lowercase slugs (they are used as CLI/UI tokens and quoted-literal scan needles)",
+    );
+  }
+  assert.deepEqual(rolesMod.ROLE_IDS, leafRoleIds, "roles.ts ROLE_IDS must equal the role-ids.ts literal (test-side twin of the roles.ts init guard)");
+  assert.deepEqual(roleIdsMod.ROLE_IDS, leafRoleIds, "role-ids.ts dist export must equal its own source literal");
+  assert.deepEqual(
+    rolesMod.ROLES.map((role) => role.id),
+    leafRoleIds,
+    "ROLES registry ids must equal the role-ids.ts literal (same order)",
+  );
+  for (const role of rolesMod.ROLES) {
+    assert.ok(
+      typeof role.label === "string" && role.label.length > 0,
+      `role ${role.id} must carry a non-empty label (untyped UI surfaces render labels from the registry)`,
+    );
   }
 
-  // Phase 1.4 minimal sync: the installer CLI and the web manual-task form no
-  // longer hardcode the role table — both derive it from the role registry
-  // (dist/src/roles.js for the CLI, GET /api/v1/roles for the UI), so the
-  // per-file "must contain <role id>" assertions above were replaced by
-  // data-driven wiring assertions. Deep coverage lives in
-  // tests/test-untyped-role-render.mjs.
+  // -------------------------------------------------------------------------
+  // 3. Derived surfaces carry exactly the registry role set.
+  // -------------------------------------------------------------------------
+  const [pluginJsonSource, controllerToolsSource, workerToolsSource] = await Promise.all([
+    readSource("src/openclaw.plugin.json"),
+    readSource("src/src/controller/controller-tools.ts"),
+    readSource("src/src/worker/tools.ts"),
+  ]);
+
+  // 3a. openclaw.plugin.json workerProvisioningRoles enum (JSON.parse, not regex).
+  const pluginJson = JSON.parse(pluginJsonSource);
+  assertSameRoleSet(
+    pluginJson.configSchema.properties.workerProvisioningRoles.items.enum,
+    leafRoleIds,
+    "openclaw.plugin.json workerProvisioningRoles enum must equal the registry role set (run scripts/sync-teamclaw-plugin-manifest.mjs after registry changes)",
+  );
+
+  // 3b. config schema workerProvisioningRoles enum (runtime import).
+  const configSchema = configMod.buildConfigSchema();
+  assertSameRoleSet(
+    configSchema.jsonSchema.properties.workerProvisioningRoles.items.enum,
+    leafRoleIds,
+    "config schema workerProvisioningRoles enum must equal the registry role set",
+  );
+
+  // 3c. Tool parameter descriptions list the registry roles (source-level
+  //     extraction until the descriptions are generated from the registry).
+  assertSameRoleSet(
+    extractDescribedRoleIds(controllerToolsSource, "controller-tools.ts"),
+    leafRoleIds,
+    "controller-tools.ts assignedRole description must list exactly the registry roles",
+  );
+  assertSameRoleSet(
+    extractDescribedRoleIds(workerToolsSource, "worker/tools.ts"),
+    leafRoleIds,
+    "worker/tools.ts targetRole description must list exactly the registry roles",
+  );
+
+  // -------------------------------------------------------------------------
+  // 4. Untyped role surfaces stay data-driven: no quoted role id literal.
+  //    Exemptions (same scope as tests/test-untyped-role-render.mjs):
+  //    - cli.mjs LEGACY_DEFAULT_PROVISIONING_ROLES: migration sentinel that
+  //      must keep matching the literal set old installer versions wrote.
+  //    - desktop roleTone(): substring buckets for CSS tone classes over
+  //      arbitrary role strings - presentation fallback, not a role table.
+  //    Prose/i18n copy and the ui/index.html command placeholder example
+  //      mention roles unquoted and are out of this scan's scope.
+  // -------------------------------------------------------------------------
+  const [cliSource, uiAppSource, desktopAppSource] = await Promise.all([
+    readSource("src/cli.mjs"),
+    readSource("src/src/ui/app.js"),
+    readSource("desktop/renderer/app.js"),
+  ]);
+  const cliScannable = cliSource.replace(/const LEGACY_DEFAULT_PROVISIONING_ROLES = \[[^\]]*\];/g, "");
+  const roleToneBlock = desktopAppSource.match(/function roleTone\([^)]*\)\s*\{[\s\S]*?\n\s*\}/);
+  const desktopScannable = roleToneBlock ? desktopAppSource.replace(roleToneBlock[0], "") : desktopAppSource;
+
+  for (const [name, source] of [
+    ["src/src/ui/app.js", uiAppSource],
+    ["src/cli.mjs", cliScannable],
+    ["desktop/renderer/app.js", desktopScannable],
+  ]) {
+    for (const roleId of leafRoleIds) {
+      const literalPattern = new RegExp('["\'`]' + roleId + '["\'`]');
+      assert.doesNotMatch(
+        source,
+        literalPattern,
+        `${name} must not hardcode the "${roleId}" role id literal (role tables render from the registry; see tests/test-untyped-role-render.mjs)`,
+      );
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // 5. Data-driven wiring pins (carried over from the Phase 1.4 minimal-sync
+  //    assertions): the installer CLI and the web manual-task form derive
+  //    their role tables from the registry instead of source literals.
+  // -------------------------------------------------------------------------
+  const uiIndexSource = await readSource("src/src/ui/index.html");
   assert.match(
     cliSource,
     /import\("\.\/dist\/src\/roles\.js"\)/,
@@ -109,31 +226,11 @@ async function runRoleRegistrySmoke() {
     "UI manual-task role options should be rendered from /roles data",
   );
 
-  assert.match(
-    rolesSource,
-    /const TEAMCLAW_ROLE_IDS_TEXT = \[/,
-    "roles.ts should keep a centralized TeamClaw role ID text list",
-  );
-  assert.match(
-    configSource,
-    /import \{ ROLE_IDS \} from "\.\/roles\.js";[\s\S]*workerProvisioningRoles:\s*\{[\s\S]*items:\s*\{[\s\S]*enum:\s*ROLE_IDS,/,
-    "config schema should validate provisioned role values against ROLE_IDS",
-  );
-  assert.match(
-    workerPromptSource,
-    /import \{ getRole \} from "\.\.\/roles\.js";[\s\S]*const TEAMCLAW_ROLE_IDS_TEXT = \[/,
-    "worker prompt should reuse shared role lookup and expose the TeamClaw role list text",
-  );
-  assert.match(
-    controllerPromptSource,
-    /import \{ ROLES \} from "\.\.\/roles\.js";[\s\S]*const TEAMCLAW_ROLE_IDS_TEXT = \[/,
-    "controller prompt should reuse shared roles and expose the TeamClaw role list text",
-  );
-  assert.match(
-    taskExecutorSource,
-    /import \{ getRole \} from "\.\/roles\.js";[\s\S]*const TEAMCLAW_ROLE_IDS_TEXT = \[/,
-    "task executor should reuse shared role lookup and expose the TeamClaw role list text",
-  );
+  // -------------------------------------------------------------------------
+  // 6. Gateway lifecycle pins (retained from the pre-rewrite file; this was
+  //    their only coverage and they are orthogonal to the role registry).
+  // -------------------------------------------------------------------------
+  const managedGatewayProcessSource = await readSource("src/src/controller/managed-gateway-process.ts");
   assert.match(
     managedGatewayProcessSource,
     /TEAMCLAW_PARENT_PID:\s*String\(process\.pid\)/,
@@ -148,33 +245,6 @@ async function runRoleRegistrySmoke() {
     managedGatewayProcessSource,
     /process\.kill\(parentPid,\s*0\)/,
     "managed gateway wrapper should monitor the controller PID and self-terminate when the parent disappears",
-  );
-  assert.match(
-    controllerToolsSource,
-    /Exact target role ID \(pm, architect, developer, qa, release-engineer, infra-engineer, devops, security-engineer, designer, marketing, data-engineer\)/,
-    "controller tools should describe target roles using the supported TeamClaw role IDs",
-  );
-  const validRoleIdsMatch = controllerToolsSource.match(/const VALID_ROLE_IDS = new Set\(\[([\s\S]*?)\]\);/);
-  assert.ok(validRoleIdsMatch, "controller tools should keep a VALID_ROLE_IDS allowlist");
-  const validRoleIds = validRoleIdsMatch[1].match(/"[^"]+"/g).map((entry) => entry.slice(1, -1));
-  assert.equal(validRoleIds.length, 11, "VALID_ROLE_IDS should cover all 11 TeamClaw roles");
-  assert.ok(validRoleIds.includes("data-engineer"), "VALID_ROLE_IDS should include data-engineer");
-  assert.match(
-    workerToolsSource,
-    /Exact target role ID \(pm, architect, developer, qa, release-engineer, infra-engineer, devops, security-engineer, designer, marketing, data-engineer\)/,
-    "worker tools should describe target roles using the supported TeamClaw role IDs",
-  );
-
-  const pluginJson = JSON.parse(pluginJsonSource);
-  const provisionRoleEnum = pluginJson.configSchema.properties.workerProvisioningRoles.items.enum;
-  for (const role of expectedRoles) {
-    assert.ok(provisionRoleEnum.includes(role), `openclaw.plugin.json workerProvisioningRoles enum should include ${role}`);
-  }
-
-  assert.match(
-    siteSource,
-    /data-n="11"[^>]*>0<\/div>\s*<div class="lbl">Roles on the team<\/div>/,
-    "GitHub Pages site should reflect the expanded role count",
   );
 
   console.log("Role registry smoke passed.");
