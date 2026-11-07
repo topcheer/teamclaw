@@ -116,6 +116,38 @@ function assertSchemaUsesSupportedKeywords(schema: unknown, at: string): void {
       throw new Error(`profiles schema ${at}: unsupported "type" value ${JSON.stringify(type)}`);
     }
   }
+  // Keyword FORM guards (review fix): the checker below only interprets a
+  // narrow form of each keyword; any other form (e.g. additionalProperties
+  // as a permissive subschema, non-string pattern, non-string required
+  // entries, non-number length/item bounds) would otherwise be SILENTLY
+  // ignored and the schema would validate less than it appears to.
+  if (schema.additionalProperties !== undefined && schema.additionalProperties !== false) {
+    throw new Error(
+      `profiles schema ${at}: "additionalProperties" is only supported as the literal false `
+        + `(permissive-subschema form is not implemented); found ${JSON.stringify(schema.additionalProperties)}`,
+    );
+  }
+  if (schema.pattern !== undefined && typeof schema.pattern !== "string") {
+    throw new Error(`profiles schema ${at}: "pattern" must be a string`);
+  }
+  if (
+    schema.required !== undefined
+    && (!Array.isArray(schema.required) || schema.required.some((entry) => typeof entry !== "string"))
+  ) {
+    throw new Error(`profiles schema ${at}: "required" must be an array of strings`);
+  }
+  if (schema.minLength !== undefined && typeof schema.minLength !== "number") {
+    throw new Error(`profiles schema ${at}: "minLength" must be a number`);
+  }
+  if (schema.minItems !== undefined && typeof schema.minItems !== "number") {
+    throw new Error(`profiles schema ${at}: "minItems" must be a number`);
+  }
+  if (schema.uniqueItems !== undefined && typeof schema.uniqueItems !== "boolean") {
+    throw new Error(`profiles schema ${at}: "uniqueItems" must be a boolean`);
+  }
+  if (schema.enum !== undefined && !Array.isArray(schema.enum)) {
+    throw new Error(`profiles schema ${at}: "enum" must be an array`);
+  }
   if (schema.properties !== undefined) {
     if (!isSchemaObject(schema.properties)) {
       throw new Error(`profiles schema ${at}: "properties" must be an object`);

@@ -190,6 +190,29 @@ assert.deepEqual(
   "resolveActiveRoleSkills must keep registry-first order and normalize like the registry helper",
 );
 
+// Review adoption: roles.ts keeps its own registry-layer copy of the
+// recommended-skills helpers; lock the two implementations together over the
+// whole registry (plus the no-role and raw-normalizer variants) so the
+// intentional duplication can never drift.
+const SKILL_PARITY_SAMPLE = ["find-skills", " Find-Skills ", "", "Extra Skill", "ui-ux-pro-max"];
+for (const role of rolesMod.ROLES) {
+  assert.deepEqual(
+    loader.resolveActiveRoleSkills(role.id, SKILL_PARITY_SAMPLE),
+    rolesMod.resolveRecommendedSkillsForRole(role.id, SKILL_PARITY_SAMPLE),
+    `resolveActiveRoleSkills("${role.id}") must equal the registry resolveRecommendedSkillsForRole`,
+  );
+}
+assert.deepEqual(
+  loader.resolveActiveRoleSkills(undefined, SKILL_PARITY_SAMPLE),
+  rolesMod.resolveRecommendedSkillsForRole(undefined, SKILL_PARITY_SAMPLE),
+  "roleId-less skill resolution must stay identical across both implementations",
+);
+assert.deepEqual(
+  loader.normalizeRecommendedSkills(SKILL_PARITY_SAMPLE),
+  rolesMod.normalizeRecommendedSkills(SKILL_PARITY_SAMPLE),
+  "normalizeRecommendedSkills implementations must agree",
+);
+
 // setActiveProfileId refuses unknown ids (programming error) and switches.
 assert.throws(() => loader.setActiveProfileId("nope"), /not a built-in profile/);
 loader.setActiveProfileId("software-rd");
@@ -236,6 +259,19 @@ assert.match(
   httpServerSource,
   /sendJson\(res, 200, \{ roles: getActiveRoles\(\), defaultRole: getActiveDefaultRole\(\) \}\);/,
   "GET /api/v1/roles must return { roles: <profile roles>, defaultRole } (the UI reads res.defaultRole)",
+);
+
+// 3e. Restoring a team state whose profileId is not a built-in profile is
+// FATAL at the controller layer (design 2.2 red line - a banking team must
+// never silently run the software baseline). The dist-level construction of
+// controller-service needs the full plugin runtime stack, so this is pinned
+// at source level: the restore branch's first statement must be the throw
+// (runtime persistence behavior is covered by test-state-migration.mjs).
+const controllerServiceSource = await readSource(path.join("src", "src", "controller", "controller-service.ts"));
+assert.match(
+  controllerServiceSource,
+  /if \(!hasProfile\(teamState\.profileId\)\) \{\s*throw new Error\(/,
+  "controller-service must throw (not warn+fallback) when a restored TeamState.profileId is not a built-in profile (design 2.2)",
 );
 
 console.log("software-rd profile golden smoke passed.");
