@@ -138,8 +138,8 @@
     },
     "domainInstructions": {
       "type": "array",
-      "items": { "type": "string" },
-      "description": "Reserved (Phase 2.4): industry guardrails; on non-software profiles these REPLACE buildRoleOperatingRules wholesale. software-rd must not set this field."
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Industry guardrails (Phase 2.4, design 2.1/2.4). On profiles that set this field the lines REPLACE buildRoleOperatingRules wholesale in the controller and worker prompt pipelines - the software engineering operating rules are NOT injected. software-rd must not set this field (fatal cross-validation in profile-loader)."
     },
     "outputConstraints": {
       "type": "object",
