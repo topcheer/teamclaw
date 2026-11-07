@@ -9,18 +9,25 @@
 // src/package.json (same-version release discipline).
 import { execSync } from "node:child_process";
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 const outDir = process.argv[2] || "dist-runtime";
 const teamclawVersion = JSON.parse(readFileSync(new URL("../src/package.json", import.meta.url), "utf8")).version;
 const openclawVersion = process.env.OPENCLAW_PIN || "latest";
+// Local builds can override the teamclaw source (e.g. TEAMCLAW_SPEC=file:../src)
+// to bundle the working tree instead of the published npm release.
+const teamclawSpec = process.env.TEAMCLAW_SPEC || `@teamclaws/teamclaw@${teamclawVersion}`;
 
 mkdirSync(path.join(outDir, "runtime"), { recursive: true });
-console.log(`[runtime-tar] openclaw@${openclawVersion} + @teamclaws/teamclaw@${teamclawVersion}`);
-execSync(`npm install --prefix ${path.join(outDir, "runtime")} openclaw@${openclawVersion} @teamclaws/teamclaw@${teamclawVersion}`, { stdio: "inherit" });
+console.log(`[runtime-tar] openclaw@${openclawVersion} + ${teamclawSpec}`);
+execSync(`npm install --prefix ${path.join(outDir, "runtime")} openclaw@${openclawVersion} ${JSON.stringify(teamclawSpec)}`, { stdio: "inherit" });
 writeFileSync(path.join(outDir, "runtime", "RUNTIME-VERSION"), `openclaw@${openclawVersion}\nteamclaw@${teamclawVersion}\n`, "utf8");
 const plat = process.platform + "-" + process.arch;
 const tar = `teamclaw-runtime-${plat}.tar.gz`;
-execSync(`tar czf ${path.join(outDir, tar)} -C ${outDir} runtime`, { stdio: "inherit" });
-execSync(`shasum -a 256 ${path.join(outDir, tar)} > ${path.join(outDir, tar)}.sha256`, { stdio: "inherit" });
+const tarPath = path.join(outDir, tar);
+execSync(`tar czf ${JSON.stringify(tarPath)} -C ${outDir} runtime`, { stdio: "inherit" });
+// Portable sha256 (node crypto): `shasum` does not exist on stock Windows.
+const sha256 = createHash("sha256").update(readFileSync(tarPath)).digest("hex");
+writeFileSync(`${tarPath}.sha256`, `${sha256}  ${tar}\n`, "utf8");
 console.log(`[runtime-tar] ${tar} ready (+.sha256)`);
