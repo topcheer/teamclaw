@@ -498,6 +498,27 @@ app.whenReady().then(async () => {
   // (build/icon.icns = site claw mark). The old runtime override pointed at
   // a legacy PNG and masked the bundle icon on every launch.
   await createMainWindow();
+  // Test hook (dev/CI driving, env-gated): when TC_TEST_HOOK is set, poll a
+  // command file and execute each line as JS inside the renderer; the JSON
+  // result is appended to <file>.result. Coordinates-free UI automation -
+  // vision-coordinate clicking proved unreliable for Electron DOM.
+  if (process.env.TC_TEST_HOOK) {
+    const hookFile = process.env.TC_TEST_HOOK;
+    const resultFile = `${hookFile}.result`;
+    setInterval(async () => {
+      let line = "";
+      try { line = (await fs.readFile(hookFile, "utf8")).trim(); } catch { return; }
+      if (!line) return;
+      try { await fs.writeFile(hookFile, "", { mode: 0o600 }); } catch { /* race */ }
+      const win = BrowserWindow.getAllWindows()[0];
+      if (!win) return;
+      let out = { error: "no window" };
+      try {
+        out = { value: await win.webContents.executeJavaScript(`(${line})()`) };
+      } catch (e) { out = { error: e instanceof Error ? e.message : String(e) }; }
+      try { await fs.appendFile(resultFile, JSON.stringify(out) + "\n"); } catch { /* best effort */ }
+    }, 500);
+  }
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       await createMainWindow();
@@ -983,24 +1004,28 @@ ipcMain.handle("runtime:is-ready", async () => {
   try {
     const cfg = JSON.parse(await fs.readFile(path.join(stateDir, "openclaw.json"), "utf8"));
     llm = Object.values(cfg?.models?.providers || {}).some((p) => p && p.apiKey);
+    // Plugin presence = registered in openclaw.json (the "Saved for the next
+    // Gateway start" record). The old extensions/teamclaw/dist probe missed
+    // npm-source installs (they land in npm/projects and only register in
+    // the config), so readiness read false and boot fell back to the wizard.
+    plugin = Boolean(cfg?.plugins?.entries?.teamclaw);
   } catch { /* no cfg */ }
   try {
-    // Same resolution order as the installer: bundled real-file first, then
-    // sandbox runtime, then global. A bundled install has no sandbox runtime
-    // dir, so the old .bin-first check missed it and readiness read false.
+    // Binary candidates kept as a secondary signal (bundled/sandbox/global).
     const candidates = [
       bundledBinary("openclaw"),
       path.join(app.getPath("userData"), "runtime", "node_modules", ".bin", "openclaw"),
       (await hasOpenClawInstalled()) ? "openclaw" : null,
     ];
     const cand = candidates.find(Boolean) || null;
-    // File-based probe (no CLI): after a bundled install the sealed tree is
-    // 300+ packages and `plugins list` takes tens of seconds - it stalled the
-    // readiness gate entirely. The installed-plugin marker on disk is
-    // equivalent and instant.
-    plugin = fsSync.existsSync(path.join(stateDir, "extensions", "teamclaw", "dist", "index.js"));
+    if (!plugin) plugin = Boolean(cand) && fsSync.existsSync(path.join(stateDir, "extensions", "teamclaw", "dist", "index.js"));
+    void cand;
   } catch { /* no runtime */ }
-  return { ready: llm && plugin, llm, plugin };
+  // Readiness = plugin installed + runtime binary present. LLM keys must NOT
+  // gate readiness: "configure later" is a supported wizard path, and a
+  // user who finished the install should boot straight into their private
+  // instance (llm is still reported separately for the wizard to surface).
+  return { ready: plugin, llm, plugin };
 });
 
 ipcMain.handle("bootstrap:install", async (event, options) => {

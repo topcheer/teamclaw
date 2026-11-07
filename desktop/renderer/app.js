@@ -3467,11 +3467,20 @@ import { createT as i18nCreateT } from "./i18n.js";
   }
 
   async function reconnectAfterLocalInstall() {
+    // Sandbox = blank machine: NEVER fall back to the host's production
+    // controller on 9527 - an empty saved URL means show the setup state,
+    // not dial whatever else runs on this host.
+    const fallbackUrl = state.settings && state.settings.sandbox ? '' : 'http://127.0.0.1:9527';
     const reconnectUrl = normalizeBaseUrl(
       state.controllerUrl
         || (state.settings && state.settings.controllerUrl)
-        || 'http://127.0.0.1:9527',
+        || fallbackUrl,
     );
+    if (!reconnectUrl) {
+      state.unavailableScreenVisible = true;
+      renderUnavailableScreen();
+      return;
+    }
     $('#controller-url').value = reconnectUrl;
     state.controllerUrl = reconnectUrl;
     state.unavailableReason = t("bootstrap.connecting");
@@ -3631,8 +3640,10 @@ import { createT as i18nCreateT } from "./i18n.js";
         // start the private instance, wait for the controller announce, connect
         // - and open the dashboard in the browser like a running install does.
         try {
-          const st = await desktop.standaloneStart({}, inst || null).catch(() => null);
+          const wizLog = (line) => { const el = document.getElementById("bootstrap-log"); if (el) el.textContent += `\n[connect] ${line}`; };
+          const st = await desktop.standaloneStart({}, inst || null).catch((e) => { wizLog("start failed: " + (e && e.message)); return null; });
           if (st && st.controllerUrl) {
+            wizLog("instance up at " + st.controllerUrl + " - waiting for controller...");
             let ok = false;
             for (let i = 0; i < 45 && !ok; i++) {
               try { const res = await fetch(`${st.controllerUrl}/api/v1/tunnel/status`, { signal: AbortSignal.timeout(1500) }); ok = res.ok; } catch {}
@@ -3640,13 +3651,16 @@ import { createT as i18nCreateT } from "./i18n.js";
             }
             if (ok) {
               await desktop.instanceSet({ mode: "private", lifecycle: (inst && inst.lifecycle) || "app", controllerUrl: st.controllerUrl, gatewayPort: st.port || null, controllerPort: st.controllerPort || null, llmConfigured: true }).catch(() => {});
-              await connectController(st.controllerUrl, { skipConversation: true }).catch(() => {});
+              await connectController(st.controllerUrl, { skipConversation: true }).catch((e) => wizLog("connect failed: " + (e && e.message)));
               // Desktop private instance intentionally does NOT open the
               // web UI in a browser - the desktop app IS the UI (user ruling).
               return;
             }
+            wizLog("controller never answered on " + st.controllerUrl);
+          } else if (st) {
+            wizLog("instance started but no controller URL (announce timeout)");
           }
-        } catch { /* fall through to the wizard screen */ }
+        } catch (e) { const el = document.getElementById("bootstrap-log"); if (el) el.textContent += `\n[connect] unexpected: ${e && e.message}`; }
         if (hasOpenClaw) {
           await reconnectAfterLocalInstall();
           return;
