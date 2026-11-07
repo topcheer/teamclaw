@@ -192,6 +192,7 @@ function buildExternalWorkerInstallInfo(req: IncomingMessage, config: PluginConf
   return {
     teamName: config.teamName,
     recommendedControllerUrl,
+    defaultRole: DEFAULT_ROLE,
     roles: ROLES.map((role) => ({ id: role.id, label: role.label, icon: role.icon })),
     autoDiscoveryCommandPrefix:
       `npx -y ${EXTERNAL_WORKER_INSTALL_SPEC} install --yes --install-mode worker --team-name ${shellEscapeSingleQuotes(config.teamName)} --worker-role `,

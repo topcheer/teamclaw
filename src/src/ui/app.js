@@ -2059,7 +2059,7 @@
       return;
     }
     if (!roles.some(function (role) { return role.id === selectedExternalWorkerRole; })) {
-      selectedExternalWorkerRole = resolveDefaultRoleId(roles);
+      selectedExternalWorkerRole = resolveDefaultRoleId(roles, info.defaultRole);
     }
     if (selectedExternalWorkerDiscoveryMode === "manual" && !info.recommendedControllerUrl) {
       selectedExternalWorkerDiscoveryMode = "mdns";
@@ -3137,11 +3137,13 @@
     }
   }
 
-  // Default role for the external-worker install card: prefer a default the
-  // backend advertises on /roles, else fall back to the first registry entry.
-  function resolveDefaultRoleId(roles) {
-    if (roleDefaultId && roles.some(function (role) { return role.id === roleDefaultId; })) {
-      return roleDefaultId;
+  // Default role for the external-worker install card: prefer the default the
+  // backend advertises on the externalWorkerInstall payload (/team/status),
+  // then one advertised on /roles, else fall back to the first registry entry.
+  function resolveDefaultRoleId(roles, payloadDefaultId) {
+    var preferred = typeof payloadDefaultId === "string" && payloadDefaultId ? payloadDefaultId : roleDefaultId;
+    if (preferred && roles.some(function (role) { return role.id === preferred; })) {
+      return preferred;
     }
     return roles.length > 0 ? roles[0].id : "";
   }

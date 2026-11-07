@@ -27,6 +27,7 @@ const projectRoot = path.resolve(scriptDir, "..");
 const uiIndexPath = path.join(projectRoot, "src", "src", "ui", "index.html");
 const uiAppPath = path.join(projectRoot, "src", "src", "ui", "app.js");
 const desktopAppPath = path.join(projectRoot, "desktop", "renderer", "app.js");
+const httpServerPath = path.join(projectRoot, "src", "src", "controller", "http-server.ts");
 const cliPath = path.join(projectRoot, "src", "cli.mjs");
 const distRolesPath = path.join(projectRoot, "src", "dist", "src", "roles.js");
 
@@ -53,10 +54,11 @@ const roleOptionLiteralPattern = new RegExp(
 );
 
 async function runUntypedRoleRenderSmoke() {
-  const [uiIndex, uiApp, desktopApp, cliSource] = await Promise.all([
+  const [uiIndex, uiApp, desktopApp, httpServerSource, cliSource] = await Promise.all([
     fs.readFile(uiIndexPath, "utf8"),
     fs.readFile(uiAppPath, "utf8"),
     fs.readFile(desktopAppPath, "utf8"),
+    fs.readFile(httpServerPath, "utf8"),
     fs.readFile(cliPath, "utf8"),
   ]);
 
@@ -102,8 +104,13 @@ async function runUntypedRoleRenderSmoke() {
   );
   assert.match(
     uiApp,
-    /function resolveDefaultRoleId\(roles\)/,
-    "external-worker default must resolve from the /roles payload",
+    /function resolveDefaultRoleId\(roles, payloadDefaultId\)/,
+    "external-worker default must resolve from the advertised payload default",
+  );
+  assert.match(
+    uiApp,
+    /resolveDefaultRoleId\(roles, info\.defaultRole\)/,
+    "external-worker card must pass the externalWorkerInstall payload default through",
   );
 
   // --- Desktop: no hardcoded external-worker role ------------------------
@@ -114,8 +121,20 @@ async function runUntypedRoleRenderSmoke() {
   );
   assert.match(
     desktopApp,
-    /state\.externalWorkerRole = roles\[0\]\.id;/,
-    "desktop must resolve the external-worker default from the controller role payload",
+    /state\.externalWorkerRole = validDefault \? payloadDefaultRole : roles\[0\]\.id;/,
+    "desktop must prefer the payload-advertised default over the first registry entry",
+  );
+  assert.match(
+    desktopApp,
+    /typeof info\.defaultRole === 'string' \? info\.defaultRole : ''/,
+    "desktop must read the external-worker default from the install payload",
+  );
+
+  // --- Backend: install payload advertises the registry default role -------
+  assert.match(
+    httpServerSource,
+    /defaultRole: DEFAULT_ROLE,/,
+    "buildExternalWorkerInstallInfo must expose the registry DEFAULT_ROLE so UIs restore the developer default",
   );
 
   // --- CLI: role table derived from the packaged registry ----------------
