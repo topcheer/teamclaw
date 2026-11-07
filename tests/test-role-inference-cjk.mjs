@@ -152,6 +152,78 @@ assert.equal(inferTaskRole({ assignedRole: "approver", title: "whatever", descri
 
 loaderMod.setActiveProfileId("software-rd");
 
+// --- f. Phase 2.5 LLM fallback wiring (fake injected callback, no real LLM) ---
+const kickoffMod = await import(
+  path.join(projectRoot, "src", "dist", "src", "controller", "kickoff-orchestrator.js")
+).catch(() => null);
+assert.ok(kickoffMod, "kickoff-orchestrator module must be built (run npm --prefix src run build first)");
+assert.equal(typeof kickoffMod.resolveTaskRoleWithLlmFallback, "function", "resolveTaskRoleWithLlmFallback must be exported for the Phase 2.5 fallback wiring");
+
+// f1. Fast path confident -> the LLM judge is not consulted.
+{
+  let judgeCalls = 0;
+  const role = await kickoffMod.resolveTaskRoleWithLlmFallback(
+    { assignedRole: undefined, title: "处理QA登录问题", description: "" },
+    { llmRoleJudge: async () => { judgeCalls += 1; return "pm"; } },
+  );
+  assert.equal(role, "qa", "confident fast path resolves without the LLM judge");
+  assert.equal(judgeCalls, 0, "LLM judge must not be called when the fast path is confident");
+}
+
+// f2. Tie -> the LLM judge decides; its answer is validated against the active profile.
+{
+  const seen = [];
+  const role = await kickoffMod.resolveTaskRoleWithLlmFallback(
+    { assignedRole: undefined, title: "修复CI流水线失败", description: "" },
+    {
+      llmRoleJudge: async ({ verdict }) => {
+        seen.push(verdict.reason);
+        return "devops";
+      },
+    },
+  );
+  assert.equal(role, "devops", "tie escalates to the LLM judge and adopts its role");
+  assert.deepEqual(seen, ["tie"], "the judge must see the tie verdict");
+}
+
+// f3. assignedRole passthrough short-circuits before the fast path.
+{
+  let judgeCalls = 0;
+  const role = await kickoffMod.resolveTaskRoleWithLlmFallback(
+    { assignedRole: "architect", title: "anything", description: "" },
+    { llmRoleJudge: async () => { judgeCalls += 1; return "qa"; } },
+  );
+  assert.equal(role, "architect", "assignedRole passthrough wins over the LLM fallback");
+  assert.equal(judgeCalls, 0, "LLM judge must not be called for assigned tasks");
+}
+
+// f4. Judge returns a role outside the active profile -> defaultRole.
+assert.equal(
+  await kickoffMod.resolveTaskRoleWithLlmFallback(
+    { assignedRole: undefined, title: "修复CI流水线失败", description: "" },
+    { llmRoleJudge: async () => "bogus-role" },
+  ),
+  "developer",
+  "invalid LLM judge output must degrade to the profile defaultRole",
+);
+
+// f5. Judge throws -> defaultRole (never fail the caller on fallback errors).
+assert.equal(
+  await kickoffMod.resolveTaskRoleWithLlmFallback(
+    { assignedRole: undefined, title: "修复CI流水线失败", description: "" },
+    { llmRoleJudge: async () => { throw new Error("llm down"); } },
+  ),
+  "developer",
+  "LLM judge failure must degrade to the profile defaultRole",
+);
+
+// f6. No judge wired -> defaultRole (Phase 0.1 configurable fallback).
+assert.equal(
+  await kickoffMod.resolveTaskRoleWithLlmFallback({ assignedRole: undefined, title: "修复CI流水线失败", description: "" }),
+  "developer",
+  "without an LLM judge the unconfident verdict degrades to the profile defaultRole",
+);
+
 // --- source-level pins: the three hardcoded developer fallbacks use DEFAULT_ROLE ---
 const readSource = (rel) => fs.readFileSync(path.join(projectRoot, rel), "utf8");
 
