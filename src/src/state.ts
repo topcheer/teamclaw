@@ -174,18 +174,62 @@ function legacyTeamStateFilePath(teamName: string): string {
   return path.join(STATE_DIR, `${teamName}-team-state.json`);
 }
 
+function isFileMissing(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException)?.code === "ENOENT";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function loadTeamState(teamName: string): Promise<TeamState | null> {
-  for (const filePath of [teamStateFilePath(), legacyTeamStateFilePath(teamName)]) {
-    try {
-      const raw = await fs.readFile(filePath, "utf8");
-      const parsed = JSON.parse(raw);
-      return migrateState(parsed);
-    } catch {
-      // Missing or unreadable candidate - fall through to the next one
-      // (pre-Phase-1.6 behavior returned null for the single legacy file).
+  // Review fix (Phase 1.6): the instance-scoped team-state.json is the
+  // primary state file, and when it EXISTS it is authoritative. A
+  // present-but-corrupt primary is a fatal error, never a silent fallback to
+  // the legacy snapshot - falling back would rewind the team to the
+  // pre-migration state and lose everything saved since. Only a MISSING
+  // primary (ENOENT) falls through to the one-time legacy read.
+  let primaryRaw: string | null = null;
+  try {
+    primaryRaw = await fs.readFile(teamStateFilePath(), "utf8");
+  } catch (error) {
+    if (!isFileMissing(error)) {
+      throw new Error(
+        `TeamClaw cannot read the persisted team state ${teamStateFilePath()}: ${errorMessage(error)}`,
+      );
     }
   }
-  return null;
+
+  if (primaryRaw !== null) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(primaryRaw);
+    } catch (error) {
+      throw new Error(
+        `TeamClaw team state file ${teamStateFilePath()} is not valid JSON (${errorMessage(error)}). `
+        + "Refusing to start with a fresh team over a corrupt state file - fix or remove the file manually.",
+      );
+    }
+    const migrated = migrateState(parsed);
+    if (!migrated) {
+      throw new Error(
+        `TeamClaw team state file ${teamStateFilePath()} exists but is not a valid team state. `
+        + "Refusing to start with a fresh team over an unusable state file - fix or remove the file manually.",
+      );
+    }
+    return migrated;
+  }
+
+  // Primary absent: one-time legacy fallback (pre-Phase-1.6 file name).
+  // Lenient by design, matching the pre-Phase-1.6 single-file behavior: a
+  // missing or corrupt legacy file simply means first initialization, and a
+  // corrupt legacy file is never overwritten (saves go to the new name).
+  try {
+    const legacyRaw = await fs.readFile(legacyTeamStateFilePath(teamName), "utf8");
+    return migrateState(JSON.parse(legacyRaw));
+  } catch {
+    return null;
+  }
 }
 
 async function saveTeamState(state: TeamState): Promise<void> {

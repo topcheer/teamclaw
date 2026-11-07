@@ -101,15 +101,19 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
         logger.info(`Controller: created new team "${config.teamName}" (profile: ${profileId})`);
       } else {
         // Restored state: TeamState.profileId is the runtime truth (config
-        // changes do not re-seed it). v1 states migrated by state.ts always
-        // carry a known id; a dangling reference would mean the profile was
-        // removed in a newer profile package - warn and stay on the baseline.
-        if (hasProfile(teamState.profileId)) {
-          setActiveProfileId(teamState.profileId);
-        } else {
-          setActiveProfileId(SOFTWARE_RD_PROFILE_ID);
-          logger.warn(`Controller: team state references unknown team profile "${teamState.profileId}"; running the "${SOFTWARE_RD_PROFILE_ID}" baseline`);
+        // changes do not re-seed it). A dangling reference means the profile
+        // package this team ran on is not available in this installation.
+        // Design 2.2 red line: FATAL, never silently run another profile -
+        // that is exactly how a banking team would degrade into the software
+        // baseline unnoticed. (The config-miss fallback above stays a warn:
+        // it only seeds first initialization, where no team exists yet.)
+        if (!hasProfile(teamState.profileId)) {
+          throw new Error(
+            `Controller: team state references team profile "${teamState.profileId}", which is not available in this installation. `
+            + "Check the teamProfile config value and the persisted state profileId, or reinstall a TeamClaw version that ships this profile.",
+          );
         }
+        setActiveProfileId(teamState.profileId);
         const previousRepoState = JSON.stringify(teamState.repo ?? null);
         teamState.repo = repoState ?? teamState.repo;
         repoStateChanged = JSON.stringify(teamState.repo ?? null) !== previousRepoState;
