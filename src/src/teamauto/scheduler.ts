@@ -2,6 +2,10 @@ import { randomBytes } from "node:crypto";
 
 import type { PluginLogger } from "../../api.js";
 import type { GithubAuthManager } from "../controller/github-auth.js";
+// Phase 2.3/2.5 (cross-review adopted suggestion): manual-proposal roles
+// validate against the ACTIVE profile and default to its defaultRole instead
+// of hardcoded software role literals.
+import { getActiveDefaultRole, validateActiveRoleId } from "../profile-loader.js";
 import type { TaskInfo, TeamState } from "../types.js";
 import { createGithubClient } from "./github-client.js";
 import { learnNorms, renderNormsBlock } from "./norms.js";
@@ -458,12 +462,17 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       throw new Error(`${repoId} not bound`);
     }
     const kind: Candidate["kind"] = input.kind === "takeOwnership" || input.kind === "issueReview" || input.kind === "prReview" || input.kind === "fullReview" ? input.kind : "issueReview";
+    // Cross-review adopted suggestion: the caller-supplied role is untrusted
+    // input - validate it against the ACTIVE profile (drops unknown and
+    // not-in-this-profile ids) and fall back to the profile defaultRole
+    // instead of the old hardcoded "developer"/"architect" software literals.
+    const role = validateActiveRoleId(input.role) ?? getActiveDefaultRole();
     const candidate: Candidate = {
       repoId,
       key: `${repoId}#manual-${Date.now()}`,
       kind,
       number: 0,
-      role: (input.role || (kind === "takeOwnership" ? "developer" : "architect")) as Candidate["role"],
+      role,
       writeMode: input.writeMode ?? (kind === "takeOwnership" ? "write" : "read-only"),
       title: input.title.slice(0, 120),
       reason: "manual proposal from agent tool",
