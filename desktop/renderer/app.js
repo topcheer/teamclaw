@@ -106,6 +106,10 @@ import { createT as i18nCreateT } from "./i18n.js";
     if (languageToggle) {
       languageToggle.textContent = state.language === "zh" ? t("action.languageToggleEn") : t("action.languageToggleZh");
     }
+    const wizardLanguageToggle = $("#wizard-language-toggle");
+    if (wizardLanguageToggle) {
+      wizardLanguageToggle.textContent = state.language === "zh" ? t("action.languageToggleEn") : t("action.languageToggleZh");
+    }
     const texts = [
       [".connection-card h2", "connection.title"],
       ["#wizard-open-btn", "connection.setup"],
@@ -176,6 +180,11 @@ import { createT as i18nCreateT } from "./i18n.js";
         const k = el.getAttribute("data-i18n");
         const v = t(k);
         if (v && v !== k) el.textContent = v;
+      });
+      document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+        const k = el.getAttribute("data-i18n-placeholder");
+        const v = t(k);
+        if (v && v !== k) el.placeholder = v;
       });
       if (selector === "#planning-list.closest") {
         const heading = $("#planning-list") && $("#planning-list").closest(".panel") ? $("#planning-list").closest(".panel").querySelector(".section-head h2") : null;
@@ -3496,6 +3505,9 @@ import { createT as i18nCreateT } from "./i18n.js";
     refreshWorkspaceTree().catch(() => {});
   });
   $('#language-toggle').addEventListener('click', function () {
+    setLanguage(state.language === 'zh' ? 'en' : 'zh');
+  });
+  $('#wizard-language-toggle').addEventListener('click', function () {
     setLanguage(state.language === 'zh' ? 'en' : 'zh');
   });
   $('#compose-focus-btn').addEventListener('click', function () {
