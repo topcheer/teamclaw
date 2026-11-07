@@ -7,6 +7,15 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// True sandbox switch for testing: on macOS Electron's userData follows the
+// SYSTEM home (NSHomeDirectory), not $HOME - env-HOME sandboxes silently
+// read the real user's config (that's how test instances ended up connected
+// to the production controller). TC_USER_DATA redirects userData before
+// anything reads it.
+if (process.env.TC_USER_DATA) {
+  app.setPath("userData", process.env.TC_USER_DATA);
+}
 const DEFAULT_SETTINGS = {
   // NO silent localhost default: an empty URL means "no instance chosen yet".
   // Boot must go through settings.instance; a hardcoded 9527 dials whatever
@@ -623,18 +632,7 @@ async function seedStandaloneConfig(preferredVendor, controllerPort) {
 async function standaloneStart(preferredVendor, remembered) {
   if (STANDALONE.child) return { ok: true, alreadyRunning: true, port: STANDALONE.port };
   // Port memory: reuse the ports recorded in settings.instance so restarts
-  // land on the SAME gateway/controller ports; only re-probe when the
-  // remembered port is taken by someone else.
-  const wantGw = Number(remembered?.gatewayPort) || null;
-  const isFree = async (port) => {
-    if (!port) return false;
-    const net = await import("node:net");
-    return await new Promise((resolve) => {
-      const srv = net.createServer();
-      srv.once("error", () => resolve(false));
-      srv.listen(port, "127.0.0.1", () => srv.close(() => resolve(true)));
-    });
-  };
+  // land on the SAME gateway/controller ports (probed + persisted below).
   const bin = await standaloneBinary();
   // Idempotent seed: a rewrite (even identical) trips the gateway config-guard
   // ("config changed during startup") and kills the spawn. Only seed when the
@@ -648,17 +646,52 @@ async function standaloneStart(preferredVendor, remembered) {
     const noController = c?.plugins?.entries?.teamclaw?.config?.mode !== "controller";
     needsSeed = noLlm || noGateway || noController;
   } catch { /* missing -> seed */ }
+  // Conflict-checked port fallback (user rule): BOTH the openclaw gateway
+  // port and the teamclaw controller port are probed BEFORE launch; an
+  // occupied preferred port falls back to the next free one (preferred+1..
+  // preferred+50, else any free port). The chosen pair is persisted into
+  // settings.instance FIRST - then the processes start on exactly those
+  // ports - so a restart lands on the same ports without re-shifting.
+  const isFreeLocal = async (port) => {
+    if (!port) return false;
+    const net = await import("node:net");
+    return await new Promise((resolve) => {
+      const srv = net.createServer();
+      srv.once("error", () => resolve(false));
+      srv.listen(port, "127.0.0.1", () => srv.close(() => resolve(true)));
+    });
+  };
+  const pickPortWithFallback = async (preferred, fallbackBase) => {
+    const base = Number.isFinite(preferred) && preferred > 0 ? preferred : fallbackBase;
+    if (await isFreeLocal(base)) return base;
+    for (let p = fallbackBase; p < fallbackBase + 50; p++) {
+      if (await isFreeLocal(p)) return p;
+    }
+    return await findFreePort();
+  };
+  const persistInstancePorts = async (instance) => {
+    try {
+      const s = await loadSettings();
+      s.instance = { ...(s.instance || {}), ...instance };
+      await saveSettings(s);
+    } catch { /* settings write failure must not kill the launch */ }
+  };
   const wantCtrl = Number(remembered?.controllerPort) || null;
-  if (needsSeed) await seedStandaloneConfig(preferredVendor, wantCtrl);
-  else if (wantCtrl) {
-    // Port memory must also hold when the rest of the config is intact.
+  const ctrlPort = await pickPortWithFallback(wantCtrl, 9527);
+  const gwPort = await pickPortWithFallback(Number(remembered?.gatewayPort) || null, ctrlPort + 100);
+  // Land the chosen pair BEFORE spawning anything (config + settings).
+  await persistInstancePorts({ mode: "private", gatewayPort: gwPort, controllerPort: ctrlPort });
+  if (needsSeed) await seedStandaloneConfig(preferredVendor, ctrlPort);
+  else {
+    // Pin the conflict-checked controller port into the sandbox config so
+    // the plugin does not race its own auto-shift against a taken 9527.
     try {
       const c = JSON.parse(await fs.readFile(sandboxCfgPath, "utf8"));
       const cur = c?.plugins?.entries?.teamclaw?.config?.port;
-      if (cur !== wantCtrl) await seedStandaloneConfig(preferredVendor, wantCtrl);
-    } catch { await seedStandaloneConfig(preferredVendor, wantCtrl); }
+      if (cur !== ctrlPort) await seedStandaloneConfig(preferredVendor, ctrlPort);
+    } catch { await seedStandaloneConfig(preferredVendor, ctrlPort); }
   }
-  STANDALONE.port = (wantGw && await isFree(wantGw)) ? wantGw : await findFreePort();
+  STANDALONE.port = gwPort;
   const logPath = path.join(standaloneStateDir(), "gateway.log");
   const logFd = fsSync.openSync(logPath, "a");
   const child = spawn(`"${bin}" gateway --port ${STANDALONE.port}`, {
@@ -689,6 +722,13 @@ async function standaloneStart(preferredVendor, remembered) {
     if (!controllerUrl) await new Promise((r) => setTimeout(r, 1000));
   }
   STANDALONE.controllerUrl = controllerUrl;
+  // If the controller still auto-shifted despite the pinned port (race with
+  // another process grabbing it between probe and bind), persist the ACTUAL
+  // bound port so the next start remembers reality.
+  const actualCtrl = controllerUrl ? Number(new URL(controllerUrl).port) : null;
+  if (actualCtrl && actualCtrl !== ctrlPort) {
+    await persistInstancePorts({ controllerPort: actualCtrl, controllerUrl });
+  }
   const mPort = controllerUrl ? Number(new URL(controllerUrl).port) : null;
   return {
     ok: true,
