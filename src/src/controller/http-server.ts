@@ -54,6 +54,7 @@ import {
   resolveActiveRoleSkills,
   setActiveProfileId,
   validateActiveRoleId,
+  type TeamProfileCapabilities,
 } from "../profile-loader.js";
 import {
   buildRepoSyncInfo,
@@ -3478,7 +3479,12 @@ function buildRepoTaskContext(repoInfo: RepoSyncInfo): string {
 }
 
 async function refreshControllerRepoState(deps: ControllerHttpDeps): Promise<GitRepoState | null> {
-  if (!deps.config.gitEnabled) {
+  // Phase 2.3: the ACTIVE PROFILE's git switch outranks the legacy config
+  // knob here - refreshing (or stamping) repo state for a profile that
+  // declared git off would re-introduce exactly the repo field the switch
+  // omitted for it (design 2.3: banking keeps no repo initialization). All
+  // callers already treat null as "no repo" (same as config gitEnabled off).
+  if (!deps.config.gitEnabled || !getActiveProfile().capabilities.git) {
     return null;
   }
 
@@ -4710,6 +4716,69 @@ const TRANSITION_BLOCKED_TASK_POST_PATH_RES = [
 const WORKER_REGISTER_PATH = "/api/v1/workers/register";
 const WORKER_HEARTBEAT_PATH_RE = /^\/api\/v1\/workers\/[^/]+\/heartbeat$/;
 
+// ===========================================================================
+// Capability 404 gates (Phase 2.3, vertical-team-profiles-design.md 4).
+//
+// Routes whose EXISTENCE depends on the active profile's capability switches.
+// A disabled capability hides its routes entirely: 404 (never 403 - the
+// resource does not exist for this team), with the owning `capability` key in
+// the error body so CI can assert the reason. software-rd ships all four
+// switches on, so its routing is unchanged.
+//
+// Ordering contract with the transition matrix above: the transition checks
+// run FIRST in handleRequest, so while a profile switch is in flight the
+// 503/409 transition semantics win over the steady-state 404 (e.g. POST
+// /repo/import during a switch to a git-less profile reports "retry later",
+// not "does not exist").
+// ===========================================================================
+
+type CapabilityGateKey = keyof TeamProfileCapabilities;
+
+/**
+ * Route -> capability map. Prefix entries hide the whole route family;
+ * exact entries are method-bound single routes. Routes NOT listed here stay
+ * up for every profile: capability-agnostic reads, capability reads that
+ * degrade gracefully instead of disappearing (GET /api/v1/repo answers
+ * { enabled: false } so the UI can render an off state), and - deliberately
+ * - POST /api/v1/controller/manifest: that endpoint records the controller
+ * INTAKE orchestration manifest (controllerRuns/projects/task bindings,
+ * requirement:complete), it is not a delivery-report surface, and the
+ * controller prompt rules make teamclaw_submit_manifest mandatory on every
+ * reply (controller-tools POSTs this endpoint) - gating it under
+ * deliveryReview would 404 every intake manifest of a deliveryReview=false
+ * team and break the intake loop (cross-review fix).
+ */
+const CAPABILITY_GATE_PREFIXES: ReadonlyArray<readonly [prefix: string, capability: CapabilityGateKey]> = [
+  ["/api/v1/teamauto", "teamauto"],
+  ["/api/v1/previews/", "runnablePreview"],
+  ["/api/v1/reports", "deliveryReview"],
+];
+const CAPABILITY_GATE_EXACT_PATHS: ReadonlyArray<readonly [method: string, pathname: string, capability: CapabilityGateKey]> = [
+  ["POST", "/api/v1/repo/import", "git"],
+  ["GET", "/api/v1/repo/bundle", "git"],
+];
+
+/**
+ * Returns the capability that owns `pathname` when the ACTIVE profile has it
+ * disabled, else null (route proceeds unchanged). Reads the active profile
+ * per request so the gates flip atomically with the switch's step-4 profile
+ * activation.
+ */
+function disabledCapabilityForPath(method: string, pathname: string): CapabilityGateKey | null {
+  const { capabilities } = getActiveProfile();
+  for (const [prefix, capability] of CAPABILITY_GATE_PREFIXES) {
+    if (pathname.startsWith(prefix) && !capabilities[capability]) {
+      return capability;
+    }
+  }
+  for (const [gatedMethod, gatedPath, capability] of CAPABILITY_GATE_EXACT_PATHS) {
+    if (method === gatedMethod && pathname === gatedPath && !capabilities[capability]) {
+      return capability;
+    }
+  }
+  return null;
+}
+
 function sleepForSwitchDrain(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -5298,6 +5367,23 @@ async function handleRequest(
       });
       return;
     }
+  }
+
+  // ==================== Capability 404 gates (Phase 2.3) ====================
+  // Steady-state existence gate, placed AFTER the transition matrix on
+  // purpose: while a switch is in flight the 503/409 transition semantics
+  // win over the steady-state 404 (e.g. repo import towards a git-less
+  // target reports "retry later" during the switch, "does not exist" after
+  // it). software-rd has all capabilities on, so this never fires there.
+  const gatedCapability = disabledCapabilityForPath(req.method ?? "", pathname);
+  if (gatedCapability) {
+    const profile = getActiveProfile();
+    sendJson(res, 404, {
+      error: `Team profile "${profile.id}" has the "${gatedCapability}" capability disabled - this endpoint does not exist for this team`,
+      capability: gatedCapability,
+      profileId: profile.id,
+    });
+    return;
   }
 
   // ==================== Web UI ====================

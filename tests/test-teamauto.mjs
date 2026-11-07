@@ -98,7 +98,12 @@ async function sourceContracts() {
   assert.match(scheduler, /kind: "sweep"/, "sweeps must be recorded");
   assert.match(scheduler, /kind: "writeback"/, "write-backs must be recorded");
   assert.match(scheduler, /kind: "bind"/, "binds must be recorded");
-  assert.match(scanner, /JOINT_REVIEW_ROLES/, "joint review roles must be an explicit shared constant");
+  // Joint review roles: explicit shared resolver derived from the ACTIVE
+  // profile (Phase 2.3 debt item 4 replaced the hardcoded role-id literal
+  // list + software-only role union; software-rd keeps the architect/qa/
+  // security-engineer trio, asserted in unitTests below).
+  assert.match(scanner, /resolveJointReviewSections\(\)/, "joint review roles must derive from the active profile via the shared resolver");
+  assert.match(scanner, /getActiveProfile\(\)/, "the scanner must read the joint-review role set from the active profile");
 
   // Collaboration contract: read/write classification, worktree+PR delivery, write serialization.
   assert.match(scanner, /writeMode: "write",/, "takeOwnership candidates must be classified as write tasks");

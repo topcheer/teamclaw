@@ -98,7 +98,8 @@
           },
           "labelZh": {
             "type": "string",
-            "description": "Reserved (Phase 2.6): Chinese label; UI falls back to label while absent."
+            "minLength": 1,
+            "description": "Chinese display label (Phase 2.6). Optional: when absent, UI consumers fall back to label via the loader's resolveRoleDisplayName rule; present-but-empty fails load validation so the fallback never has to compete with a blank string."
           },
           "icon": {
             "type": "string",

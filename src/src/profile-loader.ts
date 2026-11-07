@@ -31,6 +31,7 @@ export type TeamProfileCapabilities = {
   deliveryReview: boolean;
 };
 
+
 export type TeamProfileOutputConstraints = {
   tailnote?: string;
   refusals?: string[];
@@ -490,6 +491,26 @@ function getActiveRole(id: RoleId): ProfileRoleDefinition | undefined {
 }
 
 /**
+ * Phase 2.6 labelZh fallback rule (vertical-team-profiles-design.md 2.1/2.6):
+ * the zh display name is labelZh when the role carries one, otherwise the
+ * English label. Encoded here - the loading-validation layer - so UI
+ * consumers (Phase 5) have a single backend source for the rule instead of
+ * re-implementing `labelZh ?? label` per surface; the schema guarantees a
+ * present labelZh is never an EMPTY string (minLength 1), and a
+ * whitespace-only labelZh (which minLength cannot reject) also falls back
+ * here via trim - a blank chip must never win over the fallback. v1 is
+ * bilingual only (design 5.3: no additional locales); "en" is accepted
+ * explicitly for symmetric rendering.
+ */
+function resolveRoleDisplayName(role: ProfileRoleDefinition, locale: "zh" | "en" = "zh"): string {
+  if (locale === "en") {
+    return role.label;
+  }
+  const labelZh = typeof role.labelZh === "string" ? role.labelZh.trim() : "";
+  return labelZh.length > 0 ? labelZh : role.label;
+}
+
+/**
  * Active-profile counterpart of roles.ts validateRoleId: returns the trimmed
  * role id when `raw` is a string naming a role of the active profile,
  * otherwise undefined. Never throws.
@@ -549,4 +570,5 @@ export {
   validateActiveRoleId,
   normalizeRecommendedSkills,
   resolveActiveRoleSkills,
+  resolveRoleDisplayName,
 };

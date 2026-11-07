@@ -1,3 +1,5 @@
+import { getActiveProfile } from "../profile-loader.js";
+import type { RoleId } from "../types.js";
 import type { SweepableIssue, SweepablePull, TeamAutoGithubClient } from "./github-client.js";
 import type { TeamAutoRepo } from "./store.js";
 
@@ -9,14 +11,39 @@ import type { TeamAutoRepo } from "./store.js";
 
 export type CandidateKind = "issueReview" | "takeOwnership" | "prReview" | "fullReview";
 
-/** Roles that jointly author a scheduled full review (one section each). */
-export const JOINT_REVIEW_ROLES = ["architect", "qa", "security-engineer"] as const;
+/**
+ * Joint full-review section definitions: which review sections exist and
+ * what each section focuses on. The ROLE SET is derived from the ACTIVE team
+ * profile at sweep time (Phase 2.3, P1 handover debt item 4): only sections
+ * whose role id is a role of the active profile are scheduled, replacing the
+ * old hardcoded role-id literal list + closed role union. software-rd keeps
+ * all three sections, so its sweeps are unchanged; a profile that carries
+ * none of the section roles simply produces no joint full-review candidates.
+ */
+const JOINT_REVIEW_SECTIONS: ReadonlyArray<{ id: RoleId; focus: string }> = [
+  {
+    id: "architect",
+    focus: "architecture and structure: module boundaries, layering, README/docs accuracy, maintainability hotspots, dead or duplicated code paths",
+  },
+  {
+    id: "qa",
+    focus: "quality and tests: test coverage gaps, flaky-test hotspots, error-handling weaknesses, missing failure-path tests, CI blind spots",
+  },
+  {
+    id: "security-engineer",
+    focus: "security surface: dependency risks, secret handling, injection/validation gaps, auth-sensitive paths, unsafe defaults",
+  },
+];
 
-const JOINT_REVIEW_FOCUS: Record<(typeof JOINT_REVIEW_ROLES)[number], string> = {
-  architect: "architecture and structure: module boundaries, layering, README/docs accuracy, maintainability hotspots, dead or duplicated code paths",
-  qa: "quality and tests: test coverage gaps, flaky-test hotspots, error-handling weaknesses, missing failure-path tests, CI blind spots",
-  "security-engineer": "security surface: dependency risks, secret handling, injection/validation gaps, auth-sensitive paths, unsafe defaults",
-};
+/**
+ * Joint-review sections whose roles exist in the ACTIVE profile, in section
+ * order (one candidate per role, one shared cycle). Derived per call so a
+ * profile switch flips the joint fan-out on the next sweep.
+ */
+export function resolveJointReviewSections(): ReadonlyArray<{ id: RoleId; focus: string }> {
+  const activeRoleIds = new Set(getActiveProfile().roles.map((role) => role.id));
+  return JOINT_REVIEW_SECTIONS.filter((section) => activeRoleIds.has(section.id));
+}
 
 export type Candidate = {
   kind: CandidateKind;
@@ -24,7 +51,12 @@ export type Candidate = {
   key: string; // idempotency key, e.g. "owner/repo#issue-42"
   number: number;
   title: string;
-  role: "qa" | "developer" | "architect" | "security-engineer";
+  /**
+   * Role the candidate is routed to. RoleId (not a software-only literal
+   * union) since Phase 2.3 debt item 4: candidates may name any role of the
+   * active profile.
+   */
+  role: RoleId;
   /** Collaboration contract: reviews are read-only, ownership work writes. */
   writeMode: "read-only" | "write";
   /** Shared full-review cycle id: write-backs group on it (umbrella issue). */
@@ -161,10 +193,12 @@ export async function sweepRepo(
     // repo whose first sweep observed nothing - see the deadlock note above).
     if (now - repo.cursors.lastFullReviewAt >= intervalMs) {
       const cycle = Math.floor(now / intervalMs);
-      // Joint review: one candidate per role, one shared cycle. Each role's
-      // reply becomes a labeled section of a single umbrella review issue
-      // (the write-back reconciler groups by the cycle key).
-      for (const role of JOINT_REVIEW_ROLES) {
+      // Joint review: one candidate per section role of the ACTIVE profile,
+      // one shared cycle. Each role's reply becomes a labeled section of a
+      // single umbrella review issue (the write-back reconciler groups by
+      // the cycle key).
+      for (const section of resolveJointReviewSections()) {
+        const role = section.id;
         candidates.push({
           repoId: repo.id,
           key: `${repo.id}#fullreview-${cycle}-${role}`,
@@ -177,7 +211,7 @@ export async function sweepRepo(
           reason: `scheduled ${repo.policy.actions.fullReview} full review (joint, ${role} section)`,
           context: [
             `Perform the ${role} section of a joint full-repository review of ${repo.id}.`,
-            `Your focus: ${JOINT_REVIEW_FOCUS[role]}.`,
+            `Your focus: ${section.focus}.`,
             "Other roles cover complementary areas in parallel - do NOT duplicate their scope; go deep on yours.",
             "Your reply becomes the " + role + " section of the joint review issue on GitHub. Do not change code.",
           ].join("\n"),

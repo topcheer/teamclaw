@@ -2,7 +2,11 @@ import { randomBytes } from "node:crypto";
 
 import type { PluginLogger } from "../../api.js";
 import type { GithubAuthManager } from "../controller/github-auth.js";
-import type { RoleId, TaskInfo, TeamState } from "../types.js";
+// Phase 2.3/2.5 (cross-review adopted suggestion): manual-proposal roles
+// validate against the ACTIVE profile and default to its defaultRole instead
+// of hardcoded software role literals.
+import { getActiveDefaultRole, validateActiveRoleId } from "../profile-loader.js";
+import type { TaskInfo, TeamState } from "../types.js";
 import { createGithubClient } from "./github-client.js";
 import { learnNorms, renderNormsBlock } from "./norms.js";
 import { createRepoSync, teamAutoProjectDir } from "./repo-sync.js";
@@ -426,11 +430,9 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         ].join("\n"),
         status: "pending",
         priority: candidate.kind === "takeOwnership" ? "high" : "medium",
-        // candidate.role comes from the scanner's literal role union
-        // ("qa" | "developer" | "architect" | "security-engineer"), not from
-        // untrusted input, so this cast only widens a known subset of RoleId.
-        // Phase 2.3 narrows the scanner role set per team profile.
-        assignedRole: candidate.role as RoleId,
+        // Candidate.role is RoleId since Phase 2.3 debt item 4 (scanner role
+        // set derives from the active team profile) - no cast needed.
+        assignedRole: candidate.role,
         writeMode: candidate.writeMode === "write" ? "write" : "read-only",
         createdBy: "teamauto",
         projectDir: teamAutoProjectDir(candidate.repoId),
@@ -460,12 +462,17 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       throw new Error(`${repoId} not bound`);
     }
     const kind: Candidate["kind"] = input.kind === "takeOwnership" || input.kind === "issueReview" || input.kind === "prReview" || input.kind === "fullReview" ? input.kind : "issueReview";
+    // Cross-review adopted suggestion: the caller-supplied role is untrusted
+    // input - validate it against the ACTIVE profile (drops unknown and
+    // not-in-this-profile ids) and fall back to the profile defaultRole
+    // instead of the old hardcoded "developer"/"architect" software literals.
+    const role = validateActiveRoleId(input.role) ?? getActiveDefaultRole();
     const candidate: Candidate = {
       repoId,
       key: `${repoId}#manual-${Date.now()}`,
       kind,
       number: 0,
-      role: (input.role || (kind === "takeOwnership" ? "developer" : "architect")) as Candidate["role"],
+      role,
       writeMode: input.writeMode ?? (kind === "takeOwnership" ? "write" : "read-only"),
       title: input.title.slice(0, 120),
       reason: "manual proposal from agent tool",

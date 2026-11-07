@@ -239,7 +239,7 @@ async function waitForSwitchCompletion(call, timeoutMs = 10000) {
     assert.ok(byId["software-rd"], "software-rd must be listed");
     assert.ok(byId["minimal-bank"], "the fixture profile must be listed");
     assert.equal(byId["software-rd"].roleCount, 11, "software-rd roleCount is the 11-role baseline");
-    assert.equal(byId["minimal-bank"].roleCount, 3, "fixture roleCount");
+    assert.equal(byId["minimal-bank"].roleCount, 4, "fixture roleCount (3 labeled roles + the Phase 2.6 labelZh-less role)");
     assert.equal(byId["minimal-bank"].nameZh, "最小银行团队", "profiles listing carries nameZh");
     assert.ok(byId["minimal-bank"].icon && byId["minimal-bank"].industry && byId["minimal-bank"].version, "profiles listing carries icon/industry/version");
 
@@ -314,7 +314,7 @@ async function waitForSwitchCompletion(call, timeoutMs = 10000) {
     assert.equal(rolesRes.status, 200);
     assert.deepEqual(
       rolesRes.json.roles.map((role) => role.id),
-      ["credit-officer", "risk-reviewer", "approver"],
+      ["credit-officer", "risk-reviewer", "approver", "aml-analyst"],
       "/roles returns the active profile role set after the switch",
     );
     assert.equal(rolesRes.json.defaultRole, "credit-officer");

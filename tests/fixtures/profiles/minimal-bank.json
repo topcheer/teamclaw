@@ -6,7 +6,7 @@
   "industry": "banking",
   "icon": "🏦",
   "version": "1.0.0",
-  "description": "Test-only minimal banking profile (3 fictional credit-line roles, all software capabilities off) used to exercise the Phase 2 profile switch/archive/capability-omission, domainInstructions replacement-injection, and bilingual role-inference paths. NOT shipped with the package - loaded only via TEAMCLAW_EXTRA_PROFILES_DIR.",
+  "description": "Test-only minimal banking profile (4 fictional credit-line roles - one deliberately without labelZh for the Phase 2.6 fallback - all software capabilities off) used to exercise the Phase 2 profile switch/archive/capability paths, domainInstructions replacement-injection, and bilingual role-inference. NOT shipped with the package - loaded only via TEAMCLAW_EXTRA_PROFILES_DIR.",
   "roles": [
     {
       "id": "credit-officer",
@@ -40,6 +40,16 @@
       "recommendedSkills": [],
       "systemPrompt": "You are a credit approver. Make approval decisions within mandate, or draft committee-mode minute-style conclusions for over-limit cases. Drafts only - never a final approval document.",
       "suggestedNextRoles": ["credit-officer"]
+    },
+    {
+      "id": "aml-analyst",
+      "label": "AML Analyst",
+      "icon": "🔎",
+      "description": "AML list screening and suspicious-transaction analysis (Phase 2.6 fixture: no labelZh, exercises the label fallback).",
+      "capabilities": ["aml-screening", "suspicious-transaction-analysis"],
+      "recommendedSkills": [],
+      "systemPrompt": "You are an anti-money-laundering analyst. Screen names against sanctions and PEP lists, analyze suspicious transaction patterns, and draft escalation memos. Never issue a formal regulatory filing.",
+      "suggestedNextRoles": ["risk-reviewer"]
     }
   ],
   "domainInstructions": [
