@@ -334,8 +334,11 @@ const ROLE_IDS: RoleId[] = ROLES.map((r) => r.id);
 // disagree (length, order, or membership): every consumer of either module
 // must see exactly one role set.
 if (ROLE_IDS.length !== CANONICAL_ROLE_IDS.length || ROLE_IDS.some((id, index) => id !== CANONICAL_ROLE_IDS[index])) {
+  const registryOnly = ROLE_IDS.filter((id) => !CANONICAL_ROLE_IDS.includes(id));
+  const leafOnly = CANONICAL_ROLE_IDS.filter((id) => !ROLE_IDS.includes(id));
   throw new Error(
-    "roles.ts ROLES ids and role-ids.ts ROLE_IDS have drifted apart - update both so the registry, prompts, and manifest stay in sync",
+    `roles.ts ROLES ids and role-ids.ts ROLE_IDS have drifted apart - update both so the registry, prompts, and manifest stay in sync `
+      + `(registry-only: [${registryOnly.join(", ")}]; role-ids.ts-only: [${leafOnly.join(", ")}])`,
   );
 }
 
