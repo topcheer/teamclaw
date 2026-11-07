@@ -89,6 +89,12 @@ export class WorkerProvisioningManager {
   private reconcilePromise: Promise<void> | null = null;
   private reconcileQueued = false;
   private stopped = false;
+  // Phase 2.1 (design 2.3, switch step 2): while a team profile switch drains
+  // and archives the old team, the periodic reconcile must not fight the
+  // drain by launching replacement workers for the outgoing profile's
+  // pending tasks. Suspended reconcile calls return immediately; it is
+  // lifted before the new profile's warmup so normal operation resumes.
+  private reconcileSuspended = false;
 
   constructor(deps: WorkerProvisioningManagerDeps) {
     this.deps = deps;
@@ -227,8 +233,13 @@ export class WorkerProvisioningManager {
     await this.terminateManagedWorker(workerId, reason, "terminated");
   }
 
+  /** Phase 2.1: suspend/resume the reconcile loop during a team profile switch. */
+  setReconcileSuspended(suspended: boolean): void {
+    this.reconcileSuspended = suspended;
+  }
+
   async requestReconcile(reason: string): Promise<void> {
-    if (!this.backend || this.stopped) {
+    if (!this.backend || this.stopped || this.reconcileSuspended) {
       return;
     }
 
@@ -324,6 +335,21 @@ export class WorkerProvisioningManager {
       message: failureDetails,
     });
     this.deps.logger.warn(`Provisioner: startup readiness degraded: ${failureDetails}`);
+  }
+
+  /**
+   * Phase 2.1 (design 2.3, switch step 5): warm the new profile's warmupRoles
+   * through the standard launch path after a profile switch. Dispatches the
+   * launches (prerequisites + ensureWarmWorkersForRoles); the workers then
+   * register asynchronously exactly like a cold start, so readiness tracking
+   * (startupReadiness polling / reconcile) covers the rest.
+   */
+  async warmRolesForTeamSwitch(roles: RoleId[], reason: string): Promise<void> {
+    if (!this.backend || this.stopped) {
+      return;
+    }
+    await this.ensureStartupProvisioningPrerequisites();
+    await this.ensureWarmWorkersForRoles(roles, reason);
   }
 
   async stop(): Promise<void> {
