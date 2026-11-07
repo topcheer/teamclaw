@@ -565,4 +565,57 @@ async function waitForSwitchCompletion(call, timeoutMs = 10000) {
   assert.equal(loaded.profileId, "software-rd");
 }
 
+// ---------------------------------------------------------------------------
+// Scenario 7 (review fix): the (archiving, target) ghost-archive window.
+// Crash point: the step-4 profileId flip reached disk, but the warming phase
+// never persisted. On disk this reads as transition.phase = "archiving" with
+// state.profileId = TARGET. The archive itself landed earlier under the
+// SOURCE profile's name, so a resume that keyed the archive lookup off
+// state.profileId would miss it, re-drain the already-emptied NEW team, and
+// write a ghost archive (target-named, 0 tasks) polluting /archived-teams.
+// ---------------------------------------------------------------------------
+{
+  const now = Date.now();
+  const flippedState = softwareRdState({
+    profileId: "minimal-bank",
+    teamName: "Minimal Bank Team",
+    workers: {},
+    tasks: {},
+    messages: [],
+    createdAt: now - 1000,
+  });
+  delete flippedState.repo;
+  flippedState.transition = { phase: "archiving", targetProfileId: "minimal-bank", startedAt: now - 2000 };
+  const scenario = await bootScenario({ initialState: flippedState });
+  try {
+    // The real archive for this switch: written by step 3 under the SOURCE
+    // profile's name, before the step-4 flip.
+    const sourceSnapshot = softwareRdState();
+    await stateMod.archiveTeamState(sourceSnapshot, {
+      id: "software-rd",
+      name: "Software R&D Team",
+      version: "1.0.0",
+      roles: loaderMod.getActiveProfile().roles,
+    });
+    assert.equal(listArchiveFiles().length, 1, "pre-seeded source archive for the crash construction");
+    assert.match(listArchiveFiles()[0], /^software-rd-/);
+
+    const resumed = await httpMod.resumeTeamProfileSwitch(scenario.deps);
+    assert.equal(resumed, true, "the ghost-window combination still resumes");
+
+    const files = listArchiveFiles();
+    assert.equal(files.length, 1, "resume must not write an additional archive in the ghost window");
+    assert.match(files[0], /^software-rd-\d+\.json$/, "no minimal-bank-named ghost archive may appear");
+    assert.doesNotMatch(files[0], /^minimal-bank-/);
+
+    const state = scenario.getTeamState();
+    assert.equal(state.profileId, "minimal-bank", "the resumed new team stays on the target profile");
+    assert.equal(state.transition, undefined, "transition cleared");
+    assert.equal(Object.keys(state.tasks).length, 0);
+    assert.equal(readStateFile().profileId, "minimal-bank", "resumed state persisted");
+  } finally {
+    await scenario.close();
+  }
+}
+
 console.log("Team profile switch smoke passed.");

@@ -4899,16 +4899,26 @@ export async function resumeTeamProfileSwitch(deps: ControllerHttpDeps): Promise
   deps.logger.info(
     `Controller: resuming interrupted team profile switch to "${transition.targetProfileId}" (phase: ${transition.phase}, started at ${new Date(transition.startedAt).toISOString()})`,
   );
-  // Phase "warming" implies step 4 already replaced the persisted state with
-  // the new team (so state.profileId is the TARGET and must not be used to
-  // locate the archive, which was written for the SOURCE profile); the
-  // archive necessarily precedes step 4. For "archiving"/"draining" the
-  // persisted profileId is still the source profile.
-  const archiveExists = transition.phase === "warming"
-    ? true
-    : Boolean(await findTeamSwitchArchive(state.profileId, transition.startedAt));
+  // A persisted state whose profileId already equals the target means step 4
+  // flipped the team identity onto the NEW team. Step 4 strictly follows the
+  // completed archive write in the same execution (the archive file lands
+  // atomically before step 4 runs), so that flip PROVES the archive exists.
+  // This covers both phase "warming" and the ghost-archive window between
+  // the step-4 flip reaching disk and the warming phase persisting - on disk
+  // that window reads as (phase "archiving", profileId = target), where
+  // looking up the SOURCE-named archive file with state.profileId would miss
+  // it and a re-drain would seal the already-emptied NEW team as a ghost
+  // archive entry. (Alternative considered: persisting a sourceProfileId on
+  // the transition - rejected; this flip predicate is the identical proof
+  // without transition-shape or migration churn, and it also degrades the
+  // manually-corrupted (draining, target) combination the same safe way.)
+  const step4Flipped = state.profileId === transition.targetProfileId;
+  const archiveExists = step4Flipped
+    || transition.phase === "warming"
+    || Boolean(await findTeamSwitchArchive(state.profileId, transition.startedAt));
+  const phaseAtOrAfterArchive = transition.phase === "archiving" || transition.phase === "warming";
   await executeTeamProfileSwitch(deps, transition.targetProfileId, {
-    skipArchive: archiveExists && (transition.phase === "archiving" || transition.phase === "warming"),
+    skipArchive: archiveExists && (phaseAtOrAfterArchive || step4Flipped),
   });
   return true;
 }
