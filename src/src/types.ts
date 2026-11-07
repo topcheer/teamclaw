@@ -4,6 +4,7 @@ import { DEFAULT_GITHUB_CLIENT_ID } from "./controller/github-auth.js";
 // at runtime (its types.js import is type-only), so no module cycle is formed.
 import { DEFAULT_ROLE } from "./roles.js";
 import { validateRoleId, validateRoleIdList } from "./roles.js";
+import { ROLE_IDS } from "./roles.js";
 
 export type TeamClawMode = "controller" | "worker";
 
@@ -879,11 +880,7 @@ const VALID_PROVISIONING_TYPES: WorkerProvisioningType[] = [
 ];
 
 // Not referenced at runtime anymore: role validation goes through
-// validateRoleId/validateRoleIdList in roles.ts (Phase 0.3). Kept as a
-// textual registry pin — tests/test-role-registry.mjs asserts every role id
-// appears in this file (Phase 1.2 will fold this copy into roles.ts).
-const VALID_ROLES: RoleId[] = [
-  "pm", "architect", "developer", "qa",
-  "release-engineer", "infra-engineer", "devops", "security-engineer",
-  "designer", "marketing", "data-engineer",
-];
+// validateRoleId/validateRoleIdList in roles.ts (Phase 0.3). Phase 1.2 folds
+// the former hand-written copy into the registry: the value now derives from
+// roles.ts ROLE_IDS so it can never drift from the single source of truth.
+const VALID_ROLES: RoleId[] = ROLE_IDS;
