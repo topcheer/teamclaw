@@ -5,6 +5,7 @@ import fsSync from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { ensureBundledRuntime } from "./runtime-extract.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -168,6 +169,30 @@ async function runShellCommand(command, options = {}) {
 //   artifact - prebuilt tar from the FIXED-URL GitHub release (runtime-latest)
 const BUNDLED_BIN_DIR = () => path.join(process.resourcesPath || "", "bin");
 
+// Compressed-form runtime (installers ship resources/bin/runtime.tgz; the
+// unpacked 1GB tree is history). Extracted to userData/bundled/runtime on
+// first use - see runtime-extract.mjs. Null until warmed / not bundled.
+let EXTRACTED_RUNTIME_DIR = null;
+async function warmBundledRuntime(onEvent) {
+  if (EXTRACTED_RUNTIME_DIR) return EXTRACTED_RUNTIME_DIR;
+  try {
+    EXTRACTED_RUNTIME_DIR = await ensureBundledRuntime({
+      resourcesBinDir: BUNDLED_BIN_DIR(),
+      userDataDir: app.getPath("userData"),
+      onEvent,
+    });
+  } catch (e) {
+    if (onEvent) onEvent({ phase: "runtime", line: "Bundled runtime extraction failed: " + (e && e.message) });
+  }
+  return EXTRACTED_RUNTIME_DIR;
+}
+function bundledRuntimeRoot() {
+  // Extracted dir (userData) wins; unpacked resources/bin/runtime remains
+  // for dev runs and legacy builds.
+  if (EXTRACTED_RUNTIME_DIR) return EXTRACTED_RUNTIME_DIR;
+  return path.join(BUNDLED_BIN_DIR(), "runtime");
+}
+
 function bundledBinary(name) {
   // extraResources embeds build/bundle -> Resources/bin. NOTE: the .bin
   // entries are SYMLINKS and electron-builder's copy breaks them (lstat
@@ -175,12 +200,12 @@ function bundledBinary(name) {
   //   openclaw  -> node_modules/openclaw/openclaw.mjs
   //   (any pkg) -> node_modules/<name>/... resolved per-package below
   if (name === "openclaw") {
-    const real = path.join(BUNDLED_BIN_DIR(), "runtime", "node_modules", "openclaw", "openclaw.mjs");
+    const real = path.join(bundledRuntimeRoot(), "node_modules", "openclaw", "openclaw.mjs");
     return fsSync.existsSync(real) ? real : null;
   }
   const direct = path.join(BUNDLED_BIN_DIR(), name);
   if (fsSync.existsSync(direct)) return direct;
-  const tree = path.join(BUNDLED_BIN_DIR(), "runtime", "node_modules", ".bin", name);
+  const tree = path.join(bundledRuntimeRoot(), "node_modules", ".bin", name);
   return fsSync.existsSync(tree) ? tree : null;
 }
 
@@ -202,6 +227,11 @@ async function ensureOpenClawRuntime({ source, artifactUrl }, onEvent) {
   // keeps openclaw+teamclaw peers resolvable inside one tree, which is what
   // makes fully-offline plugin registration work (a local-path plugins
   // install otherwise resolves its openclaw peer over npm).
+  const bundledPre = bundledBinary("openclaw");
+  if (!bundledPre) {
+    // Cold start before the whenReady warm-up finished - extract on demand.
+    await warmBundledRuntime(onEvent);
+  }
   const bundled = bundledBinary("openclaw");
   if (bundled) {
     onEvent({ phase: "openclaw", line: "Using bundled OpenClaw runtime: " + bundled });
@@ -567,6 +597,9 @@ async function createMainWindow() {
 }
 
 app.whenReady().then(async () => {
+  // Warm the compressed bundled runtime early so wizard clicks never wait
+  // on a first-use extraction (best effort - failures degrade to npm).
+  warmBundledRuntime().catch(() => {});
   // No app.dock.setIcon here: the Dock icon comes from the bundle icns
   // (build/icon.icns = site claw mark). The old runtime override pointed at
   // a legacy PNG and masked the bundle icon on every launch.
