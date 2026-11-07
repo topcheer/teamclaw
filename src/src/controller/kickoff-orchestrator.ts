@@ -16,9 +16,11 @@
  */
 
 import type { PluginLogger } from "../../api.js";
-import type { KickoffAssessment, KickoffPlan, RoleId, TeamState, WorkerInfo } from "../types.js";
+import type { KickoffAssessment, KickoffPlan, RoleId, TaskInfo, TeamState, WorkerInfo } from "../types.js";
 // Phase 1.3: role data comes from the active TeamProfile loader.
-import { getActiveRole, getActiveRoleIds } from "../profile-loader.js";
+import { getActiveDefaultRole, getActiveRole, getActiveRoleIds, validateActiveRoleId } from "../profile-loader.js";
+import { inferTaskRoleWithConfidence } from "./role-inference.js";
+import type { RoleInferenceVerdict } from "./role-inference.js";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -289,6 +291,63 @@ export function buildKickoffAssessmentPrompt(role: RoleId, requirement: string):
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ── Phase 2.5: LLM fallback for unconfident role inference (design 2.3) ─────
+//
+// The tiered token scoring in role-inference.ts is the FAST PATH only. When
+// it refuses to decide (all-zero, or the top two roles tie), the role
+// decision escalates to the controller LLM pass - the same LLM-driven intake
+// flow that drives this orchestrator (manifest requiredRoles, kickoff
+// candidateRoles, worker assessments). role-inference stays a pure module,
+// so the escalation lives here behind an injected callback: production
+// callers wire the callback to their controller-LLM session; tests inject a
+// fake. Without a callback the resolver degrades to the profile defaultRole
+// (the Phase 0.1 configurable fallback).
+
+export type TaskRoleResolutionDeps = {
+  /** Pure token fast path. Injectable so tests can pin the escalation wiring. */
+  inferWithConfidence?: typeof inferTaskRoleWithConfidence;
+  /**
+   * LLM fallback: ask the controller LLM pass to judge the role for the
+   * task. Returns a role id (validated against the active profile; invalid
+   * or null results fall back to the profile defaultRole).
+   */
+  llmRoleJudge?: (input: { task: Pick<TaskInfo, "assignedRole" | "title" | "description">; verdict: RoleInferenceVerdict }) => Promise<RoleId | string | null>;
+  logger?: Pick<PluginLogger, "info" | "warn">;
+};
+
+export async function resolveTaskRoleWithLlmFallback(
+  task: Pick<TaskInfo, "assignedRole" | "title" | "description">,
+  deps: TaskRoleResolutionDeps = {},
+): Promise<RoleId> {
+  const verdict = (deps.inferWithConfidence ?? inferTaskRoleWithConfidence)(task);
+  if (!verdict.needsLlmFallback) {
+    return verdict.role!;
+  }
+
+  if (deps.llmRoleJudge) {
+    try {
+      const judged = await deps.llmRoleJudge({ task, verdict });
+      const validated = validateActiveRoleId(judged);
+      if (validated) {
+        deps.logger?.info(
+          `RoleInference: LLM fallback judged role ${validated} (token fast path refused: ${verdict.reason})`,
+        );
+        return validated;
+      }
+      deps.logger?.warn(
+        `RoleInference: LLM fallback returned ${JSON.stringify(judged)} which is not a role of the active profile; using defaultRole`,
+      );
+    } catch (err) {
+      deps.logger?.warn(`RoleInference: LLM fallback failed (${err instanceof Error ? err.message : String(err)}); using defaultRole`);
+    }
+  } else {
+    deps.logger?.info(
+      `RoleInference: token fast path refused to decide (${verdict.reason}) and no LLM fallback is wired; using defaultRole`,
+    );
+  }
+  return getActiveDefaultRole();
 }
 
 export { ASSESSMENT_TIMEOUT_MS };

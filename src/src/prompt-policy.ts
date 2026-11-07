@@ -28,10 +28,30 @@ export function composePrompt(...sections: PromptSection[]): string {
   return lines.join("\n");
 }
 
+/**
+ * Phase 2.4 (design 2.1/2.4, replacement semantics): when the caller passes a
+ * non-empty `domainInstructions` (the active TeamProfile's industry
+ * guardrails), the domain lines REPLACE the software engineering operating
+ * rules wholesale - none of the software rules below are injected. Without
+ * the option (software-rd baseline, roles.ts registry init) the output is
+ * byte-identical to the pre-Phase-2.4 value, which the Phase 1.7 prompt
+ * goldens lock. The option is injected by the prompt pipelines (controller
+ * and worker prompt-injector) rather than read from the loader here: this
+ * module stays dependency-free so the roles.ts import chain cannot cycle.
+ */
 export function buildRoleOperatingRules(options: {
   suggestedRoles: string[];
   recommendedSkills: string[];
+  domainInstructions?: string[];
 }): string[] {
+  const domainInstructions = options.domainInstructions ?? [];
+  if (domainInstructions.length > 0) {
+    return [
+      "",
+      "## TeamClaw Operating Contract",
+      ...domainInstructions,
+    ];
+  }
   const suggestedRoles = options.suggestedRoles.length > 0 ? options.suggestedRoles.join(", ") : "none";
   const recommendedSkills = options.recommendedSkills.length > 0 ? options.recommendedSkills.join(", ") : "none";
   return [

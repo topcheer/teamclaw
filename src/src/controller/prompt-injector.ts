@@ -1,6 +1,6 @@
 import type { PluginConfig, TeamState } from "../types.js";
 // Phase 1.3: the advertised role set comes from the active TeamProfile.
-import { getActiveRoles } from "../profile-loader.js";
+import { getActiveDomainInstructions, getActiveRoles } from "../profile-loader.js";
 import {
   buildControllerCompletionRules,
   buildControllerDisciplineRules,
@@ -9,6 +9,7 @@ import {
   buildControllerStructuredContractRules,
   buildControllerToolRules,
   buildControllerWorkflowRules,
+  buildRoleOperatingRules,
   composePrompt,
 } from "../prompt-policy.js";
 import { hasOnDemandWorkerProvisioning, shouldBlockControllerWithoutWorkers } from "./controller-capacity.js";
@@ -93,6 +94,21 @@ export function createControllerPromptInjector(deps: ControllerPromptDeps) {
         ? ` Recommended skills: ${role.recommendedSkills.join(", ")}.`
         : "";
       parts.push(`- ${role.icon} ${role.label}: ${role.description}.${skillLine}`);
+    }
+
+    // Phase 2.4 (design 2.4): when the active profile carries industry
+    // guardrails, the controller's operating contract is replaced by them,
+    // assembled right after the role catalog (the controller-side analog of
+    // "after the role systemPrompt" on the worker pipeline). Profiles without
+    // domainInstructions (software-rd) inject nothing, so the controller
+    // prompt bytes are unchanged (Phase 1.7 golden).
+    const domainInstructions = getActiveDomainInstructions();
+    if (domainInstructions) {
+      parts.push(...buildRoleOperatingRules({
+        suggestedRoles: [],
+        recommendedSkills: [],
+        domainInstructions,
+      }));
     }
 
     // List existing projects so the controller can distinguish new vs. existing

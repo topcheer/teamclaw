@@ -6,7 +6,7 @@
   "industry": "banking",
   "icon": "🏦",
   "version": "1.0.0",
-  "description": "Test-only minimal banking profile (3 fictional credit-line roles, all software capabilities off) used to exercise the Phase 2 profile switch/archive/capability-omission paths. NOT shipped with the package - loaded only via TEAMCLAW_EXTRA_PROFILES_DIR.",
+  "description": "Test-only minimal banking profile (3 fictional credit-line roles, all software capabilities off) used to exercise the Phase 2 profile switch/archive/capability-omission, domainInstructions replacement-injection, and bilingual role-inference paths. NOT shipped with the package - loaded only via TEAMCLAW_EXTRA_PROFILES_DIR.",
   "roles": [
     {
       "id": "credit-officer",
@@ -14,7 +14,7 @@
       "labelZh": "客户经理",
       "icon": "📋",
       "description": "Corporate credit intake and due diligence.",
-      "capabilities": ["credit-intake", "due-diligence"],
+      "capabilities": ["credit-intake", "due-diligence", "核保", "贷前调查", "合规"],
       "recommendedSkills": [],
       "systemPrompt": "You are a corporate credit officer. Collect borrower materials, run AML list screening at intake, and draft due-diligence summaries. Never issue a formal approval opinion.",
       "suggestedNextRoles": ["risk-reviewer"]
@@ -25,7 +25,7 @@
       "labelZh": "风险审查",
       "icon": "🧮",
       "description": "Credit risk review and collateral valuation.",
-      "capabilities": ["risk-review", "collateral-valuation"],
+      "capabilities": ["risk-review", "collateral-valuation", "押品估值", "合规"],
       "recommendedSkills": [],
       "systemPrompt": "You are a credit risk reviewer. Review due-diligence outputs against credit policy, assess collateral valuation, and produce review opinions with explicit conclusions (pass / return for补充材料 / escalate).",
       "suggestedNextRoles": ["approver"]
@@ -36,11 +36,16 @@
       "labelZh": "审批人",
       "icon": "✅",
       "description": "Approval decision and committee-mode minutes.",
-      "capabilities": ["approval-decision", "committee-minutes"],
+      "capabilities": ["approval-decision", "committee-minutes", "贷审会", "合规"],
       "recommendedSkills": [],
       "systemPrompt": "You are a credit approver. Make approval decisions within mandate, or draft committee-mode minute-style conclusions for over-limit cases. Drafts only - never a final approval document.",
       "suggestedNextRoles": ["credit-officer"]
     }
+  ],
+  "domainInstructions": [
+    "Banking operating contract: every artifact you produce is an internal working draft - never a formal approval opinion, a regulatory filing, or an external submission.",
+    "Never fabricate customer data, credit figures, interest rates, or regulation/circular citation numbers; ask for the authoritative source and cite what you were given.",
+    "Escalate to a human decision-maker (clarification request) before any step that would touch real customer funds, credit bureau queries, or external systems."
   ],
   "capabilities": {
     "git": false,

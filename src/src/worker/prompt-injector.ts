@@ -1,7 +1,7 @@
 import type { PluginConfig, WorkerIdentity } from "../types.js";
 // Phase 1.3: the worker role prompt comes from the active TeamProfile.
-import { getActiveRole } from "../profile-loader.js";
-import { buildWorkerSessionRules, composePrompt } from "../prompt-policy.js";
+import { getActiveDomainInstructions, getActiveRole } from "../profile-loader.js";
+import { buildRoleOperatingRules, buildWorkerSessionRules, composePrompt } from "../prompt-policy.js";
 import { MessageQueue } from "./message-queue.js";
 
 // Phase 1.2: the local TEAMCLAW_ROLE_IDS_TEXT copy that used to live here was
@@ -24,9 +24,24 @@ export function createWorkerPromptInjector(
       return null;
     }
 
+    // Phase 2.4 (design 2.4): when the active profile carries industry
+    // guardrails they REPLACE the software operating rules and are assembled
+    // right after the role systemPrompt. Profiles without domainInstructions
+    // (software-rd) inject nothing here - the operating contract is already
+    // pre-composed into their systemPrompt - so the worker prompt bytes are
+    // unchanged (Phase 1.7 golden).
+    const domainInstructions = getActiveDomainInstructions();
+
     const parts: string[] = [
       `## TeamClaw Role: ${roleDef.label} ${roleDef.icon}`,
       roleDef.systemPrompt,
+      ...(domainInstructions
+        ? buildRoleOperatingRules({
+          suggestedRoles: roleDef.suggestedNextRoles,
+          recommendedSkills: roleDef.recommendedSkills,
+          domainInstructions,
+        })
+        : []),
       ...buildWorkerSessionRules(),
       "Important: submit structured collaboration contracts for all handoffs, reviews, progress updates, and result deliveries so the controller can route work without parsing freeform prose.",
       "Do not use sessions_yield or end your turn while background work, coding agents, or process sessions are still running.",

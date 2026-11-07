@@ -37,6 +37,16 @@ export type TeamProfileOutputConstraints = {
   citationPolicy?: Record<string, unknown>;
 };
 
+/**
+ * Profile role face (Phase 2.5, design 2.3): RoleDefinition plus the optional
+ * Chinese display label the schema already allows. role-inference reads
+ * labelZh as the highest-tier bilingual token source; the base
+ * RoleDefinition type is untouched (types.ts is registry-facing).
+ */
+export type ProfileRoleDefinition = RoleDefinition & {
+  labelZh?: string;
+};
+
 export type TeamProfile = {
   /** Profile schema format version (additive-only evolution, design 2.2). */
   schemaVersion: number;
@@ -49,7 +59,7 @@ export type TeamProfile = {
   reviewedBy?: string[];
   description: string;
   params?: Record<string, unknown>;
-  roles: RoleDefinition[];
+  roles: ProfileRoleDefinition[];
   domainInstructions?: string[];
   outputConstraints?: TeamProfileOutputConstraints;
   glossary?: string[];
@@ -345,6 +355,17 @@ function crossValidateProfile(profile: TeamProfile, profileFile: string): void {
   if (!roleIdSet.has(profile.defaultRole)) {
     referenceErrors.push(`defaultRole "${profile.defaultRole}" is not a role of this profile`);
   }
+  // Phase 2.4 red line (design 2.1/2.4): domainInstructions REPLACE the
+  // software operating rules, and the software-rd baseline deliberately does
+  // not carry them (its rules stay pre-composed in the role systemPrompts,
+  // locked byte-for-byte by the Phase 1.7 golden). Setting them on software-rd
+  // would double-inject an operating contract, so it is a fatal load error.
+  if (profile.id === SOFTWARE_RD_PROFILE_ID && profile.domainInstructions && profile.domainInstructions.length > 0) {
+    referenceErrors.push(
+      `the "${SOFTWARE_RD_PROFILE_ID}" baseline profile must not set domainInstructions `
+      + "(its operating rules stay pre-composed in the role systemPrompts; design 2.1/2.4)",
+    );
+  }
   for (const roleId of profile.warmupRoles) {
     if (!roleIdSet.has(roleId)) {
       referenceErrors.push(`warmupRoles entry "${roleId}" is not a role of this profile`);
@@ -440,7 +461,7 @@ function getActiveProfile(): TeamProfile {
   return profile;
 }
 
-function getActiveRoles(): RoleDefinition[] {
+function getActiveRoles(): ProfileRoleDefinition[] {
   return getActiveProfile().roles;
 }
 
@@ -452,8 +473,19 @@ function getActiveDefaultRole(): RoleId {
   return getActiveProfile().defaultRole;
 }
 
+/**
+ * Phase 2.4 (design 2.1/2.4): the active profile's industry guardrails, or
+ * undefined when the profile does not carry them (software-rd baseline).
+ * The prompt pipelines REPLACE buildRoleOperatingRules with these lines;
+ * a profile without them keeps the software operating rules unchanged.
+ */
+function getActiveDomainInstructions(): string[] | undefined {
+  const instructions = getActiveProfile().domainInstructions;
+  return instructions && instructions.length > 0 ? instructions : undefined;
+}
+
 /** Active-profile counterpart of roles.ts getRole. */
-function getActiveRole(id: RoleId): RoleDefinition | undefined {
+function getActiveRole(id: RoleId): ProfileRoleDefinition | undefined {
   return getActiveRoles().find((role) => role.id === id);
 }
 
@@ -512,6 +544,7 @@ export {
   getActiveRoles,
   getActiveRoleIds,
   getActiveDefaultRole,
+  getActiveDomainInstructions,
   getActiveRole,
   validateActiveRoleId,
   normalizeRecommendedSkills,
