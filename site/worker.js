@@ -1,4 +1,5 @@
 import site from "./index.html";
+import privacy from "./privacy.html";
 
 const HEADERS = {
   "content-type": "text/html;charset=utf-8",
@@ -19,6 +20,12 @@ export default {
         });
       }
       // Single-page marketing site: serve the page for any path.
+      if (url.pathname === "/privacy") {
+        return new Response(request.method === "HEAD" ? null : privacy, {
+          status: 200,
+          headers: HEADERS,
+        });
+      }
       return new Response(request.method === "HEAD" ? null : site, {
         status: 200,
         headers: HEADERS,
