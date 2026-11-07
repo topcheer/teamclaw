@@ -384,6 +384,51 @@ async function writeLlmConfigFile(cfgPath, { provider, endpoint, apiKey, model }
   await fs.writeFile(cfgPath, JSON.stringify(cfg, null, 2), { mode: 0o600 });
 }
 
+// Model discovery for the wizard: fetch the provider's model list from
+// MAIN process (renderer fetch is CORS-blocked by most provider APIs).
+// Returns { models: [id...] } or { error } - the renderer keeps manual
+// input as fallback either way.
+const PROVIDER_MODEL_SOURCES = {
+  openrouter: { url: "https://openrouter.ai/api/v1/models", auth: "none" },
+  openai: { url: "https://api.openai.com/v1/models", auth: "bearer" },
+  anthropic: { url: "https://api.anthropic.com/v1/models", auth: "anthropic" },
+  deepseek: { url: "https://api.deepseek.com/models", auth: "bearer" },
+  google: { url: "https://generativelanguage.googleapis.com/v1beta/models", auth: "query" },
+  zai: { url: "https://api.z.ai/api/paas/v4/models", auth: "bearer" },
+};
+async function fetchProviderModels(provider, endpoint, apiKey) {
+  const src = PROVIDER_MODEL_SOURCES[provider];
+  if (!src) return { models: [] };
+  const https = await import("node:https");
+  const target = endpoint && endpoint.trim() ? endpoint.trim().replace(/\/$/, "") + "/models" : src.url;
+  const headers = { Accept: "application/json" };
+  if (src.auth === "bearer" || src.auth === "anthropic") headers.Authorization = `Bearer ${apiKey}`;
+  if (src.auth === "anthropic") { headers["x-api-key"] = apiKey; headers["anthropic-version"] = "2023-06-01"; delete headers.Authorization; }
+  const url = new URL(target);
+  if (src.auth === "query") url.searchParams.set("key", apiKey);
+  const body = await new Promise((resolve, reject) => {
+    const req = https.get(url, { headers, timeout: 8000 }, (res) => {
+      let data = "";
+      res.on("data", (c) => { data += c; });
+      res.on("end", () => resolve({ status: res.statusCode, data }));
+    });
+    req.on("timeout", () => { req.destroy(new Error("timeout")); });
+    req.on("error", reject);
+  });
+  if (body.status !== 200) return { error: `HTTP ${body.status}` };
+  let ids = [];
+  try {
+    const json = JSON.parse(body.data);
+    const list = Array.isArray(json.data) ? json.data : Array.isArray(json.models) ? json.models : [];
+    ids = list.map((m) => (typeof m === "string" ? m : m.id || m.name || "")).filter(Boolean).map((id) => String(id).replace(/^models\//, ""));
+  } catch (e) { return { error: "bad payload" }; }
+  return { models: ids.slice(0, 200) };
+}
+ipcMain.handle("llm:list-models", async (_e, { provider, endpoint, apiKey }) => {
+  try { return await fetchProviderModels(provider, endpoint, apiKey); }
+  catch (e) { return { error: e instanceof Error ? e.message : String(e) }; }
+});
+
 // Global-mode LLM write (user explicitly chose "configure" over "use
 // existing"): writes the machine-level ~/.openclaw/openclaw.json. Only the
 // chosen provider entry + agents.defaults.model are merged in.
@@ -977,13 +1022,17 @@ ipcMain.handle("global:probe", async () => {
 // Global-mode gateway: spawn the system openclaw gateway (default state dir,
 // NO sandbox env). Fresh installs get LLM written by the wizard first;
 // pre-existing state is reused untouched.
-async function globalGatewayStart(preferredPort, extraEnv) {
+async function globalGatewayStart(preferredPort, extraEnv, binOverride) {
   const port = Number(preferredPort) || (await findFreePort());
   const logFd = fsSync.openSync(path.join(app.getPath("userData"), "global-gateway.log"), "a");
   const env = { ...(extraEnv || process.env) };
   delete env.OPENCLAW_STATE_DIR;
   delete env.OPENCLAW_PROFILE;
-  const child = spawn(`openclaw gateway --port ${port}`, {
+  // Blank machine (user-found on Windows): no `openclaw` on PATH - the
+  // wizard's global install self-provisions a runtime and hands its absolute
+  // binary here; PATH fallback keeps existing behavior.
+  const bin = binOverride || "openclaw";
+  const child = spawn(`"${bin}" gateway --port ${port}`, {
     cwd: env.HOME || process.env.HOME || process.cwd(),
     env,
     shell: true,
@@ -1001,7 +1050,7 @@ const GLOBAL_GATEWAY = { child: null, port: null };
 // LaunchAgent gateway so the controller comes up.
 ipcMain.handle("instance:install-into-global", async (event) => {
   const onEvent = (e) => { try { event.sender.send("bootstrap:install-event", e); } catch {} };
-  const globalCfg = path.join(process.env.HOME || "", ".openclaw", "openclaw.json");
+  const globalCfg = path.join(process.env.HOME || process.env.USERPROFILE || process.cwd(), ".openclaw", "openclaw.json");
   try {
     const bak = path.join(app.getPath("userData"), `global-cfg-backup-${Date.now()}.json`);
     await fs.copyFile(globalCfg, bak).catch(() => {});
@@ -1010,12 +1059,22 @@ ipcMain.handle("instance:install-into-global", async (event) => {
   // Target the GLOBAL state explicitly: the app process may already carry a
   // private instance's OPENCLAW_STATE_DIR, and inheriting it would install
   // into the wrong instance.
-  const gHome = process.env.HOME || process.cwd();
+  const gHome = process.env.HOME || process.env.USERPROFILE || process.cwd();
   const gEnv = { ...process.env, HOME: gHome, OPENCLAW_HOME: gHome };
   delete gEnv.OPENCLAW_STATE_DIR;
   delete gEnv.OPENCLAW_PROFILE;
+  // Blank machine: no `openclaw` on PATH. Self-provision a runtime first
+  // (bundled or sandbox npm install - no system npm required when bundled)
+  // and use ITS binary everywhere below; the old PATH-only commands failed
+  // and left the wizard stuck on step 3 forever.
+  let bin = "openclaw";
+  if (!(await hasOpenClawInstalled())) {
+    onEvent({ phase: "openclaw", line: "No OpenClaw on this machine - provisioning a runtime first..." });
+    bin = await ensureOpenClawRuntime({ source: "auto" }, onEvent);
+    onEvent({ phase: "openclaw", line: "Runtime ready: " + bin });
+  }
   onEvent({ phase: "teamclaw", line: "Installing TeamClaw into the global OpenClaw (explicit choice)..." });
-  await runShellStream("openclaw plugins install @teamclaws/teamclaw --force --accept-capabilities", gHome, (line) =>
+  await runShellStream(`"${bin}" plugins install @teamclaws/teamclaw --force --accept-capabilities`, gHome, (line) =>
     onEvent({ phase: "teamclaw", line }), gEnv);
   // The plugin defaults to WORKER mode; the desktop app needs this instance to
   // BE the controller. Without this the global gateway loads teamclaw as a
@@ -1039,7 +1098,7 @@ ipcMain.handle("instance:install-into-global", async (event) => {
   onEvent({ phase: "teamclaw", line: "Restarting the global gateway..." });
   let restarted = true;
   try {
-    await runShellStream("openclaw gateway restart", gHome, (line) =>
+    await runShellStream(`"${bin}" gateway restart`, gHome, (line) =>
       onEvent({ phase: "teamclaw", line }), gEnv);
   } catch {
     // No service manager (fresh machine, sandbox, Linux w/o systemd unit):
@@ -1054,12 +1113,12 @@ ipcMain.handle("instance:install-into-global", async (event) => {
       gPort = Number(c?.gateway?.port) || 18789;
     } catch { /* default */ }
     onEvent({ phase: "teamclaw", line: `No gateway service found - starting one on port ${gPort}...` });
-    await globalGatewayStart(gPort, { ...gEnv, HOME: gHome });
+    await globalGatewayStart(gPort, { ...gEnv, HOME: gHome }, bin);
   }
   // Resolve THIS instance's controller (pinned or auto-shifted port) from its
   // own config + gateway log - never the process-global 9527 default, which
   // may be another instance entirely.
-  const gStateDir = process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME || "", ".openclaw");
+  const gStateDir = gHome;
   let gCfg = null;
   try { gCfg = JSON.parse(await fs.readFile(path.join(gStateDir, "openclaw.json"), "utf8")); } catch { /* none */ }
   const controllerUrl = await resolveInstanceControllerUrl(gStateDir, controllerPortFromConfig(gCfg), [

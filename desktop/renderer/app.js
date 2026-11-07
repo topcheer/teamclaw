@@ -828,6 +828,61 @@ import { createT as i18nCreateT } from "./i18n.js";
     deepseek: "deepseek-chat",
     google: "gemini-3-pro",
   };
+  // Where to get an API key per provider (user spec: clickable hint).
+  const LLM_KEY_URLS = {
+    zai: "https://z.ai/model-api",
+    anthropic: "https://console.anthropic.com/settings/keys",
+    openai: "https://platform.openai.com/api-keys",
+    openrouter: "https://openrouter.ai/keys",
+    deepseek: "https://platform.deepseek.com/api_keys",
+    google: "https://aistudio.google.com/apikey",
+  };
+  let llmModelsFetchToken = 0;
+  function updateLlmKeyHint() {
+    const keyhint = document.getElementById("bootstrap-llm-keyhint");
+    const prov = document.getElementById("bootstrap-llm-provider");
+    if (!keyhint || !prov) return;
+    const url = LLM_KEY_URLS[prov.value];
+    // Only honor the "use existing" selection when the radio pair is
+    // actually visible (global mode). In private mode the hidden radios
+    // still exist in the DOM with `checked` on the first one - selecting it
+    // here hid the key hint for everyone (user-found).
+    const useRow = document.getElementById("bootstrap-llm-use-row");
+    const useExisting = document.querySelector('input[name="llm-source"]:checked');
+    const hideHint = Boolean(useRow && !useRow.hidden && useExisting && useExisting.value === "configured");
+    if (!url || hideHint) { keyhint.hidden = true; keyhint.innerHTML = ""; return; }
+    keyhint.hidden = false;
+    keyhint.innerHTML = `${escapeHtml(t("wizard.keyHint"))} <a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(prov.value)} → ${escapeHtml(url)}</a>`;
+  }
+  function scheduleLlmModelsFetch() {
+    const prov = document.getElementById("bootstrap-llm-provider");
+    const keyEl = document.getElementById("bootstrap-llm-apikey");
+    const epEl = document.getElementById("bootstrap-llm-endpoint");
+    const listEl = document.getElementById("bootstrap-llm-model-list");
+    if (!prov || !keyEl || !listEl) return;
+    const token = ++llmModelsFetchToken;
+    const key = keyEl.value.trim();
+    if (!key) { listEl.innerHTML = ""; return; }
+    // OpenRouter's model list is public - fetch without a key too.
+    if (prov.value !== "openrouter" && !key) return;
+    window.teamclawDesktop.llmListModels({ provider: prov.value, endpoint: epEl ? epEl.value.trim() : "", apiKey: key })
+      .then((res) => {
+        if (token !== llmModelsFetchToken) return; // stale
+        if (!res || res.error || !Array.isArray(res.models) || !res.models.length) return;
+        listEl.innerHTML = res.models.map((id) => `<option value="${escapeHtml(id)}"></option>`).join("");
+        // Smart default: prefer the current prefilled/default model if the
+        // provider lists it, else a free/recommended-looking entry, else first.
+        const modelEl = document.getElementById("bootstrap-llm-model");
+        if (modelEl && !modelEl.dataset.userEdited) {
+          const preferred = LLM_DEFAULT_MODELS[prov.value];
+          const pick = res.models.find((m) => m === preferred)
+            || res.models.find((m) => /free/i.test(m) && prov.value === "openrouter")
+            || res.models[0];
+          if (pick) { modelEl.value = pick; updateLlmStep(); }
+        }
+      })
+      .catch(() => { /* manual input still works */ });
+  }
   function llmMode() {
     const el = document.querySelector('input[name="bootstrap-mode"]:checked');
     return el ? el.getAttribute("data-bootstrap-mode") : "controller-manual";
@@ -958,9 +1013,16 @@ import { createT as i18nCreateT } from "./i18n.js";
             await connectController(r.controllerUrl, { skipConversation: true }).catch(() => {});
             unveilShell();
           } else {
-            const r = await desktop.instanceStartGlobal();
-            wizLine(`[global] gateway pid=${r.pid} port=${r.port}`);
-            await desktop.instanceSet({ mode: "global", controllerUrl: null, llmConfigured: true });
+            // Blank machine (user-found on Windows): bare start-global spawns
+            // a binary that does not exist and the wizard sat on step 3
+            // forever. installIntoGlobal self-provisions the runtime, installs
+            // the plugin into the GLOBAL state, writes controller mode, and
+            // only then starts the gateway - so it works with nothing present.
+            wizLine("[global] No existing OpenClaw - running the full global install...");
+            const r = await desktop.instanceInstallIntoGlobal();
+            await desktop.instanceSet({ mode: "global", controllerUrl: r.controllerUrl, llmConfigured: true }).catch(() => {});
+            await connectController(r.controllerUrl, { skipConversation: true }).catch(() => {});
+            unveilShell();
           }
         } catch (e) {
           wizLine("[error] " + (e && e.message));
@@ -988,7 +1050,18 @@ import { createT as i18nCreateT } from "./i18n.js";
       const el = document.getElementById(id);
       if (el) el.addEventListener(el.tagName === "SELECT" ? "change" : "input", updateLlmStep);
     });
-    document.querySelectorAll('input[name="llm-source"]').forEach((r) => r.addEventListener("change", updateLlmStep));
+    // Provider UX (user spec): key-acquisition hint on provider change;
+    // model list auto-refresh once a key exists (debounced). Mark manual
+    // model edits so the fetch default never overwrites the user's choice.
+    const provEl = document.getElementById("bootstrap-llm-provider");
+    if (provEl) provEl.addEventListener("change", updateLlmKeyHint);
+    const keyElX = document.getElementById("bootstrap-llm-apikey");
+    if (keyElX) keyElX.addEventListener("input", () => { updateLlmKeyHint(); clearTimeout(window.__llmFetchT); window.__llmFetchT = setTimeout(scheduleLlmModelsFetch, 700); });
+    const modelElX = document.getElementById("bootstrap-llm-model");
+    if (modelElX) modelElX.addEventListener("input", () => { modelElX.dataset.userEdited = modelElX.value.trim() ? "1" : ""; });
+    const epElX = document.getElementById("bootstrap-llm-endpoint");
+    if (epElX) epElX.addEventListener("input", () => { clearTimeout(window.__llmFetchT); window.__llmFetchT = setTimeout(scheduleLlmModelsFetch, 700); });
+    document.querySelectorAll('input[name="llm-source"]').forEach((r) => r.addEventListener("change", () => { updateLlmKeyHint(); updateLlmStep(); }));
   }
 
   function bootShell(msgKey) {

@@ -426,9 +426,11 @@
                 <option value="google">Google</option>
               </select>
               <input id="bootstrap-llm-endpoint" class="compact-input" type="text" data-i18n-placeholder="wizard.llmEndpoint" placeholder="接口地址（可选）">
-              <input id="bootstrap-llm-model" class="compact-input" type="text" placeholder="model">
+              <input id="bootstrap-llm-model" class="compact-input" type="text" placeholder="model" list="bootstrap-llm-model-list" autocomplete="off">
+              <datalist id="bootstrap-llm-model-list"></datalist>
               <input id="bootstrap-llm-apikey" class="compact-input" type="password" placeholder="API Key">
             </div>
+            <div id="bootstrap-llm-keyhint" class="bootstrap-status-detail" hidden></div>
             <div id="bootstrap-llm-hint" class="bootstrap-status-detail" hidden></div>
           </div>
           <div class="bootstrap-note" data-i18n="wizard.llmNote">配置只写入本应用的私有目录（沙箱），不会改动你机器上已有的任何 OpenClaw 配置。</div>
