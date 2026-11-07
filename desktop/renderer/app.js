@@ -1593,6 +1593,11 @@ import { createT as i18nCreateT } from "./i18n.js";
     // v3.1 S1: overlay is the 3-step wizard; keep busy/visibility semantics only.
     const ov = $("#bootstrap-overlay");
     if (ov) ov.classList.toggle("hidden", !state.unavailableScreenVisible && state.connectionState === "connected");
+    // Fresh-machine path: when the wizard must show (no instance record and
+    // no ready runtime), lift the boot gate - otherwise "Connecting..." sits
+    // on top of the wizard forever (true-sandbox launch hung exactly here;
+    // fake HOME sandboxes masked it by adopting the real machine's state).
+    if (state.unavailableScreenVisible && state.connectionState !== "connected") unveilShell();
     const busy = Boolean(state.localSetupInfo && state.localSetupInfo.hasOpenClaw ? state.isInstallingLocal : state.isInstallingOpenClaw);
     const log = $("#bootstrap-log");
     if (log) log.parentElement && (log.parentElement.hidden = false);
@@ -4211,7 +4216,12 @@ import { createT as i18nCreateT } from "./i18n.js";
         const el = document.querySelector(`input[name="bootstrap-mode"][data-bootstrap-mode="${mode}"]`);
         if (el) { el.checked = true; el.dispatchEvent(new Event("change")); }
       };
-      if (env.openclaw && env.teamclawInGlobal) {
+      // Sandbox = blank machine (user rule): the wizard defaults to the
+      // PRIVATE instance and never pre-fills the host's real controller URL.
+      // Host-probing defaults only apply to a normal (non-sandbox) launch.
+      if (state.settings && state.settings.sandbox) {
+        pick("controller-manual");
+      } else if (env.openclaw && env.teamclawInGlobal) {
         pick("remote");
         const urlEl = document.getElementById("bootstrap-controller-url");
         if (urlEl && env.globalControllerUrl) urlEl.value = env.globalControllerUrl;

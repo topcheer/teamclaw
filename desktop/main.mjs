@@ -62,11 +62,15 @@ function getSettingsPath() {
 }
 
 async function loadSettings() {
+  // sandbox flag is derived, never persisted: a TC_USER_DATA launch must
+  // behave like a fresh machine (wizard defaults to PRIVATE, no probing of
+  // the host's real openclaw/controller) even after settings get saved.
+  const derived = { ...DEFAULT_SETTINGS, sandbox: Boolean(process.env.TC_USER_DATA) };
   try {
     const raw = await fs.readFile(getSettingsPath(), "utf8");
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    return { ...derived, ...JSON.parse(raw), sandbox: derived.sandbox };
   } catch {
-    return { ...DEFAULT_SETTINGS };
+    return { ...derived };
   }
 }
 
