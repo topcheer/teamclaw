@@ -1119,7 +1119,7 @@ async function globalGatewayStart(preferredPort, extraEnv, binOverride) {
   // Blank machine (user-found on Windows): no `openclaw` on PATH - the
   // wizard's global install self-provisions a runtime and hands its absolute
   // binary here; PATH fallback keeps existing behavior.
-  const bin = binOverride || "openclaw";
+  const bin = binOverride || bundledBinary("openclaw") || "openclaw";
   const child = spawn(`"${bin}" gateway --port ${port}`, {
     cwd: env.HOME || process.env.HOME || process.cwd(),
     env,
@@ -1219,7 +1219,7 @@ ipcMain.handle("instance:install-into-global", async (event) => {
   return { ok: true, controllerUrl };
 });
 
-ipcMain.handle("instance:start-global", () => globalGatewayStart());
+ipcMain.handle("instance:start-global", (_e, port) => globalGatewayStart(port));
 
 ipcMain.handle("runtime:is-ready", async () => {
   const stateDir = path.join(app.getPath("userData"), "openclaw-state");

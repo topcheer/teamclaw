@@ -978,6 +978,21 @@ import { createT as i18nCreateT } from "./i18n.js";
           if (log) log.textContent = "[global] TeamClaw already present in the global instance.\n";
           const url = env.globalControllerUrl || "http://127.0.0.1:9527";
           await desktop.instanceSet({ mode: "global", controllerUrl: url, llmConfigured: true }).catch(() => {});
+          // Plugin registered does NOT mean the gateway is running (fresh
+          // boot, killed process, no service manager on Windows). Probe
+          // liveness; start the gateway ourselves when dead, then wait
+          // bounded for the controller before connecting.
+          const probe = async () => {
+            try { const r = await fetch(url + "/api/v1/tunnel/status", { signal: AbortSignal.timeout(1500) }); return r.ok; } catch { return false; }
+          };
+          if (!(await probe())) {
+            if (log) log.textContent += "[global] Global gateway not running - starting it...\n";
+            const port = Number(new URL(url).port) || 9527;
+            await desktop.instanceStartGlobal(port).catch(() => {});
+            for (let i = 0; i < 45 && !(await probe()); i++) {
+              await new Promise((r) => setTimeout(r, 2000));
+            }
+          }
           await connectController(url, { skipConversation: true }).catch(() => {});
           unveilShell();
           return;
