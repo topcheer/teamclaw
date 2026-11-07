@@ -4737,9 +4737,16 @@ type CapabilityGateKey = keyof TeamProfileCapabilities;
 /**
  * Route -> capability map. Prefix entries hide the whole route family;
  * exact entries are method-bound single routes. Routes NOT listed here stay
- * up for every profile: capability-agnostic reads, and capability reads that
+ * up for every profile: capability-agnostic reads, capability reads that
  * degrade gracefully instead of disappearing (GET /api/v1/repo answers
- * { enabled: false } so the UI can render an off state).
+ * { enabled: false } so the UI can render an off state), and - deliberately
+ * - POST /api/v1/controller/manifest: that endpoint records the controller
+ * INTAKE orchestration manifest (controllerRuns/projects/task bindings,
+ * requirement:complete), it is not a delivery-report surface, and the
+ * controller prompt rules make teamclaw_submit_manifest mandatory on every
+ * reply (controller-tools POSTs this endpoint) - gating it under
+ * deliveryReview would 404 every intake manifest of a deliveryReview=false
+ * team and break the intake loop (cross-review fix).
  */
 const CAPABILITY_GATE_PREFIXES: ReadonlyArray<readonly [prefix: string, capability: CapabilityGateKey]> = [
   ["/api/v1/teamauto", "teamauto"],
@@ -4747,7 +4754,6 @@ const CAPABILITY_GATE_PREFIXES: ReadonlyArray<readonly [prefix: string, capabili
   ["/api/v1/reports", "deliveryReview"],
 ];
 const CAPABILITY_GATE_EXACT_PATHS: ReadonlyArray<readonly [method: string, pathname: string, capability: CapabilityGateKey]> = [
-  ["POST", "/api/v1/controller/manifest", "deliveryReview"],
   ["POST", "/api/v1/repo/import", "git"],
   ["GET", "/api/v1/repo/bundle", "git"],
 ];

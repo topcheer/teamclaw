@@ -7,12 +7,17 @@
 // Covers:
 //   1. Steady-state 404 short-circuit: with the all-off fixture profile
 //      (minimal-bank) active, every /teamauto/* route, the preview proxy
-//      family, the delivery-report + orchestration-manifest routes, and the
-//      repo write/export routes answer 404 (never 403) with the owning
-//      `capability` key in the error body. GET /api/v1/repo degrades
-//      gracefully ({ enabled: false }) WITHOUT stamping repo state even when
-//      the legacy config knob gitEnabled=true is on (the profile switch is
-//      the truth).
+//      family, the delivery-report routes, and the repo write/export routes
+//      answer 404 (never 403) with the owning `capability` key in the error
+//      body. GET /api/v1/repo degrades gracefully ({ enabled: false })
+//      WITHOUT stamping repo state even when the legacy config knob
+//      gitEnabled=true is on (the profile switch is the truth).
+//      POST /api/v1/controller/manifest is deliberately NOT gated: it is the
+//      controller INTAKE manifest endpoint that teamclaw_submit_manifest
+//      must reach on every reply (cross-review fix for over-gating - a
+//      deliveryReview=false team's intake loop must not 404), asserted
+//      reachable here end-to-end (400 validation / business 404 / 201
+//      recording on a seeded run).
 //   2. software-rd zero change: the same routes keep their pre-2.3 behavior
 //      (503 scheduler-not-running / 400 bad body / 503 preview-unavailable /
 //      200 empty reports / 404 session-miss) and none of those bodies carry
@@ -223,16 +228,56 @@ const ALL_CAPABILITY_KEYS = ["deliveryReview", "git", "runnablePreview", "teamau
       assert.equal(res.json.capability, "runnablePreview");
     }
 
-    // deliveryReview=false -> delivery reports + orchestration manifest 404.
+    // deliveryReview=false -> delivery-report routes 404.
     for (const [method, pathname, body] of [
       ["GET", "/api/v1/reports"],
       ["GET", "/api/v1/reports/session-1"],
-      ["POST", "/api/v1/controller/manifest", { sessionKey: "session-1", manifest: { requirementSummary: "x" } }],
     ]) {
       const res = await scenario.call(method, pathname, body);
       assert.equal(res.status, 404, `${method} ${pathname} must be 404 under deliveryReview=false`);
       assert.equal(res.json.capability, "deliveryReview");
     }
+
+    // Cross-review fix: POST /api/v1/controller/manifest is the controller
+    // INTAKE orchestration manifest (controller-tools.ts teamclaw_submit_manifest
+    // POSTs it, and the prompt rules make that call mandatory on every reply)
+    // - it must stay reachable for a deliveryReview=false team. Prove the
+    // full ladder: validation 400, business 404 (no run for the session), and
+    // a real 201 recording against a seeded controller run.
+    const manifestEmpty = await scenario.call("POST", "/api/v1/controller/manifest", {});
+    assert.equal(manifestEmpty.status, 400, "manifest validation path stays reachable under minimal-bank");
+    assert.match(manifestEmpty.json.error, /manifest is required/);
+    assert.equal(manifestEmpty.json.capability, undefined);
+
+    const manifestNoRun = await scenario.call("POST", "/api/v1/controller/manifest", {
+      sessionKey: "session-1",
+      manifest: { requirementSummary: "credit file review" },
+    });
+    assert.equal(manifestNoRun.status, 404, "a session without a controller run keeps its business 404");
+    assert.match(manifestNoRun.json.error, /Controller run not found/);
+    assert.equal(manifestNoRun.json.capability, undefined, "the business 404 is not the capability 404");
+
+    scenario.deps.updateTeamState((s) => {
+      s.controllerRuns["run-1"] = {
+        id: "run-1",
+        title: "Credit intake",
+        sessionKey: "session-1",
+        source: "human",
+        request: "review the credit file",
+        createdTaskIds: [],
+        status: "completed",
+        createdAt: now - 500,
+        updatedAt: now - 500,
+      };
+    });
+    const manifestOk = await scenario.call("POST", "/api/v1/controller/manifest", {
+      sessionKey: "session-1",
+      manifest: { requirementSummary: "credit file review" },
+    });
+    assert.equal(manifestOk.status, 201, "the intake manifest records fine on a deliveryReview=false team (cross-review fix)");
+    assert.equal(manifestOk.json.manifest.requirementSummary, "credit file review");
+    assert.equal(manifestOk.json.controllerRun.id, "run-1");
+    assert.equal(manifestOk.json.controllerRun.manifest.requirementSummary, "credit file review", "the run keeps the recorded manifest");
 
     // git=false -> repo write/export routes 404 (the read stays graceful).
     const importRes = await scenario.call("POST", "/api/v1/repo/import", {});
@@ -398,6 +443,23 @@ const ALL_CAPABILITY_KEYS = ["deliveryReview", "git", "runnablePreview", "teamau
 }
 
 // ---------------------------------------------------------------------------
+// Scenario 4b: scheduler manual-proposal roles validate against the active
+// profile (cross-review adopted suggestion; source-level pin because
+// proposeManual needs a bound store + scheduler instance at runtime).
+// ---------------------------------------------------------------------------
+{
+  const schedulerSource = fs.readFileSync(path.join(projectRoot, "src", "src", "teamauto", "scheduler.ts"), "utf8");
+  assert.ok(
+    schedulerSource.includes("const role = validateActiveRoleId(input.role) ?? getActiveDefaultRole();"),
+    "proposeManual must validate the caller role against the active profile and default to the profile defaultRole",
+  );
+  assert.ok(
+    !schedulerSource.includes('? "developer" : "architect"'),
+    "the hardcoded software role-literal defaults must be gone from the manual-proposal path",
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Scenario 5: Phase 2.6 labelZh fallback.
 // ---------------------------------------------------------------------------
 {
@@ -428,6 +490,13 @@ const ALL_CAPABILITY_KEYS = ["deliveryReview", "git", "runnablePreview", "teamau
     loaderMod.resolveRoleDisplayName(byId["aml-analyst"], "en"),
     "AML Analyst",
     "en rendering uses label for labelZh-less roles too",
+  );
+  // Cross-review adopted suggestion: a whitespace-only labelZh (which the
+  // schema minLength cannot reject) must also fall back to label.
+  assert.equal(
+    loaderMod.resolveRoleDisplayName({ ...byId["credit-officer"], labelZh: "   " }),
+    "Credit Officer",
+    "whitespace-only labelZh falls back to label (trim handling)",
   );
 
   // Load-validation side: present-but-empty labelZh is fatal (a blank string
