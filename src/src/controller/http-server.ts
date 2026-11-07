@@ -47,6 +47,8 @@ import { listWorkspaceTree, listWorkspaceSubtree, readWorkspaceFile, readWorkspa
 import {
   BUILTIN_PROFILES,
   getActiveProfile,
+  getActiveProfileId,
+  getActiveRoleIds,
   getActiveRoles,
   getActiveDefaultRole,
   hasProfile,
@@ -5030,12 +5032,73 @@ export async function resumeTeamProfileSwitch(deps: ControllerHttpDeps): Promise
   return true;
 }
 
+// ── Issue #191: auto-assign re-entrancy gate ─────────────────────────────────
+//
+// revertTaskAssignment (dispatch failure path) fires a nested
+// `void autoAssignPendingTasks(deps)`. Before the gate, each nested call ran
+// concurrently with its OWN attemptedPairs set: it re-attempted the pair that
+// had just failed, reverted again, and spawned another nested round - with
+// unreachable workers the retry tree grew 2^n dispatch attempts (observed as
+// a 4GB OOM). The gate keeps ONE round in flight per controller deps and
+// defers nested triggers to a single follow-up round that SHARES the failed
+// pairs, collapsing the storm to linear work. Keyed weakly on the deps object
+// so separate controller instances (and separate test scenarios) never share
+// gate state.
+type AutoAssignGate = {
+  inFlight: boolean;
+  rerunQueued: boolean;
+  attemptedPairs: Set<string>;
+};
+
+const autoAssignGates = new WeakMap<ControllerHttpDeps, AutoAssignGate>();
+
+function getAutoAssignGate(deps: ControllerHttpDeps): AutoAssignGate {
+  let gate = autoAssignGates.get(deps);
+  if (!gate) {
+    gate = { inFlight: false, rerunQueued: false, attemptedPairs: new Set() };
+    autoAssignGates.set(deps, gate);
+  }
+  return gate;
+}
+
 export async function autoAssignPendingTasks(
   deps: ControllerHttpDeps,
   preferredWorkerId?: string,
 ): Promise<TaskInfo[]> {
+  const gate = getAutoAssignGate(deps);
+  if (gate.inFlight) {
+    // Nested trigger (revert path, concurrent register/heartbeat, ...):
+    // never start a parallel round. Queue exactly one follow-up; it re-reads
+    // the live state, so nothing observable is lost - only the storm is.
+    gate.rerunQueued = true;
+    return [];
+  }
+  gate.inFlight = true;
+  try {
+    return await runAutoAssignRound(deps, preferredWorkerId, gate.attemptedPairs);
+  } finally {
+    gate.inFlight = false;
+    if (gate.rerunQueued) {
+      gate.rerunQueued = false;
+      void autoAssignPendingTasks(deps).catch(() => {
+        // Best-effort follow-up round; assignment failures already surface
+        // via task state (same policy as the fire-and-forget call sites).
+      });
+    } else {
+      // The round settled with no deferred work: forget the attempted (and
+      // possibly failed) pairs so future rounds may try them again - e.g.
+      // after an unreachable worker recovers or a new task is submitted.
+      gate.attemptedPairs.clear();
+    }
+  }
+}
+
+async function runAutoAssignRound(
+  deps: ControllerHttpDeps,
+  preferredWorkerId: string | undefined,
+  attemptedPairs: Set<string>,
+): Promise<TaskInfo[]> {
   const { getTeamState, taskRouter, wsServer, logger, config } = deps;
-  const attemptedPairs = new Set<string>();
   const assignedTasks: TaskInfo[] = [];
   const maxConcurrent = config.maxConcurrentTasks;
 
@@ -5066,8 +5129,10 @@ export async function autoAssignPendingTasks(
     // Collaboration contract: serialize write tasks per repo checkout - a
     // second writer on the same root waits until the active one settles.
     const busyWriteRoots = activeWriteRoots(state);
-    const candidateAssignments = taskRouter
-      .autoAssignPendingTasks(state.tasks, state.workers)
+    // Phase 2.5 wiring: the router is async because unconfident tasks may
+    // first escalate to the injected LLM role judge (cached per task).
+    const candidateAssignments = (await taskRouter
+      .autoAssignPendingTasks(state.tasks, state.workers))
       .filter(({ task, worker }) => !attemptedPairs.has(`${task.id}:${worker.id}`))
       .filter(({ task }) => {
         const root = taskWriteRoot(task);
@@ -5795,13 +5860,27 @@ async function handleRequest(
   if (req.method === "POST" && pathname === "/api/v1/workers/register") {
     const body = await parseJsonBody(req);
     const workerId = typeof body.workerId === "string" ? body.workerId : "";
-    const role = validateActiveRoleId(body.role) ?? "";
+    const rawRole = typeof body.role === "string" ? body.role.trim() : "";
+    const role = validateActiveRoleId(rawRole) ?? "";
     const label = typeof body.label === "string" ? body.label : role;
     const workerUrl = typeof body.url === "string" ? body.url : "";
     const capabilities = Array.isArray(body.capabilities) ? body.capabilities as string[] : [];
     const launchToken = typeof body.launchToken === "string" ? body.launchToken : undefined;
 
     if (!workerId || !role || !workerUrl) {
+      // Issue #192: a role string that the ACTIVE profile does not know is
+      // the actionable failure (worker config carried an id from another
+      // profile, or the team switched profiles underneath the worker) - say
+      // so with the valid id list instead of the generic "required" 400.
+      if (workerId && !role && workerUrl && rawRole) {
+        sendError(
+          res,
+          400,
+          `role "${rawRole}" is not part of the active team profile "${getActiveProfileId()}" (valid roles: ${getActiveRoleIds().join(", ")}). ` +
+            "Update the worker's role config to one of these roles, or have the controller switch the team profile.",
+        );
+        return;
+      }
       sendError(res, 400, "workerId, role, and url are required");
       return;
     }

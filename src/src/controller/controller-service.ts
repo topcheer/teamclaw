@@ -9,17 +9,17 @@ import { createControllerHttpServer, autoAssignPendingTasks, resumeTeamProfileSw
 import { TaskRouter } from "./task-router.js";
 import { MessageRouter } from "./message-router.js";
 import { TeamWebSocketServer } from "./websocket.js";
-import { ensureOpenClawWorkspaceMemoryDir } from "../openclaw-workspace.js";
+import { ensureOpenClawWorkspaceMemoryDir, buildTeamClawAgentSessionKey } from "../openclaw-workspace.js";
 import { ensureControllerGitRepo } from "../git-collaboration.js";
 import { WorkerProvisioningManager } from "./worker-provisioning.js";
 import { PreviewManager } from "./preview-manager.js";
-import { runKickoffMeeting, buildKickoffAssessmentPrompt, ASSESSMENT_TIMEOUT_MS } from "./kickoff-orchestrator.js";
+import { runKickoffMeeting, buildKickoffAssessmentPrompt, ASSESSMENT_TIMEOUT_MS, type TaskRoleResolutionDeps } from "./kickoff-orchestrator.js";
 import { resolvePreferredLanAddress } from "../networking.js";
 import { createTeamAutoScheduler, type TeamAutoScheduler } from "../teamauto/scheduler.js";
 import { getGithubAuthManager } from "./github-auth.js";
 // Phase 1.6 (design 2.3): TeamState.profileId is the single runtime truth for
 // the active TeamProfile; config teamProfile only seeds first initialization.
-import { getActiveProfile, hasProfile, setActiveProfileId, SOFTWARE_RD_PROFILE_ID } from "../profile-loader.js";
+import { getActiveProfile, getActiveRoleIds, hasProfile, setActiveProfileId, validateActiveRoleId, SOFTWARE_RD_PROFILE_ID } from "../profile-loader.js";
 
 export type KickoffHandler = (
   candidateRoles: RoleId[],
@@ -227,7 +227,18 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
       }
 
       mdnsAdvertiser = new MDnsAdvertiser(logger);
-      taskRouter = new TaskRouter(logger);
+      // Phase 2.5 wiring (design 2.3 "LLM 兜底", P2.5 follow-up): the
+      // controller LLM session is the production role judge for tasks the
+      // bilingual token fast path refuses to decide (tie / all-zero). The
+      // judge runs on a dedicated one-shot subagent session - NOT the intake
+      // conversation - so verdicts never pollute intake semantics. Missing
+      // runtime subagent => no judge, and the TaskRouter keeps its exact
+      // pre-wiring behavior.
+      const llmRoleJudge = createControllerLlmRoleJudge(deps);
+      if (llmRoleJudge) {
+        logger.info("Controller: LLM role judge wired into task dispatch (unconfident role inference escalates to the controller LLM)");
+      }
+      taskRouter = new TaskRouter(logger, llmRoleJudge ? { llmRoleJudge } : undefined);
       messageRouter = new MessageRouter(logger);
       wsServer = new TeamWebSocketServer(logger);
 
@@ -561,4 +572,124 @@ async function requestKickoffAssessment(
   } finally {
     clearTimeout(timeout);
   }
+}
+
+// ── Phase 2.5 wiring: controller LLM as the role judge ───────────────────────
+//
+// resolveTaskRoleWithLlmFallback (kickoff-orchestrator) defined the seam in
+// P2.5 with fake-driven tests but no production caller. This factory builds
+// the production llmRoleJudge: a ONE-SHOT subagent session on the controller
+// runtime (never the long-lived intake conversation, so verdicts cannot
+// pollute intake semantics) that answers with a single role id of the ACTIVE
+// profile. The resolver validates the answer (validateActiveRoleId) and
+// degrades to the profile defaultRole when the judge is unavailable, times
+// out, errors, or names a role outside the active profile - the TaskRouter
+// then treats the outcome as a routing hint, so dispatch never blocks on a
+// strand.
+
+/** Budget for a one-id LLM verdict; past it the resolver degrades to defaultRole. */
+const ROLE_JUDGE_TIMEOUT_MS = 30_000;
+const ROLE_JUDGE_SESSION_PREFIX = "teamclaw-role-judge:";
+const ROLE_JUDGE_SYSTEM_PROMPT = [
+  "You are the role router of a TeamClaw controller.",
+  "Given one task, pick the single team role that should own it.",
+  "Reply with EXACTLY one role id from the provided list - no prose, no markdown, no explanation.",
+].join(" ");
+
+function createControllerLlmRoleJudge(
+  deps: Pick<ControllerServiceDeps, "runtime" | "logger">,
+): TaskRoleResolutionDeps["llmRoleJudge"] | undefined {
+  const subagent = deps.runtime?.subagent;
+  if (
+    !subagent
+    || typeof subagent.run !== "function"
+    || typeof subagent.waitForRun !== "function"
+    || typeof subagent.getSessionMessages !== "function"
+  ) {
+    // Runtime without an LLM subagent (e.g. minimal test doubles): leave the
+    // seam unwired; the TaskRouter keeps its pre-wiring behavior.
+    return undefined;
+  }
+  const logger = deps.logger;
+
+  return async ({ task, verdict }) => {
+    const roleIds = getActiveRoleIds();
+    const message = [
+      `Task title: ${task.title}`,
+      `Task description: ${task.description?.trim() || "(none)"}`,
+      "",
+      `Token-based role scoring refused to decide (${verdict.reason}).`,
+      `Pick the single role that should own this task. Answer with EXACTLY one role id from: ${roleIds.join(", ")}`,
+    ].join("\n");
+
+    // Fresh one-shot session per verdict: the judge must stay stateless and
+    // separate from any intake/worker conversation.
+    const sessionKey = buildTeamClawAgentSessionKey(
+      `${ROLE_JUDGE_SESSION_PREFIX}${task.id}-${Date.now()}`,
+    );
+    const run = await subagent.run({
+      sessionKey,
+      message,
+      extraSystemPrompt: ROLE_JUDGE_SYSTEM_PROMPT,
+      idempotencyKey: `role-judge-${task.id}-${Date.now()}`,
+    });
+    const waited = await subagent.waitForRun({
+      runId: run.runId,
+      timeoutMs: ROLE_JUDGE_TIMEOUT_MS,
+    });
+    if (waited.status !== "ok") {
+      logger.warn(
+        `Controller: LLM role judge did not complete for task ${task.id} (${waited.status}${"error" in waited && waited.error ? `: ${waited.error}` : ""}); using the profile defaultRole`,
+      );
+      return null;
+    }
+
+    const session = await subagent.getSessionMessages({ sessionKey, limit: 5 });
+    const reply = extractLastAssistantText(session.messages);
+    const direct = validateActiveRoleId(reply.trim());
+    if (direct) {
+      return direct;
+    }
+    // Tolerate light prose wrapping ("The role is: qa."): first ACTIVE role
+    // id that appears as a whole word in the reply.
+    for (const roleId of roleIds) {
+      const pattern = new RegExp(`(^|[^a-z0-9-])${roleId.replace(/[-]/g, "\\-")}([^a-z0-9-]|$)`);
+      if (pattern.test(reply)) {
+        return roleId;
+      }
+    }
+    logger.warn(
+      `Controller: LLM role judge reply for task ${task.id} named no active role (${reply.slice(0, 120) || "empty reply"}); using the profile defaultRole`,
+    );
+    return null;
+  };
+}
+
+/** Last assistant message text (string or text blocks), mirroring the http-server intake helper semantics. */
+function extractLastAssistantText(messages: unknown[]): string {
+  const assistantMessages = messages.filter((message): message is { role?: unknown; content?: unknown } => {
+    if (!message || typeof message !== "object") {
+      return false;
+    }
+    return (message as { role?: unknown }).role === "assistant";
+  });
+  const lastAssistant = assistantMessages[assistantMessages.length - 1];
+  if (!lastAssistant) {
+    return "";
+  }
+  if (typeof lastAssistant.content === "string") {
+    return lastAssistant.content;
+  }
+  if (Array.isArray(lastAssistant.content)) {
+    const textBlocks = lastAssistant.content
+      .filter((block): block is { type?: unknown; text?: unknown } => {
+        return !!block && typeof block === "object" && (block as { type?: unknown }).type === "text";
+      })
+      .map((block) => (typeof block.text === "string" ? block.text : ""))
+      .filter(Boolean);
+    if (textBlocks.length > 0) {
+      return textBlocks.join("\n");
+    }
+  }
+  return "";
 }
