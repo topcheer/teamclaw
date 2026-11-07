@@ -69,6 +69,22 @@ export type RepoSyncInfo = {
   headSummary?: string;
 };
 
+/**
+ * Phase 1.1 (vertical-team-profiles-design.md v1.3): RoleId is an open
+ * branded string so future TeamProfiles can carry arbitrary role sets;
+ * runtime legitimacy of a role id is enforced by validateRoleId/
+ * validateRoleIdList in roles.ts (Phase 0.3), not by the compiler.
+ *
+ * Hybrid form ruling (design v1.3, section 1.5 errata + section 6
+ * decision): TS 5.9 - the repo-locked compiler - rejects direct assignment
+ * of string literals to `string & { __roleId: true }` (the #33050
+ * unsoundness fix), while the role definitions in roles.ts/role-ids.ts
+ * are pure JS array literals that the manifest generator regex-extracts
+ * and evaluates, and their RoleId[] annotations are pinned by
+ * tests/test-role-single-source.mjs. The software-rd seed ids therefore
+ * stay as a literal arm; any other string must pass validateRoleId or an
+ * explicit cast to enter the branded arm.
+ */
 export type RoleId =
   | "pm"
   | "architect"
@@ -80,7 +96,8 @@ export type RoleId =
   | "security-engineer"
   | "designer"
   | "marketing"
-  | "data-engineer";
+  | "data-engineer"
+  | (string & { __roleId: true });
 
 export type RoleDefinition = {
   id: RoleId;
