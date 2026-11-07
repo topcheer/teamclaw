@@ -5129,8 +5129,10 @@ async function runAutoAssignRound(
     // Collaboration contract: serialize write tasks per repo checkout - a
     // second writer on the same root waits until the active one settles.
     const busyWriteRoots = activeWriteRoots(state);
-    const candidateAssignments = taskRouter
-      .autoAssignPendingTasks(state.tasks, state.workers)
+    // Phase 2.5 wiring: the router is async because unconfident tasks may
+    // first escalate to the injected LLM role judge (cached per task).
+    const candidateAssignments = (await taskRouter
+      .autoAssignPendingTasks(state.tasks, state.workers))
       .filter(({ task, worker }) => !attemptedPairs.has(`${task.id}:${worker.id}`))
       .filter(({ task }) => {
         const root = taskWriteRoot(task);

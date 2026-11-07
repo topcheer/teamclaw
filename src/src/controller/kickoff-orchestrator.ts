@@ -312,13 +312,15 @@ export type TaskRoleResolutionDeps = {
    * LLM fallback: ask the controller LLM pass to judge the role for the
    * task. Returns a role id (validated against the active profile; invalid
    * or null results fall back to the profile defaultRole).
+   * "id" is part of the payload (P2.5 wiring) so production judges can key
+   * one-shot sessions and logs by task id.
    */
-  llmRoleJudge?: (input: { task: Pick<TaskInfo, "assignedRole" | "title" | "description">; verdict: RoleInferenceVerdict }) => Promise<RoleId | string | null>;
+  llmRoleJudge?: (input: { task: Pick<TaskInfo, "id" | "assignedRole" | "title" | "description">; verdict: RoleInferenceVerdict }) => Promise<RoleId | string | null>;
   logger?: Pick<PluginLogger, "info" | "warn">;
 };
 
 export async function resolveTaskRoleWithLlmFallback(
-  task: Pick<TaskInfo, "assignedRole" | "title" | "description">,
+  task: Pick<TaskInfo, "id" | "assignedRole" | "title" | "description">,
   deps: TaskRoleResolutionDeps = {},
 ): Promise<RoleId> {
   const verdict = (deps.inferWithConfidence ?? inferTaskRoleWithConfidence)(task);

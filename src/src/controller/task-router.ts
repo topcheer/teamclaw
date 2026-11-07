@@ -1,17 +1,46 @@
 import type { PluginLogger } from "../../api.js";
-import type { TaskInfo, WorkerInfo } from "../types.js";
+import type { RoleId, TaskInfo, WorkerInfo } from "../types.js";
 // Phase 1.3: role labels come from the active TeamProfile.
 import { getActiveRole } from "../profile-loader.js";
 // Phase 2.5: bilingual tiered token inference (design 2.3) is the fast path
 // for unassigned tasks; it returns null when it refuses to decide (tie or
 // all-zero), which falls through to the legacy keyword matcher below.
 import { inferTaskRole } from "./role-inference.js";
+// Phase 2.5 wiring (design 2.3 "LLM 兜底", P2.5 follow-up): tasks the token
+// fast path refuses to decide escalate to resolveTaskRoleWithLlmFallback
+// (kickoff-orchestrator seam). The llmRoleJudge callback is injected by the
+// controller assembly (controller-service wires it to the real controller
+// LLM session; tests inject fakes) so this module stays free of LLM/runtime
+// knowledge. Without a judge the escalation is skipped and unconfident tasks
+// keep the legacy capability-matcher path - byte-for-byte the pre-wiring
+// behavior (e.g. runtimes without an LLM subagent).
+import { resolveTaskRoleWithLlmFallback, type TaskRoleResolutionDeps } from "./kickoff-orchestrator.js";
+
+export type TaskRouterOptions = {
+  /**
+   * Phase 2.5 wiring: LLM judge for tasks the token fast path refuses to
+   * decide. The resolver validates the judge's answer against the ACTIVE
+   * profile and degrades to the profile defaultRole on failure/invalid
+   * answers; this router treats the outcome as a routing HINT exactly like a
+   * confident inference (degrade to the legacy matcher when the role has no
+   * idle worker - never strand the task).
+   */
+  llmRoleJudge?: TaskRoleResolutionDeps["llmRoleJudge"];
+};
 
 export class TaskRouter {
   private logger: PluginLogger;
+  private readonly llmRoleJudge?: TaskRoleResolutionDeps["llmRoleJudge"];
+  /**
+   * LLM-judged role per task id, written at most once per task per process
+   * so a pending unconfident task never triggers repeat LLM calls across
+   * dispatch rounds. Pruned when the task disappears from state.
+   */
+  private readonly judgedRoles = new Map<string, RoleId>();
 
-  constructor(logger: PluginLogger) {
+  constructor(logger: PluginLogger, options?: TaskRouterOptions) {
     this.logger = logger;
+    this.llmRoleJudge = options?.llmRoleJudge;
   }
 
   routeTask(
@@ -38,7 +67,10 @@ export class TaskRouter {
     // when the inferred role has no idle worker we degrade to the legacy
     // matcher instead of stranding the task (inference is a hint, the
     // explicit assignedRole branch above is the decision that must wait).
-    const inferredRole = inferTaskRole(task);
+    // Phase 2.5 wiring: an LLM-judged role (cached from a previous dispatch
+    // round) fills in when the token fast path refuses to decide, with the
+    // same hint semantics as a confident inference.
+    const inferredRole = inferTaskRole(task) ?? this.judgedRoles.get(task.id);
     if (inferredRole) {
       const inferredCandidates = Object.values(workers).filter(
         (w) => w.role === inferredRole && w.status === "idle",
@@ -79,13 +111,41 @@ export class TaskRouter {
     return null;
   }
 
-  autoAssignPendingTasks(
+  async autoAssignPendingTasks(
     tasks: Record<string, TaskInfo>,
     workers: Record<string, WorkerInfo>,
-  ): Array<{ task: TaskInfo; worker: WorkerInfo }> {
+  ): Promise<Array<{ task: TaskInfo; worker: WorkerInfo }>> {
     const pendingTasks = Object.values(tasks).filter(
       (t) => t.status === "pending" || t.status === "assigned",
     );
+
+    this.pruneJudgedRoles(tasks);
+
+    // Phase 2.5 wiring: escalate unassigned tasks the token fast path refuses
+    // to decide to the LLM judge, once per task (results cached above the
+    // routing call). The resolver degrades to the profile defaultRole when
+    // the judge fails, times out, or answers with a role outside the active
+    // profile. Skipped entirely when no judge is wired - pre-wiring behavior.
+    if (this.llmRoleJudge) {
+      await Promise.all(pendingTasks
+        .filter((task) =>
+          !task.assignedRole
+          && !this.judgedRoles.has(task.id)
+          && inferTaskRole(task) === null)
+        .map(async (task) => {
+          try {
+            const resolved = await resolveTaskRoleWithLlmFallback(task, {
+              llmRoleJudge: this.llmRoleJudge,
+              logger: this.logger,
+            });
+            this.judgedRoles.set(task.id, resolved);
+          } catch (err) {
+            this.logger.warn(
+              `TaskRouter: LLM role judge threw for task ${task.id} (${err instanceof Error ? err.message : String(err)}); keeping legacy routing for it`,
+            );
+          }
+        }));
+    }
 
     const assignments: Array<{ task: TaskInfo; worker: WorkerInfo }> = [];
 
@@ -101,6 +161,15 @@ export class TaskRouter {
     }
 
     return assignments;
+  }
+
+  /** Drop judged-role cache entries for tasks that no longer exist in state. */
+  private pruneJudgedRoles(tasks: Record<string, TaskInfo>): void {
+    for (const taskId of this.judgedRoles.keys()) {
+      if (!tasks[taskId]) {
+        this.judgedRoles.delete(taskId);
+      }
+    }
   }
 
   private extractKeywords(text: string): string[] {
