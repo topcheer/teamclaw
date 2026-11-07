@@ -8,6 +8,7 @@ import type {
   TeamState,
   WorkerIdentity,
 } from "./types.js";
+import { validateRoleIdList } from "./roles.js";
 
 const STATE_VERSION = 2;
 
@@ -101,9 +102,9 @@ function normalizeStartupReadiness(value: unknown): StartupProvisioningReadiness
   const startedAt = typeof record.startedAt === "number" ? record.startedAt : undefined;
   const checkedAt = typeof record.checkedAt === "number" ? record.checkedAt : undefined;
   const attempts = typeof record.attempts === "number" && record.attempts >= 0 ? Math.floor(record.attempts) : 0;
-  const requiredRoles = Array.isArray(record.requiredRoles)
-    ? record.requiredRoles.filter((entry): entry is string => typeof entry === "string")
-    : [];
+  // Phase 0.3: persisted requiredRoles are untrusted; filter through the
+  // shared guard so corrupted state cannot inject arbitrary role strings.
+  const requiredRoles = validateRoleIdList(record.requiredRoles);
   const readyWorkerIds = Array.isArray(record.readyWorkerIds)
     ? record.readyWorkerIds.filter((entry): entry is string => typeof entry === "string")
     : [];
@@ -116,7 +117,7 @@ function normalizeStartupReadiness(value: unknown): StartupProvisioningReadiness
     startedAt,
     checkedAt,
     attempts,
-    requiredRoles: requiredRoles as RoleId[],
+    requiredRoles,
     readyWorkerIds,
     message,
   };

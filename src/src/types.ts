@@ -3,6 +3,7 @@ import { DEFAULT_GITHUB_CLIENT_ID } from "./controller/github-auth.js";
 // Safe value import: roles.js only pulls prompt-policy.js -> openclaw-workspace.js
 // at runtime (its types.js import is type-only), so no module cycle is formed.
 import { DEFAULT_ROLE } from "./roles.js";
+import { validateRoleId, validateRoleIdList } from "./roles.js";
 
 export type TeamClawMode = "controller" | "worker";
 
@@ -624,8 +625,9 @@ function parseRoleModelOverrides(raw: unknown): Partial<Record<RoleId, string>> 
   const result: Partial<Record<RoleId, string>> = {};
   let hasAny = false;
   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (VALID_ROLES.includes(key as RoleId) && typeof value === "string" && value.trim()) {
-      result[key as RoleId] = value.trim();
+    const roleKey = validateRoleId(key);
+    if (roleKey && typeof value === "string" && value.trim()) {
+      result[roleKey] = value.trim();
       hasAny = true;
     }
   }
@@ -641,9 +643,7 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
     ? raw.port
     : 9527;
 
-  const role = typeof raw.role === "string" && VALID_ROLES.includes(raw.role as RoleId)
-    ? raw.role as RoleId
-    : DEFAULT_ROLE;
+  const role = validateRoleId(raw.role) ?? DEFAULT_ROLE;
 
   const controllerUrl = typeof raw.controllerUrl === "string"
     ? raw.controllerUrl.trim()
@@ -825,11 +825,9 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
 }
 
 function parseRoleList(raw: unknown): RoleId[] {
-  return Array.isArray(raw)
-    ? [...new Set(raw
-        .filter((entry): entry is RoleId => typeof entry === "string" && VALID_ROLES.includes(entry as RoleId))
-        .map((entry) => entry as RoleId))]
-    : [];
+  // Phase 0.3: delegates to the shared validateRoleIdList guard in roles.ts
+  // (same filter + first-occurrence dedup semantics as before).
+  return validateRoleIdList(raw);
 }
 
 function parseProvisioningType(raw: unknown): WorkerProvisioningType {
@@ -880,6 +878,10 @@ const VALID_PROVISIONING_TYPES: WorkerProvisioningType[] = [
   "kubernetes",
 ];
 
+// Not referenced at runtime anymore: role validation goes through
+// validateRoleId/validateRoleIdList in roles.ts (Phase 0.3). Kept as a
+// textual registry pin — tests/test-role-registry.mjs asserts every role id
+// appears in this file (Phase 1.2 will fold this copy into roles.ts).
 const VALID_ROLES: RoleId[] = [
   "pm", "architect", "developer", "qa",
   "release-engineer", "infra-engineer", "devops", "security-engineer",
