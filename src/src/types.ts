@@ -540,6 +540,12 @@ export type PluginConfig = {
    */
   roleModelOverrides?: Partial<Record<RoleId, string>>;
   taskTimeoutMs: number;
+  /**
+   * Phase 2.1 (design section 2.3, switch step 2): how long a profile switch
+   * drains in-flight tasks (assigned/in_progress) before force-collecting
+   * them and terminating the workers.
+   */
+  teamSwitchDrainTimeoutMs: number;
   gitEnabled: boolean;
   gitRemoteUrl: string;
   gitDefaultBranch: string;
@@ -585,6 +591,20 @@ export type WorkerIdentity = {
   registeredAt: number;
 };
 
+/**
+ * Phase 2.1 (vertical-team-profiles-design.md section 2.3): the transition
+ * state machine for an in-flight team profile switch. Persisted inside
+ * TeamState so a controller crash can resume idempotently (archive file
+ * exists -> rebuild the new team; otherwise re-drain from scratch).
+ */
+export type TeamSwitchTransitionPhase = "draining" | "archiving" | "warming";
+
+export type TeamSwitchTransition = {
+  phase: TeamSwitchTransitionPhase;
+  targetProfileId: string;
+  startedAt: number;
+};
+
 export type TeamState = {
   /** Schema version for forward-compatible state migration. */
   version?: number;
@@ -594,6 +614,13 @@ export type TeamState = {
    * Legacy states without this field migrate to the software-rd baseline.
    */
   profileId: string;
+  /**
+   * Phase 2.1 (design section 2.3): set while a profile switch is in
+   * progress (drain -> archive -> rebuild -> warmup). Absent on a settled
+   * team. Its presence drives the 409/503 concurrency matrix and the
+   * crash-resume path in the controller startup chain.
+   */
+  transition?: TeamSwitchTransition;
   teamName: string;
   workers: Record<string, WorkerInfo>;
   tasks: Record<string, TaskInfo>;
@@ -705,6 +732,11 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
   const taskTimeoutMs = typeof raw.taskTimeoutMs === "number" && raw.taskTimeoutMs >= 1000
     ? raw.taskTimeoutMs
     : 600_000;
+
+  // Phase 2.1: graceful-drain budget for a team profile switch (design 2.3).
+  const teamSwitchDrainTimeoutMs = typeof raw.teamSwitchDrainTimeoutMs === "number" && raw.teamSwitchDrainTimeoutMs >= 1000
+    ? raw.teamSwitchDrainTimeoutMs
+    : 30_000;
 
   const gitEnabled = typeof raw.gitEnabled === "boolean" ? raw.gitEnabled : true;
 
@@ -834,6 +866,7 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
     processModel,
     roleModelOverrides: parseRoleModelOverrides(raw.roleModelOverrides),
     taskTimeoutMs,
+    teamSwitchDrainTimeoutMs,
     gitEnabled,
     gitRemoteUrl,
     gitDefaultBranch,
