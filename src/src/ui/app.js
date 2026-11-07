@@ -157,6 +157,7 @@
       "teamauto.enable": "Enable",
       "teamauto.unbind": "Unbind",
       "teamauto.save": "Save config",
+      "teamauto.tabConfig": "Config",
       "teamauto.saved": "Saved",
       "teamauto.schedule": "Schedule",
       "teamauto.maxPerSweep": "Max/sweep",
@@ -316,6 +317,7 @@
       "teamauto.enable": "启用",
       "teamauto.unbind": "解绑",
       "teamauto.save": "保存配置",
+      "teamauto.tabConfig": "配置",
       "teamauto.saved": "已保存",
       "teamauto.schedule": "节奏",
       "teamauto.maxPerSweep": "每轮上限",
@@ -2831,8 +2833,10 @@
     var opts = options || {};
     return normalizeArray(items).map(function (item) {
       const status = item.status || "pending";
+      // Worker context is written in markdown (headings, bold, lists) - run
+      // it through the shared renderer instead of raw textContent.
       const context = item.context
-        ? '<div class="clarification-context"><strong>Context:</strong> ' + escapeHtml(item.context) + "</div>"
+        ? '<div class="clarification-context"><strong>Context:</strong><div class="clarification-context-md">' + renderMarkdown(item.context) + "</div></div>"
         : "";
       const taskLink = opts.linkToTask && item.taskId
         ? '<button type="button" class="btn btn-small" data-open-task-id="' + escapeHtml(item.taskId) + '">Open task</button>'
@@ -3120,6 +3124,20 @@
   }
 
   function activateTab(nextTab) {
+    // TeamAuto sub-tabs (Config / Activity) - delegated once, DOM-level.
+    // NOTE: guard via function property - document.dataset is undefined on
+    // Document (it only exists on Element) and threw during init, killing
+    // every listener registered after it (user-visible: ALL clicks dead).
+    if (!activateTab.taSubtabsBound) {
+      activateTab.taSubtabsBound = true;
+      document.addEventListener("click", function (event) {
+        const btn = event.target instanceof Element && event.target.closest("[data-ta-pane]");
+        if (!btn || btn.tagName !== "BUTTON") return;
+        const pane = btn.getAttribute("data-ta-pane");
+        $$("[data-ta-pane]").forEach((b) => b.classList.toggle("active", b === btn));
+        $$("[data-ta-pane-body]").forEach((p) => p.classList.toggle("is-hidden", p.getAttribute("data-ta-pane-body") !== pane));
+      });
+    }
     activeTab = nextTab || "tasks";
     $$(".tab").forEach(function (item) {
       item.classList.toggle("active", item.dataset.tab === activeTab);
@@ -3524,6 +3542,9 @@
       type: "controller-input",
       content: cmd,
     });
+    // User spec: sending an intake IS a conversation action - jump to the
+    // Messages tab so the reply lands in view without an extra click.
+    activateTab("messages");
 
     apiPost("/controller/intake", {
       message: cmd,

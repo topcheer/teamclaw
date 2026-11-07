@@ -488,16 +488,32 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     // never deliver - drop them instead of accumulating forever.
     if (state0) {
       const before = s.writebacks.length;
+      const deadOnes: typeof s.writebacks = [];
       s.writebacks = s.writebacks.filter((w) => {
         if (w.doneAt) { return true; }
         const t = state0.tasks[w.taskId];
         const dead = !t || (t.status === "failed" && !t.result);
         if (dead) {
           logger.warn(`TeamAuto: dropping dead write-back ${w.taskId} (${t ? "task failed without result" : "task missing"})`);
+          deadOnes.push(w);
         }
         return !dead;
       });
       if (s.writebacks.length !== before) { await saveTeamAutoStore(s); }
+      // Live-verified gap (mw5aun1l, 2026-11-07): this drop path fires for
+      // failed-without-result tasks BEFORE the pending loop below, so the
+      // terminal worktree cleanup there never ran for them - the single
+      // largest leak source. Safety-clean here too (same contract). The
+      // filter callback cannot await, hence the post-filter pass.
+      for (const w of deadOnes) {
+        const t = state0.tasks[w.taskId];
+        if (t && t.writeMode === "write" && t.projectDir?.includes("__task-")) {
+          const r = await sync.safeRemoveTaskWorktree(w.repoId, w.taskId);
+          if (!r.removed && !r.reason.includes("already gone")) {
+            logger.warn(`TeamAuto: terminal task ${w.taskId} worktree kept: ${r.reason}`);
+          }
+        }
+      }
     }
     // Self-heal: an entry whose task later COMPLETED with a result (e.g. the
     // completion gate rejected an early submission, then a retry succeeded)
@@ -528,6 +544,15 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       try {
         if (task.status === "failed" || !task.result) {
           entry.error = task.status === "failed" ? (task.error ?? "task failed") : "task completed without a textual result";
+          // Terminal write task: its dispatch-time worktree has no delivery
+          // path left - remove it when the worker never produced deliverable
+          // commits (safety-checked, undelivered work is retained + logged).
+          if (task.writeMode === "write" && task.projectDir?.includes("__task-")) {
+            const r = await sync.safeRemoveTaskWorktree(entry.repoId, task.id);
+            if (!r.removed && !r.reason.includes("already gone")) {
+              logger.warn(`TeamAuto: terminal task ${task.id} worktree kept: ${r.reason}`);
+            }
+          }
         } else {
           const role = (task.assignedRole ?? "qa") as string;
           let body = `${task.result.trim()}\n${MARKER_FOOTER(role)}`;
@@ -706,6 +731,37 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       void reconcileWritebacks();
     }, 20_000);
     writebackTimer.unref?.();
+    // Boot reconciliation: heal leftover task worktrees whose task is
+    // terminal (or gone entirely) - the pre-cleanup backlog never shrinks
+    // on its own. Safety-checked: undelivered work is kept and logged.
+    void (async () => {
+      try {
+        let removed = 0;
+        let retained = 0;
+        for (const repo of s.repos) {
+          if (!repo.enabled) continue;
+          const isTerminal = (taskId: string): boolean => {
+            const t = deps.getTeamState()?.tasks[taskId];
+            if (t && t.status !== "completed" && t.status !== "failed") return false;
+            // Review F1: a terminal task with a pending write-back (push
+            // ok / PR failed, 20s-retry window) still needs its worktree -
+            // the retry delivers the PR from the surviving branch. Do not
+            // GC until the write-back settles (doneAt or dropped).
+            return !s.writebacks.some((w) => w.taskId === taskId && !w.doneAt);
+          };
+          const r = await sync.gcTaskWorktrees(repo.id, isTerminal);
+          removed += r.removed.length;
+          retained += r.retained.length;
+        }
+        if (removed || retained) {
+          recordActivity(s, { at: Date.now(), repoId: "*", kind: "task", text: `worktree GC: removed ${removed}, retained ${retained} (undelivered)` });
+          await saveTeamAutoStore(s);
+          logger.warn(`TeamAuto: worktree GC removed ${removed}, retained ${retained}`);
+        }
+      } catch (err) {
+        logger.warn(`TeamAuto: worktree GC failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    })();
   }
 
   async function stop(): Promise<void> {

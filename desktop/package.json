@@ -1,6 +1,6 @@
 {
   "name": "teamclaw-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "Cross-platform TeamClaw desktop client",
@@ -9,25 +9,28 @@
   "main": "main.mjs",
   "scripts": {
     "dev": "electron .",
-    "dist": "electron-builder",
-    "dist:mac": "electron-builder --mac dmg zip",
-    "dist:mac:x64": "electron-builder --mac dmg zip --x64",
-    "dist:mac:arm64": "electron-builder --mac dmg zip --arm64",
-    "dist:mac:universal": "electron-builder --mac dmg zip --universal",
-    "dist:linux": "electron-builder --linux AppImage deb",
-    "dist:linux:x64": "electron-builder --linux AppImage deb --x64",
-    "dist:linux:arm64": "electron-builder --linux AppImage deb --arm64",
-    "dist:win": "electron-builder --win nsis",
-    "dist:win:x64": "electron-builder --win nsis --x64",
-    "dist:win:arm64": "electron-builder --win nsis --arm64",
-    "dist:dir": "electron-builder --dir",
-    "smoke": "node --check main.mjs && node --check preload.mjs && node --check renderer/app.js"
+    "dist": "npm run prepare-bundled && electron-builder",
+    "dist:mac": "npm run prepare-bundled && electron-builder --mac dmg zip",
+    "dist:mac:x64": "npm run prepare-bundled && electron-builder --mac dmg zip --x64",
+    "dist:mac:arm64": "npm run prepare-bundled && electron-builder --mac dmg zip --arm64",
+    "dist:mac:universal": "npm run prepare-bundled && electron-builder --mac dmg zip --universal",
+    "dist:linux": "npm run prepare-bundled && electron-builder --linux AppImage deb",
+    "dist:linux:x64": "npm run prepare-bundled && electron-builder --linux AppImage deb --x64",
+    "dist:linux:arm64": "npm run prepare-bundled && electron-builder --linux AppImage deb --arm64",
+    "dist:win": "npm run prepare-bundled && electron-builder --win nsis",
+    "dist:win:x64": "npm run prepare-bundled && electron-builder --win nsis --x64",
+    "dist:win:arm64": "npm run prepare-bundled && electron-builder --win nsis --arm64",
+    "dist:dir": "npm run prepare-bundled && electron-builder --dir",
+    "smoke": "node --check main.mjs && node --check preload.mjs && node --check renderer/app.js",
+    "prepare-bundled": "node scripts/prepare-bundled.mjs",
+    "dist:mas": "electron-builder --mac mas"
   },
   "build": {
     "appId": "dev.ggcode.teamclaw",
     "productName": "TeamClaw Desktop",
     "files": [
       "main.mjs",
+      "runtime-extract.mjs",
       "preload.mjs",
       "renderer/**/*",
       "package.json"
@@ -58,6 +61,20 @@
         "deb"
       ],
       "category": "Development"
+    },
+    "extraResources": [
+      {
+        "from": "build/bundle",
+        "to": "bin"
+      }
+    ],
+    "mas": {
+      "entitlements": "build/entitlements.mas.plist",
+      "entitlementsInherit": "build/entitlements.mas.plist",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "provisioningProfile": "build/embedded.provisionprofile",
+      "notarize": false
     }
   },
   "devDependencies": {

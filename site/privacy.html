@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — TeamClaw</title>
+<style>
+:root{--ink:#14110f;--cream:#f6f1e6;--orange:#ff4a1c;--mono:"JetBrains Mono",ui-monospace,monospace}
+*{box-sizing:border-box;margin:0}
+body{background:var(--cream);color:var(--ink);font:16px/1.7 -apple-system,"Segoe UI",sans-serif;padding:48px 24px}
+main{max-width:760px;margin:0 auto}
+h1{font-family:var(--mono);font-size:clamp(28px,4vw,44px);letter-spacing:-.02em;margin-bottom:8px}
+h1 em{color:var(--orange);font-style:normal}
+p.lead{font-family:var(--mono);font-size:13px;opacity:.7;margin-bottom:40px;border-bottom:2px solid var(--ink);padding-bottom:16px}
+h2{font-family:var(--mono);font-size:15px;text-transform:uppercase;letter-spacing:.08em;margin:32px 0 8px;padding-top:24px;border-top:1px solid rgba(20,17,15,.15)}
+ul{padding-left:22px;margin:8px 0}
+li{margin:4px 0}
+code{font-family:var(--mono);font-size:.9em;background:rgba(20,17,15,.06);padding:1px 6px;border-radius:4px}
+footer{margin-top:48px;font-family:var(--mono);font-size:12px;opacity:.55}
+a{color:var(--orange)}
+</style>
+</head>
+<body>
+<main>
+<h1>Privacy <em>Policy</em></h1>
+<p class="lead">TeamClaw Desktop — effective November 6, 2026</p>
+
+<h2>Short version</h2>
+<p>TeamClaw is a local-first application. Your project files, configuration, API keys and conversation history stay on your Mac. We do not operate servers that receive your code or conversations.</p>
+
+<h2>What stays on your device</h2>
+<ul>
+<li>Source code and workspaces you open — read and written only by the agent processes you run locally.</li>
+<li>LLM provider credentials (API keys) you enter — stored in your local configuration directory, never uploaded by us.</li>
+<li>Team activity, task history and session logs — kept in local state files under your user directory.</li>
+</ul>
+
+<h2>What leaves your device</h2>
+<ul>
+<li>Prompts, code context and file contents you ask agents to work on are sent <strong>directly from your Mac to the LLM provider you configure</strong> (for example OpenAI, Anthropic, or your own endpoint). Those providers process data under their own privacy policies.</li>
+<li>App Store download and crash telemetry handled by Apple.</li>
+<li>If you enable the optional tunnel feature, the gateway port you choose is exposed through an encrypted tunnel you control; disable it and nothing is exposed.</li>
+</ul>
+
+<h2>What we never do</h2>
+<ul>
+<li>No TeamClaw analytics, tracking or advertising SDKs.</li>
+<li>No account required — we don't have a sign-up server, so we can't collect names, emails or behavior.</li>
+<li>No selling or sharing of data, because no data reaches us.</li>
+</ul>
+
+<h2>Contact</h2>
+<p>Questions about this policy: open an issue at <a href="https://github.com/topcheer/teamclaw">github.com/topcheer/teamclaw</a>.</p>
+
+<footer>TeamClaw · teamclaw.dev</footer>
+</main>
+</body>
+</html>

@@ -200,6 +200,11 @@
         <!-- TeamAuto Tab -->
         <div id="tab-teamauto" class="tab-panel">
           <div class="teamauto-wrap">
+            <div class="ta-subtabs" role="tablist">
+              <button type="button" class="ta-subtab active" data-ta-pane="config" data-i18n="teamauto.tabConfig">Config</button>
+              <button type="button" class="ta-subtab" data-ta-pane="activity" data-i18n="teamauto.activity">Activity</button>
+            </div>
+            <div class="ta-pane" data-ta-pane-body="config">
             <div class="teamauto-bind card">
               <div class="teamauto-bind-row">
                 <select id="teamauto-repo-select" class="teamauto-select"></select>
@@ -224,8 +229,11 @@
               <p class="teamauto-hint" data-i18n="teamauto.hint">Pick one of your GitHub repositories. TeamClaw sweeps it on its own schedule, reviews issues/PRs, takes ownership of unassigned issues, and posts results with teamclaw markers.</p>
             </div>
             <div id="teamauto-repos" class="teamauto-repos"></div>
+            </div>
+            <div class="ta-pane is-hidden" data-ta-pane-body="activity">
             <h3 class="teamauto-section-title" data-i18n="teamauto.activity">Activity</h3>
             <div id="teamauto-activity" class="teamauto-activity"></div>
+            </div>
           </div>
         </div>
 

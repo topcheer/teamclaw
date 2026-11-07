@@ -44,7 +44,7 @@
       <section id="connection-card" class="panel connection-card">
         <div class="section-head compact">
           <div>
-            <h2>Controller</h2>
+            <h2 data-i18n="connection.title">连接</h2>
             <div id="connection-summary" class="detail-subtitle">Not connected</div>
           </div>
           <div class="head-actions">
@@ -52,40 +52,34 @@
           </div>
         </div>
         <div id="connection-body" class="connection-body">
-          <input id="controller-url" class="compact-input" type="text" placeholder="http://127.0.0.1:9527">
-          <div class="row-actions">
-            <button id="connect-btn" class="btn btn-primary" type="button">Connect</button>
-            <button id="refresh-btn" class="btn" type="button">Refresh</button>
+          <div class="connection-group">
+            <div class="connection-group-label" data-i18n="connection.prodGroup">连接已有服务</div>
+            <input id="controller-url" class="compact-input" type="text" placeholder="http://127.0.0.1:9527">
+            <div class="row-actions">
+              <button id="connect-btn" class="btn btn-primary" type="button" data-i18n="connection.connect">连接</button>
+              <button id="refresh-btn" class="btn" type="button" data-i18n="connection.refresh">刷新</button>
+            </div>
           </div>
           <div class="standalone-box">
             <div class="standalone-head">
-              <span class="bootstrap-label">Standalone instance (isolated)</span>
+              <span class="connection-group-label" data-i18n="connection.privateGroup">私有本地实例</span>
               <div id="standalone-pill" class="pill pill-stopped">Stopped</div>
             </div>
             <div class="standalone-row">
-              <select id="standalone-vendor" class="compact-input" title="LLM provider (defaults to your current OpenClaw config)">
-                <option value="">Use current OpenClaw config</option>
-                <option value="anthropic">Anthropic</option>
-                <option value="openai">OpenAI</option>
-                <option value="openrouter">OpenRouter</option>
-                <option value="zai">Z.ai</option>
-                <option value="deepseek">DeepSeek</option>
-              </select>
-              <button id="standalone-start-btn" class="btn btn-primary" type="button">Start</button>
+              <button id="standalone-start-btn" class="btn btn-primary" type="button" data-i18n="connection.privateStart">启动 / 初始化</button>
               <button id="standalone-connect-btn" class="btn" type="button" hidden>Use this</button>
+              <button id="standalone-stop-btn" class="btn" type="button" hidden data-i18n="connection.privateStop">停止</button>
             </div>
-            <div class="bootstrap-note">Own state dir, own port, dies with this app - your existing OpenClaw install is never touched.</div>
+            <div class="bootstrap-note" data-i18n="connection.privateNote">独立目录与端口，不触碰你机器上已有的 OpenClaw。</div>
           </div>
         </div>
       </section>
 
       <nav class="panel nav-card">
         <button class="nav-btn active" data-view="mission" type="button"><span class="nav-label">Mission</span><span class="nav-signal is-hidden" data-nav-signal="mission"></span></button>
-        <button class="nav-btn" data-view="planning" type="button"><span class="nav-label">Planning</span><span class="nav-signal is-hidden" data-nav-signal="planning"></span></button>
         <button class="nav-btn" data-view="tasks" type="button"><span class="nav-label">Tasks</span><span class="nav-signal is-hidden" data-nav-signal="tasks"></span></button>
         <button class="nav-btn" data-view="clarifications" type="button"><span class="nav-label">Clarifications</span><span class="nav-signal is-hidden" data-nav-signal="clarifications"></span></button>
         <button class="nav-btn" data-view="workspace" type="button"><span class="nav-label">Workspace</span><span class="nav-signal is-hidden" data-nav-signal="workspace"></span></button>
-        <button class="nav-btn" data-view="reports" type="button"><span class="nav-label">Reports</span><span class="nav-signal is-hidden" data-nav-signal="reports"></span></button>
         <button class="nav-btn" data-view="teamauto" type="button"><span class="nav-label">TeamAuto</span></button>
         <button class="nav-btn" data-view="controller" type="button"><span class="nav-label">Controller</span></button>
       </nav>
@@ -111,6 +105,7 @@
         <div class="header-actions">
           <button id="gh-corner-login" class="btn" type="button" hidden>Login</button>
           <button id="gh-corner-user" class="btn gh-corner-user" type="button" hidden title="GitHub: click to sign out"><img id="gh-corner-avatar" class="gh-corner-avatar is-hidden" alt=""><span id="gh-corner-name">-</span></button>
+          <button id="wizard-open-btn" class="btn btn-small" type="button" data-i18n="connection.setup">设置向导</button>
           <button id="compose-focus-btn" class="btn" type="button">New requirement</button>
           <button id="notice-toggle" class="btn notice-toggle" type="button">Notifications <span id="notice-badge" class="notice-badge">0</span></button>
         </div>
@@ -226,14 +221,25 @@
       <section id="view-teamauto" class="stage-view">
         <section class="panel large-card">
           <div class="section-head"><h2 id="teamauto-title">TeamAuto</h2></div>
-          <p id="teamauto-hint" class="detail-subtitle">Pick one of your GitHub repositories. TeamClaw sweeps it on its own schedule, reviews issues/PRs, takes ownership of unassigned issues, and posts results with teamclaw markers.</p>
-          <div class="teamauto-bind-row">
-            <select id="ta-repo-select" class="teamauto-select"></select>
-            <button id="ta-repos-refresh" class="btn" type="button">Refresh repos</button>
-            <input id="ta-schedule" class="teamauto-schedule-input" type="text" placeholder="*/30 * * * *" spellcheck="false" />
-            <button id="ta-bind" class="btn btn-primary" type="button">Bind</button>
+          <div class="ta-tabs" role="tablist">
+            <button class="ta-tab active" data-ta-tab="repos" type="button" data-i18n="teamauto.tabRepos">Repositories</button>
+            <button class="ta-tab" data-ta-tab="activity" type="button" data-i18n="teamauto.activity">Activity</button>
           </div>
-          <div id="ta-bind-msg" class="teamauto-msg"></div>
+          <div class="ta-tabpane active" data-ta-pane="repos">
+            <p id="teamauto-hint" class="detail-subtitle">Pick one of your GitHub repositories. TeamClaw sweeps it on its own schedule, reviews issues/PRs, takes ownership of unassigned issues, and posts results with teamclaw markers.</p>
+            <div class="teamauto-bind-row">
+              <select id="ta-repo-select" class="teamauto-select"></select>
+              <button id="ta-repos-refresh" class="btn" type="button">Refresh repos</button>
+              <input id="ta-schedule" class="teamauto-schedule-input" type="text" placeholder="*/30 * * * *" spellcheck="false" />
+              <button id="ta-bind" class="btn btn-primary" type="button">Bind</button>
+            </div>
+            <div id="ta-bind-msg" class="teamauto-msg"></div>
+            <div id="ta-repos" class="teamauto-repos"></div>
+          </div>
+          <div class="ta-tabpane" data-ta-pane="activity">
+            <h3 class="teamauto-section-title" id="ta-activity-title">Activity</h3>
+            <div id="ta-activity" class="teamauto-activity"></div>
+          </div>
           <div id="ta-bind-overlay" class="ta-bind-overlay is-hidden" role="dialog" aria-modal="true">
             <div class="ta-bind-dialog">
               <div class="ta-bind-title" id="ta-bind-overlay-title">Binding...</div>
@@ -246,15 +252,20 @@
               <button id="ta-bind-overlay-close" class="btn btn-small is-hidden" type="button" data-i18n="teamauto.close">Close</button>
             </div>
           </div>
-          <div id="ta-repos" class="teamauto-repos"></div>
-          <h3 class="teamauto-section-title" id="ta-activity-title">Activity</h3>
-          <div id="ta-activity" class="teamauto-activity"></div>
         </section>
       </section>
 
       <section id="view-controller" class="stage-view">
-        <div class="view-grid controller-grid">
-          <section class="panel detail-card">
+        <section class="panel large-card">
+          <div class="section-head"><h2>Controller</h2></div>
+          <div class="ta-tabs ctl-tabs" role="tablist">
+            <button class="ta-tab active" data-ctl-tab="models" type="button" data-i18n="ctl.tab.models">Team models</button>
+            <button class="ta-tab" data-ctl-tab="workspace" type="button" data-i18n="ctl.tab.workspace">Workspace</button>
+            <button class="ta-tab" data-ctl-tab="github" type="button" data-i18n="ctl.tab.github">GitHub</button>
+            <button class="ta-tab" data-ctl-tab="tunnel" type="button" data-i18n="ctl.tab.tunnel">Tunnel</button>
+          </div>
+          <div class="ta-tabpane active" data-ctl-pane="models">
+          <section class="detail-card ctl-card">
             <div class="section-head compact"><h2 id="ctl-models-title">Team models</h2></div>
             <p id="ctl-models-hint" class="ctl-hint">Default model applies to the controller and every role; per-role selections override it for that role.</p>
             <label class="ctl-field"><span id="ctl-default-label">Default model</span><select id="ctl-default"></select></label>
@@ -264,7 +275,9 @@
               <span id="ctl-models-result" class="ctl-result"></span>
             </div>
           </section>
-          <section class="panel detail-card">
+          </div>
+          <div class="ta-tabpane" data-ctl-pane="workspace">
+          <section class="detail-card ctl-card">
             <div class="section-head compact"><h2 id="ctl-ws-title">Workspace directory</h2></div>
             <p class="ctl-hint"><span id="ctl-ws-current-label">Current:</span> <code id="ctl-ws-path">...</code> <span id="ctl-ws-default" class="ctl-badge is-hidden">default</span></p>
             <p id="ctl-ws-hint" class="ctl-hint">Point the team workspace at any absolute path on the controller machine. Applies after a gateway restart.</p>
@@ -274,7 +287,9 @@
               <span id="ctl-ws-result" class="ctl-result"></span>
             </div>
           </section>
-          <section class="panel detail-card">
+          </div>
+          <div class="ta-tabpane" data-ctl-pane="github">
+          <section class="detail-card ctl-card">
             <div class="section-head compact"><h2 id="ctl-gh-title">GitHub login</h2></div>
             <p class="ctl-hint"><span id="ctl-gh-current-label">Current:</span> <code id="ctl-gh-account">-</code></p>
             <p id="ctl-gh-hint" class="ctl-hint">Authorizes TeamClaw to access the GitHub API on your behalf. The token is stored only on the controller machine.</p>
@@ -284,7 +299,9 @@
               <span id="ctl-gh-result" class="ctl-result"></span>
             </div>
           </section>
-          <section class="panel detail-card">
+          </div>
+          <div class="ta-tabpane" data-ctl-pane="tunnel">
+          <section class="detail-card ctl-card">
             <div class="section-head compact"><h2 id="ctl-tunnel-title">Internet tunnel</h2></div>
             <p id="ctl-tunnel-hint" class="ctl-hint">Share the local web UI at a public HTTPS URL. Visitors must enter the gate token shown below.</p>
             <div id="ctl-tunnel-state" class="ctl-tunnel-state ctl-hint">Loading…</div>
@@ -295,7 +312,8 @@
               <span id="ctl-tunnel-result" class="ctl-result"></span>
             </div>
           </section>
-        </div>
+          </div>
+        </section>
       </section>
     </main>
   </div>
@@ -335,103 +353,111 @@
 
   <div id="bootstrap-overlay" class="bootstrap-overlay hidden" aria-hidden="true">
     <section class="bootstrap-panel">
+      <button id="wizard-language-toggle" class="mini-btn" type="button" style="position:absolute;top:14px;right:110px">中文</button>
+      <button id="wizard-cancel-btn" class="bootstrap-close" type="button" data-i18n="wizard.cancel">取消</button>
       <div class="bootstrap-hero">
         <div class="bootstrap-kicker">TeamClaw Desktop</div>
-        <h1 id="bootstrap-title">TeamClaw is unavailable on this machine.</h1>
-        <p id="bootstrap-subtitle" class="bootstrap-subtitle">We'll first try to connect to the local controller. If it isn't running yet, you can install TeamClaw here, start it, or point this app at another controller.</p>
+        <h1 id="bootstrap-title" data-i18n="bootstrap.wizardTitle">Let's get started</h1>
+        <p id="bootstrap-subtitle" class="bootstrap-subtitle" data-i18n="bootstrap.wizardSubtitle">Choose how you want to run TeamClaw. The private local instance is recommended - it never touches your existing OpenClaw.</p>
       </div>
-
-      <div class="bootstrap-grid">
-        <section class="bootstrap-card">
-          <div class="bootstrap-card-head">
-            <div>
-              <div id="bootstrap-status-label" class="bootstrap-label">Startup status</div>
-              <div id="bootstrap-status-detail" class="bootstrap-status-detail">Couldn't reach the local TeamClaw controller.</div>
-            </div>
-            <div id="local-pill" class="pill pill-stopped">Stopped</div>
-          </div>
-        </section>
-
-        <section id="bootstrap-mode-card" class="bootstrap-card">
-          <div id="bootstrap-mode-label" class="bootstrap-label">Install mode</div>
+      <div id="wizard-steps" class="wizard-steps">
+        <span data-step-ind="1" class="step-ind active" data-i18n="wizard.stepMode">1 · 方式</span>
+        <span data-step-ind="2" class="step-ind" data-i18n="wizard.stepModel">2 · 模型</span>
+        <span data-step-ind="3" class="step-ind" data-i18n="wizard.stepLaunch">3 · 启动</span>
+      </div>
+      <div class="bootstrap-grid" id="wizard-body">
+        <!-- Step 1: how to run -->
+        <section class="bootstrap-card" data-wizard-step="1">
+          <div class="bootstrap-label" data-i18n="wizard.runMode">运行方式</div>
           <label class="bootstrap-mode">
             <input type="radio" name="bootstrap-mode" data-bootstrap-mode="controller-manual" checked>
-            <span>
-              <strong id="bootstrap-mode-manual-title">Local quickstart</strong>
-              <small id="bootstrap-mode-manual-hint">Runs the controller here with empty preferred provisioning roles. TeamClaw can still scale to the configured per-role worker cap.</small>
-            </span>
+            <span><strong data-i18n="wizard.modePrivateTitle">私有本地实例（推荐）</strong><small data-i18n="wizard.modePrivateDesc">独立目录、独立端口，随本应用启停；不影响你已有的 OpenClaw。</small></span>
           </label>
           <label class="bootstrap-mode">
-            <input type="radio" name="bootstrap-mode" data-bootstrap-mode="controller-process">
-            <span>
-              <strong id="bootstrap-mode-process-title">Local multi-process</strong>
-              <small id="bootstrap-mode-process-hint">Runs the controller here and provisions local worker processes on demand. Uses more CPU and memory.</small>
-            </span>
+            <input type="radio" name="bootstrap-mode" data-bootstrap-mode="remote">
+            <span><strong data-i18n="wizard.modeRemoteTitle">连接现有 controller</strong><small data-i18n="wizard.modeRemoteDesc">指向一台已在运行的 TeamClaw controller（含远程）。</small></span>
           </label>
-          <p id="bootstrap-mode-warning" class="bootstrap-warning">This mode uses more resources on the current machine, but gives local workers stronger process isolation. The local quickstart mode keeps `workerProvisioningRoles: []`, so startup readiness falls back to a warm developer worker.</p>
+          <label class="bootstrap-mode">
+            <input type="radio" name="bootstrap-mode" data-bootstrap-mode="global">
+            <span><strong data-i18n="wizard.modeGlobalTitle">使用/安装全局 OpenClaw 实例</strong><small data-i18n="wizard.modeGlobalDesc">机器级 OpenClaw：已有配置将原样复用（不改写模型配置）；全新则由向导初始化并持久化。</small></span>
+          </label>
+          <div id="bootstrap-private-lifecycle" class="bootstrap-note">
+            <span data-i18n="wizard.lifecycleLabel">内置实例随应用关闭：</span><label><input type="radio" name="private-lifecycle" value="app" checked><span data-i18n="wizard.lifecycleApp"> 一起关闭</span></label>
+            <label><input type="radio" name="private-lifecycle" value="persistent"> <span data-i18n="wizard.lifecyclePersistent">保持后台运行（重启应用直接连接）</span></label>
+          </div>
+          <div id="bootstrap-remote-url-row" hidden>
+            <input id="bootstrap-controller-url" class="compact-input" type="text" placeholder="http://127.0.0.1:9527">
+            <button class="btn" type="button" data-bootstrap-connect="true">连接这个 controller</button>
+          </div>
+          <details class="wizard-advanced">
+            <summary data-i18n="wizard.advanced">高级选项</summary>
+            <div class="bootstrap-label" style="margin-top:8px" data-i18n="wizard.sourceLabel">安装源</div>
+            <select id="bootstrap-source" class="compact-input">
+              <option value="auto" data-i18n="wizard.srcAuto">自动（优先内置）</option>
+              <option value="bundled" data-i18n="wizard.srcBundled">随应用内置（离线）</option>
+              <option value="official" data-i18n="wizard.srcOfficial">官方源（npm）</option>
+              <option value="artifact" data-i18n="wizard.srcArtifact">Artifact（默认固定源，可自定义 URL）</option>
+            </select>
+            <input id="bootstrap-artifact-url" class="compact-input" type="text" placeholder="Artifact URL（默认 runtime-latest 固定源）" hidden>
+            <div class="bootstrap-label" style="margin-top:8px" data-i18n="wizard.advModeLabel">运行模式</div>
+            <label class="bootstrap-mode"><input type="radio" name="bootstrap-adv-mode" value="controller-manual" checked><span><strong data-i18n="wizard.advSimple">简洁</strong><small data-i18n="wizard.advSimpleDesc">按需拉起本地 worker</small></span></label>
+            <label class="bootstrap-mode"><input type="radio" name="bootstrap-adv-mode" value="controller-process"><span><strong data-i18n="wizard.advMulti">多进程</strong><small data-i18n="wizard.advMultiDesc">更强隔离，占用更多</small></span></label>
+            <button class="btn btn-small" type="button" data-bootstrap-copy-install="true" hidden>复制安装命令</button>
+          </details>
+          <div class="bootstrap-actions">
+            <button id="wizard-next-1" class="btn btn-primary" type="button" data-i18n="wizard.next">下一步</button>
+          </div>
         </section>
-
-        <section class="bootstrap-card bootstrap-command-card">
-          <div id="bootstrap-command-label" class="bootstrap-label">One-line install command</div>
-          <pre class="worker-install-command bootstrap-command"><code id="bootstrap-install-command"></code></pre>
-          <section class="bootstrap-card bootstrap-llm-card">
-            <div class="bootstrap-label">LLM provider (everything else defaults)</div>
+        <!-- Step 2: LLM -->
+        <section class="bootstrap-card" data-wizard-step="2" hidden>
+          <div class="bootstrap-label" data-i18n="wizard.llmLabelRequired">Model service (required)</div>
+          <div id="bootstrap-llm-use-row" class="bootstrap-note" hidden>
+            <label><input type="radio" name="llm-source" value="configured" checked> <span id="bootstrap-llm-use-label" data-i18n="wizard.llmUseConfigured">Use existing configuration</span></label>
+            <label><input type="radio" name="llm-source" value="custom"> <span data-i18n="wizard.llmUseCustom">Configure a provider</span></label>
+          </div>
+          <div id="bootstrap-llm-fields">
             <div class="bootstrap-llm-row">
               <select id="bootstrap-llm-provider" class="compact-input">
-                <option value="">Detect / keep existing</option>
+                <option value="zai">Z.ai</option>
                 <option value="anthropic">Anthropic</option>
                 <option value="openai">OpenAI</option>
                 <option value="openrouter">OpenRouter</option>
-                <option value="zai">Z.ai</option>
                 <option value="deepseek">DeepSeek</option>
                 <option value="google">Google</option>
               </select>
-              <input id="bootstrap-llm-endpoint" class="compact-input" type="text" placeholder="Endpoint URL (optional)">
-              <input id="bootstrap-llm-apikey" class="compact-input" type="password" placeholder="API key">
+              <input id="bootstrap-llm-endpoint" class="compact-input" type="text" data-i18n-placeholder="wizard.llmEndpoint" placeholder="接口地址（可选）">
+              <input id="bootstrap-llm-apikey" class="compact-input" type="password" placeholder="API Key">
+              <div class="bootstrap-llm-model-row">
+                <select id="bootstrap-llm-model-select" class="compact-input" hidden></select>
+                <input id="bootstrap-llm-model" class="compact-input" type="text" placeholder="model" autocomplete="off">
+                <button id="bootstrap-llm-models-refresh" class="btn btn-small" type="button" data-i18n="wizard.refreshModels" title="Refresh model list">刷新</button>
+              </div>
             </div>
-            <div class="bootstrap-label" style="margin-top:10px">Install source</div>
-            <select id="bootstrap-source" class="compact-input">
-              <option value="auto">Auto (bundled if present, else official)</option>
-              <option value="bundled">Bundled with this app</option>
-              <option value="official">Official registry (npm)</option>
-              <option value="gitlab">GitLab artifact (tar/zip URL)</option>
-            </select>
-            <input id="bootstrap-gitlab-url" class="compact-input" type="text" placeholder="GitLab artifact URL" hidden>
-            <div class="bootstrap-note">Sandboxed install - your existing OpenClaw/TeamClaw installation and ~/.openclaw are never modified.</div>
-          </section>
-          <section class="bootstrap-card bootstrap-log-card" hidden id="bootstrap-log-card">
-            <div class="bootstrap-label">Install progress</div>
-            <pre id="bootstrap-log" class="bootstrap-log"></pre>
-          </section>
+            <div id="bootstrap-llm-keyhint" class="bootstrap-status-detail" hidden></div>
+            <div id="bootstrap-llm-hint" class="bootstrap-status-detail" hidden></div>
+          </div>
+          <div class="bootstrap-note" data-i18n="wizard.llmNote">配置只写入本应用的私有目录（沙箱），不会改动你机器上已有的任何 OpenClaw 配置。</div>
           <div class="bootstrap-actions">
-            <button class="btn" type="button" data-bootstrap-copy-install="true">Copy install command</button>
-            <button id="bootstrap-install-btn" class="btn btn-primary" type="button" data-bootstrap-install="true">Install now</button>
+            <button class="btn" data-wizard-back="1" type="button" data-i18n="wizard.back">上一步</button>
+            <button id="wizard-next-2" class="btn btn-primary" type="button" data-i18n="wizard.install" disabled>开始安装</button>
           </div>
         </section>
-
-        <section id="bootstrap-openclaw-quickstart-card" class="bootstrap-card">
-          <div id="bootstrap-start-command-label" class="bootstrap-label">OpenClaw guided quickstart command</div>
-          <pre class="worker-install-command bootstrap-command"><code id="bootstrap-start-command">openclaw onboard --flow quickstart --install-daemon</code></pre>
-        </section>
-
-        <section class="bootstrap-card">
-          <div id="bootstrap-remote-title" class="bootstrap-label">Or connect to another controller</div>
-          <p id="bootstrap-remote-hint" class="bootstrap-subcopy">You can still point this desktop app at a remote TeamClaw controller.</p>
-          <label for="bootstrap-controller-url" id="bootstrap-remote-url-label" class="bootstrap-inline-label">Controller URL</label>
-          <input id="bootstrap-controller-url" class="compact-input" type="text" placeholder="http://127.0.0.1:9527">
+        <!-- Step 3: progress -->
+        <section class="bootstrap-card" data-wizard-step="3" hidden>
+          <div class="bootstrap-label" id="bootstrap-status-label" data-i18n="wizard.progress">进度</div>
+          <div id="bootstrap-status-detail" class="bootstrap-status-detail" data-i18n="wizard.preparing">准备中…</div>
+          <pre id="bootstrap-log" class="bootstrap-log"></pre>
           <div class="bootstrap-actions">
-            <button class="btn" type="button" data-bootstrap-connect="true">Connect to this controller</button>
+            <button id="bootstrap-install-btn" class="btn btn-primary" type="button" data-bootstrap-install="true" hidden data-i18n="wizard.install">开始安装</button>
+            <button class="btn" type="button" data-bootstrap-restart-wizard hidden data-i18n="wizard.restart">重新开始</button>
           </div>
-        </section>
-
-        <section id="bootstrap-openclaw-components-card" class="bootstrap-card bootstrap-log-card">
-          <div id="bootstrap-logs-label" class="bootstrap-label">Component install command</div>
-          <pre id="bootstrap-local-log" class="worker-install-command bootstrap-log">npm install -g openclaw@latest</pre>
         </section>
       </div>
     </section>
   </div>
+    </section>
+  </div>
 
-  <script src="./app.js"></script>
+  <script type="module" src="./app.js"></script>
 </body>
 </html>

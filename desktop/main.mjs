@@ -5,11 +5,34 @@ import fsSync from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { ensureBundledRuntime, makeOpenclawShim } from "./runtime-extract.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// True sandbox switch for testing: on macOS Electron's userData follows the
+// SYSTEM home (NSHomeDirectory), not $HOME - env-HOME sandboxes silently
+// read the real user's config (that's how test instances ended up connected
+// to the production controller). TC_USER_DATA redirects userData before
+// anything reads it.
+if (process.env.TC_USER_DATA) {
+  app.setPath("userData", process.env.TC_USER_DATA);
+}
 const DEFAULT_SETTINGS = {
-  controllerUrl: "http://127.0.0.1:9527",
+  // NO silent localhost default: an empty URL means "no instance chosen yet".
+  // Boot must go through settings.instance; a hardcoded 9527 dials whatever
+  // else runs on this machine (e.g. a host production controller).
+  controllerUrl: "",
   theme: "system",
+  // instance = the app's single source of truth for what to run/connect:
+  //   mode: "private"  - bundled/sandbox runtime, own state dir, own port
+  //                       lifecycle "app" (die with app) | "persistent"
+  //         "global"   - the machine-level OpenClaw (system PATH binary,
+  //                       default state dir). Reuses any pre-existing state
+  //                       and NEVER overwrites its LLM config.
+  //         "external" - just connect to a controller URL, manage nothing.
+  //   controllerUrl - resolved/known URL for this instance
+  //   llmConfigured - whether the wizard already wrote LLM config for it
+  instance: null,
 };
 
 let mainWindow = null;
@@ -40,11 +63,15 @@ function getSettingsPath() {
 }
 
 async function loadSettings() {
+  // sandbox flag is derived, never persisted: a TC_USER_DATA launch must
+  // behave like a fresh machine (wizard defaults to PRIVATE, no probing of
+  // the host's real openclaw/controller) even after settings get saved.
+  const derived = { ...DEFAULT_SETTINGS, sandbox: Boolean(process.env.TC_USER_DATA) };
   try {
     const raw = await fs.readFile(getSettingsPath(), "utf8");
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    return { ...derived, ...JSON.parse(raw), sandbox: derived.sandbox };
   } catch {
-    return { ...DEFAULT_SETTINGS };
+    return { ...derived };
   }
 }
 
@@ -170,19 +197,66 @@ async function runShellCommand(command, options = {}) {
 // Install sources for the OpenClaw + TeamClaw runtimes.
 //   bundled  - ships inside this app (extraResources/bin; offline install)
 //   official - npm registry (@latest)
-//   gitlab   - prebuilt tar/zip from a GitLab artifact URL
+//   artifact - prebuilt tar from the FIXED-URL GitHub release (runtime-latest)
 const BUNDLED_BIN_DIR = () => path.join(process.resourcesPath || "", "bin");
 
+// Compressed-form runtime (installers ship resources/bin/runtime.tgz; the
+// unpacked 1GB tree is history). Extracted to userData/bundled/runtime on
+// first use - see runtime-extract.mjs. Null until warmed / not bundled.
+let EXTRACTED_RUNTIME_DIR = null;
+let EXTRACTED_OPENCLAW_SHIM = null;
+async function warmBundledRuntime(onEvent) {
+  if (EXTRACTED_RUNTIME_DIR) return EXTRACTED_RUNTIME_DIR;
+  try {
+    EXTRACTED_RUNTIME_DIR = await ensureBundledRuntime({
+      resourcesBinDir: BUNDLED_BIN_DIR(),
+      userDataDir: app.getPath("userData"),
+      onEvent,
+    });
+    // Launcher shim: the entry is openclaw.mjs (a Node script). Windows has
+    // no .mjs association - shell-spawning it pops "choose an app". The shim
+    // runs it under Electron's embedded Node, no system Node needed.
+    if (EXTRACTED_RUNTIME_DIR) {
+      EXTRACTED_OPENCLAW_SHIM = makeOpenclawShim(EXTRACTED_RUNTIME_DIR, process.execPath);
+    }
+  } catch (e) {
+    if (onEvent) onEvent({ phase: "runtime", line: "Bundled runtime extraction failed: " + (e && e.message) });
+  }
+  return EXTRACTED_RUNTIME_DIR;
+}
+function bundledRuntimeRoot() {
+  // Extracted dir (userData) wins; unpacked resources/bin/runtime remains
+  // for dev runs and legacy builds.
+  if (EXTRACTED_RUNTIME_DIR) return EXTRACTED_RUNTIME_DIR;
+  return path.join(BUNDLED_BIN_DIR(), "runtime");
+}
+
 function bundledBinary(name) {
-  const candidate = path.join(BUNDLED_BIN_DIR(), name);
-  return fsSync.existsSync(candidate) ? candidate : null;
+  // extraResources embeds build/bundle -> Resources/bin. NOTE: the .bin
+  // entries are SYMLINKS and electron-builder's copy breaks them (lstat
+  // hits, existsSync false), so resolve the REAL files instead:
+  //   openclaw  -> node_modules/openclaw/openclaw.mjs
+  //   (any pkg) -> node_modules/<name>/... resolved per-package below
+  if (name === "openclaw") {
+    // Extracted (compressed-form) runtime: return the LAUNCHER SHIM, never
+    // the bare .mjs - Windows cannot shell-execute .mjs (no association).
+    if (EXTRACTED_OPENCLAW_SHIM && fsSync.existsSync(EXTRACTED_OPENCLAW_SHIM)) {
+      return EXTRACTED_OPENCLAW_SHIM;
+    }
+    const real = path.join(bundledRuntimeRoot(), "node_modules", "openclaw", "openclaw.mjs");
+    return fsSync.existsSync(real) ? real : null;
+  }
+  const direct = path.join(BUNDLED_BIN_DIR(), name);
+  if (fsSync.existsSync(direct)) return direct;
+  const tree = path.join(bundledRuntimeRoot(), "node_modules", ".bin", name);
+  return fsSync.existsSync(tree) ? tree : null;
 }
 
 function resolveInstallSource(source) {
   switch (source) {
     case "bundled":
     case "official":
-    case "gitlab":
+    case "artifact":
       return source;
     default:
       // Auto: prefer a bundled binary when present, else npm.
@@ -190,8 +264,22 @@ function resolveInstallSource(source) {
   }
 }
 
-async function ensureOpenClawRuntime({ source, gitlabUrl }, onEvent) {
+async function ensureOpenClawRuntime({ source, artifactUrl }, onEvent) {
   // Returns the openclaw command (bundled path or global CLI name).
+  // Bundled tree WINS over reusing the global install: the embedded runtime
+  // keeps openclaw+teamclaw peers resolvable inside one tree, which is what
+  // makes fully-offline plugin registration work (a local-path plugins
+  // install otherwise resolves its openclaw peer over npm).
+  const bundledPre = bundledBinary("openclaw");
+  if (!bundledPre) {
+    // Cold start before the whenReady warm-up finished - extract on demand.
+    await warmBundledRuntime(onEvent);
+  }
+  const bundled = bundledBinary("openclaw");
+  if (bundled) {
+    onEvent({ phase: "openclaw", line: "Using bundled OpenClaw runtime: " + bundled });
+    return bundled;
+  }
   const existing = await hasOpenClawInstalled();
   if (existing) {
     onEvent({ phase: "openclaw", line: "OpenClaw already installed - reusing." });
@@ -204,30 +292,36 @@ async function ensureOpenClawRuntime({ source, gitlabUrl }, onEvent) {
     onEvent({ phase: "openclaw", line: "Using bundled OpenClaw binary: " + bin });
     return bin;
   }
-  if (src === "gitlab") {
-    if (!gitlabUrl) throw new Error("GitLab artifact URL is required for the gitlab source.");
+  if (src === "artifact") {
+    // Fixed-URL rolling release (user design): tag never moves, CI replaces
+    // assets. Default URL, user-overridable; sha256 verified when available.
+    const plat = `${process.platform}-${process.arch}`;
+    const url = artifactUrl || `https://github.com/topcheer/teamclaw/releases/download/runtime-latest/teamclaw-runtime-${plat}.tar.gz`;
     const workDir = path.join(app.getPath("userData"), "downloads");
     await fs.mkdir(workDir, { recursive: true });
-    const fileName = gitlabUrl.split("/").pop() || "artifact.tgz";
+    const fileName = url.split("/").pop() || "artifact.tar.gz";
     const dest = path.join(workDir, fileName);
-    onEvent({ phase: "openclaw", line: `Downloading GitLab artifact ${fileName}...` });
-    await runShellStream(`curl -fSL --retry 3 -o "${dest}" "${gitlabUrl}"`, workDir, (line) =>
+    onEvent({ phase: "openclaw", line: `Downloading runtime artifact ${fileName}...` });
+    await runShellStream(`curl -fSL --retry 3 -o "${dest}" "${url}"`, workDir, (line) =>
       onEvent({ phase: "openclaw", line }),
     );
-    const extractDir = path.join(workDir, fileName.replace(/\.(tar\.gz|tgz|zip)$/, ""));
-    await fs.mkdir(extractDir, { recursive: true });
-    onEvent({ phase: "openclaw", line: `Extracting to ${extractDir}...` });
-    if (/\.(tar\.gz|tgz)$/.test(fileName)) {
-      await runShellStream(`tar xzf "${dest}" -C "${extractDir}"`, workDir, (line) => onEvent({ phase: "openclaw", line }));
-    } else if (/\.zip$/.test(fileName)) {
-      await runShellStream(`unzip -oq "${dest}" -d "${extractDir}"`, workDir, (line) => onEvent({ phase: "openclaw", line }));
+    onEvent({ phase: "openclaw", line: "Verifying sha256..." });
+    const sum = await runShellCommand(`shasum -a 256 "${dest}"`, { cwd: workDir });
+    const digest = (sum.stdout || "").split(" ")[0];
+    try {
+      const expect = (await (await fetch(url + ".sha256")).text()).split(" ")[0];
+      if (expect && digest !== expect) throw new Error(`sha256 mismatch: ${digest} != ${expect}`);
+      onEvent({ phase: "openclaw", line: "sha256 OK: " + digest.slice(0, 12) });
+    } catch (e) {
+      if (String(e.message || "").startsWith("sha256 mismatch")) throw e;
+      onEvent({ phase: "openclaw", line: "checksum file unavailable - continuing without verification" });
     }
-    // Locate the openclaw binary inside the extracted tree.
-    const found = await runShellCommand(`find "${extractDir}" -name openclaw -type f -perm +111 | head -1`, { cwd: workDir });
-    const bin = (found.stdout || "").trim();
-    if (!bin) throw new Error("No openclaw binary found inside the GitLab artifact.");
-    await fs.chmod(bin, 0o755).catch(() => {});
-    onEvent({ phase: "openclaw", line: "GitLab artifact ready: " + bin });
+    const extractDir = path.join(workDir, "runtime-extracted");
+    await fs.mkdir(extractDir, { recursive: true });
+    await runShellStream(`tar xzf "${dest}" -C "${extractDir}"`, workDir, (line) => onEvent({ phase: "openclaw", line }));
+    const bin = path.join(extractDir, "runtime", "node_modules", ".bin", "openclaw");
+    if (!fsSync.existsSync(bin)) throw new Error("Runtime tree malformed (no openclaw bin).");
+    onEvent({ phase: "openclaw", line: "Artifact runtime ready: " + bin });
     return bin;
   }
   // official: npm install into the DESKTOP-OWNED prefix - the user's global
@@ -255,8 +349,61 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
   await fs.mkdir(runtimeDir, { recursive: true });
   const pluginDir = path.join(runtimeDir, "node_modules", "@teamclaws", "teamclaw");
   const res = await runShellCommand(`"${openclawBin}" plugins list 2>/dev/null || true`, { cwd: runtimeDir, env: sandboxEnv });
-  if ((res.stdout || "").includes("teamclaw")) {
+  // Precise: match the plugins-list TABLE row (│ TeamClaw │), not any
+  // teamclaw substring - the stock-extensions path line also contains it.
+  if (/│\s*TeamClaw\s*│/.test(res.stdout || "")) {
     onEvent({ phase: "teamclaw", line: "TeamClaw plugin already installed." });
+    return;
+  }
+  // Fully-offline registration when a bundled tree exists: install the
+  // plugin from the EMBEDDED runtime tree (same tar shape) - no npm, no
+  // network. Only falls back to npm when the bundle is absent.
+  const bundledOpenclaw = bundledBinary("openclaw");
+  const bundledPlugin = bundledOpenclaw
+    ? path.join(BUNDLED_BIN_DIR(), "runtime", "node_modules", "@teamclaws", "teamclaw")
+    : null;
+  if (bundledPlugin && fsSync.existsSync(bundledPlugin)) {
+    onEvent({ phase: "teamclaw", line: "Registering the bundled TeamClaw plugin (offline)..." });
+    await runShellStream(`"${openclawBin}" plugins install "file:${bundledPlugin}" --force --accept-capabilities`, runtimeDir, (line) =>
+      onEvent({ phase: "teamclaw", line }), sandboxEnv);
+    // #147: openclaw's dependency probe enforces the plugin rootDir BOUNDARY -
+    // hoisted deps (npm layout in the runtime tree) resolve OUTSIDE it and
+    // the plugin lands error-state "required dependencies are missing".
+    // Seal the runtime tree's node_modules INTO the installed plugin dir
+    // (pure file copy, zero network). Symlinks copied verbatim; the .bin
+    // entries in the plugin subtree were already materialized at bundle time.
+    const extRoot = path.join(sandboxEnv.OPENCLAW_STATE_DIR, "extensions", "teamclaw");
+    const extDeps = path.join(extRoot, "node_modules");
+    if (fsSync.existsSync(extRoot)) {
+      // Precise seal: the plugin's own declared dependencies only (5 pkgs,
+      // incl. the openclaw peer) - copied one-by-one from the bundled tree so
+      // a single bad entry can never abort the whole copy (#147: whole-tree
+      // cp died silently after ~10 entries; the boundary probe needs deps
+      // INSIDE the plugin rootDir, hoisted layout does not satisfy it).
+      // Seal ALL real package dirs from the bundled tree (not just direct
+      // deps): the plugin loads its transitive dependencies at runtime
+      // (fast-deep-equal etc.) and openclaw refuses the load on ANY missing
+      // one. Per-package try/catch: a single dangling entry must not abort
+      // the rest (whole-tree cp died that way).
+      const runtimeNM = path.join(BUNDLED_BIN_DIR(), "runtime", "node_modules");
+      let sealed = 0, skipped = 0;
+      const sealDir = async (dir) => {
+        for (const entry of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
+          if (entry.name === ".bin" || entry.name === ".package-lock.json") continue;
+          const src = path.join(dir, entry.name);
+          if (entry.isDirectory() && entry.name.startsWith("@")) { await sealDir(src); continue; }
+          if (!entry.isDirectory()) continue;
+          const hasManifest = fsSync.existsSync(path.join(src, "package.json"));
+          if (!hasManifest) continue;
+          const dst = path.join(extDeps, path.relative(runtimeNM, src));
+          if (fsSync.existsSync(dst)) { continue; }
+          await fs.cp(src, dst, { recursive: true, verbatimSymlinks: true, force: true }).then(() => { sealed++; }, () => { skipped++; });
+        }
+      };
+      onEvent({ phase: "teamclaw", line: "Sealing offline deps (full closure) into the plugin dir..." });
+      await sealDir(runtimeNM);
+      onEvent({ phase: "teamclaw", line: `Deps sealed: ${sealed} packages (${skipped} skipped).` });
+    }
     return;
   }
   await runShellStream(`npm install --prefix "${runtimeDir}" @teamclaws/teamclaw@latest`, runtimeDir, (line) =>
@@ -273,19 +420,25 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
 
 // Minimal LLM config: write the DESKTOP-SANDBOX openclaw.json directly
 // (userData/openclaw-state). The user's own ~/.openclaw is never touched -
-// hard requirement. Provider + endpoint + apiKey only, all else defaults.
-async function writeLlmConfig(_openclawBin, { provider, endpoint, apiKey }, onEvent) {
+// hard requirement. Provider + endpoint + apiKey + model, all else defaults.
+// Model lands on agents.defaults.model as "<provider>/<modelId>" (canonical
+// agent-model selection shape, see openclaw/src/config/model-input.ts).
+async function writeLlmConfig(_openclawBin, { provider, endpoint, apiKey, model }, onEvent) {
   if (!provider || !apiKey) {
     onEvent({ phase: "llm", line: "No LLM credentials provided - keeping defaults." });
     return;
   }
   const stateDir = path.join(app.getPath("userData"), "openclaw-state");
   await fs.mkdir(stateDir, { recursive: true });
-  const cfgPath = path.join(stateDir, "openclaw.json");
+  await writeLlmConfigFile(path.join(stateDir, "openclaw.json"), { provider, endpoint, apiKey, model });
+  onEvent({ phase: "llm", line: `LLM config written for ${provider}${model ? ` (${model})` : ""} (sandbox only).` });
+}
+
+// Shared writer: merges provider creds + default model into an openclaw
+// config file without disturbing unrelated keys.
+async function writeLlmConfigFile(cfgPath, { provider, endpoint, apiKey, model }) {
   let cfg = {};
   try { cfg = JSON.parse(await fs.readFile(cfgPath, "utf8")); } catch { cfg = {}; }
-  // Real OpenClaw schema: models.providers.<id> (NOT a top-level "vendors"
-  // key - that fails config validation and blocks every CLI command).
   cfg.models = cfg.models || {};
   cfg.models.providers = cfg.models.providers || {};
   cfg.models.providers[provider] = {
@@ -293,9 +446,76 @@ async function writeLlmConfig(_openclawBin, { provider, endpoint, apiKey }, onEv
     apiKey,
     ...(endpoint ? { baseUrl: endpoint } : {}),
   };
+  if (model) {
+    cfg.agents = cfg.agents || {};
+    cfg.agents.defaults = { ...(cfg.agents.defaults || {}) };
+    // Model refs may already be vendor-prefixed (e.g. openrouter/free) -
+    // never double-prefix with the provider id.
+    const modelRef = String(model).trim();
+    cfg.agents.defaults.model = modelRef.startsWith(`${provider}/`) ? modelRef : `${provider}/${modelRef}`;
+  }
   await fs.writeFile(cfgPath, JSON.stringify(cfg, null, 2), { mode: 0o600 });
-  onEvent({ phase: "llm", line: `LLM config written for ${provider} (sandbox only).` });
 }
+
+// Model discovery for the wizard: fetch the provider's model list from
+// MAIN process (renderer fetch is CORS-blocked by most provider APIs).
+// Returns { models: [id...] } or { error } - the renderer keeps manual
+// input as fallback either way.
+const PROVIDER_MODEL_SOURCES = {
+  openrouter: { url: "https://openrouter.ai/api/v1/models", auth: "none" },
+  openai: { url: "https://api.openai.com/v1/models", auth: "bearer" },
+  anthropic: { url: "https://api.anthropic.com/v1/models", auth: "anthropic" },
+  deepseek: { url: "https://api.deepseek.com/models", auth: "bearer" },
+  google: { url: "https://generativelanguage.googleapis.com/v1beta/models", auth: "query" },
+  zai: { url: "https://api.z.ai/api/paas/v4/models", auth: "bearer" },
+};
+async function fetchProviderModels(provider, endpoint, apiKey) {
+  const src = PROVIDER_MODEL_SOURCES[provider];
+  if (!src) return { models: [] };
+  const https = await import("node:https");
+  const target = endpoint && endpoint.trim() ? endpoint.trim().replace(/\/$/, "") + "/models" : src.url;
+  const headers = { Accept: "application/json" };
+  if (src.auth === "bearer" || src.auth === "anthropic") headers.Authorization = `Bearer ${apiKey}`;
+  if (src.auth === "anthropic") { headers["x-api-key"] = apiKey; headers["anthropic-version"] = "2023-06-01"; delete headers.Authorization; }
+  const url = new URL(target);
+  if (src.auth === "query") url.searchParams.set("key", apiKey);
+  const body = await new Promise((resolve, reject) => {
+    const req = https.get(url, { headers, timeout: 8000 }, (res) => {
+      let data = "";
+      res.on("data", (c) => { data += c; });
+      res.on("end", () => resolve({ status: res.statusCode, data }));
+    });
+    req.on("timeout", () => { req.destroy(new Error("timeout")); });
+    req.on("error", reject);
+  });
+  if (body.status !== 200) return { error: `HTTP ${body.status}` };
+  let ids = [];
+  try {
+    const json = JSON.parse(body.data);
+    const list = Array.isArray(json.data) ? json.data : Array.isArray(json.models) ? json.models : [];
+    ids = list.map((m) => (typeof m === "string" ? m : m.id || m.name || "")).filter(Boolean).map((id) => String(id).replace(/^models\//, ""));
+  } catch (e) { return { error: "bad payload" }; }
+  // No 200-cap here: OpenRouter alone ships 460+ models and the aggregate
+  // entries (openrouter/free, openrouter/auto) sort past the first 200 -
+  // the old cap silently hid them from the picker (user-found).
+  return { models: ids.slice(0, 500) };
+}
+ipcMain.handle("llm:list-models", async (_e, { provider, endpoint, apiKey }) => {
+  try { return await fetchProviderModels(provider, endpoint, apiKey); }
+  catch (e) { return { error: e instanceof Error ? e.message : String(e) }; }
+});
+
+// Global-mode LLM write (user explicitly chose "configure" over "use
+// existing"): writes the machine-level ~/.openclaw/openclaw.json. Only the
+// chosen provider entry + agents.defaults.model are merged in.
+ipcMain.handle("llm:write-global", async (_e, llm) => {
+  const { provider, endpoint, apiKey, model } = llm || {};
+  if (!provider || !apiKey) throw new Error("Provider and API key are required");
+  const globalCfg = path.join(process.env.HOME || "", ".openclaw", "openclaw.json");
+  await fs.mkdir(path.dirname(globalCfg), { recursive: true });
+  await writeLlmConfigFile(globalCfg, { provider, endpoint, apiKey, model });
+  return { ok: true, path: globalCfg };
+});
 
 // Streamed variant: emits every stdout/stderr line through onLine and
 // resolves with the same result shape as runShellCommand.
@@ -307,6 +527,18 @@ async function runShellStream(command, cwd, onLine, envOverride) {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
+  // Watchdog: grandchildren can inherit and hold the stdio pipes, so the
+  // child's 'exit' may fire but 'close' never does and callers hang. If the
+  // stream goes silent for 20s AFTER the child exits, force-settle.
+  let exited = false;
+  let lastActivity = Date.now();
+  child.on("exit", () => { exited = true; lastActivity = Date.now(); });
+  const watchdog = setInterval(() => {
+    if (exited && Date.now() - lastActivity > 20000) {
+      try { child.kill("SIGKILL"); } catch { /* gone */ }
+    }
+  }, 5000);
+  const bump = () => { lastActivity = Date.now(); };
   let stdout = "";
   let stderr = "";
   const makePump = (isErr) => {
@@ -319,7 +551,7 @@ async function runShellStream(command, cwd, onLine, envOverride) {
         let idx;
         while ((idx = pending.indexOf("\n")) >= 0) {
           const line = pending.slice(0, idx).trim();
-          if (line) onLine(line);
+          if (line) { onLine(line); bump(); }
           pending = pending.slice(idx + 1);
         }
       });
@@ -330,6 +562,7 @@ async function runShellStream(command, cwd, onLine, envOverride) {
   return await new Promise((resolve, reject) => {
     child.on("error", reject);
     child.on("exit", (code, signal) => {
+      clearInterval(watchdog);
       const result = { ok: code === 0, code, signal, stdout: stdout.trim(), stderr: stderr.trim() };
       if (code === 0) return resolve(result);
       const failure = new Error(stderr.trim() || stdout.trim() || `Command failed: ${command}`);
@@ -407,10 +640,34 @@ async function createMainWindow() {
 }
 
 app.whenReady().then(async () => {
+  // Warm the compressed bundled runtime early so wizard clicks never wait
+  // on a first-use extraction (best effort - failures degrade to npm).
+  warmBundledRuntime().catch(() => {});
   // No app.dock.setIcon here: the Dock icon comes from the bundle icns
   // (build/icon.icns = site claw mark). The old runtime override pointed at
   // a legacy PNG and masked the bundle icon on every launch.
   await createMainWindow();
+  // Test hook (dev/CI driving, env-gated): when TC_TEST_HOOK is set, poll a
+  // command file and execute each line as JS inside the renderer; the JSON
+  // result is appended to <file>.result. Coordinates-free UI automation -
+  // vision-coordinate clicking proved unreliable for Electron DOM.
+  if (process.env.TC_TEST_HOOK) {
+    const hookFile = process.env.TC_TEST_HOOK;
+    const resultFile = `${hookFile}.result`;
+    setInterval(async () => {
+      let line = "";
+      try { line = (await fs.readFile(hookFile, "utf8")).trim(); } catch { return; }
+      if (!line) return;
+      try { await fs.writeFile(hookFile, "", { mode: 0o600 }); } catch { /* race */ }
+      const win = BrowserWindow.getAllWindows()[0];
+      if (!win) return;
+      let out = { error: "no window" };
+      try {
+        out = { value: await win.webContents.executeJavaScript(`(${line})()`) };
+      } catch (e) { out = { error: e instanceof Error ? e.message : String(e) }; }
+      try { await fs.appendFile(resultFile, JSON.stringify(out) + "\n"); } catch { /* best effort */ }
+    }, 500);
+  }
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       await createMainWindow();
@@ -439,7 +696,19 @@ ipcMain.handle("window:apply-theme", async (_event, theme) => {
   return { ok: true };
 });
 ipcMain.handle("settings:get", async () => loadSettings());
-ipcMain.handle("settings:save", async (_event, settings) => saveSettings(settings));
+ipcMain.handle("settings:save", async (_event, settings) => {
+  // `instance` is owned exclusively by instance:set. Renderer preferences are
+  // saved from a snapshot taken at boot, which would otherwise clobber the
+  // instance record written later (a real bug: mode/ports silently lost).
+  const current = await loadSettings().catch(() => ({}));
+  const next = { ...settings };
+  // HARD ownership rule: renderer snapshots carry a boot-time instance value
+  // (often explicit null) that would clobber a record written afterwards.
+  // instance belongs to instance:set alone.
+  delete next.instance;
+  next.instance = current.instance ?? null;
+  return saveSettings(next);
+});
 /* ---------------- Standalone instance (fully isolated) ----------------
  * A desktop-owned OpenClaw+TeamClaw instance:
  *   - state dir: userData/standalone-state (OPENCLAW_STATE_DIR) - never the
@@ -451,10 +720,14 @@ ipcMain.handle("settings:save", async (_event, settings) => saveSettings(setting
  *     desktop may override the vendor - written only into the sandbox copy
  *   - started/stopped with the desktop app; killed on quit, pid-guarded
  */
-const STANDALONE = { child: null, port: null, pid: null };
+const STANDALONE = { child: null, port: null, pid: null, controllerUrl: null };
 
 function standaloneStateDir() {
-  return path.join(app.getPath("userData"), "standalone-state");
+  // The private instance RUNS on the bootstrap sandbox state - one sandbox
+  // holds both the registered plugin and the running gateway. A separate
+  // standalone-state dir used to split them (plugin registered in one,
+  // gateway in the other - controller never came up).
+  return path.join(app.getPath("userData"), "openclaw-state");
 }
 function standalonePidFile() {
   return path.join(standaloneStateDir(), "gateway.pid");
@@ -473,8 +746,12 @@ async function findFreePort() {
 }
 
 async function standaloneBinary() {
-  // Prefer the desktop sandbox runtime; fall back to the user-installed
-  // openclaw (executed read-only - we never modify its installation).
+  // Same resolution order as the installer (bundled > sandbox runtime >
+  // global read-only). A bundled install wrote the sandbox state with the
+  // bundled (newer) openclaw - running the OLDER global binary against it
+  // is refused by the gateway ("older than the config last written by").
+  const bundled = bundledBinary("openclaw");
+  if (bundled) return bundled;
   const sandboxBin = path.join(app.getPath("userData"), "runtime", "node_modules", ".bin", "openclaw");
   if (fsSync.existsSync(sandboxBin)) return sandboxBin;
   // probeOpenClawInstall treats "binary resolves but --help fails under load"
@@ -486,31 +763,114 @@ async function standaloneBinary() {
   throw new Error("No OpenClaw runtime available - run the one-click install first.");
 }
 
-async function seedStandaloneConfig(preferredVendor) {
-  // Copy the user's LLM config (READ-ONLY source) into the sandbox state;
-  // optionally pin a preferred vendor. Never writes the user's file.
+async function seedStandaloneConfig(preferredVendor, controllerPort) {
+  // Minimal-config seeding: a full copy of the user's config made the
+  // gateway normalize production-specific fields at startup, tripping its
+  // own config-guard ("config changed during startup") in a loop. Instead
+  // write ONLY {gateway.mode:local} + the LLM providers already configured
+  // in the bootstrap sandbox (read-only source; user config never read or
+  // written here).
   const stateDir = standaloneStateDir();
   await fs.mkdir(stateDir, { recursive: true });
   const dst = path.join(stateDir, "openclaw.json");
   let cfg = {};
   try { cfg = JSON.parse(await fs.readFile(dst, "utf8")); } catch { cfg = {}; }
-  const userCfgPath = path.join(process.env.HOME || "", ".openclaw", "openclaw.json");
+  cfg.gateway = { ...(cfg.gateway || {}), mode: "local" };
+  cfg.models = cfg.models || { providers: {} };
+  cfg.models.providers = cfg.models.providers || {};
+  const bootstrapCfg = path.join(app.getPath("userData"), "openclaw-state", "openclaw.json");
   try {
-    const userCfg = JSON.parse(await fs.readFile(userCfgPath, "utf8"));
-    cfg.vendors = { ...(userCfg.vendors || {}), ...(cfg.vendors || {}) };
-  } catch { /* no user config - empty start */ }
-  if (preferredVendor && cfg.vendors && cfg.vendors[preferredVendor]) {
-    cfg.preferredVendor = preferredVendor;
-  }
+    const b = JSON.parse(await fs.readFile(bootstrapCfg, "utf8"));
+    for (const [id, p] of Object.entries(b?.models?.providers || {})) {
+      cfg.models.providers[id] = { ...(cfg.models.providers[id] || {}), ...p };
+    }
+  } catch { /* bootstrap not run yet - empty providers */ }
+  if (preferredVendor && cfg.models.providers[preferredVendor]) cfg.preferredVendor = preferredVendor;
+  // Declare the plugin in controller mode - without this the gateway starts
+  // the teamclaw plugin as a WORKER (it just polls for a controller and the
+  // desktop dashboard never gets its API).
+  cfg.plugins = cfg.plugins || { entries: {} };
+  cfg.plugins.entries = cfg.plugins.entries || {};
+  cfg.plugins.entries.teamclaw = {
+    ...(cfg.plugins.entries.teamclaw || {}),
+    enabled: true,
+    config: {
+      ...(cfg.plugins.entries.teamclaw?.config || {}),
+      mode: "controller",
+      teamName: "private",
+      // Pin the controller port so restarts land on the remembered one; the
+      // plugin auto-shifts (9527 -> 9627 ...) when it is occupied, and the
+      // actual bound port is recorded back into settings afterwards.
+      ...(controllerPort ? { port: controllerPort } : {}),
+    },
+  };
   await fs.writeFile(dst, JSON.stringify(cfg, null, 2), { mode: 0o600 });
   return dst;
 }
 
-async function standaloneStart(preferredVendor) {
+async function standaloneStart(preferredVendor, remembered) {
   if (STANDALONE.child) return { ok: true, alreadyRunning: true, port: STANDALONE.port };
+  // Port memory: reuse the ports recorded in settings.instance so restarts
+  // land on the SAME gateway/controller ports (probed + persisted below).
   const bin = await standaloneBinary();
-  await seedStandaloneConfig(preferredVendor);
-  STANDALONE.port = await findFreePort();
+  // Idempotent seed: a rewrite (even identical) trips the gateway config-guard
+  // ("config changed during startup") and kills the spawn. Only seed when the
+  // sandbox config is missing or lacks any models.providers entry.
+  const sandboxCfgPath = path.join(standaloneStateDir(), "openclaw.json");
+  let needsSeed = true;
+  try {
+    const c = JSON.parse(await fs.readFile(sandboxCfgPath, "utf8"));
+    const noLlm = !c?.models?.providers || Object.keys(c.models.providers).length === 0;
+    const noGateway = !c?.gateway?.mode;
+    const noController = c?.plugins?.entries?.teamclaw?.config?.mode !== "controller";
+    needsSeed = noLlm || noGateway || noController;
+  } catch { /* missing -> seed */ }
+  // Conflict-checked port fallback (user rule): BOTH the openclaw gateway
+  // port and the teamclaw controller port are probed BEFORE launch; an
+  // occupied preferred port falls back to the next free one (preferred+1..
+  // preferred+50, else any free port). The chosen pair is persisted into
+  // settings.instance FIRST - then the processes start on exactly those
+  // ports - so a restart lands on the same ports without re-shifting.
+  const isFreeLocal = async (port) => {
+    if (!port) return false;
+    const net = await import("node:net");
+    return await new Promise((resolve) => {
+      const srv = net.createServer();
+      srv.once("error", () => resolve(false));
+      srv.listen(port, "127.0.0.1", () => srv.close(() => resolve(true)));
+    });
+  };
+  const pickPortWithFallback = async (preferred, fallbackBase) => {
+    const base = Number.isFinite(preferred) && preferred > 0 ? preferred : fallbackBase;
+    if (await isFreeLocal(base)) return base;
+    for (let p = fallbackBase; p < fallbackBase + 50; p++) {
+      if (await isFreeLocal(p)) return p;
+    }
+    return await findFreePort();
+  };
+  const persistInstancePorts = async (instance) => {
+    try {
+      const s = await loadSettings();
+      s.instance = { ...(s.instance || {}), ...instance };
+      await saveSettings(s);
+    } catch { /* settings write failure must not kill the launch */ }
+  };
+  const wantCtrl = Number(remembered?.controllerPort) || null;
+  const ctrlPort = await pickPortWithFallback(wantCtrl, 9527);
+  const gwPort = await pickPortWithFallback(Number(remembered?.gatewayPort) || null, ctrlPort + 100);
+  // Land the chosen pair BEFORE spawning anything (config + settings).
+  await persistInstancePorts({ mode: "private", gatewayPort: gwPort, controllerPort: ctrlPort });
+  if (needsSeed) await seedStandaloneConfig(preferredVendor, ctrlPort);
+  else {
+    // Pin the conflict-checked controller port into the sandbox config so
+    // the plugin does not race its own auto-shift against a taken 9527.
+    try {
+      const c = JSON.parse(await fs.readFile(sandboxCfgPath, "utf8"));
+      const cur = c?.plugins?.entries?.teamclaw?.config?.port;
+      if (cur !== ctrlPort) await seedStandaloneConfig(preferredVendor, ctrlPort);
+    } catch { await seedStandaloneConfig(preferredVendor, ctrlPort); }
+  }
+  STANDALONE.port = gwPort;
   const logPath = path.join(standaloneStateDir(), "gateway.log");
   const logFd = fsSync.openSync(logPath, "a");
   const child = spawn(`"${bin}" gateway --port ${STANDALONE.port}`, {
@@ -528,7 +888,85 @@ async function standaloneStart(preferredVendor) {
     STANDALONE.pid = null;
     try { fsSync.rmSync(standalonePidFile(), { force: true }); } catch { /* gone */ }
   });
-  return { ok: true, port: STANDALONE.port, pid: child.pid ?? null, controllerUrl: `http://127.0.0.1:${STANDALONE.port}` };
+  // The teamclaw controller picks its own HTTP port (9527, auto-shifted when
+  // occupied - e.g. 9537 next to a production controller). Wait for its
+  // announce line in the gateway log and surface THAT as the controllerUrl.
+  let controllerUrl = null;
+  for (let i = 0; i < 40 && !controllerUrl; i++) {
+    try {
+      const log = await fs.readFile(logPath, "utf8");
+      const m = log.match(/Controller: Web UI available at http:\/\/127\.0\.0\.1:(\d+)/);
+      if (m) controllerUrl = `http://127.0.0.1:${m[1]}`;
+    } catch { /* log not written yet */ }
+    if (!controllerUrl) await new Promise((r) => setTimeout(r, 1000));
+  }
+  // First-boot worker race auto-heal (user-found): a provisioned worker can
+  // spawn inside the gateway's config-normalization window and die on the
+  // config-guard ("config changed during startup - Retry startup"). The
+  // provisioner does not retry, leaving startup readiness degraded and no
+  // model ever runs. One bounded respawn fixes it: on the second boot the
+  // config journal has settled and the worker passes.
+  if (controllerUrl) {
+    const logText = async () => { try { return await fs.readFile(logPath, "utf8"); } catch { return ""; } };
+    const announceCount = (t) => (t.match(/Controller: Web UI available at/g) || []).length;
+    const respawn = async () => {
+      const before = announceCount(await logText());
+      try { child.kill("SIGTERM"); } catch { /* gone */ }
+      await new Promise((r) => { child.once("exit", r); setTimeout(r, 4000); });
+      const child2 = spawn(`"${bin}" gateway --port ${STANDALONE.port}`, {
+        cwd: standaloneStateDir(),
+        env: { ...process.env, OPENCLAW_STATE_DIR: standaloneStateDir() },
+        shell: true,
+        stdio: ["ignore", logFd, logFd],
+        detached: false,
+      });
+      STANDALONE.child = child2;
+      STANDALONE.pid = child2.pid ?? null;
+      await fs.writeFile(standalonePidFile(), String(child2.pid ?? ""), { mode: 0o600 });
+      child2.on("exit", () => {
+        STANDALONE.child = null;
+        STANDALONE.pid = null;
+        try { fsSync.rmSync(standalonePidFile(), { force: true }); } catch { /* gone */ }
+      });
+      // Wait for a NEW announce line (the old one is still in the log).
+      let url = null;
+      for (let j = 0; j < 40 && !url; j++) {
+        const t = await logText();
+        if (announceCount(t) > before) {
+          const all = t.match(/Controller: Web UI available at http:\/\/127\.0\.0\.1:(\d+)/g) || [];
+          const last = all[all.length - 1] || "";
+          const m2 = last.match(/:(\d+)$/);
+          if (m2) url = `http://127.0.0.1:${m2[1]}`;
+        }
+        if (!url) await new Promise((r) => setTimeout(r, 1000));
+      }
+      return url;
+    };
+    for (let i = 0; i < 15; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const t = await logText();
+      const guardRace = /config changed during startup/.test(t) && /Provisioner: process worker [^\n]* exited/.test(t);
+      if (!guardRace) continue;
+      controllerUrl = (await respawn()) || controllerUrl;
+      break;
+    }
+  }
+  STANDALONE.controllerUrl = controllerUrl;
+  // If the controller still auto-shifted despite the pinned port (race with
+  // another process grabbing it between probe and bind), persist the ACTUAL
+  // bound port so the next start remembers reality.
+  const actualCtrl = controllerUrl ? Number(new URL(controllerUrl).port) : null;
+  if (actualCtrl && actualCtrl !== ctrlPort) {
+    await persistInstancePorts({ controllerPort: actualCtrl, controllerUrl });
+  }
+  const mPort = controllerUrl ? Number(new URL(controllerUrl).port) : null;
+  return {
+    ok: true,
+    port: STANDALONE.port,
+    pid: child.pid ?? null,
+    controllerUrl: controllerUrl || `http://127.0.0.1:${STANDALONE.port}`,
+    controllerPort: Number.isFinite(mPort) ? mPort : null,
+  };
 }
 
 async function standaloneStop() {
@@ -556,17 +994,258 @@ function standaloneStatus() {
     running: Boolean(STANDALONE.child),
     port: STANDALONE.port,
     pid: STANDALONE.pid,
-    controllerUrl: STANDALONE.port ? `http://127.0.0.1:${STANDALONE.port}` : null,
+    controllerUrl: STANDALONE.controllerUrl || null,
     stateDir: standaloneStateDir(),
   };
 }
 
-ipcMain.handle("standalone:start", async (_e, options) => standaloneStart(options?.preferredVendor));
+ipcMain.handle("standalone:start", async (_e, options) =>
+  standaloneStart(options?.preferredVendor, options?.instance || null)
+);
 ipcMain.handle("standalone:stop", () => standaloneStop());
 ipcMain.handle("standalone:status", () => standaloneStatus());
 
-// App lifecycle: the desktop-owned instance dies with the app (no orphans).
-app.on("before-quit", () => { try { STANDALONE.child?.kill("SIGTERM"); } catch { /* gone */ } });
+// App lifecycle: the private instance dies with the app UNLESS the user
+// chose "persistent" (keep it running in the background so the next app
+// start reconnects instantly). Global gateways are always left running.
+app.on("before-quit", async () => {
+  const settings = await loadSettings().catch(() => null);
+  const lifecycle = settings?.instance?.lifecycle || "app";
+  if (lifecycle === "app") {
+    try { STANDALONE.child?.kill("SIGTERM"); } catch { /* gone */ }
+  }
+});
+
+// Readiness gate: fully-offline two probes against the DESKOP SANDBOX state.
+// ready = LLM configured (any models.providers[*].apiKey) AND teamclaw registered.
+// ---- Instance manager: one IPC family driven ONLY by settings.instance ----
+ipcMain.handle("instance:get", async () => (await loadSettings()).instance);
+ipcMain.handle("instance:set", async (_e, instance) => {
+  const settings = await loadSettings();
+  settings.instance = instance || null;
+  await saveSettings(settings);
+  return settings.instance;
+});
+// Environment detection for the wizard (READ-ONLY). Decides the DEFAULT
+// option: both present -> connect existing; openclaw only -> install into
+// it (or private); neither -> full global install (private optional).
+ipcMain.handle("env:detect", async () => {
+  const globalState = path.join(process.env.HOME || "", ".openclaw");
+  const cfgPath = path.join(globalState, "openclaw.json");
+  let cfg = null;
+  try { cfg = JSON.parse(await fs.readFile(cfgPath, "utf8")); } catch { /* none */ }
+  const openclaw = Boolean(cfg) || (await hasOpenClawInstalled());
+  // teamclaw registered in the GLOBAL state? plugins.entries or extensions dir.
+  const teamclawInGlobal = Boolean(
+    cfg?.plugins?.entries?.teamclaw ||
+    fsSync.existsSync(path.join(globalState, "plugins", "teamclaw"))
+  );
+  // Global controller URL is only inferred from the GLOBAL state, never
+  // probed on a fixed port: a sandboxed desktop must not mistake a
+  // foreign/production controller for its own. Liveness is checked later,
+  // at connect time, by the caller.
+  const globalControllerUrl = teamclawInGlobal
+    ? `http://127.0.0.1:${controllerPortFromConfig(cfg)}`
+    : null;
+  return { openclaw, teamclawInGlobal, globalControllerUrl, llmConfigured: Boolean(cfg && Object.values(cfg?.models?.providers || {}).some((p) => p && p.apiKey)), llmProviders: cfg ? Object.entries(cfg?.models?.providers || {}).filter(([, p]) => p && p.apiKey).map(([id]) => id) : [], llmDefaultModel: (cfg?.agents?.defaults?.model || "") || null };
+});
+
+
+// Per-instance controller port: never assume the process-global 9527 - each
+// OpenClaw instance (global or private) may run its controller on its own
+// pinned/auto-shifted port. Read it from THAT state dir's config, then from
+// the gateway log announce line (the source of truth after auto-shift).
+function controllerPortFromConfig(cfg) {
+  const p = Number(cfg?.plugins?.entries?.teamclaw?.config?.port);
+  return Number.isFinite(p) && p > 0 ? p : 9527;
+}
+async function resolveInstanceControllerUrl(stateDir, cfgPort, logPaths) {
+  const candidates = logPaths || [path.join(stateDir, "gateway.log"), path.join(stateDir, "logs", "gateway.log")];
+  for (let i = 0; i < 45; i++) {
+    for (const lp of candidates) {
+      try {
+        const log = await fs.readFile(lp, "utf8");
+        // Announce line shape: "Controller: Web UI available at http://127.0.0.1:<port>/ui"
+        // The /ui suffix is part of the real message - never anchor on end-of-string.
+        const re = /Controller: Web UI available at http:\/\/127\.0\.0\.1:(\d+)/g;
+        let last = null;
+        for (let mm = re.exec(log); mm; mm = re.exec(log)) last = mm[1];
+        if (last) {
+          {
+            const url = `http://127.0.0.1:${last}`;
+            try {
+              const r = await fetch(`${url}/api/v1/tunnel/status`, { signal: AbortSignal.timeout(1500) });
+              if (r.ok) return url;
+            } catch { /* announced but not answering yet */ }
+          }
+        }
+      } catch { /* log not there yet */ }
+    }
+    // NO blind probe of the configured port: on a machine that already runs
+    // another controller, that port belongs to a DIFFERENT instance and
+    // accepting it silently attaches this app to a foreign gateway. The
+    // announce line is the only trustworthy source; cfgPort is just a hint
+    // for the caller's own diagnostics.
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  return null;
+}
+
+// Global-mode detection for the wizard: does the machine-level OpenClaw have
+// a pre-existing state (LLM already configured)? Read-only.
+ipcMain.handle("global:probe", async () => {
+  const statePath = path.join(process.env.HOME || "", ".openclaw", "openclaw.json");
+  try {
+    const cfg = JSON.parse(await fs.readFile(statePath, "utf8"));
+    const llm = Object.values(cfg?.models?.providers || {}).some((p) => p && p.apiKey);
+    return { present: true, llmConfigured: llm, binary: await hasOpenClawInstalled() };
+  } catch {
+    return { present: false, llmConfigured: false, binary: await hasOpenClawInstalled() };
+  }
+});
+// Global-mode gateway: spawn the system openclaw gateway (default state dir,
+// NO sandbox env). Fresh installs get LLM written by the wizard first;
+// pre-existing state is reused untouched.
+async function globalGatewayStart(preferredPort, extraEnv, binOverride) {
+  const port = Number(preferredPort) || (await findFreePort());
+  const logFd = fsSync.openSync(path.join(app.getPath("userData"), "global-gateway.log"), "a");
+  const env = { ...(extraEnv || process.env) };
+  delete env.OPENCLAW_STATE_DIR;
+  delete env.OPENCLAW_PROFILE;
+  // Blank machine (user-found on Windows): no `openclaw` on PATH - the
+  // wizard's global install self-provisions a runtime and hands its absolute
+  // binary here; PATH fallback keeps existing behavior.
+  const bin = binOverride || "openclaw";
+  const child = spawn(`"${bin}" gateway --port ${port}`, {
+    cwd: env.HOME || process.env.HOME || process.cwd(),
+    env,
+    shell: true,
+    stdio: ["ignore", logFd, logFd],
+  });
+  GLOBAL_GATEWAY.child = child;
+  GLOBAL_GATEWAY.port = port;
+  return { ok: true, port, pid: child.pid ?? null };
+}
+const GLOBAL_GATEWAY = { child: null, port: null };
+// Install TeamClaw INTO the existing global OpenClaw (user-chosen path; the
+// only flow allowed to write the global state - explicit consent by choice).
+// Backs up the global cfg to the desktop dir first, then registers the plugin
+// with the system openclaw CLI (global state, no sandbox env) and restarts the
+// LaunchAgent gateway so the controller comes up.
+ipcMain.handle("instance:install-into-global", async (event) => {
+  const onEvent = (e) => { try { event.sender.send("bootstrap:install-event", e); } catch {} };
+  const globalCfg = path.join(process.env.HOME || process.env.USERPROFILE || process.cwd(), ".openclaw", "openclaw.json");
+  try {
+    const bak = path.join(app.getPath("userData"), `global-cfg-backup-${Date.now()}.json`);
+    await fs.copyFile(globalCfg, bak).catch(() => {});
+    onEvent({ phase: "teamclaw", line: "Backed up global config to " + bak });
+  } catch { /* no cfg yet */ }
+  // Target the GLOBAL state explicitly: the app process may already carry a
+  // private instance's OPENCLAW_STATE_DIR, and inheriting it would install
+  // into the wrong instance.
+  const gHome = process.env.HOME || process.env.USERPROFILE || process.cwd();
+  const gEnv = { ...process.env, HOME: gHome, OPENCLAW_HOME: gHome };
+  delete gEnv.OPENCLAW_STATE_DIR;
+  delete gEnv.OPENCLAW_PROFILE;
+  // Blank machine: no `openclaw` on PATH. Self-provision a runtime first
+  // (bundled or sandbox npm install - no system npm required when bundled)
+  // and use ITS binary everywhere below; the old PATH-only commands failed
+  // and left the wizard stuck on step 3 forever.
+  let bin = "openclaw";
+  if (!(await hasOpenClawInstalled())) {
+    onEvent({ phase: "openclaw", line: "No OpenClaw on this machine - provisioning a runtime first..." });
+    bin = await ensureOpenClawRuntime({ source: "auto" }, onEvent);
+    onEvent({ phase: "openclaw", line: "Runtime ready: " + bin });
+  }
+  onEvent({ phase: "teamclaw", line: "Installing TeamClaw into the global OpenClaw (explicit choice)..." });
+  await runShellStream(`"${bin}" plugins install @teamclaws/teamclaw --force --accept-capabilities`, gHome, (line) =>
+    onEvent({ phase: "teamclaw", line }), gEnv);
+  // The plugin defaults to WORKER mode; the desktop app needs this instance to
+  // BE the controller. Without this the global gateway loads teamclaw as a
+  // worker ("Identity: no controller found") and no dashboard API ever exists.
+  const gCfgPath = path.join(gHome, ".openclaw", "openclaw.json");
+  try {
+    const c = JSON.parse(await fs.readFile(gCfgPath, "utf8"));
+    c.plugins = c.plugins || {};
+    c.plugins.entries = c.plugins.entries || {};
+    const prev = c.plugins.entries.teamclaw || {};
+    c.plugins.entries.teamclaw = {
+      ...prev,
+      enabled: true,
+      config: { ...(prev.config || {}), mode: "controller", teamName: prev.config?.teamName || "global" },
+    };
+    await fs.writeFile(gCfgPath, JSON.stringify(c, null, 2), { mode: 0o600 });
+    onEvent({ phase: "teamclaw", line: "Global instance set to controller mode." });
+  } catch (e) {
+    onEvent({ phase: "teamclaw", line: "Could not set controller mode: " + (e && e.message) });
+  }
+  onEvent({ phase: "teamclaw", line: "Restarting the global gateway..." });
+  let restarted = true;
+  try {
+    await runShellStream(`"${bin}" gateway restart`, gHome, (line) =>
+      onEvent({ phase: "teamclaw", line }), gEnv);
+  } catch {
+    // No service manager (fresh machine, sandbox, Linux w/o systemd unit):
+    // restart is not available, so start the gateway ourselves instead of
+    // failing the whole install.
+    restarted = false;
+  }
+  if (!restarted) {
+    let gPort = 18789;
+    try {
+      const c = JSON.parse(await fs.readFile(path.join(gHome, ".openclaw", "openclaw.json"), "utf8"));
+      gPort = Number(c?.gateway?.port) || 18789;
+    } catch { /* default */ }
+    onEvent({ phase: "teamclaw", line: `No gateway service found - starting one on port ${gPort}...` });
+    await globalGatewayStart(gPort, { ...gEnv, HOME: gHome }, bin);
+  }
+  // Resolve THIS instance's controller (pinned or auto-shifted port) from its
+  // own config + gateway log - never the process-global 9527 default, which
+  // may be another instance entirely.
+  const gStateDir = gHome;
+  let gCfg = null;
+  try { gCfg = JSON.parse(await fs.readFile(path.join(gStateDir, "openclaw.json"), "utf8")); } catch { /* none */ }
+  const controllerUrl = await resolveInstanceControllerUrl(gStateDir, controllerPortFromConfig(gCfg), [
+    path.join(app.getPath("userData"), "global-gateway.log"),
+    path.join(gStateDir, "gateway.log"),
+    path.join(gStateDir, "logs", "gateway.log"),
+  ]);
+  if (!controllerUrl) throw new Error(`Global controller did not come up in ${gStateDir} after install.`);
+  onEvent({ phase: "done", line: "Global TeamClaw ready at " + controllerUrl });
+  return { ok: true, controllerUrl };
+});
+
+ipcMain.handle("instance:start-global", () => globalGatewayStart());
+
+ipcMain.handle("runtime:is-ready", async () => {
+  const stateDir = path.join(app.getPath("userData"), "openclaw-state");
+  let llm = false, plugin = false;
+  try {
+    const cfg = JSON.parse(await fs.readFile(path.join(stateDir, "openclaw.json"), "utf8"));
+    llm = Object.values(cfg?.models?.providers || {}).some((p) => p && p.apiKey);
+    // Plugin presence = registered in openclaw.json (the "Saved for the next
+    // Gateway start" record). The old extensions/teamclaw/dist probe missed
+    // npm-source installs (they land in npm/projects and only register in
+    // the config), so readiness read false and boot fell back to the wizard.
+    plugin = Boolean(cfg?.plugins?.entries?.teamclaw);
+  } catch { /* no cfg */ }
+  try {
+    // Binary candidates kept as a secondary signal (bundled/sandbox/global).
+    const candidates = [
+      bundledBinary("openclaw"),
+      path.join(app.getPath("userData"), "runtime", "node_modules", ".bin", "openclaw"),
+      (await hasOpenClawInstalled()) ? "openclaw" : null,
+    ];
+    const cand = candidates.find(Boolean) || null;
+    if (!plugin) plugin = Boolean(cand) && fsSync.existsSync(path.join(stateDir, "extensions", "teamclaw", "dist", "index.js"));
+    void cand;
+  } catch { /* no runtime */ }
+  // Readiness = plugin installed + runtime binary present. LLM keys must NOT
+  // gate readiness: "configure later" is a supported wizard path, and a
+  // user who finished the install should boot straight into their private
+  // instance (llm is still reported separately for the wizard to surface).
+  return { ready: plugin, llm, plugin };
+});
 
 ipcMain.handle("bootstrap:install", async (event, options) => {
   // Orchestrate the sandboxed bootstrap with streamed progress events.
@@ -574,12 +1253,46 @@ ipcMain.handle("bootstrap:install", async (event, options) => {
   const onEvent = (e) => {
     try { event.sender.send("bootstrap:install-event", e); } catch { /* window gone */ }
   };
-  const { llm, source, gitlabUrl } = options || {};
+  const { llm, source, artifactUrl } = options || {};
   try {
     onEvent({ phase: "start", line: "Starting sandboxed bootstrap..." });
-    const openclawBin = await ensureOpenClawRuntime({ source, gitlabUrl }, onEvent);
+    onEvent({ phase: "diag", line: "rp=" + (process.resourcesPath||"none") });
+    {
+      const base = path.join(process.resourcesPath || "", "bin");
+      const t1 = path.join(base, "runtime", "node_modules", ".bin", "openclaw");
+      onEvent({ phase: "diag", line: "bin-dir=" + fsSync.existsSync(base) + " tree=" + fsSync.existsSync(t1) + " lstat=" + (() => { try { return fsSync.lstatSync(t1).isSymbolicLink(); } catch { return "ERR:"; } })() });
+    }
+    const openclawBin = await ensureOpenClawRuntime({ source, artifactUrl }, onEvent);
     await ensureTeamClawPlugin(openclawBin, onEvent);
     await writeLlmConfig(openclawBin, llm || {}, onEvent);
+    // Settle pass (user-found worker config-guard race): the FIRST gateway
+    // boot normalizes freshly-written config (e.g. agents.defaults.model is
+    // canonicalized to "provider/<catalog-id>"), and a worker provisioned in
+    // that window dies on the config-guard ("config changed during startup")
+    // - the provisioner then degrades readiness and no model ever runs.
+    // One headless boot right here lets normalization land on disk BEFORE
+    // the interactive start, so its first workers boot against settled
+    // config (verified: second boot rewrites nothing).
+    if (llm && llm.provider && llm.apiKey) {
+      onEvent({ phase: "llm", line: "Settling gateway config (one headless boot)..." });
+      try {
+        const settlePort = await findFreePort();
+        const stateDir = path.join(app.getPath("userData"), "openclaw-state");
+        const settle = spawn(`"${openclawBin}" gateway --port ${settlePort}`, {
+          cwd: stateDir,
+          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+          shell: true,
+          stdio: ["ignore", "ignore", "ignore"],
+          detached: false,
+        });
+        await new Promise((r) => setTimeout(r, 9000));
+        try { settle.kill("SIGTERM"); } catch { /* gone */ }
+        await new Promise((r) => { settle.once("exit", r); setTimeout(r, 4000); });
+        onEvent({ phase: "llm", line: "Config settled." });
+      } catch (e) {
+        onEvent({ phase: "llm", line: "Settle pass skipped: " + (e instanceof Error ? e.message : String(e)) });
+      }
+    }
     onEvent({ phase: "done", line: "Bootstrap complete.", openclawBin });
     return { ok: true, openclawBin };
   } catch (err) {
@@ -589,8 +1302,6 @@ ipcMain.handle("bootstrap:install", async (event, options) => {
 });
 
 ipcMain.handle("controller:get-setup-info", async () => getLocalSetupInfo());
-ipcMain.handle("controller:install-local", async (_event, options) => installLocalTeamClaw(options));
-ipcMain.handle("openclaw:install-local", async (_event, options) => installOpenClawLocally(options));
 ipcMain.handle("shell:openExternal", async (_event, url) => {
   await shell.openExternal(String(url || ""));
 });

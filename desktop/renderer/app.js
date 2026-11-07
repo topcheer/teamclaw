@@ -1,3 +1,4 @@
+import { createT as i18nCreateT } from "./i18n.js";
 (function () {
   "use strict";
 
@@ -64,457 +65,6 @@
     language: loadLanguage(),
   };
 
-  const TRANSLATIONS = {
-    en: {
-      "boot.connecting": "Connecting to the controller and loading team data...",
-      "connection.disconnected": "Disconnected",
-      "connection.connecting": "Connecting",
-      "connection.reconnecting": "Reconnecting",
-      "connection.connected": "Connected",
-      "connection.waiting": "Waiting for a controller connection…",
-      "connection.noSummary": "No controller summary yet.",
-      "connection.connectedTo": "Connected to {url}",
-      "connection.changeServer": "Connected - click to change server",
-      "connection.retrying": "Controller unavailable. Retrying in {seconds}s…",
-      "connection.controller": "Controller",
-      "connection.edit": "Edit",
-      "connection.done": "Done",
-      "connection.connect": "Connect",
-      "connection.refresh": "Refresh",
-      "mission.title": "Mission",
-      "tab.planning": "Planning",
-      "tab.controller": "Controller",
-      "tab.teamauto": "TeamAuto",
-      "teamauto.refreshRepos": "Refresh repos",
-      "teamauto.bind": "Bind",
-      "teamauto.bindStageVerify": "Verifying access",
-      "teamauto.bindStageClone": "Cloning repository",
-      "teamauto.bindStageNorms": "Learning repo conventions",
-      "teamauto.bindReady": "Repository ready",
-      "teamauto.bindFailed": "Binding failed",
-      "teamauto.close": "Close",
-      "teamauto.provisioning": "preparing",
-      "teamauto.provisionFailed": "setup failed",
-      "teamauto.loginFirst": "Sign in to GitHub first (top-right Login).",
-      "teamauto.hint": "Pick one of your GitHub repositories. TeamClaw sweeps it on its own schedule, reviews issues/PRs, takes ownership of unassigned issues, and posts results with teamclaw markers.",
-      "teamauto.loadingRepos": "Loading your repos...",
-      "teamauto.noCandidates": "No selectable repos (check GitHub login)",
-      "teamauto.needRepo": "Select a repository first",
-      "teamauto.active": "active",
-      "teamauto.disabled": "disabled",
-      "teamauto.paused": "paused",
-      "teamauto.sweep": "Sweep now",
-      "teamauto.disable": "Disable",
-      "teamauto.enable": "Enable",
-      "teamauto.unbind": "Unbind",
-      "teamauto.save": "Save config",
-      "teamauto.saved": "Saved",
-      "teamauto.schedule": "Schedule",
-      "teamauto.maxPerSweep": "Max/sweep",
-      "teamauto.fullReview": "Full review",
-      "teamauto.takeOwnership": "Take ownership",
-      "teamauto.lastSweep": "Last sweep",
-      "teamauto.norms": "Norms",
-      "teamauto.confirmUnbind": "Unbind this repo?",
-      "teamauto.empty": "No repos bound yet. Pick one above and click Bind.",
-      "teamauto.activity": "Activity",
-      "teamauto.activityEmpty": "No TeamAuto activity yet - sweeps and write-backs will appear here.",
-      "ctl.models.title": "Team models",
-      "ctl.models.hint": "Default model applies to the controller and every role; per-role selections override it for that role.",
-      "ctl.models.default": "Default model",
-      "ctl.models.useDefault": "(use default)",
-      "ctl.models.save": "Save models",
-      "ctl.models.saved": "Saved. Hot-reload applies; restart the gateway if needed.",
-      "ctl.models.failed": "Failed to save model settings",
-      "ctl.gh.title": "GitHub login",
-      "ctl.gh.current": "Current:",
-      "ctl.gh.hint": "Authorizes TeamClaw to access the GitHub API on your behalf. The token is stored only on the controller machine.",
-      "ctl.tunnel.title": "Internet tunnel",
-      "ctl.tunnel.hint": "Share the local web UI at a public HTTPS URL. Visitors must enter the gate token shown below.",
-      "ctl.tunnel.share": "Share via tunnel",
-      "ctl.tunnel.stop": "Stop sharing",
-      "ctl.tunnel.install": "Install cloudflared",
-      "ctl.tunnel.loading": "Loading…",
-      "ctl.tunnel.off": "Not sharing. Share to expose the web UI at team-<github-user>.teamclaw.dev.",
-      "ctl.tunnel.notInstalled": "cloudflared connector is not installed on the controller machine.",
-      "ctl.tunnel.starting": "Starting tunnel",
-      "ctl.tunnel.installing": "Installing cloudflared",
-      "ctl.tunnel.live": "Live",
-      "ctl.tunnel.gateToken": "Gate token",
-      "ctl.tunnel.stopped": "Sharing stopped.",
-      "ctl.tunnel.errNotConnected": "Connect to the controller first.",
-      "ctl.tunnel.actionFailed": "Tunnel action failed: ",
-      "ctl.gh.login": "Sign in with GitHub",
-      "ctl.gh.logout": "Sign out",
-      "ctl.gh.signedOut": "Not signed in",
-      "ctl.gh.validUntil": "valid until",
-      "ctl.gh.pageOpened": "GitHub login page opened in your browser. Enter the code shown there; this app updates automatically.",
-      "ctl.gh.loggedOut": "Signed out.",
-      "ctl.gh.failed": "GitHub login failed",
-      "ctl.ws.title": "Workspace directory",
-      "ctl.ws.current": "Current:",
-      "ctl.ws.default": "default",
-      "ctl.ws.hint": "Point the team workspace at any absolute path on the controller machine. Applies after a gateway restart.",
-      "ctl.ws.inputLabel": "New workspace path",
-      "ctl.ws.apply": "Apply workspace",
-      "ctl.ws.saved": "Updated. Restart the gateway (openclaw gateway restart) to apply.",
-      "ctl.ws.failed": "Failed to update workspace",
-      "ctl.ws.needAbsolute": "Enter an absolute path starting with / or ~/",
-      "ctl.notConnected": "Connect to a controller first",
-      "tab.tasks": "Tasks",
-      "tab.clarifications": "Clarifications",
-      "tab.workspace": "Workspace",
-      "tab.reports": "Reports",
-      "mission.newRequirement": "New requirement",
-      "mission.notifications": "Notifications",
-      "mission.requirement": "Requirement",
-      "mission.summary": "Summary",
-      "mission.recentInteraction": "Recent interaction",
-      "mission.connectHint": "Connect to a controller to load team state.",
-      "mission.noConversation": "No conversation yet.",
-      "planning.runs": "Planning runs",
-      "planning.empty": "Select a planning run to inspect the kickoff discussion.",
-      "planning.requirement": "Requirement",
-      "planning.originalRequest": "Original request",
-      "planning.requiredRoles": "Required roles",
-      "planning.candidateRoles": "Kickoff roles",
-      "planning.complexity": "Complexity",
-      "planning.createdTasks": "Created tasks",
-      "planning.deferredTasks": "Deferred tasks",
-      "planning.clarificationsNeeded": "Clarifications needed",
-      "planning.handoffPlan": "Handoff plan",
-      "planning.notes": "Notes",
-      "planning.assessments": "Kickoff assessments",
-      "planning.scope": "Scope",
-      "planning.suggestedTasks": "Suggested tasks",
-      "planning.dependencies": "Dependencies",
-      "planning.risks": "Risks",
-      "planning.questions": "Open questions",
-      "planning.noControllerOutput": "No controller output yet.",
-      "planning.groupActive": "Active",
-      "planning.groupPending": "Pending",
-      "planning.groupCompleted": "Completed",
-      "planning.groupBlockedFailed": "Blocked / Failed",
-      "summary.workers": "Workers",
-      "summary.pending": "Pending",
-      "summary.blocked": "Blocked",
-      "summary.completed": "Completed",
-      "task.title": "Task",
-      "task.auto": "Auto",
-      "task.details": "Task details",
-      "task.timeline": "Timeline",
-      "task.messages": "Messages",
-      "task.loadingDetail": "Loading task detail…",
-      "task.failedLoadDetail": "Failed to load task detail",
-      "clarification.answerPlaceholder": "Answer",
-      "clarification.question": "Question",
-      "clarification.whyBlocked": "Why blocked",
-      "clarification.context": "Context",
-      "clarification.answer": "Answer",
-      "clarification.needed": "Clarification needed",
-      "clarification.project": "Project clarification",
-      "clarification.task": "Task clarification",
-      "clarification.queue.one": "1 pending clarification",
-      "clarification.queue.many": "{count} pending clarifications",
-      "clarification.humanInput": "Human input required",
-      "clarification.openTask": "Open task context",
-      "clarification.openPlanning": "Open planning context",
-      "clarification.later": "Later",
-      "clarification.historyEmpty": "No clarification history.",
-      "task.groupProject": "Project",
-      "task.selectHint": "Select a task to inspect its timeline and execution.",
-      "workspace.selectFile": "Select a file",
-      "workspace.selectedFile": "Selected file",
-      "workspace.selectHint": "Select a workspace file to inspect it.",
-      "planning.runFallback": "Planning run",
-      "reports.projectFallback": "Project",
-      "reports.deliveryTitle": "{project} delivery report",
-      "task.filter.none": "No tasks in this filter.",
-      "clarifications.none": "No clarifications right now.",
-      "workspace.none": "No workspace entries yet.",
-      "reports.none": "No delivery reports yet.",
-      "runtime.title": "TeamClaw is installed but cannot work yet.",
-      "runtime.noModel": "No TeamClaw model is configured for this instance.",
-      "runtime.noAuth": "No usable OpenClaw auth profile was found for TeamClaw.",
-      "bootstrap.title": "TeamClaw is unavailable on this machine.",
-      "bootstrap.subtitle": "We'll first try to connect to the local controller. If it isn't running yet, you can install TeamClaw here, start it, or point this app at another controller.",
-      "bootstrap.status": "Startup status",
-      "bootstrap.autoStarting": "Trying to start the local controller…",
-      "bootstrap.connecting": "Connecting to the local controller…",
-      "bootstrap.failed": "Couldn't reach the local TeamClaw controller.",
-      "bootstrap.mode": "Install mode",
-      "bootstrap.manualMode": "Local quickstart",
-      "bootstrap.manualModeHint": "Runs the controller here with empty preferred provisioning roles. TeamClaw can still scale to the configured per-role worker cap.",
-      "bootstrap.processMode": "Local multi-process",
-      "bootstrap.processModeHint": "Runs the controller here and provisions local worker processes on demand. Uses more CPU and memory.",
-      "bootstrap.command": "One-line install command",
-      "bootstrap.copyInstall": "Copy install command",
-      "bootstrap.installNow": "Install now",
-      "bootstrap.installing": "Installing…",
-      "bootstrap.openclawMissingTitle": "OpenClaw is not installed on this machine yet.",
-      "bootstrap.openclawMissingSubtitle": "Install OpenClaw first, then come back here to install TeamClaw.",
-      "bootstrap.openclawInstallLabel": "OpenClaw one-click install command",
-      "bootstrap.openclawQuickstartLabel": "OpenClaw guided quickstart command",
-      "bootstrap.openclawInstallNow": "Install OpenClaw now",
-      "bootstrap.teamclawInstallLabel": "TeamClaw one-line install command",
-      "bootstrap.teamclawDetectedTitle": "OpenClaw is installed, but the local TeamClaw controller is unavailable.",
-      "bootstrap.teamclawDetectedSubtitle": "Install TeamClaw into your local OpenClaw setup, or point this app at another controller.",
-      "bootstrap.startLocal": "Start local controller",
-      "bootstrap.startingLocal": "Starting…",
-      "bootstrap.remoteTitle": "Or connect to another controller",
-      "bootstrap.remoteHint": "You can still point this desktop app at a remote TeamClaw controller.",
-      "bootstrap.remoteUrl": "Controller URL",
-      "bootstrap.connectRemote": "Connect to this controller",
-      "bootstrap.copied": "Copied",
-      "bootstrap.modeWarning": "This mode uses more resources on the current machine, but gives local workers stronger process isolation.",
-      "bootstrap.manualWarning": "This mode still executes work locally. TeamClaw provisions local worker processes on demand and keeps `workerProvisioningRoles` empty so startup readiness falls back to a warm developer worker.",
-      "bootstrap.logs": "Local controller activity",
-      "bootstrap.startCommand": "OpenClaw guided quickstart command",
-      "bootstrap.componentsLabel": "Component install command",
-      "worker.add": "Add worker",
-      "worker.hide": "Hide worker command",
-      "worker.cardTitle": "Register a new external worker",
-      "worker.cardSubtitle": "Generate a one-line worker installer command for another machine.",
-      "worker.role": "Role",
-      "worker.discovery": "Controller discovery",
-      "worker.discoveryMdns": "LAN auto-discovery (mDNS)",
-      "worker.discoveryManual": "Manual controller URL (LAN IP)",
-      "worker.copy": "Copy command",
-      "worker.copied": "Copied",
-      "worker.recommendedUrl": "Recommended controller URL: ",
-      "planning.none": "No projects yet.",
-      "planning.consensus": "Consensus",
-      "planning.controllerOutput": "Controller output",
-      "planning.noOutput": "No controller output yet.",
-      "action.languageToggleZh": "中文",
-      "action.languageToggleEn": "English"
-    },
-    zh: {
-      "boot.connecting": "正在连接控制器并加载团队数据...",
-      "connection.notConnected": "未连接",
-      "connection.disconnected": "已断开",
-      "connection.connecting": "连接中",
-      "connection.reconnecting": "重连中",
-      "connection.connected": "已连接",
-      "connection.waiting": "等待连接 controller…",
-      "connection.noSummary": "暂无 controller 摘要。",
-      "connection.connectedTo": "已连接到 {url}",
-      "connection.changeServer": "已连接 - 点击更换服务器",
-      "connection.retrying": "Controller 不可用，{seconds} 秒后重试…",
-      "connection.controller": "Controller",
-      "connection.edit": "编辑",
-      "connection.done": "完成",
-      "connection.connect": "连接",
-      "connection.refresh": "刷新",
-      "mission.title": "任务台",
-      "tab.planning": "规划",
-      "tab.controller": "控制器",
-      "tab.teamauto": "TeamAuto",
-      "teamauto.refreshRepos": "刷新仓库",
-      "teamauto.bind": "绑定",
-      "teamauto.bindStageVerify": "验证访问权限",
-      "teamauto.bindStageClone": "克隆仓库中",
-      "teamauto.bindStageNorms": "学习仓库规范",
-      "teamauto.bindReady": "仓库就绪",
-      "teamauto.bindFailed": "绑定失败",
-      "teamauto.close": "关闭",
-      "teamauto.provisioning": "准备中",
-      "teamauto.provisionFailed": "准备失败",
-      "teamauto.loginFirst": "请先登录 GitHub（右上角 Login）。",
-      "teamauto.hint": "选择你的 GitHub 仓库。TeamClaw 按各自节奏定时扫描，自主 review issue/PR、认领未分配 issue，并以 teamclaw 标识写回结果。",
-      "teamauto.loadingRepos": "正在加载你的仓库...",
-      "teamauto.noCandidates": "无可选仓库（请检查 GitHub 登录）",
-      "teamauto.needRepo": "请先选择一个仓库",
-      "teamauto.active": "运行中",
-      "teamauto.disabled": "已停用",
-      "teamauto.paused": "已暂停",
-      "teamauto.sweep": "立即扫描",
-      "teamauto.disable": "停用",
-      "teamauto.enable": "启用",
-      "teamauto.unbind": "解绑",
-      "teamauto.save": "保存配置",
-      "teamauto.saved": "已保存",
-      "teamauto.schedule": "节奏",
-      "teamauto.maxPerSweep": "每轮上限",
-      "teamauto.fullReview": "全量 review",
-      "teamauto.takeOwnership": "认领 issue",
-      "teamauto.lastSweep": "上次扫描",
-      "teamauto.norms": "协作规范",
-      "teamauto.confirmUnbind": "确定解绑该仓库？",
-      "teamauto.empty": "尚未绑定仓库。在上方选择后点击绑定。",
-      "teamauto.activity": "动态",
-      "teamauto.activityEmpty": "暂无 TeamAuto 动态 - 扫描与写回会出现在这里。",
-      "ctl.models.title": "团队模型",
-      "ctl.models.hint": "默认模型作用于控制器与所有角色；按角色的选择会覆盖默认值。",
-      "ctl.models.default": "默认模型",
-      "ctl.models.useDefault": "（跟随默认）",
-      "ctl.models.save": "保存模型",
-      "ctl.models.saved": "已保存。配置热重载生效；如未生效请重启网关。",
-      "ctl.models.failed": "保存模型设置失败",
-      "ctl.gh.title": "GitHub 登录",
-      "ctl.gh.current": "当前：",
-      "ctl.gh.hint": "授权 TeamClaw 以你的身份访问 GitHub API。令牌仅保存在控制器机器上。",
-      "ctl.tunnel.title": "互联网隧道",
-      "ctl.tunnel.hint": "将本地 Web UI 分享到公网 HTTPS 地址。访客需输入下方显示的门禁令牌。",
-      "ctl.tunnel.share": "通过隧道分享",
-      "ctl.tunnel.stop": "停止分享",
-      "ctl.tunnel.install": "安装 cloudflared",
-      "ctl.tunnel.loading": "加载中…",
-      "ctl.tunnel.off": "未分享。分享后可通过 team-<github用户>.teamclaw.dev 访问 Web UI。",
-      "ctl.tunnel.notInstalled": "控制器机器上尚未安装 cloudflared 连接器。",
-      "ctl.tunnel.starting": "正在启动隧道",
-      "ctl.tunnel.installing": "正在安装 cloudflared",
-      "ctl.tunnel.live": "在线",
-      "ctl.tunnel.gateToken": "门禁令牌",
-      "ctl.tunnel.stopped": "已停止分享。",
-      "ctl.tunnel.errNotConnected": "请先连接控制器。",
-      "ctl.tunnel.actionFailed": "隧道操作失败：",
-      "ctl.gh.login": "使用 GitHub 登录",
-      "ctl.gh.logout": "退出登录",
-      "ctl.gh.signedOut": "未登录",
-      "ctl.gh.validUntil": "有效期至",
-      "ctl.gh.pageOpened": "已在浏览器中打开 GitHub 登录页，输入页面上显示的代码，完成后此处会自动更新。",
-      "ctl.gh.loggedOut": "已退出登录。",
-      "ctl.gh.failed": "GitHub 登录失败",
-      "ctl.ws.title": "工作区目录",
-      "ctl.ws.current": "当前：",
-      "ctl.ws.default": "默认",
-      "ctl.ws.hint": "可将团队工作区指向控制器机器上的任意绝对路径。需重启网关后生效。",
-      "ctl.ws.inputLabel": "新工作区路径",
-      "ctl.ws.apply": "应用工作区",
-      "ctl.ws.saved": "已更新。请重启网关（openclaw gateway restart）后生效。",
-      "ctl.ws.failed": "更新工作区失败",
-      "ctl.ws.needAbsolute": "请输入以 / 或 ~/ 开头的绝对路径",
-      "ctl.notConnected": "请先连接 controller",
-      "tab.tasks": "任务",
-      "tab.clarifications": "澄清",
-      "tab.workspace": "工作区",
-      "tab.reports": "报告",
-      "mission.newRequirement": "新需求",
-      "mission.notifications": "通知",
-      "mission.requirement": "需求",
-      "mission.summary": "摘要",
-      "mission.recentInteraction": "最近交互",
-      "mission.connectHint": "连接到 controller 后即可加载团队状态。",
-      "mission.noConversation": "暂无对话。",
-      "planning.runs": "规划运行",
-      "planning.empty": "选择一个规划运行以查看 kickoff 讨论。",
-      "planning.requirement": "需求",
-      "planning.originalRequest": "原始需求",
-      "planning.requiredRoles": "所需角色",
-      "planning.candidateRoles": "Kickoff 参与角色",
-      "planning.complexity": "复杂度",
-      "planning.createdTasks": "已创建任务",
-      "planning.deferredTasks": "延后任务",
-      "planning.clarificationsNeeded": "待澄清问题",
-      "planning.handoffPlan": "交接计划",
-      "planning.notes": "备注",
-      "planning.assessments": "Kickoff 评估",
-      "planning.scope": "范围判断",
-      "planning.suggestedTasks": "建议任务",
-      "planning.dependencies": "依赖项",
-      "planning.risks": "风险",
-      "planning.questions": "开放问题",
-      "planning.noControllerOutput": "暂无 controller 输出。",
-      "planning.groupActive": "进行中",
-      "planning.groupPending": "待开始",
-      "planning.groupCompleted": "已完成",
-      "planning.groupBlockedFailed": "阻塞 / 失败",
-      "summary.workers": "Workers",
-      "summary.pending": "待处理",
-      "summary.blocked": "阻塞",
-      "summary.completed": "完成",
-      "task.title": "任务",
-      "task.auto": "自动分配",
-      "task.details": "任务详情",
-      "task.timeline": "时间线",
-      "task.messages": "消息",
-      "task.loadingDetail": "正在加载任务详情…",
-      "task.failedLoadDetail": "加载任务详情失败",
-      "clarification.answerPlaceholder": "回答",
-      "clarification.question": "问题",
-      "clarification.whyBlocked": "阻塞原因",
-      "clarification.context": "上下文",
-      "clarification.answer": "回答",
-      "clarification.needed": "需要人工澄清",
-      "clarification.project": "项目澄清",
-      "clarification.task": "任务澄清",
-      "clarification.queue.one": "1 条待处理澄清",
-      "clarification.queue.many": "{count} 条待处理澄清",
-      "clarification.humanInput": "需要人工输入",
-      "clarification.openTask": "打开任务上下文",
-      "clarification.openPlanning": "打开规划上下文",
-      "clarification.later": "稍后处理",
-      "clarification.historyEmpty": "暂无澄清历史。",
-      "task.groupProject": "项目",
-      "task.selectHint": "选择一个任务以查看它的时间线和执行详情。",
-      "workspace.selectFile": "选择文件",
-      "workspace.selectedFile": "已选文件",
-      "workspace.selectHint": "选择一个工作区文件以查看内容。",
-      "planning.runFallback": "规划运行",
-      "reports.projectFallback": "项目",
-      "reports.deliveryTitle": "{project} 交付报告",
-      "task.filter.none": "当前筛选下暂无任务。",
-      "clarifications.none": "当前暂无澄清。",
-      "workspace.none": "暂无工作区内容。",
-      "reports.none": "暂无交付报告。",
-      "runtime.title": "TeamClaw 已安装，但当前还无法工作。",
-      "runtime.noModel": "当前实例还没有为 TeamClaw 配置模型。",
-      "runtime.noAuth": "未找到 TeamClaw 可用的 OpenClaw 认证配置。",
-      "bootstrap.title": "当前这台机器上的 TeamClaw 不可用。",
-      "bootstrap.subtitle": "应用会先尝试连接本机 controller；如果本机还没跑起来，你可以在这里安装、启动，或改连到别的 controller。",
-      "bootstrap.status": "启动状态",
-      "bootstrap.autoStarting": "正在尝试启动本地 controller…",
-      "bootstrap.connecting": "正在连接本地 controller…",
-      "bootstrap.failed": "暂时无法连上本机 TeamClaw controller。",
-      "bootstrap.mode": "安装模式",
-      "bootstrap.manualMode": "本机快速开始",
-      "bootstrap.manualModeHint": "controller 在本机运行，`workerProvisioningRoles` 为空；这是最轻量的同机模式，TeamClaw 仍然可以按当前配置扩到每个角色的 worker 上限。",
-      "bootstrap.processMode": "本机多进程",
-      "bootstrap.processModeHint": "controller 在本机运行，并按需拉起本地 worker 进程。隔离性更强，但会消耗更多 CPU / 内存。",
-      "bootstrap.command": "一行安装命令",
-      "bootstrap.copyInstall": "复制安装命令",
-      "bootstrap.installNow": "立即安装",
-      "bootstrap.installing": "安装中…",
-      "bootstrap.openclawMissingTitle": "这台机器上还没有安装 OpenClaw。",
-      "bootstrap.openclawMissingSubtitle": "请先安装 OpenClaw，然后再回来安装 TeamClaw。",
-      "bootstrap.openclawInstallLabel": "OpenClaw 一键安装命令",
-      "bootstrap.openclawQuickstartLabel": "OpenClaw 引导式 quickstart 命令",
-      "bootstrap.openclawInstallNow": "立即安装 OpenClaw",
-      "bootstrap.teamclawInstallLabel": "TeamClaw 一行安装命令",
-      "bootstrap.teamclawDetectedTitle": "本机已安装 OpenClaw，但本地 TeamClaw controller 目前不可用。",
-      "bootstrap.teamclawDetectedSubtitle": "你可以把 TeamClaw 安装到本机 OpenClaw 里，或者把这个桌面端改连到别的 controller。",
-      "bootstrap.startLocal": "启动本地 controller",
-      "bootstrap.startingLocal": "启动中…",
-      "bootstrap.remoteTitle": "或者连接到其他 controller",
-      "bootstrap.remoteHint": "你也可以把这个桌面端直接连接到远端 TeamClaw controller。",
-      "bootstrap.remoteUrl": "Controller 地址",
-      "bootstrap.connectRemote": "连接这个 controller",
-      "bootstrap.copied": "已复制",
-      "bootstrap.modeWarning": "这个模式会更多地占用当前机器资源，但本地 worker 的进程隔离更强。",
-      "bootstrap.manualWarning": "这个模式一样能在本机直接执行任务；TeamClaw 会按需拉起本地 worker 进程，并保持 `workerProvisioningRoles` 为空，让启动 readiness 回退到预热一个 developer worker。",
-      "bootstrap.logs": "本地 controller 活动",
-      "bootstrap.startCommand": "OpenClaw 引导式 quickstart 命令",
-      "bootstrap.componentsLabel": "拆件安装命令",
-      "worker.add": "添加 worker",
-      "worker.hide": "隐藏 worker 命令",
-      "worker.cardTitle": "注册新的外部 worker",
-      "worker.cardSubtitle": "为另一台机器生成一行式 worker 安装命令。",
-      "worker.role": "角色",
-      "worker.discovery": "Controller 发现方式",
-      "worker.discoveryMdns": "局域网自动发现（mDNS）",
-      "worker.discoveryManual": "手动填写 controller 地址（局域网 IP）",
-      "worker.copy": "复制命令",
-      "worker.copied": "已复制",
-      "worker.recommendedUrl": "推荐的 controller 地址：",
-      "planning.none": "暂无项目。",
-      "planning.consensus": "共识",
-      "planning.controllerOutput": "Controller 输出",
-      "planning.noOutput": "暂无 controller 输出。",
-      "action.languageToggleZh": "中文",
-      "action.languageToggleEn": "English"
-    }
-  };
 
   function $(selector) { return document.querySelector(selector); }
   function $$(selector) { return document.querySelectorAll(selector); }
@@ -527,10 +77,7 @@
     }
   }
 
-  function t(key, params) {
-    const template = (TRANSLATIONS[state.language] && TRANSLATIONS[state.language][key]) || TRANSLATIONS.en[key] || key;
-    return template.replace(/\{(\w+)\}/g, (_, name) => (params && params[name] != null ? String(params[name]) : ""));
-  }
+  const t = i18nCreateT(() => state.language);
 
   function setLanguage(language) {
     state.language = language === "zh" ? "zh" : "en";
@@ -559,8 +106,19 @@
     if (languageToggle) {
       languageToggle.textContent = state.language === "zh" ? t("action.languageToggleEn") : t("action.languageToggleZh");
     }
+    const wizardLanguageToggle = $("#wizard-language-toggle");
+    if (wizardLanguageToggle) {
+      wizardLanguageToggle.textContent = state.language === "zh" ? t("action.languageToggleEn") : t("action.languageToggleZh");
+    }
     const texts = [
-      [".connection-card h2", "connection.controller"],
+      [".connection-card h2", "connection.title"],
+      ["#wizard-open-btn", "connection.setup"],
+      ["#wizard-cancel-btn", "wizard.cancel"],
+      [".connection-group .connection-group-label", "connection.prodGroup"],
+      [".standalone-box .connection-group-label", "connection.privateGroup"],
+      ["#standalone-start-btn", "connection.privateStart"],
+      ["#standalone-stop-btn", "connection.privateStop"],
+      [".standalone-box .bootstrap-note", "connection.privateNote"],
       [".nav-btn[data-view='mission'] .nav-label", "mission.title"],
       [".nav-btn[data-view='planning'] .nav-label", "tab.planning"],
       [".nav-btn[data-view='tasks'] .nav-label", "tab.tasks"],
@@ -572,6 +130,12 @@
       ["#teamauto-hint", "teamauto.hint"],
       ["#ta-repos-refresh", "teamauto.refreshRepos"],
       ["#ta-bind", "teamauto.bind"],
+      ["[data-ta-tab='repos']", "teamauto.tabRepos"],
+      ["[data-ta-tab='activity']", "teamauto.activity"],
+      ["[data-ctl-tab='models']", "ctl.tab.models"],
+      ["[data-ctl-tab='workspace']", "ctl.tab.workspace"],
+      ["[data-ctl-tab='github']", "ctl.tab.github"],
+      ["[data-ctl-tab='tunnel']", "ctl.tab.tunnel"],
       ["#ta-activity-title", "teamauto.activity"],
       ["#ctl-models-title", "ctl.models.title"],
       ["#ctl-models-hint", "ctl.models.hint"],
@@ -610,6 +174,18 @@
       ["#bootstrap-start-command-label", "bootstrap.startCommand"]
     ];
     texts.forEach(([selector, key]) => {
+      // Generic scan: any element carrying data-i18n translates itself.
+      // (Wizard/bootstrap section adopted this; new static text should too.)
+      document.querySelectorAll("[data-i18n]").forEach((el) => {
+        const k = el.getAttribute("data-i18n");
+        const v = t(k);
+        if (v && v !== k) el.textContent = v;
+      });
+      document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+        const k = el.getAttribute("data-i18n-placeholder");
+        const v = t(k);
+        if (v && v !== k) el.placeholder = v;
+      });
       if (selector === "#planning-list.closest") {
         const heading = $("#planning-list") && $("#planning-list").closest(".panel") ? $("#planning-list").closest(".panel").querySelector(".section-head h2") : null;
         if (heading) heading.textContent = t(key);
@@ -707,6 +283,20 @@
     if (key.includes("devops") || key.includes("platform") || key.includes("infra")) return "devops";
     if (key.includes("research") || key.includes("analyst")) return "research";
     return "neutral";
+  }
+
+  // Worker display label: the full provisioned-developer-xxxx machine id
+  // never renders raw. With a role, show a role chip + short id tail; the
+  // full id stays available via title attr.
+  function renderWorkerLabel(task, { chip = false } = {}) {
+    const id = task?.assignedWorkerId || "";
+    const role = task?.assignedRole || "";
+    const short = id ? id.replace(/^provisioned-/, "").slice(0, 14) : "";
+    const title = id || role;
+    if (chip && role) return renderRoleChip(role);
+    if (role) return `<span title="${escapeHtml(title)}">${escapeHtml(humanize(role))}${short ? " · " + escapeHtml(short) : ""}</span>`;
+    if (short) return `<span title="${escapeHtml(title)}">${escapeHtml(short)}</span>`;
+    return "";
   }
 
   function renderRoleChip(role) {
@@ -1225,6 +815,289 @@
     return response.json();
   }
 
+  // ---- Wizard (3 steps) ----
+  // ---- LLM hard gate (user spec, 2026-11-07) ----
+  // Private install: provider + model + apiKey are REQUIRED (endpoint
+  // optional) before Install enables. Global mode with models already
+  // configured: defaults to "use existing", user may switch to "configure".
+  const LLM_DEFAULT_MODELS = {
+    zai: "glm-4.6",
+    anthropic: "claude-sonnet-4-5",
+    openai: "gpt-6",
+    openrouter: "anthropic/claude-sonnet-4.5",
+    deepseek: "deepseek-chat",
+    google: "gemini-3-pro",
+  };
+  // Where to get an API key per provider (user spec: clickable hint).
+  const LLM_KEY_URLS = {
+    zai: "https://z.ai/model-api",
+    anthropic: "https://console.anthropic.com/settings/keys",
+    openai: "https://platform.openai.com/api-keys",
+    openrouter: "https://openrouter.ai/keys",
+    deepseek: "https://platform.deepseek.com/api_keys",
+    google: "https://aistudio.google.com/apikey",
+  };
+  let llmModelsFetchToken = 0;
+  let llmModelsCache = [];
+  function applyModelFilter(forceFull) {
+    const select = document.getElementById("bootstrap-llm-model-select");
+    const modelEl = document.getElementById("bootstrap-llm-model");
+    if (!select || !modelEl || !llmModelsCache.length) return;
+    // forceFull: after a fetch-filled smart default, show the FULL list for
+    // browsing - filtering by the just-filled value collapses it to one
+    // entry (user-reported). Only real typing filters.
+    const q = forceFull ? "" : modelEl.value.trim().toLowerCase();
+    const list = q ? llmModelsCache.filter((m) => m.toLowerCase().includes(q)) : llmModelsCache.slice();
+    const current = modelEl.value.trim();
+    const options = list.includes(current) || !current ? list : [current].concat(list);
+    select.innerHTML = options.map((id) => `<option value="${escapeHtml(id)}">${escapeHtml(id)}</option>`).join("");
+    select.hidden = false;
+    modelEl.hidden = false; // stays visible as the filter/entry box
+    if (current && options.includes(current)) select.value = current;
+  }
+  function updateLlmKeyHint() {
+    const keyhint = document.getElementById("bootstrap-llm-keyhint");
+    const prov = document.getElementById("bootstrap-llm-provider");
+    if (!keyhint || !prov) return;
+    const url = LLM_KEY_URLS[prov.value];
+    // Only honor the "use existing" selection when the radio pair is
+    // actually visible (global mode). In private mode the hidden radios
+    // still exist in the DOM with `checked` on the first one - selecting it
+    // here hid the key hint for everyone (user-found).
+    const useRow = document.getElementById("bootstrap-llm-use-row");
+    const useExisting = document.querySelector('input[name="llm-source"]:checked');
+    const hideHint = Boolean(useRow && !useRow.hidden && useExisting && useExisting.value === "configured");
+    if (!url || hideHint) { keyhint.hidden = true; keyhint.innerHTML = ""; return; }
+    keyhint.hidden = false;
+    keyhint.innerHTML = `${escapeHtml(t("wizard.keyHint"))} <a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(prov.value)} → ${escapeHtml(url)}</a>`;
+  }
+  function scheduleLlmModelsFetch() {
+    const prov = document.getElementById("bootstrap-llm-provider");
+    const keyEl = document.getElementById("bootstrap-llm-apikey");
+    const epEl = document.getElementById("bootstrap-llm-endpoint");
+    if (!prov || !keyEl) return;
+    const token = ++llmModelsFetchToken;
+    const key = keyEl.value.trim();
+    // OpenRouter's model list is public - fetch without a key too.
+    if (prov.value !== "openrouter" && !key) return;
+    window.teamclawDesktop.llmListModels({ provider: prov.value, endpoint: epEl ? epEl.value.trim() : "", apiKey: key })
+      .then((res) => {
+        if (token !== llmModelsFetchToken) return; // stale
+        const select = document.getElementById("bootstrap-llm-model-select");
+        const modelEl = document.getElementById("bootstrap-llm-model");
+        if (!res || res.error || !Array.isArray(res.models) || !res.models.length || !select || !modelEl) return;
+        llmModelsCache = res.models.slice();
+        // Smart default: prefer the curated default if listed, else a free
+        // entry on openrouter, else first. Only when the user hasn't chosen.
+        if (!modelEl.dataset.userEdited) {
+          const preferred = LLM_DEFAULT_MODELS[prov.value];
+          const pick = res.models.find((m) => m === preferred)
+            || res.models.find((m) => /free/i.test(m) && prov.value === "openrouter")
+            || res.models[0];
+          if (pick) modelEl.value = pick;
+        }
+        applyModelFilter(!modelEl.dataset.userEdited);
+        updateLlmStep();
+      })
+      .catch(() => { /* manual input still works */ });
+  }
+  function llmMode() {
+    const el = document.querySelector('input[name="bootstrap-mode"]:checked');
+    return el ? el.getAttribute("data-bootstrap-mode") : "controller-manual";
+  }
+  function llmSource() {
+    const el = document.querySelector('input[name="llm-source"]:checked');
+    return el ? el.value : "custom";
+  }
+  function updateLlmStep() {
+    const useRow = document.getElementById("bootstrap-llm-use-row");
+    const fields = document.getElementById("bootstrap-llm-fields");
+    const prov = document.getElementById("bootstrap-llm-provider");
+    const modelEl = document.getElementById("bootstrap-llm-model");
+    const keyEl = document.getElementById("bootstrap-llm-apikey");
+    const hint = document.getElementById("bootstrap-llm-hint");
+    const next2 = document.getElementById("wizard-next-2");
+    if (!prov || !next2) return;
+    const env = state.envDetect;
+    const offerConfigured = llmMode() === "global" && env && env.llmConfigured;
+    if (useRow) {
+      useRow.hidden = !offerConfigured;
+      const useRadio = document.querySelector('input[name="llm-source"][value="configured"]');
+      if (offerConfigured && useRadio && !document.querySelector('input[name="llm-source"]:checked')) useRadio.checked = true;
+      if (offerConfigured) {
+        const lbl = document.getElementById("bootstrap-llm-use-label");
+        const provs = (env.llmProviders || []).join(", ");
+        if (lbl) lbl.textContent = provs ? `${t("wizard.llmUseConfigured")} (${provs})` : t("wizard.llmUseConfigured");
+      }
+    }
+    const useExisting = offerConfigured && llmSource() === "configured";
+    if (fields) fields.style.display = useExisting ? "none" : "";
+    if (modelEl) {
+      if (!modelEl.value.trim() && LLM_DEFAULT_MODELS[prov.value]) modelEl.value = LLM_DEFAULT_MODELS[prov.value];
+      modelEl.placeholder = LLM_DEFAULT_MODELS[prov.value] || "model";
+    }
+    let reason = null;
+    if (!useExisting) {
+      if (!prov.value) reason = t("wizard.needProvider");
+      else if (!keyEl || !keyEl.value.trim()) reason = t("wizard.needKey");
+      else if (!modelEl || !modelEl.value.trim()) reason = t("wizard.needModel");
+    }
+    if (hint) { hint.hidden = !reason; hint.textContent = reason || ""; }
+    next2.disabled = Boolean(reason);
+  }
+  function wizardGoStep(n) {
+    document.querySelectorAll("[data-wizard-step]").forEach((el) => {
+      el.hidden = el.getAttribute("data-wizard-step") !== String(n);
+    });
+    if (n === 2) updateLlmStep(); // hard gate: re-validate on every entry
+    document.querySelectorAll("#wizard-steps .step-ind").forEach((el) => {
+      const on = el.getAttribute("data-step-ind") === String(n);
+      el.classList.toggle("active", on);
+      el.classList.toggle("done", Number(el.getAttribute("data-step-ind")) < n);
+    });
+  }
+  function bindWizardControls() {
+    const next1 = document.getElementById("wizard-next-1");
+    if (next1) next1.addEventListener("click", async () => {
+      const checked = document.querySelector('input[name="bootstrap-mode"]:checked');
+      const mode = checked ? checked.getAttribute("data-bootstrap-mode") : "controller-manual";
+      if (mode === "remote") {
+        const row = document.getElementById("bootstrap-remote-url-row");
+        if (row) row.hidden = false;
+        return; // remote: 停在步骤1 等用户填 URL 连接
+      }
+      if (mode === "global") {
+        // Three cases (user spec):
+        //  a) global already HAS teamclaw  -> just connect & remember
+        //  b) global openclaw, no teamclaw -> install INTO it (backup first)
+        //  c) no openclaw at all           -> full install, LLM step first
+        const env = state.envDetect || (await desktop.envDetect().catch(() => null));
+        const log = document.getElementById("bootstrap-log");
+        if (env && env.openclaw && env.teamclawInGlobal) {
+          wizardGoStep(3);
+          if (log) log.textContent = "[global] TeamClaw already present in the global instance.\n";
+          const url = env.globalControllerUrl || "http://127.0.0.1:9527";
+          await desktop.instanceSet({ mode: "global", controllerUrl: url, llmConfigured: true }).catch(() => {});
+          await connectController(url, { skipConversation: true }).catch(() => {});
+          unveilShell();
+          return;
+        }
+        if (env && env.openclaw && !env.teamclawInGlobal) {
+          // LLM gate (user spec): installing INTO an existing global openclaw
+          // still passes through step 2 - models already configured default
+          // to "use existing"; the user may switch to "configure". Install
+          // itself is triggered from step 2's Install button.
+          wizardGoStep(2);
+          return;
+        }
+        wizardGoStep(2); // case c: fresh global -> LLM step, then start-global
+        return;
+      }
+      wizardGoStep(2); // private (default)
+    });
+    const next2 = document.getElementById("wizard-next-2");
+    if (next2) next2.addEventListener("click", async () => {
+      updateLlmStep();
+      if (next2.disabled) return; // hard gate: never bypass via double-click
+      const checked = document.querySelector('input[name="bootstrap-mode"]:checked');
+      const mode = checked ? checked.getAttribute("data-bootstrap-mode") : "controller-manual";
+      const env = state.envDetect;
+      const useExisting = mode === "global" && env && env.llmConfigured && llmSource() === "configured";
+      const provEl = document.getElementById("bootstrap-llm-provider");
+      const keyEl = document.getElementById("bootstrap-llm-apikey");
+      const epEl = document.getElementById("bootstrap-llm-endpoint");
+      const modelEl = document.getElementById("bootstrap-llm-model");
+      const llm = useExisting ? null : {
+        provider: provEl.value,
+        endpoint: epEl ? epEl.value.trim() : "",
+        apiKey: keyEl ? keyEl.value.trim() : "",
+        model: modelEl ? modelEl.value.trim() : "",
+      };
+      wizardGoStep(3);
+      if (mode === "global") {
+        const log = document.getElementById("bootstrap-log");
+        const wizLine = (s) => { if (log) log.textContent += s + "\n"; };
+        try {
+          wizLine("[global] Starting global path...");
+          if (llm) {
+            wizLine(`[global] Writing ${llm.provider} config into the global OpenClaw...`);
+            await desktop.llmWriteGlobal(llm);
+          } else {
+            wizLine("[global] Using the existing global model configuration.");
+          }
+          if (env && env.openclaw && !env.teamclawInGlobal) {
+            const r = await desktop.instanceInstallIntoGlobal();
+            await desktop.instanceSet({ mode: "global", controllerUrl: r.controllerUrl, llmConfigured: true }).catch(() => {});
+            await connectController(r.controllerUrl, { skipConversation: true }).catch(() => {});
+            unveilShell();
+          } else {
+            // Blank machine (user-found on Windows): bare start-global spawns
+            // a binary that does not exist and the wizard sat on step 3
+            // forever. installIntoGlobal self-provisions the runtime, installs
+            // the plugin into the GLOBAL state, writes controller mode, and
+            // only then starts the gateway - so it works with nothing present.
+            wizLine("[global] No existing OpenClaw - running the full global install...");
+            const r = await desktop.instanceInstallIntoGlobal();
+            await desktop.instanceSet({ mode: "global", controllerUrl: r.controllerUrl, llmConfigured: true }).catch(() => {});
+            await connectController(r.controllerUrl, { skipConversation: true }).catch(() => {});
+            unveilShell();
+          }
+        } catch (e) {
+          wizLine("[error] " + (e && e.message));
+        }
+        return;
+      }
+      const ib = document.getElementById("bootstrap-install-btn");
+      // The step-3 install button stays hidden - it exists only as a
+      // programmatic trigger; unhiding it left a stray "开始安装" visible
+      // for the whole install (user-reported). A hidden button still
+      // receives .click().
+      if (ib) { ib.click(); }
+    });
+    document.querySelectorAll("[data-wizard-back]").forEach((b) => b.addEventListener("click", () => wizardGoStep(Number(b.getAttribute("data-wizard-back")) || 1)));
+    const modes = document.querySelectorAll('input[name="bootstrap-mode"]');
+    modes.forEach((m) => m.addEventListener("change", () => {
+      const row = document.getElementById("bootstrap-remote-url-row");
+      if (row) row.hidden = !m.checked || m.getAttribute("data-bootstrap-mode") !== "remote";
+    }));
+    const sel = document.getElementById("bootstrap-source");
+    const gl = document.getElementById("bootstrap-artifact-url");
+    if (sel && gl) sel.addEventListener("change", () => { gl.hidden = sel.value !== "artifact"; });
+    // LLM hard gate: live validation while the user types/picks.
+    ["bootstrap-llm-provider", "bootstrap-llm-model", "bootstrap-llm-apikey", "bootstrap-llm-endpoint"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener(el.tagName === "SELECT" ? "change" : "input", updateLlmStep);
+    });
+    // Provider UX (user spec): key-acquisition hint on provider change;
+    // model list auto-refresh once a key exists (debounced). Mark manual
+    // model edits so the fetch default never overwrites the user's choice.
+    const provEl = document.getElementById("bootstrap-llm-provider");
+    // Provider switch ALSO re-fetches (debounced): openrouter's list is
+    // public, so switching to it must populate the picker without a manual
+    // refresh click (user-found: "list gone until I hit refresh").
+    if (provEl) provEl.addEventListener("change", () => {
+      updateLlmKeyHint();
+      clearTimeout(window.__llmFetchT);
+      window.__llmFetchT = setTimeout(scheduleLlmModelsFetch, 400);
+    });
+    const keyElX = document.getElementById("bootstrap-llm-apikey");
+    if (keyElX) keyElX.addEventListener("input", () => { updateLlmKeyHint(); clearTimeout(window.__llmFetchT); window.__llmFetchT = setTimeout(scheduleLlmModelsFetch, 700); });
+    const modelElX = document.getElementById("bootstrap-llm-model");
+    if (modelElX) modelElX.addEventListener("input", () => { modelElX.dataset.userEdited = modelElX.value.trim() ? "1" : ""; applyModelFilter(); });
+    const modelSel = document.getElementById("bootstrap-llm-model-select");
+    if (modelSel) modelSel.addEventListener("change", () => {
+      // Pick from the list fills the entry box WITHOUT re-filtering, so the
+      // list stays browsable after a selection.
+      if (modelElX) { modelElX.value = modelSel.value; modelElX.dataset.userEdited = modelSel.value.trim() ? "1" : ""; }
+      updateLlmStep();
+    });
+    const modelsRefresh = document.getElementById("bootstrap-llm-models-refresh");
+    if (modelsRefresh) modelsRefresh.addEventListener("click", () => { modelElX && delete modelElX.dataset.userEdited; scheduleLlmModelsFetch(); });
+    const epElX = document.getElementById("bootstrap-llm-endpoint");
+    if (epElX) epElX.addEventListener("input", () => { clearTimeout(window.__llmFetchT); window.__llmFetchT = setTimeout(scheduleLlmModelsFetch, 700); });
+    document.querySelectorAll('input[name="llm-source"]').forEach((r) => r.addEventListener("change", () => { updateLlmKeyHint(); updateLlmStep(); }));
+  }
+
   function bootShell(msgKey) {
     const shell = $(".app-shell");
     const ov = $("#boot-screen");
@@ -1651,6 +1524,24 @@
   function bindTeamAutoControls() {
     if (teamAutoBtnBound) return;
     teamAutoBtnBound = true;
+    // Sub-tabs (Repositories | Activity): plain class toggling; both panes
+    // keep rendering so switching tabs never needs a refetch.
+    document.querySelectorAll(".ta-tab[data-ta-tab]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const tab = btn.getAttribute("data-ta-tab");
+        document.querySelectorAll(".ta-tab[data-ta-tab]").forEach((b) => b.classList.toggle("active", b === btn));
+        document.querySelectorAll(".ta-tabpane[data-ta-pane]").forEach((p) => p.classList.toggle("active", p.getAttribute("data-ta-pane") === tab));
+      });
+    });
+    // Controller settings tabs (models | workspace | github | tunnel): same
+    // toggle semantics; every pane keeps rendering from its own pollers.
+    document.querySelectorAll(".ta-tab[data-ctl-tab]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const tab = btn.getAttribute("data-ctl-tab");
+        document.querySelectorAll(".ta-tab[data-ctl-tab]").forEach((b) => b.classList.toggle("active", b === btn));
+        document.querySelectorAll(".ta-tabpane[data-ctl-pane]").forEach((p) => p.classList.toggle("active", p.getAttribute("data-ctl-pane") === tab));
+      });
+    });
     const bindBtn = document.getElementById("ta-bind");
     if (bindBtn) {
       bindBtn.addEventListener("click", async () => {
@@ -1886,118 +1777,18 @@
   }
 
   function renderUnavailableScreen() {
-    const shell = $(".app-shell");
-    const overlay = $("#bootstrap-overlay");
-    const commandEl = $("#bootstrap-install-command");
-    const mode = selectedLocalSetupMode();
-    const modeId = mode ? mode.id : state.localSetupMode;
-    const hasOpenClaw = Boolean(state.localSetupInfo && state.localSetupInfo.hasOpenClaw);
-    const installCommand = hasOpenClaw
-      ? (mode && mode.installCommand ? String(mode.installCommand) : "npx -y @teamclaws/teamclaw install --yes --install-mode controller-manual")
-      : String((state.localSetupInfo && state.localSetupInfo.openClawInstallCommand) || "npm install -g openclaw@latest");
-    const quickstartCommand = String((state.localSetupInfo && state.localSetupInfo.openClawQuickstartCommand) || "openclaw onboard --flow quickstart --install-daemon");
-    const remoteInput = $("#bootstrap-controller-url");
-    const visible = state.unavailableScreenVisible;
-
-    if (shell) shell.classList.toggle("app-shell-blocked", visible);
-    if (!overlay) return;
-    overlay.classList.toggle("hidden", !visible);
-    overlay.setAttribute("aria-hidden", visible ? "false" : "true");
-    if (!visible) {
-      return;
-    }
-
-    overlay.querySelectorAll("[data-bootstrap-mode]").forEach((input) => {
-      input.checked = input.getAttribute("data-bootstrap-mode") === modeId;
-    });
-
-    if (remoteInput && !remoteInput.value) {
-      remoteInput.value = state.controllerUrl || (state.settings && state.settings.controllerUrl) || "http://127.0.0.1:9527";
-    }
-    if (commandEl) {
-      commandEl.textContent = installCommand;
-    }
-
-    const startCommandEl = $("#bootstrap-start-command");
-    if (startCommandEl) {
-      startCommandEl.textContent = quickstartCommand;
-    }
-
-    const titleEl = $("#bootstrap-title");
-    const subtitleEl = $("#bootstrap-subtitle");
-    const commandLabelEl = $("#bootstrap-command-label");
-    const nextStepLabelEl = $("#bootstrap-start-command-label");
-    const componentsEl = $("#bootstrap-local-log");
-    const openClawQuickstartCard = $("#bootstrap-openclaw-quickstart-card");
-    const openClawComponentsCard = $("#bootstrap-openclaw-components-card");
-    if (titleEl) titleEl.textContent = hasOpenClaw ? t("bootstrap.teamclawDetectedTitle") : t("bootstrap.openclawMissingTitle");
-    if (subtitleEl) subtitleEl.textContent = hasOpenClaw ? t("bootstrap.teamclawDetectedSubtitle") : t("bootstrap.openclawMissingSubtitle");
-    if (commandLabelEl) commandLabelEl.textContent = hasOpenClaw ? t("bootstrap.teamclawInstallLabel") : t("bootstrap.openclawInstallLabel");
-    if (nextStepLabelEl) nextStepLabelEl.textContent = t("bootstrap.openclawQuickstartLabel");
-    if (componentsEl) {
-      componentsEl.textContent = String((state.localSetupInfo && state.localSetupInfo.openClawInstallCommand) || "npm install -g openclaw@latest");
-    }
-    if (openClawQuickstartCard) {
-      openClawQuickstartCard.classList.toggle("hidden", hasOpenClaw);
-    }
-    if (openClawComponentsCard) {
-      openClawComponentsCard.classList.toggle("hidden", hasOpenClaw);
-    }
-
-    const reasonEl = $("#bootstrap-status-detail");
-    if (reasonEl) {
-      const fallback = state.isConnecting
-          ? t("bootstrap.connecting")
-          : t("bootstrap.failed");
-      reasonEl.textContent = state.unavailableReason || fallback;
-    }
-
-    const statusPill = $("#local-pill");
-    if (statusPill) {
-      // Detection degrades to "detected (degraded)" instead of "missing" when the
-      // openclaw binary resolves but --help kept failing under load (#140).
-      const probeWarning = state.localSetupInfo && state.localSetupInfo.openClawProbeWarning;
-      statusPill.className = `pill ${hasOpenClaw ? (probeWarning ? "pill-connecting" : "pill-connected") : "pill-disconnected"}`;
-      statusPill.title = hasOpenClaw && probeWarning ? String(probeWarning) : "";
-      statusPill.textContent = hasOpenClaw ? (probeWarning ? "OpenClaw detected (degraded)" : "OpenClaw detected") : "OpenClaw missing";
-    }
-
-    const modeCard = $("#bootstrap-mode-card");
-    if (modeCard) {
-      modeCard.classList.toggle("hidden", !hasOpenClaw);
-    }
-
-    const warningEl = $("#bootstrap-mode-warning");
-    if (warningEl) {
-      const warningText = modeId === "controller-process" ? t("bootstrap.modeWarning") : t("bootstrap.manualWarning");
-      warningEl.textContent = warningText;
-    }
-
-    const installBtn = $("#bootstrap-install-btn");
-    if (installBtn) {
-      const busy = hasOpenClaw ? state.isInstallingLocal : state.isInstallingOpenClaw;
-      installBtn.disabled = busy;
-      installBtn.textContent = busy
-        ? t("bootstrap.installing")
-        : (hasOpenClaw ? t("bootstrap.installNow") : t("bootstrap.openclawInstallNow"));
-    }
-    const copyBtn = $('[data-bootstrap-copy-install]');
-    if (copyBtn) {
-      copyBtn.textContent = t("bootstrap.copyInstall");
-    }
-    const remoteConnectBtn = $('[data-bootstrap-connect]');
-    if (remoteConnectBtn) {
-      remoteConnectBtn.textContent = t("bootstrap.connectRemote");
-    }
-
-    const manualTitle = $("#bootstrap-mode-manual-title");
-    const manualHint = $("#bootstrap-mode-manual-hint");
-    const processTitle = $("#bootstrap-mode-process-title");
-    const processHint = $("#bootstrap-mode-process-hint");
-    if (manualTitle) manualTitle.textContent = t("bootstrap.manualMode");
-    if (manualHint) manualHint.textContent = t("bootstrap.manualModeHint");
-    if (processTitle) processTitle.textContent = t("bootstrap.processMode");
-    if (processHint) processHint.textContent = t("bootstrap.processModeHint");
+    // v3.1 S1: overlay is the 3-step wizard; keep busy/visibility semantics only.
+    const ov = $("#bootstrap-overlay");
+    if (ov) ov.classList.toggle("hidden", !state.unavailableScreenVisible && state.connectionState === "connected");
+    // Fresh-machine path: when the wizard must show (no instance record and
+    // no ready runtime), lift the boot gate - otherwise "Connecting..." sits
+    // on top of the wizard forever (true-sandbox launch hung exactly here;
+    // fake HOME sandboxes masked it by adopting the real machine's state).
+    if (state.unavailableScreenVisible && state.connectionState !== "connected") unveilShell();
+    const busy = Boolean(state.localSetupInfo && state.localSetupInfo.hasOpenClaw ? state.isInstallingLocal : state.isInstallingOpenClaw);
+    const log = $("#bootstrap-log");
+    if (log) log.parentElement && (log.parentElement.hidden = false);
+    void busy;
   }
 
   function buildExternalWorkerCommand(info, roleId, discoveryMode) {
@@ -2461,7 +2252,7 @@
   }
 
   function buildTaskLiveMeta(task) {
-    return [humanize(task.status || "unknown"), task.assignedWorkerId, formatTime(task.updatedAt)].filter(Boolean).join(" • ");
+    return [humanize(task.status || "unknown"), renderWorkerLabel(task), formatTime(task.updatedAt)].filter(Boolean).join(" • ");
   }
 
   function applyLiveTaskUpdate(task) {
@@ -2657,7 +2448,7 @@
       roleEl.innerHTML = task.assignedRole ? renderRoleChip(task.assignedRole) : `<span class="mini-pill">${escapeHtml(t("task.auto"))}</span>`;
     }
     if (pillRowEl) {
-      pillRowEl.innerHTML = [task.priority, task.assignedWorkerId].filter(Boolean).map((v) => `<span class="mini-pill">${escapeHtml(v)}</span>`).join("");
+      pillRowEl.innerHTML = [task.priority, task.assignedWorkerId ? renderWorkerLabel(task) : null].filter(Boolean).map((v) => `<span class="mini-pill">${v}</span>`).join("");
     }
 
     if (state.selectedTaskDetailTab === "timeline" && state.taskTimelineAutoFollow) {
@@ -2674,7 +2465,7 @@
       `<section class="detail-block task-hero task-detail-header">` +
       `<div class="detail-kicker">${escapeHtml(t("task.title"))}</div>` +
       `<div class="list-headline"><div class="detail-title" data-task-detail-title>${escapeHtml(task.title || task.id || t("task.title"))}</div><div data-task-hero-status>${renderStatusTag(task.status || "unknown")}</div></div>` +
-      `<div class="task-meta-row"><div data-task-detail-role>${task.assignedRole ? renderRoleChip(task.assignedRole) : `<span class="mini-pill">${escapeHtml(t("task.auto"))}</span>`}</div><div class="pill-row" data-task-detail-pills>${[task.priority, task.assignedWorkerId].filter(Boolean).map((v) => `<span class="mini-pill">${escapeHtml(v)}</span>`).join("")}</div></div>` +
+      `<div class="task-meta-row"><div data-task-detail-role>${task.assignedRole ? renderRoleChip(task.assignedRole) : `<span class="mini-pill">${escapeHtml(t("task.auto"))}</span>`}</div><div class="pill-row" data-task-detail-pills>${[task.priority, task.assignedWorkerId ? renderWorkerLabel(task) : null].filter(Boolean).map((v) => `<span class="mini-pill">${v}</span>`).join("")}</div></div>` +
       `<div class="detail-subtitle" data-task-live-meta>${escapeHtml(buildTaskLiveMeta(task))}</div>` +
       `<div class="row-actions">` +
       `<button class="btn" type="button" data-delete-task="${escapeHtml(task.id || "")}">Delete task</button>` +
@@ -2934,14 +2725,17 @@
             `<div class="task-group-title">${escapeHtml(group.title || t("task.groupProject"))}</div>` +
             group.tasks.map((task) => {
               const selected = task.id === state.selectedTaskId ? " active" : "";
-              const meta = [task.assignedRole, task.assignedWorkerId, formatTime(task.updatedAt || task.createdAt)].filter(Boolean).join(" • ");
+              const meta = [renderWorkerLabel(task), formatTime(task.updatedAt || task.createdAt)].filter(Boolean).join(" • ");
               return (
                 `<button type="button" class="list-item task-list-item${selected}" data-task-id="${escapeHtml(task.id)}">` +
                 `<div class="compact-list-row">` +
                 `${renderListIndicator(task.status || "unknown")}` +
                 `<div class="list-copy">` +
                 `<div class="list-title">${escapeHtml(task.title || task.id || t("task.title"))}</div>` +
-                `<div class="list-meta">${escapeHtml(meta || compactText(task.description, 120))}</div>` +
+              // renderWorkerLabel/formatTime return SAFE html (internally
+              // escaped) - escaping the joined string double-escapes it and
+              // leaks literal <span title=...> text into the list row.
+              `<div class="list-meta">${meta || escapeHtml(compactText(task.description, 120))}</div>` +
                 `</div>` +
                 `${renderStatusTag(task.status || "unknown")}` +
                 `</div>` +
@@ -3352,7 +3146,7 @@
           category: status === "completed" ? "delivery" : ((status === "blocked" || status === "failed") ? "attention" : "active"),
           title: task.title || `Task ${task.id || ""}`,
           body: summary,
-          meta: [task.assignedRole, task.assignedWorkerId].filter(Boolean).join(" • "),
+          meta: [renderWorkerLabel(task)].filter(Boolean).join(" • "),
           actions: notificationActionsForTask(task.id || ""),
           desktopAlert: false,
           updatedAt: task.updatedAt || task.completedAt || task.createdAt,
@@ -3479,7 +3273,7 @@
           category: status === "completed" ? "delivery" : ((status === "blocked" || status === "failed") ? "attention" : "active"),
           title: task.title || `Task ${task.id || ""}`,
           body: status === "completed" ? "Completed and ready for review." : `Now ${status || "updated"}.`,
-          meta: [task.assignedRole, task.assignedWorkerId].filter(Boolean).join(" • "),
+          meta: [renderWorkerLabel(task)].filter(Boolean).join(" • "),
           actions: notificationActionsForTask(task.id || task.taskId || ""),
           desktopAlert: status === "completed" || status === "blocked" || status === "failed",
         });
@@ -3823,9 +3617,17 @@
   async function connectSavedController() {
     state.settings = await desktop.getSettings();
     state.localSetupInfo = await desktop.getLocalSetupInfo();
-    const defaultUrl = state.settings.controllerUrl || 'http://127.0.0.1:9527';
+    // No implicit localhost fallback: connecting somewhere the user never
+    // chose (a host production controller on 9527) is worse than showing the
+    // setup screen. Only an explicitly saved URL is used here.
+    const defaultUrl = state.settings.controllerUrl || '';
     $('#controller-url').value = defaultUrl;
     state.controllerUrl = defaultUrl;
+    if (!defaultUrl) {
+      renderChrome();
+      renderUnavailableScreen();
+      return;
+    }
     state.localSetupMode = 'controller-manual';
     if (state.localSetupInfo && Array.isArray(state.localSetupInfo.modes)) {
       const preferredMode = state.localSetupInfo.modes.find((entry) => entry.recommended) || state.localSetupInfo.modes[0];
@@ -3852,11 +3654,20 @@
   }
 
   async function reconnectAfterLocalInstall() {
+    // Sandbox = blank machine: NEVER fall back to the host's production
+    // controller on 9527 - an empty saved URL means show the setup state,
+    // not dial whatever else runs on this host.
+    const fallbackUrl = state.settings && state.settings.sandbox ? '' : 'http://127.0.0.1:9527';
     const reconnectUrl = normalizeBaseUrl(
       state.controllerUrl
         || (state.settings && state.settings.controllerUrl)
-        || 'http://127.0.0.1:9527',
+        || fallbackUrl,
     );
+    if (!reconnectUrl) {
+      state.unavailableScreenVisible = true;
+      renderUnavailableScreen();
+      return;
+    }
     $('#controller-url').value = reconnectUrl;
     state.controllerUrl = reconnectUrl;
     state.unavailableReason = t("bootstrap.connecting");
@@ -3899,6 +3710,9 @@
     refreshWorkspaceTree().catch(() => {});
   });
   $('#language-toggle').addEventListener('click', function () {
+    setLanguage(state.language === 'zh' ? 'en' : 'zh');
+  });
+  $('#wizard-language-toggle').addEventListener('click', function () {
     setLanguage(state.language === 'zh' ? 'en' : 'zh');
   });
   $('#compose-focus-btn').addEventListener('click', function () {
@@ -3994,21 +3808,51 @@
       const providerEl = document.getElementById('bootstrap-llm-provider');
       const endpointEl = document.getElementById('bootstrap-llm-endpoint');
       const apikeyEl = document.getElementById('bootstrap-llm-apikey');
+      const modelEl = document.getElementById('bootstrap-llm-model');
       const sourceEl = document.getElementById('bootstrap-source');
-      const gitlabEl = document.getElementById('bootstrap-gitlab-url');
+      const artifactEl = document.getElementById('bootstrap-artifact-url');
       const source = sourceEl && sourceEl.value !== 'auto' ? sourceEl.value : undefined;
-      const gitlabUrl = source === 'gitlab' && gitlabEl ? gitlabEl.value.trim() : undefined;
-      const llm = (providerEl && providerEl.value)
-        ? { provider: providerEl.value, endpoint: endpointEl ? endpointEl.value.trim() : '', apiKey: apikeyEl ? apikeyEl.value.trim() : '' }
+      const artifactUrl = source === 'artifact' && artifactEl ? artifactEl.value.trim() : undefined;
+      const llm = (providerEl && providerEl.value && apikeyEl && apikeyEl.value.trim())
+        ? { provider: providerEl.value, endpoint: endpointEl ? endpointEl.value.trim() : '', apiKey: apikeyEl.value.trim(), model: modelEl ? modelEl.value.trim() : '' }
         : {};
 
-      const installPromise = desktop.bootstrapInstall({ llm, source, gitlabUrl })
+      const installPromise = desktop.bootstrapInstall({ llm, source, artifactUrl })
         .finally(() => { if (unsub) unsub(); });
       installPromise.then(async () => {
         state.isInstallingLocal = false;
         state.isInstallingOpenClaw = false;
+        // `inst` must be read HERE: the outer scopes never define it, and the
+        // ReferenceError it used to throw was silently swallowed - the
+        // post-install connect hop never actually ran until this line.
+        const inst = await desktop.instanceGet().catch(() => null);
         state.unavailableReason = "";
         state.localSetupInfo = await desktop.getLocalSetupInfo();
+        // Last hop (the "it just works" moment): after a successful install,
+        // start the private instance, wait for the controller announce, connect
+        // - and open the dashboard in the browser like a running install does.
+        try {
+          const wizLog = (line) => { const el = document.getElementById("bootstrap-log"); if (el) el.textContent += `\n[connect] ${line}`; };
+          const st = await desktop.standaloneStart({}, inst || null).catch((e) => { wizLog("start failed: " + (e && e.message)); return null; });
+          if (st && st.controllerUrl) {
+            wizLog("instance up at " + st.controllerUrl + " - waiting for controller...");
+            let ok = false;
+            for (let i = 0; i < 45 && !ok; i++) {
+              try { const res = await fetch(`${st.controllerUrl}/api/v1/tunnel/status`, { signal: AbortSignal.timeout(1500) }); ok = res.ok; } catch {}
+              if (!ok) await new Promise((w) => setTimeout(w, 1500));
+            }
+            if (ok) {
+              await desktop.instanceSet({ mode: "private", lifecycle: (inst && inst.lifecycle) || "app", controllerUrl: st.controllerUrl, gatewayPort: st.port || null, controllerPort: st.controllerPort || null, llmConfigured: true }).catch(() => {});
+              await connectController(st.controllerUrl, { skipConversation: true }).catch((e) => wizLog("connect failed: " + (e && e.message)));
+              // Desktop private instance intentionally does NOT open the
+              // web UI in a browser - the desktop app IS the UI (user ruling).
+              return;
+            }
+            wizLog("controller never answered on " + st.controllerUrl);
+          } else if (st) {
+            wizLog("instance started but no controller URL (announce timeout)");
+          }
+        } catch (e) { const el = document.getElementById("bootstrap-log"); if (el) el.textContent += `\n[connect] unexpected: ${e && e.message}`; }
         if (hasOpenClaw) {
           await reconnectAfterLocalInstall();
           return;
@@ -4454,12 +4298,37 @@
   setSummaryLine(t("connection.noSummary"));
   setConnectionPill("disconnected", t("connection.disconnected"));
   setupGithubCorner();
+  // S2: connection card - wizard entry + private instance stop button.
+  {
+    const wizBtn = document.getElementById('wizard-open-btn');
+    if (wizBtn) wizBtn.addEventListener('click', () => {
+      state.unavailableScreenVisible = true;
+      renderUnavailableScreen();
+      wizardGoStep(1);
+    });
+    const wizCancel = document.getElementById('wizard-cancel-btn');
+    if (wizCancel) wizCancel.addEventListener('click', () => {
+      state.unavailableScreenVisible = false;
+      renderUnavailableScreen();
+      // Explicit user dismissal wins over the boot-gate keep-open: without
+      // this the "not connected yet" branch re-shows the overlay instantly
+      // and cancel appears dead.
+      const ov = document.getElementById('bootstrap-overlay');
+      if (ov) ov.classList.add('hidden');
+    });
+    const stopBtn = document.getElementById('standalone-stop-btn');
+    if (stopBtn) stopBtn.addEventListener('click', async () => {
+      stopBtn.disabled = true;
+      try { await desktop.standaloneStop(); } catch { /* ipc gone */ }
+      stopBtn.disabled = false;
+    });
+  }
   bindTeamAutoControls();
-  // Bootstrap: gitlab source reveals the artifact URL input.
+  // Bootstrap: artifact source reveals the URL input (fixed GitHub release by default).
   {
     const sel = document.getElementById('bootstrap-source');
-    const gl = document.getElementById('bootstrap-gitlab-url');
-    if (sel && gl) sel.addEventListener('change', () => { gl.hidden = sel.value !== 'gitlab'; });
+    const gl = document.getElementById('bootstrap-artifact-url');
+    if (sel && gl) sel.addEventListener('change', () => { gl.hidden = sel.value !== 'artifact'; });
   }
   // Standalone instance controls (fully isolated OpenClaw+TeamClaw).
   {
@@ -4474,6 +4343,8 @@
         if (pill) pill.textContent = st.running ? 'Running :' + st.port : 'Stopped';
         if (startBtn) startBtn.hidden = st.running;
         if (connectBtn) connectBtn.hidden = !st.running;
+        const stopBtn2 = document.getElementById('standalone-stop-btn');
+        if (stopBtn2) stopBtn2.hidden = !st.running;
         if (connectBtn) connectBtn.dataset.url = st.controllerUrl || '';
       } catch { /* ipc gone */ }
     };
@@ -4493,6 +4364,82 @@
     refreshStandalone();
     setInterval(refreshStandalone, 5000);
   }
+  // Readiness gate (S1): ready -> auto standalone start; else wizard.
+  (async () => {
+    // SOT gate v3: settings.instance is the single source of truth.
+    const inst = await desktop.instanceGet().catch(() => null);
+    if (inst && inst.mode === "external" && inst.controllerUrl) {
+      await connectController(inst.controllerUrl, { skipConversation: true }).catch(() => {});
+      unveilShell();
+      return;
+    }
+    if (inst && inst.mode === "global") {
+      // Reconnect to the global gateway recorded at wizard time.
+      if (inst.controllerUrl) {
+        await connectController(inst.controllerUrl, { skipConversation: true }).catch(() => {});
+        unveilShell();
+        return;
+      }
+    }
+    if (!inst || inst.mode === "private") {
+      // Migration + private path: a ready sandbox with no instance record yet
+      // (pre-SOT installs) is adopted as private automatically.
+      try {
+        const r = await desktop.runtimeIsReady();
+      if (r && r.ready) {
+        bootShell("boot.startingInstance");
+        const st = await desktop.standaloneStart({}, inst || null).catch(() => null);
+        if (st && st.controllerUrl) {
+          // Gateway just spawned: poll until the controller answers (<=30s),
+          // then connect. Transient failures retry inside the window.
+          let ok = false;
+          for (let i = 0; i < 30 && !ok; i++) {
+            try { const res = await fetch(`${st.controllerUrl}/api/v1/tunnel/status`, { signal: AbortSignal.timeout(1500) }); ok = res.ok; } catch {}
+            if (!ok) await new Promise((w) => setTimeout(w, 1000));
+          }
+          if (ok) {
+            await connectController(st.controllerUrl, { skipConversation: true }).catch(() => {});
+            await desktop.instanceSet({ mode: "private", lifecycle: (inst && inst.lifecycle) || "app", controllerUrl: st.controllerUrl, gatewayPort: st.port || null, controllerPort: st.controllerPort || null, llmConfigured: true }).catch(() => {});
+            unveilShell();
+            return;
+          }
+        }
+        unveilShell();
+      }
+    } catch { unveilShell(); }
+    }
+    // No usable instance record -> wizard, with the DEFAULT option chosen
+    // from a read-only environment probe (user spec):
+    //   global openclaw + teamclaw -> connect existing (option 3 selected)
+    //   openclaw only              -> install into it (global) by default
+    //   neither                    -> full global install by default
+    state.unavailableScreenVisible = true;
+    renderUnavailableScreen();
+    try {
+      const env = await desktop.envDetect();
+      state.envDetect = env;
+      const pick = (mode) => {
+        const el = document.querySelector(`input[name="bootstrap-mode"][data-bootstrap-mode="${mode}"]`);
+        if (el) { el.checked = true; el.dispatchEvent(new Event("change")); }
+      };
+      // Sandbox = blank machine (user rule): the wizard defaults to the
+      // PRIVATE instance and never pre-fills the host's real controller URL.
+      // Host-probing defaults only apply to a normal (non-sandbox) launch.
+      if (state.settings && state.settings.sandbox) {
+        pick("controller-manual");
+      } else if (env.openclaw && env.teamclawInGlobal) {
+        pick("remote");
+        const urlEl = document.getElementById("bootstrap-controller-url");
+        if (urlEl && env.globalControllerUrl) urlEl.value = env.globalControllerUrl;
+      } else if (env.openclaw) {
+        pick("global"); // install into the existing global instance
+      } else {
+        pick("global"); // full global install is the default path
+      }
+    } catch { /* keep defaults */ }
+    wizardGoStep(1);
+  })();
+  bindWizardControls();
   connectSavedController();
   renderConversation();
   activateView('mission');
