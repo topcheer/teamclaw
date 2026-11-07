@@ -422,7 +422,10 @@ async function fetchProviderModels(provider, endpoint, apiKey) {
     const list = Array.isArray(json.data) ? json.data : Array.isArray(json.models) ? json.models : [];
     ids = list.map((m) => (typeof m === "string" ? m : m.id || m.name || "")).filter(Boolean).map((id) => String(id).replace(/^models\//, ""));
   } catch (e) { return { error: "bad payload" }; }
-  return { models: ids.slice(0, 200) };
+  // No 200-cap here: OpenRouter alone ships 460+ models and the aggregate
+  // entries (openrouter/free, openrouter/auto) sort past the first 200 -
+  // the old cap silently hid them from the picker (user-found).
+  return { models: ids.slice(0, 500) };
 }
 ipcMain.handle("llm:list-models", async (_e, { provider, endpoint, apiKey }) => {
   try { return await fetchProviderModels(provider, endpoint, apiKey); }
