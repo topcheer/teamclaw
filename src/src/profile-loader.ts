@@ -367,6 +367,48 @@ function crossValidateProfile(profile: TeamProfile, profileFile: string): void {
 
 const BUILTIN_PROFILES = loadBuiltinProfiles();
 
+// ---------------------------------------------------------------------------
+// Phase 2.1 test-hook: optional extra profile packages (additive merge).
+//
+// TEAMCLAW_EXTRA_PROFILES_DIR points at a directory (e.g. the repository's
+// tests/fixtures/profiles/) whose *.json packages are validated with the same
+// schema + cross-field pipeline and MERGED into the built-in registry. This
+// lets integration tests exercise the switch/archive/capability paths against
+// a minimal non-software profile WITHOUT shipping test fixtures inside
+// src/profiles/ (design 2.2: that directory is the distributed package set).
+// The env var is unset in production, so runtime behavior is bit-identical;
+// a broken extra package stays FATAL (same loader red line).
+// ---------------------------------------------------------------------------
+
+const EXTRA_PROFILES_DIR = process.env.TEAMCLAW_EXTRA_PROFILES_DIR?.trim() ?? "";
+
+function mergeExtraProfiles(): void {
+  let files: string[];
+  try {
+    files = fs.readdirSync(EXTRA_PROFILES_DIR)
+      .filter((name) => name.endsWith(".json") && name !== "schema.json")
+      .sort();
+  } catch {
+    throw new Error(
+      `TeamClaw cannot read TEAMCLAW_EXTRA_PROFILES_DIR "${EXTRA_PROFILES_DIR}" `
+        + "(set it to a directory of TeamProfile JSON packages, or unset it).",
+    );
+  }
+  const schemaFilePath = path.join(PROFILES_DIR, "schema.json");
+  const schema = readJsonFile(schemaFilePath) as JsonSchema;
+  for (const file of files) {
+    const record = validateProfilePackage(readJsonFile(path.join(EXTRA_PROFILES_DIR, file)), schema, file);
+    if (BUILTIN_PROFILES.has(record.id)) {
+      throw new Error(`TeamClaw extra profile ${file} shadows the built-in profile id "${record.id}"`);
+    }
+    BUILTIN_PROFILES.set(record.id, record);
+  }
+}
+
+if (EXTRA_PROFILES_DIR) {
+  mergeExtraProfiles();
+}
+
 // The active profile defaults to the software-rd baseline. In controller
 // mode, controller-service re-points it from TeamState.profileId (the single
 // runtime truth, design 2.3) after loading state; config teamProfile only

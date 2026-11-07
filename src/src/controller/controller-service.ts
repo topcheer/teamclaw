@@ -5,7 +5,7 @@ import type { KickoffAssessment, PluginConfig, RoleId, TeamState } from "../type
 import { loadTeamState, saveTeamState } from "../state.js";
 import { MDnsAdvertiser } from "../discovery.js";
 import { WORKER_TIMEOUT_MS } from "../protocol.js";
-import { createControllerHttpServer, autoAssignPendingTasks } from "./http-server.js";
+import { createControllerHttpServer, autoAssignPendingTasks, resumeTeamProfileSwitch, type ControllerHttpDeps } from "./http-server.js";
 import { TaskRouter } from "./task-router.js";
 import { MessageRouter } from "./message-router.js";
 import { TeamWebSocketServer } from "./websocket.js";
@@ -19,7 +19,7 @@ import { createTeamAutoScheduler, type TeamAutoScheduler } from "../teamauto/sch
 import { getGithubAuthManager } from "./github-auth.js";
 // Phase 1.6 (design 2.3): TeamState.profileId is the single runtime truth for
 // the active TeamProfile; config teamProfile only seeds first initialization.
-import { hasProfile, setActiveProfileId, SOFTWARE_RD_PROFILE_ID } from "../profile-loader.js";
+import { getActiveProfile, hasProfile, setActiveProfileId, SOFTWARE_RD_PROFILE_ID } from "../profile-loader.js";
 
 export type KickoffHandler = (
   candidateRoles: RoleId[],
@@ -65,27 +65,57 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
     async start(_ctx: OpenClawPluginServiceContext) {
       const serviceStartedAt = Date.now();
       await ensureOpenClawWorkspaceMemoryDir(logger);
-      const repoState = await ensureControllerGitRepo(config, logger).catch((err) => {
-        logger.warn(`Controller: failed to prepare git collaboration repo: ${err instanceof Error ? err.message : String(err)}`);
-        return null;
-      });
 
-      // Load or create team state
+      // Load or create team state. The active profile is resolved FIRST (from
+      // the restored TeamState.profileId, or the config bootstrap value on
+      // first initialization) so that capability-dependent startup wiring
+      // below knows which profile it is initializing (Phase 2.3 preview).
       teamState = await loadTeamState(config.teamName);
-      let repoStateChanged = false;
+      let seededProfileId: string;
       if (!teamState) {
         // Phase 1.6: first initialization seeds the active profile from the
         // config bootstrap value. An unknown id is the one sanctioned
         // fallback (design 2.2): warn and run the software-rd baseline.
         const requestedProfileId = config.teamProfile;
-        let profileId = requestedProfileId;
+        seededProfileId = requestedProfileId;
         if (!hasProfile(requestedProfileId)) {
-          profileId = SOFTWARE_RD_PROFILE_ID;
+          seededProfileId = SOFTWARE_RD_PROFILE_ID;
           logger.warn(`Controller: configured teamProfile "${requestedProfileId}" is not a built-in profile; falling back to "${SOFTWARE_RD_PROFILE_ID}"`);
         }
-        setActiveProfileId(profileId);
+      } else {
+        // Restored state: TeamState.profileId is the runtime truth (config
+        // changes do not re-seed it). A dangling reference means the profile
+        // package this team ran on is not available in this installation.
+        // Design 2.2 red line: FATAL, never silently run another profile -
+        // that is exactly how a banking team would degrade into the software
+        // baseline unnoticed. (The config-miss fallback above stays a warn:
+        // it only seeds first initialization, where no team exists yet.)
+        if (!hasProfile(teamState.profileId)) {
+          throw new Error(
+            `Controller: team state references team profile "${teamState.profileId}", which is not available in this installation. `
+              + "Check the teamProfile config value and the persisted state profileId, or reinstall a TeamClaw version that ships this profile.",
+          );
+        }
+        seededProfileId = teamState.profileId;
+      }
+      setActiveProfileId(seededProfileId);
+      const activeCapabilities = getActiveProfile().capabilities;
+
+      // Phase 2.3 preview (minimal capability wiring, design 2.1): the git
+      // collaboration repo is only prepared for profiles with git enabled -
+      // a document-delivery team has no repo concept. On the software-rd
+      // baseline (git: true) behavior is unchanged.
+      const repoState = activeCapabilities.git
+        ? await ensureControllerGitRepo(config, logger).catch((err) => {
+            logger.warn(`Controller: failed to prepare git collaboration repo: ${err instanceof Error ? err.message : String(err)}`);
+            return null;
+          })
+        : null;
+
+      let repoStateChanged = false;
+      if (!teamState) {
         teamState = {
-          profileId,
+          profileId: seededProfileId,
           teamName: config.teamName,
           workers: {},
           tasks: {},
@@ -98,24 +128,10 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
           updatedAt: Date.now(),
         };
         await saveTeamState(teamState);
-        logger.info(`Controller: created new team "${config.teamName}" (profile: ${profileId})`);
+        logger.info(`Controller: created new team "${config.teamName}" (profile: ${seededProfileId})`);
       } else {
-        // Restored state: TeamState.profileId is the runtime truth (config
-        // changes do not re-seed it). A dangling reference means the profile
-        // package this team ran on is not available in this installation.
-        // Design 2.2 red line: FATAL, never silently run another profile -
-        // that is exactly how a banking team would degrade into the software
-        // baseline unnoticed. (The config-miss fallback above stays a warn:
-        // it only seeds first initialization, where no team exists yet.)
-        if (!hasProfile(teamState.profileId)) {
-          throw new Error(
-            `Controller: team state references team profile "${teamState.profileId}", which is not available in this installation. `
-            + "Check the teamProfile config value and the persisted state profileId, or reinstall a TeamClaw version that ships this profile.",
-          );
-        }
-        setActiveProfileId(teamState.profileId);
         const previousRepoState = JSON.stringify(teamState.repo ?? null);
-        teamState.repo = repoState ?? teamState.repo;
+        teamState.repo = repoState ?? (activeCapabilities.git ? teamState.repo : undefined);
         repoStateChanged = JSON.stringify(teamState.repo ?? null) !== previousRepoState;
         logger.info(`Controller: restored team "${config.teamName}" with ${Object.keys(teamState.workers).length} workers`);
       }
@@ -226,7 +242,7 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
 
       let serviceKickoffHandler: KickoffHandler | undefined;
 
-      const server = createControllerHttpServer({
+      const httpDeps: ControllerHttpDeps = {
         config,
         logger,
         runtime: deps.runtime,
@@ -239,7 +255,9 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
         previewManager,
         getKickoffHandler: () => serviceKickoffHandler,
         getTeamAutoScheduler: () => teamAutoSchedulerRef,
-      });
+      };
+
+      const server = createControllerHttpServer(httpDeps);
 
       const PORT_RETRY_STEP = 10;
       const PORT_MAX_RETRIES = 10;
@@ -284,29 +302,44 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
         workerProvisioningManager.setActualPort(actualPort);
       }
 
+      // Phase 2.1 (design 2.3 crash semantics): resume an interrupted team
+      // profile switch before TeamAuto/preview restoration/provisioning kick
+      // in, so no subsystem fights the resume. Runs after the port is known
+      // (switch warmup launches need the actual controller URL). Requests
+      // arriving mid-resume hit the transition concurrency matrix (409/503),
+      // which is exactly what it exists for. An unavailable target profile is
+      // fatal here - same red line as restoring an unknown profileId.
+      await resumeTeamProfileSwitch(httpDeps);
+
       // TeamAuto: autonomous repo collaboration (bind repos via /api/v1/teamauto/*).
-      try {
-        const auth = getGithubAuthManager(config, logger);
-        const httpDepsForAutoAssign = { config, logger, getTeamState: () => teamState, updateTeamState: updateState, taskRouter, messageRouter, wsServer } as Parameters<typeof autoAssignPendingTasks>[0];
-        teamAutoSchedulerRef = createTeamAutoScheduler({
-          logger,
-          auth,
-          getTeamState: () => teamState,
-          updateTeamState: updateState,
-          onTasksCreated: async () => {
-            await autoAssignPendingTasks(httpDepsForAutoAssign);
-          },
-          onActivity: (entry) => {
-            wsServer.broadcastUpdate({
-              type: "teamauto:activity",
-              data: { at: entry.at, repoId: entry.repoId, kind: entry.kind, text: entry.text },
-            });
-          },
-        });
-        await teamAutoSchedulerRef.start();
-        deps.onTeamAutoSchedulerAvailable?.(() => teamAutoSchedulerRef);
-      } catch (err) {
-        logger.warn(`Controller: TeamAuto scheduler failed to start: ${err instanceof Error ? err.message : String(err)}`);
+      // Phase 2.3 preview (minimal capability wiring): a profile with
+      // teamauto disabled never starts the scheduler at all.
+      if (getActiveProfile().capabilities.teamauto) {
+        try {
+          const auth = getGithubAuthManager(config, logger);
+          const httpDepsForAutoAssign = { config, logger, getTeamState: () => teamState, updateTeamState: updateState, taskRouter, messageRouter, wsServer } as Parameters<typeof autoAssignPendingTasks>[0];
+          teamAutoSchedulerRef = createTeamAutoScheduler({
+            logger,
+            auth,
+            getTeamState: () => teamState,
+            updateTeamState: updateState,
+            onTasksCreated: async () => {
+              await autoAssignPendingTasks(httpDepsForAutoAssign);
+            },
+            onActivity: (entry) => {
+              wsServer.broadcastUpdate({
+                type: "teamauto:activity",
+                data: { at: entry.at, repoId: entry.repoId, kind: entry.kind, text: entry.text },
+              });
+            },
+          });
+          await teamAutoSchedulerRef.start();
+          deps.onTeamAutoSchedulerAvailable?.(() => teamAutoSchedulerRef);
+        } catch (err) {
+          logger.warn(`Controller: TeamAuto scheduler failed to start: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      } else {
+        logger.info("Controller: TeamAuto scheduler skipped (capability disabled by the active team profile)");
       }
 
       // Start mDNS advertising with the actual port
@@ -338,12 +371,16 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
       serviceKickoffHandler = kickoffHandler;
       deps.onKickoffHandlerAvailable?.(kickoffHandler);
 
-      logger.info(`Controller: starting preview restoration...`);
-      void previewManager.restorePreviewsOnStartup().then(() => {
-        logger.info(`Controller: preview restoration completed`);
-      }).catch((err) => {
-        logger.warn(`Controller: failed to restore previews on startup: ${String(err)}`);
-      });
+      // Phase 2.3 preview (minimal capability wiring): only profiles with
+      // runnablePreview enabled restore dynamic previews on startup.
+      if (getActiveProfile().capabilities.runnablePreview) {
+        logger.info(`Controller: starting preview restoration...`);
+        void previewManager.restorePreviewsOnStartup().then(() => {
+          logger.info(`Controller: preview restoration completed`);
+        }).catch((err) => {
+          logger.warn(`Controller: failed to restore previews on startup: ${String(err)}`);
+        });
+      }
 
       // Start timeout monitoring
       timeoutTimer = setInterval(() => {

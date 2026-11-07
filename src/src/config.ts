@@ -53,6 +53,11 @@ function buildConfigSchema() {
           default: 600000,
           description: "Inactivity threshold in milliseconds before TeamClaw probes a stalled role task instead of failing it",
         },
+        teamSwitchDrainTimeoutMs: {
+          type: "number" as const,
+          default: 30000,
+          description: "How long a team profile switch waits for in-flight tasks to finish before force-collecting them (design 2.3 graceful drain)",
+        },
         maxConcurrentTasks: {
           type: "integer" as const,
           default: 5,
@@ -256,6 +261,10 @@ function buildConfigSchema() {
       taskTimeoutMs: {
         label: "Task Stall Threshold",
         help: "In milliseconds, how long TeamClaw waits without visible progress before probing the task instead of failing it",
+      },
+      teamSwitchDrainTimeoutMs: {
+        label: "Profile Switch Drain Timeout",
+        help: "In milliseconds, how long a team profile switch waits for in-flight tasks to finish before force-collecting them",
       },
       maxConcurrentTasks: {
         label: "Max Concurrent Tasks",

@@ -22,7 +22,12 @@ import {
   normalizeContractRole,
   normalizeContractStringList,
 } from "../interaction-contracts.js";
-import { ROLE_IDS } from "../roles.js";
+// Phase 2.1 debt item 1 (P1 closeout handover): tool input validation checks
+// the ACTIVE TeamProfile's role set via the profile loader. The previous
+// registry-set check would silently kill every non-software role once a team
+// switches profiles; behavior on the software-rd baseline is unchanged
+// (active set == registry set).
+import { validateActiveRoleId } from "../profile-loader.js";
 
 export type ControllerToolsDeps = {
   config: PluginConfig;
@@ -45,10 +50,6 @@ const EXECUTION_READY_BLOCKERS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /blocked\s*-\s*by/i, reason: "it explicitly says the task is blocked by another item" },
   { pattern: /需要.*先完成/u, reason: "it states another piece of work must complete first" },
 ];
-
-// Phase 1.2: derived from the roles.ts registry instead of a hand-written id
-// list (the former copy was missing data-engineer before Phase 0.2 fixed it).
-const VALID_ROLE_IDS = new Set<string>(ROLE_IDS);
 
 const ENGLISH_LATER_PHASE_CLAUSE_RE = /\b(?:after|once)\b(.+?)\b(complete|completed|ready|available|exists?)\b/i;
 const ENGLISH_LATER_PHASE_DEPENDENCY_RE = /\b(?:task|tasks|service|services|module|modules|phase|phases|api|apis|interface|interfaces|review|qa|design|developer|architect|skeleton|backend|frontend|deliverable|artifact|handoff)\b/i;
@@ -98,9 +99,12 @@ export function createControllerTools(deps: ControllerToolsDeps) {
         }
 
         const rawRoles = Array.isArray(params.candidateRoles) ? params.candidateRoles : [];
+        // Phase 2.1 debt item 1: validate against the ACTIVE profile's role
+        // set (validateActiveRoleId) so kickoff candidate roles of a switched
+        // team (e.g. banking) pass instead of being silently filtered out.
         const candidateRoles = rawRoles
-          .map((r) => String(r ?? "").trim().toLowerCase())
-          .filter((r): r is RoleId => VALID_ROLE_IDS.has(r));
+          .map((r) => validateActiveRoleId(String(r ?? "").trim().toLowerCase()))
+          .filter((r): r is RoleId => r !== undefined);
 
         if (candidateRoles.length === 0) {
           return { details: {}, content: [{ type: "text" as const, text: "At least one valid candidate role is required." }] };

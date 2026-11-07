@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import type {
+  RoleDefinition,
   RoleId,
   StartupProvisioningReadiness,
   TeamProvisioningState,
@@ -77,6 +78,19 @@ function migrateState(raw: unknown): TeamState | null {
   // already carry the field and pass through unchanged.
   if (typeof state.profileId !== "string" || !state.profileId.trim()) {
     state.profileId = SOFTWARE_RD_PROFILE_ID;
+  }
+
+  // Phase 2.1: a malformed persisted transition is dropped (treated as "no
+  // switch in progress"). Aborting a corrupt switch keeps the previous team
+  // fully intact - the safe failure mode; the user can re-issue the switch.
+  if (state.transition !== undefined) {
+    const transition = state.transition as Record<string, unknown>;
+    const phaseOk = transition?.phase === "draining" || transition?.phase === "archiving" || transition?.phase === "warming";
+    const targetOk = typeof transition?.targetProfileId === "string" && Boolean(transition.targetProfileId.trim());
+    const startedAtOk = typeof transition?.startedAt === "number";
+    if (!phaseOk || !targetOk || !startedAtOk) {
+      delete state.transition;
+    }
   }
 
   return state as unknown as TeamState;
@@ -253,6 +267,140 @@ async function saveTeamState(state: TeamState): Promise<void> {
   await enqueueAtomicWrite(filePath, `${JSON.stringify(state, null, 2)}\n`);
 }
 
+// ---------------------------------------------------------------------------
+// Team profile switch archive (Phase 2.1, design section 2.3 step 3).
+//
+// Switching profiles seals the WHOLE previous TeamState (tasks,
+// clarifications, messages, previews, repo, projects, controllerRuns,
+// reports) into state-dir/archived/<profileId>-<timestamp>.json together with
+// an embedded snapshot of the profile's roles - so an archived banking team
+// keeps its original role vocabulary even after the profile package evolves
+// (design 2.2: archive queries must not suffer terminology drift). v1 only
+// lists archive metadata; the full payload stays queryable offline.
+// ---------------------------------------------------------------------------
+
+const ARCHIVED_TEAMS_DIR_NAME = "archived";
+const ARCHIVE_FILE_RE = /^([a-z0-9-]+)-(\d+)\.json$/;
+
+/** Embedded profile snapshot stored alongside the archived team state. */
+export type ArchivedTeamProfileSnapshot = {
+  id: string;
+  name: string;
+  nameZh?: string;
+  version: string;
+  roles: RoleDefinition[];
+};
+
+export type ArchivedTeamEnvelope = {
+  archivedAt: number;
+  profile: ArchivedTeamProfileSnapshot;
+  team: TeamState;
+};
+
+export type ArchivedTeamSummary = {
+  /** Archive file name (unique id for v1 metadata listing purposes). */
+  file: string;
+  profileId: string;
+  profileName: string;
+  teamName: string;
+  archivedAt: number;
+  taskCount: number;
+};
+
+function archivedTeamsDirPath(): string {
+  return path.join(STATE_DIR, ARCHIVED_TEAMS_DIR_NAME);
+}
+
+function parseArchiveFileName(name: string): { profileId: string; timestamp: number } | null {
+  const match = ARCHIVE_FILE_RE.exec(name);
+  if (!match) {
+    return null;
+  }
+  const timestamp = Number(match[2]);
+  return Number.isFinite(timestamp) ? { profileId: match[1]!, timestamp } : null;
+}
+
+/**
+ * Seal the given TeamState into the archive directory (design 2.3 step 3).
+ * Returns the archive file path. The write is atomic; the envelope embeds the
+ * profile snapshot so the archive is self-contained.
+ */
+async function archiveTeamState(
+  state: TeamState,
+  profileSnapshot: ArchivedTeamProfileSnapshot,
+): Promise<string> {
+  const dir = archivedTeamsDirPath();
+  await ensureDir(dir);
+  const fileName = `${state.profileId}-${Date.now()}.json`;
+  const filePath = path.join(dir, fileName);
+  const envelope: ArchivedTeamEnvelope = {
+    archivedAt: Date.now(),
+    profile: profileSnapshot,
+    team: state,
+  };
+  await enqueueAtomicWrite(filePath, `${JSON.stringify(envelope, null, 2)}\n`);
+  return filePath;
+}
+
+/** List archived teams (newest first). Unreadable entries are skipped. */
+async function listArchivedTeams(): Promise<ArchivedTeamSummary[]> {
+  let files: string[];
+  try {
+    files = await fs.readdir(archivedTeamsDirPath());
+  } catch {
+    return [];
+  }
+  const summaries: ArchivedTeamSummary[] = [];
+  for (const name of files.sort().reverse()) {
+    if (!name.endsWith(".json") || !parseArchiveFileName(name)) {
+      continue;
+    }
+    try {
+      const raw = await fs.readFile(path.join(archivedTeamsDirPath(), name), "utf8");
+      const parsed = JSON.parse(raw) as ArchivedTeamEnvelope;
+      if (!parsed?.team || typeof parsed.team !== "object") {
+        continue;
+      }
+      summaries.push({
+        file: name,
+        profileId: parsed.profile?.id ?? parsed.team.profileId ?? "unknown",
+        profileName: parsed.profile?.name ?? "",
+        teamName: typeof parsed.team.teamName === "string" ? parsed.team.teamName : "",
+        archivedAt: typeof parsed.archivedAt === "number" ? parsed.archivedAt : 0,
+        taskCount: parsed.team.tasks && typeof parsed.team.tasks === "object"
+          ? Object.keys(parsed.team.tasks).length
+          : 0,
+      });
+    } catch {
+      // Skip unreadable/corrupt archive files - listing must never fail the API.
+    }
+  }
+  return summaries;
+}
+
+/**
+ * Crash-resume helper (design 2.3): find an archive file written for the
+ * given (source) profileId at or after `startedAt` - the persisted
+ * transition.startedAt. Existence of such a file means the switch already got
+ * past the archive step, so a restart must jump straight to building the new
+ * team instead of re-draining.
+ */
+async function findTeamSwitchArchive(profileId: string, startedAt: number): Promise<string | null> {
+  let files: string[];
+  try {
+    files = await fs.readdir(archivedTeamsDirPath());
+  } catch {
+    return null;
+  }
+  for (const name of files.sort().reverse()) {
+    const parsed = parseArchiveFileName(name);
+    if (parsed && parsed.profileId === profileId && parsed.timestamp >= startedAt) {
+      return path.join(archivedTeamsDirPath(), name);
+    }
+  }
+  return null;
+}
+
 async function loadWorkerIdentity(): Promise<WorkerIdentity | null> {
   const filePath = path.join(STATE_DIR, "worker-identity.json");
   try {
@@ -291,6 +439,9 @@ export {
   STATE_DIR,
   loadTeamState,
   saveTeamState,
+  archiveTeamState,
+  listArchivedTeams,
+  findTeamSwitchArchive,
   loadWorkerIdentity,
   saveWorkerIdentity,
   clearWorkerIdentity,

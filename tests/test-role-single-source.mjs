@@ -148,11 +148,25 @@ assert.doesNotMatch(
   "types.ts must not keep a hand-written VALID_ROLES array",
 );
 
-// 1e. controller-tools.ts VALID_ROLE_IDS is derived from the registry.
+// 1e. controller-tools.ts validates tool role inputs against the ACTIVE
+// TeamProfile (Phase 2.1 debt item 1 from the P1 closeout handover): the old
+// registry-set check would silently kill every non-software role once a team
+// switches profiles. The software-rd behavior is unchanged (active set ==
+// registry set); the registry import itself is gone.
 assert.match(
   controllerToolsSource,
-  /import \{ ROLE_IDS \} from "\.\.\/roles\.js";[\s\S]*const VALID_ROLE_IDS = new Set<string>\(ROLE_IDS\);/,
-  "controller-tools.ts VALID_ROLE_IDS must be new Set(ROLE_IDS) imported from roles.js",
+  /import \{ validateActiveRoleId \} from "\.\.\/profile-loader\.js";/,
+  "controller-tools.ts must validate candidate roles via validateActiveRoleId from the profile loader",
+);
+assert.match(
+  controllerToolsSource,
+  /validateActiveRoleId\(String\(r \?\? ""\)\.trim\(\)\.toLowerCase\(\)\)/,
+  "controller-tools.ts kickoff candidateRoles must be filtered through validateActiveRoleId",
+);
+assert.doesNotMatch(
+  controllerToolsSource,
+  /ROLE_IDS|VALID_ROLE_IDS/,
+  "controller-tools.ts must not keep a registry-set role copy (Phase 2.1 debt 1 removed it)",
 );
 
 // 1f. openclaw-workspace.ts derives the catalog id/order from role-ids.ts.

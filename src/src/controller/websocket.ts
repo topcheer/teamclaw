@@ -20,7 +20,13 @@ export type WsEvent =
   | { type: "project:deleted"; data: unknown }
   | { type: "requirement:complete"; data: unknown }
   | { type: "report:ready"; data: unknown }
-  | { type: "teamauto:activity"; data: unknown };
+  | { type: "teamauto:activity"; data: unknown }
+  // Phase 2.2 (design sections 2.3/4): team profile switch lifecycle. Event
+  // names follow the design document verbatim (dot-separated) rather than the
+  // colon convention used by the domain events above - they are the external
+  // contract UI/desktop/workers will subscribe to.
+  | { type: "team.switch_started"; data: { profileId: string; previousProfileId: string } }
+  | { type: "team.switch_completed"; data: { profileId: string } };
 
 export class TeamWebSocketServer {
   private wss: WebSocketServer | null = null;

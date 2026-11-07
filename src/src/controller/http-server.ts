@@ -26,6 +26,7 @@ import type {
   TaskStatus,
   TeamMessage,
   TeamState,
+  TeamSwitchTransition,
   WorkerProgressContract,
   WorkerInfo,
   WorkerTaskResultContract,
@@ -38,15 +39,20 @@ import {
   sendError,
   generateId,
 } from "../protocol.js";
+import { saveTeamState, archiveTeamState, listArchivedTeams, findTeamSwitchArchive } from "../state.js";
 import { listWorkspaceTree, listWorkspaceSubtree, readWorkspaceFile, readWorkspaceRawFile } from "../workspace-browser.js";
 // Phase 1.3: runtime role data comes from the active TeamProfile loader
 // (software-rd baseline) instead of the roles.ts registry; roles.ts/role-ids.ts
 // remain the type layer and the generator source.
 import {
+  BUILTIN_PROFILES,
+  getActiveProfile,
   getActiveRoles,
   getActiveDefaultRole,
+  hasProfile,
   normalizeRecommendedSkills,
   resolveActiveRoleSkills,
+  setActiveProfileId,
   validateActiveRoleId,
 } from "../profile-loader.js";
 import {
@@ -2734,7 +2740,29 @@ async function continueControllerWorkflow(task: TaskInfo, deps: ControllerHttpDe
   });
 }
 
-async function runControllerIntake(
+/**
+ * Phase 2.1 review fix (design 2.3 concurrency matrix): intake runs create
+ * tasks and burn a controller LLM pass, so they are refused while a profile
+ * switch transition is in flight - at the runControllerIntake ENTRY, which is
+ * the single funnel for URL submissions AND internal callers (task-completion
+ * follow-ups, parallel-help, clarification resumes) that bypass the URL-level
+ * 503 gate. The message deliberately avoids every token of
+ * CONTROLLER_INTAKE_RETRYABLE_ERROR_PATTERN: a transition rejection must fail
+ * fast, never retry its way into the switched team.
+ */
+export class ControllerIntakeSwitchInProgressError extends Error {
+  readonly transition: TeamSwitchTransition;
+
+  constructor(transition: TeamSwitchTransition) {
+    super(
+      `Controller intake rejected: a team profile switch to "${transition.targetProfileId}" is in progress (phase: ${transition.phase}) - retry after the switch completes`,
+    );
+    this.name = "ControllerIntakeSwitchInProgressError";
+    this.transition = transition;
+  }
+}
+
+export async function runControllerIntake(
   message: string,
   sessionKey: string,
   deps: ControllerHttpDeps,
@@ -2744,6 +2772,10 @@ async function runControllerIntake(
     sourceTaskTitle?: string;
   },
 ): Promise<{ sessionKey: string; runId: string; reply: string; controllerRunId: string }> {
+  const activeTransition = deps.getTeamState()?.transition;
+  if (activeTransition) {
+    throw new ControllerIntakeSwitchInProgressError(activeTransition);
+  }
   const normalizedSessionKey = normalizeControllerIntakeSessionKey(sessionKey);
   return withSerializedControllerIntake(normalizedSessionKey, async () => {
     let lastError: Error | null = null;
@@ -4643,6 +4675,292 @@ async function assignTaskToWorker(
   return deps.getTeamState()?.tasks[taskId];
 }
 
+// ===========================================================================
+// Team profile switch (Phase 2.1, vertical-team-profiles-design.md 2.3).
+//
+// Six-step semantics of POST /api/v1/team/profile:
+//   0. validate profileId + reject concurrent switches (409)   [endpoint]
+//   1. transition = { draining, target, startedAt }; persisted + WS event
+//   2. graceful drain of in-flight tasks (timeout -> force-collect),
+//      terminate workers                                        [drainTeam...]
+//   3. archive the WHOLE TeamState + roles snapshot             [state.ts]
+//   4. fresh capability-conditioned TeamState for the target
+//   5. warm the target profile's warmupRoles                    [provisioner]
+//   6. clear transition, persist, broadcast team.switch_completed
+// ===========================================================================
+
+const SWITCH_DRAIN_POLL_INTERVAL_MS = 500;
+/** Advisory backoff hint carried in 409 bodies for worker register/heartbeat. */
+const SWITCH_WORKER_BACKOFF_HINT_MS = 5000;
+const SWITCH_TASK_SUBMISSION_RETRY_AFTER_SECONDS = 5;
+/** New-work entry points gated with 503 + Retry-While during a transition. */
+const TRANSITION_BLOCKED_TASK_POST_PATHS = new Set([
+  "/api/v1/tasks",
+  "/api/v1/controller/intake",
+  "/api/v1/controller/manifest",
+]);
+// Review fix: manual assign and parallel-help both spawn work for the
+// outgoing team (parallel-help funnels into runControllerIntake, which also
+// carries its own entry-level backstop); task handoff stays open - it is part
+// of in-flight completion the drain waits on.
+const TRANSITION_BLOCKED_TASK_POST_PATH_RES = [
+  /^\/api\/v1\/tasks\/[^/]+\/assign$/,
+  /^\/api\/v1\/tasks\/[^/]+\/parallel-help$/,
+];
+const WORKER_REGISTER_PATH = "/api/v1/workers/register";
+const WORKER_HEARTBEAT_PATH_RE = /^\/api\/v1\/workers\/[^/]+\/heartbeat$/;
+
+function sleepForSwitchDrain(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function taskInFlightForDrain(task: TaskInfo): boolean {
+  return Boolean(task.assignedWorkerId) && (task.status === "assigned" || task.status === "in_progress");
+}
+
+/**
+ * Design 2.3 step 2: graceful drain. Waits until no task is assigned /
+ * in-progress any more (in-flight workers report results through their
+ * normal endpoints, which stay open during the transition), then returns.
+ * On timeout the remaining in-flight tasks are force-collected (failed with
+ * an explicit error so the archive records the forced end) and all workers
+ * are marked offline. Managed workers are terminated by the caller through
+ * the provisioning manager's onWorkerRemoved (the terminateManagedWorker
+ * single point); external workers observe 409 heartbeats and back off.
+ */
+async function drainTeamForProfileSwitch(
+  deps: ControllerHttpDeps,
+): Promise<{ timedOut: boolean; forceCollected: string[] }> {
+  const { config, logger, getTeamState, updateTeamState } = deps;
+  const deadline = Date.now() + config.teamSwitchDrainTimeoutMs;
+  while (Date.now() < deadline) {
+    const state = getTeamState();
+    if (!state || !Object.values(state.tasks).some(taskInFlightForDrain)) {
+      return { timedOut: false, forceCollected: [] };
+    }
+    await sleepForSwitchDrain(SWITCH_DRAIN_POLL_INTERVAL_MS);
+  }
+
+  const forceCollected: string[] = [];
+  updateTeamState((state) => {
+    for (const task of Object.values(state.tasks)) {
+      if (taskInFlightForDrain(task)) {
+        task.status = "failed";
+        task.error = `team profile switch drain timeout (${config.teamSwitchDrainTimeoutMs}ms) - in-flight task force-collected into the team archive`;
+        task.updatedAt = Date.now();
+        forceCollected.push(task.id);
+      }
+    }
+    for (const worker of Object.values(state.workers)) {
+      worker.status = "offline";
+      worker.currentTaskId = undefined;
+    }
+  });
+  logger.warn(
+    `Controller: profile switch drain timed out after ${config.teamSwitchDrainTimeoutMs}ms - force-collected ${forceCollected.length} in-flight task(s)`,
+  );
+  return { timedOut: true, forceCollected };
+}
+
+export type TeamProfileSwitchOptions = {
+  /**
+   * Crash resume (design 2.3): the archive file for this switch already
+   * exists, so skip the drain+archive steps (2-3) and rebuild the new team
+   * directly (steps 4-6).
+   */
+  skipArchive?: boolean;
+};
+
+/**
+ * Run switch steps 2-6 (step 1 - setting and persisting the transition -
+ * belongs to the POST endpoint / crash resume). Exported so the controller
+ * startup chain can resume an interrupted switch with the same semantics.
+ */
+export async function executeTeamProfileSwitch(
+  deps: ControllerHttpDeps,
+  targetProfileId: string,
+  options: TeamProfileSwitchOptions = {},
+): Promise<void> {
+  const { config, logger, getTeamState, updateTeamState, wsServer, workerProvisioningManager } = deps;
+  const target = BUILTIN_PROFILES.get(targetProfileId);
+  if (!target) {
+    throw new Error(`TeamClaw team profile "${targetProfileId}" is not available in this installation`);
+  }
+  const setPhase = (phase: "draining" | "archiving" | "warming"): void => {
+    updateTeamState((state) => {
+      if (state.transition?.targetProfileId === targetProfileId) {
+        state.transition.phase = phase;
+      }
+    });
+  };
+
+  if (!options.skipArchive) {
+    // Step 2: drain in-flight work, then stop every worker.
+    setPhase("draining");
+    workerProvisioningManager?.setReconcileSuspended(true);
+    const drain = await drainTeamForProfileSwitch(deps);
+    for (const workerId of Object.keys(getTeamState()?.provisioning?.workers ?? {})) {
+      if (workerProvisioningManager?.hasManagedWorker(workerId)) {
+        await workerProvisioningManager
+          .onWorkerRemoved(workerId, `team profile switch to "${targetProfileId}"`)
+          .catch((err) => logger.warn(`Controller: failed to terminate managed worker ${workerId} during profile switch: ${String(err)}`));
+      }
+    }
+    // Capability teardown for subsystems the target profile switches off
+    // (minimal Phase 2.3 preview; the full 404 short-circuit lands in 2.3).
+    // NOTE: teardown is one-directional at runtime. Switching a capability
+    // back ON does not (re)start its subsystem here - TeamAuto scheduling
+    // and preview restoration are wired at controller startup only, so an
+    // off -> on switch (e.g. minimal-bank -> software-rd) takes effect for
+    // those subsystems after the next gateway restart.
+    if (!target.capabilities.teamauto) {
+      const scheduler = deps.getTeamAutoScheduler?.() ?? null;
+      if (scheduler) {
+        try {
+          await scheduler.stop();
+        } catch { /* scheduler already stopped */ }
+      }
+    }
+    if (!target.capabilities.runnablePreview && deps.previewManager) {
+      try {
+        await deps.previewManager.stopAll();
+      } catch { /* previews already stopped */ }
+    }
+
+    // Step 3: archive the whole previous TeamState with a roles snapshot.
+    // The phase flip is persisted BEFORE the archive write so a crash between
+    // the two leaves an unambiguous "archive may exist" state for the resume
+    // path (file existence check).
+    setPhase("archiving");
+    const sourceState = getTeamState();
+    if (sourceState) {
+      await saveTeamState(sourceState);
+      const sourceProfile = getActiveProfile();
+      await archiveTeamState(sourceState, {
+        id: sourceProfile.id,
+        name: sourceProfile.name,
+        nameZh: sourceProfile.nameZh,
+        version: sourceProfile.version,
+        roles: sourceProfile.roles,
+      });
+      logger.info(
+        `Controller: archived team "${sourceState.teamName}" (profile ${sourceProfile.id}, `
+          + `${Object.keys(sourceState.tasks).length} task(s))${drain.timedOut ? " after drain timeout" : ""}`,
+      );
+    }
+  }
+
+  // Step 4: fresh TeamState for the target profile, conditioned on its
+  // capability switches (design 2.3: banking omits repo/previews/reports).
+  // setActiveProfileId and the state mutation below are both synchronous, so
+  // no request can observe the new state against the old profile.
+  const repoState = target.capabilities.git
+    ? await ensureControllerGitRepo(config, logger).catch((err) => {
+        logger.warn(`Controller: failed to prepare git collaboration repo for profile "${target.id}": ${err instanceof Error ? err.message : String(err)}`);
+        return null;
+      })
+    : null;
+  setActiveProfileId(target.id);
+  const newCreatedAt = Date.now();
+  updateTeamState((state) => {
+    state.profileId = target.id;
+    state.teamName = target.name;
+    state.workers = {};
+    state.tasks = {};
+    state.controllerRuns = {};
+    state.projects = {};
+    state.messages = [];
+    state.clarifications = {};
+    state.provisioning = { workers: {} };
+    if (target.capabilities.git && repoState) {
+      state.repo = repoState;
+    } else {
+      delete state.repo;
+    }
+    if (target.capabilities.runnablePreview) {
+      state.previews = {};
+    } else {
+      delete state.previews;
+    }
+    if (target.capabilities.deliveryReview) {
+      state.reports = {};
+    } else {
+      delete state.reports;
+    }
+    state.createdAt = newCreatedAt;
+  });
+  await saveTeamState(getTeamState()!);
+
+  // Step 5: warm the new profile's warmupRoles through the provisioning
+  // pipeline (launch dispatch; registration/readiness tracking continues in
+  // the background exactly like a cold start).
+  setPhase("warming");
+  await saveTeamState(getTeamState()!);
+  workerProvisioningManager?.setReconcileSuspended(false);
+  if (workerProvisioningManager?.isEnabled() && target.warmupRoles.length > 0) {
+    await workerProvisioningManager
+      .warmRolesForTeamSwitch(target.warmupRoles, `profile switch warmup (${target.id})`)
+      .catch((err) => logger.warn(`Controller: profile switch warmup failed: ${err instanceof Error ? err.message : String(err)}`));
+  }
+
+  // Step 6: settle - clear the transition, persist, announce.
+  updateTeamState((state) => {
+    delete state.transition;
+  });
+  await saveTeamState(getTeamState()!);
+  wsServer.broadcastUpdate({ type: "team.switch_completed", data: { profileId: target.id } });
+  logger.info(`Controller: team profile switch to "${target.id}" completed`);
+}
+
+/**
+ * Design 2.3 crash semantics: on controller startup, an unfinished persisted
+ * transition is resumed idempotently. If the archive file for this switch
+ * already exists AND the phase is at/after "archiving", jump straight to
+ * building the new team (skipArchive); otherwise re-run the drain from
+ * scratch (drain is idempotent - a completed drain simply finds no in-flight
+ * tasks). Returns true when a transition was resumed.
+ */
+export async function resumeTeamProfileSwitch(deps: ControllerHttpDeps): Promise<boolean> {
+  const state = deps.getTeamState();
+  const transition = state?.transition;
+  if (!state || !transition) {
+    return false;
+  }
+  if (!hasProfile(transition.targetProfileId)) {
+    // Same red line as restoring an unknown profileId (design 2.2): a team
+    // mid-switch to an unavailable profile must never silently land on a
+    // different profile.
+    throw new Error(
+      `Controller: interrupted team profile switch references profile "${transition.targetProfileId}", which is not available in this installation. `,
+    );
+  }
+  deps.logger.info(
+    `Controller: resuming interrupted team profile switch to "${transition.targetProfileId}" (phase: ${transition.phase}, started at ${new Date(transition.startedAt).toISOString()})`,
+  );
+  // A persisted state whose profileId already equals the target means step 4
+  // flipped the team identity onto the NEW team. Step 4 strictly follows the
+  // completed archive write in the same execution (the archive file lands
+  // atomically before step 4 runs), so that flip PROVES the archive exists.
+  // This covers both phase "warming" and the ghost-archive window between
+  // the step-4 flip reaching disk and the warming phase persisting - on disk
+  // that window reads as (phase "archiving", profileId = target), where
+  // looking up the SOURCE-named archive file with state.profileId would miss
+  // it and a re-drain would seal the already-emptied NEW team as a ghost
+  // archive entry. (Alternative considered: persisting a sourceProfileId on
+  // the transition - rejected; this flip predicate is the identical proof
+  // without transition-shape or migration churn, and it also degrades the
+  // manually-corrupted (draining, target) combination the same safe way.)
+  const step4Flipped = state.profileId === transition.targetProfileId;
+  const archiveExists = step4Flipped
+    || transition.phase === "warming"
+    || Boolean(await findTeamSwitchArchive(state.profileId, transition.startedAt));
+  const phaseAtOrAfterArchive = transition.phase === "archiving" || transition.phase === "warming";
+  await executeTeamProfileSwitch(deps, transition.targetProfileId, {
+    skipArchive: archiveExists && (phaseAtOrAfterArchive || step4Flipped),
+  });
+  return true;
+}
+
 export async function autoAssignPendingTasks(
   deps: ControllerHttpDeps,
   preferredWorkerId?: string,
@@ -4651,6 +4969,13 @@ export async function autoAssignPendingTasks(
   const attemptedPairs = new Set<string>();
   const assignedTasks: TaskInfo[] = [];
   const maxConcurrent = config.maxConcurrentTasks;
+
+  // Phase 2.1 (design 2.3 concurrency matrix): while a profile switch
+  // transition is active, never dispatch new work - pending tasks belong to
+  // the outgoing team and are sealed into its archive.
+  if (getTeamState()?.transition) {
+    return assignedTasks;
+  }
 
   while (true) {
     const state = getTeamState();
@@ -4927,6 +5252,53 @@ async function handleRequest(
   const { config, logger, getTeamState, updateTeamState, taskRouter, messageRouter, wsServer } = deps;
   const requestUrl = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   const currentState = getTeamState();
+
+  // ==================== Profile switch concurrency matrix ====================
+  // Phase 2.1 (design 2.3): while a switch transition is in flight -
+  //   - worker register/heartbeat -> 409 with an explicit backoff hint (the
+  //     design contract for existing workers; they retry on their interval
+  //     and re-register after team.switch_completed);
+  //   - task submission POSTs -> 503 + Retry-After;
+  //   - a second POST /api/v1/team/profile -> 409 (handled inside that
+  //     endpoint, which owns the step-0 validation order);
+  // Worker result/progress endpoints intentionally stay open: the drain step
+  // waits for exactly those in-flight completions.
+  const activeTransition = currentState?.transition;
+  if (activeTransition) {
+    if (req.method === "POST" && (pathname === WORKER_REGISTER_PATH || WORKER_HEARTBEAT_PATH_RE.test(pathname))) {
+      sendJson(res, 409, {
+        error: `Team profile switch to "${activeTransition.targetProfileId}" is in progress (phase: ${activeTransition.phase}); worker registration and heartbeat are temporarily rejected - back off and retry`,
+        retryAfterMs: SWITCH_WORKER_BACKOFF_HINT_MS,
+        transition: { phase: activeTransition.phase, targetProfileId: activeTransition.targetProfileId },
+      });
+      return;
+    }
+    if (
+      req.method === "POST" &&
+      (TRANSITION_BLOCKED_TASK_POST_PATHS.has(pathname) || TRANSITION_BLOCKED_TASK_POST_PATH_RES.some((re) => re.test(pathname)))
+    ) {
+      res.setHeader("Retry-After", String(SWITCH_TASK_SUBMISSION_RETRY_AFTER_SECONDS));
+      sendJson(res, 503, {
+        error: `Team profile switch to "${activeTransition.targetProfileId}" is in progress (phase: ${activeTransition.phase}); task submission is temporarily unavailable - retry after the switch completes`,
+        retryAfterSeconds: SWITCH_TASK_SUBMISSION_RETRY_AFTER_SECONDS,
+        transition: { phase: activeTransition.phase, targetProfileId: activeTransition.targetProfileId },
+      });
+      return;
+    }
+    // Review fix: a bundle import during a transition would run after the
+    // step-4 flip and stamp a repo field onto the new team even for profiles
+    // with git disabled - the switch itself re-prepares repo state for
+    // git-capable targets, so imports wait it out.
+    if (req.method === "POST" && pathname === "/api/v1/repo/import") {
+      res.setHeader("Retry-After", String(SWITCH_TASK_SUBMISSION_RETRY_AFTER_SECONDS));
+      sendJson(res, 503, {
+        error: `Team profile switch to "${activeTransition.targetProfileId}" is in progress (phase: ${activeTransition.phase}); repo import is temporarily unavailable - retry after the switch completes`,
+        retryAfterSeconds: SWITCH_TASK_SUBMISSION_RETRY_AFTER_SECONDS,
+        transition: { phase: activeTransition.phase, targetProfileId: activeTransition.targetProfileId },
+      });
+      return;
+    }
+  }
 
   // ==================== Web UI ====================
   if (req.method === "GET" && pathname === "/") {
@@ -6209,24 +6581,42 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
       workerId: requestedBy,
       role: requestedByRole,
     }, deps);
-    const result = await runControllerIntake(
-      buildControllerParallelHelpMessage(currentTask, getTeamState(), {
-        requestedBy,
-        requestedByRole,
-        targetRole,
-        reason,
-        requestedWorkerCount,
-        suggestedWorkstreams,
-      }),
-      sessionKey,
-      deps,
-      {
-        source: "task_follow_up",
-        sourceTaskId: currentTask.id,
-        sourceTaskTitle: currentTask.title,
-      },
-    );
-    sendJson(res, 201, result);
+    try {
+      const result = await runControllerIntake(
+        buildControllerParallelHelpMessage(currentTask, getTeamState(), {
+          requestedBy,
+          requestedByRole,
+          targetRole,
+          reason,
+          requestedWorkerCount,
+          suggestedWorkstreams,
+        }),
+        sessionKey,
+        deps,
+        {
+          source: "task_follow_up",
+          sourceTaskId: currentTask.id,
+          sourceTaskTitle: currentTask.title,
+        },
+      );
+      sendJson(res, 201, result);
+    } catch (err) {
+      if (err instanceof ControllerIntakeSwitchInProgressError) {
+        // Backstop for the race between the URL-level gate and the intake
+        // entry; same 503 + Retry-After shape as the gate.
+        res.setHeader("Retry-After", String(SWITCH_TASK_SUBMISSION_RETRY_AFTER_SECONDS));
+        sendJson(res, 503, {
+          error: err.message,
+          retryAfterSeconds: SWITCH_TASK_SUBMISSION_RETRY_AFTER_SECONDS,
+          transition: {
+            phase: err.transition.phase,
+            targetProfileId: err.transition.targetProfileId,
+          },
+        });
+        return;
+      }
+      throw err;
+    }
     return;
   }
 
@@ -6393,6 +6783,21 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
       const result = await runControllerIntake(message, sessionKey, deps);
       sendJson(res, 200, result);
     } catch (err) {
+      if (err instanceof ControllerIntakeSwitchInProgressError) {
+        // Same response shape as the URL-level transition gate (503 +
+        // Retry-After); reachable here when a switch starts between the gate
+        // and the intake entry (the gate reads the state once per request).
+        res.setHeader("Retry-After", String(SWITCH_TASK_SUBMISSION_RETRY_AFTER_SECONDS));
+        sendJson(res, 503, {
+          error: err.message,
+          retryAfterSeconds: SWITCH_TASK_SUBMISSION_RETRY_AFTER_SECONDS,
+          transition: {
+            phase: err.transition.phase,
+            targetProfileId: err.transition.targetProfileId,
+          },
+        });
+        return;
+      }
       const errorMessage = err instanceof Error ? err.message : String(err);
       logger.warn(`Controller: intake failed for ${sessionKey}: ${errorMessage}`);
       sendError(res, errorMessage.includes("timed out") ? 504 : 500, errorMessage);
@@ -6905,6 +7310,119 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
   // GET /api/v1/roles
   if (req.method === "GET" && pathname === "/api/v1/roles") {
     sendJson(res, 200, { roles: getActiveRoles(), defaultRole: getActiveDefaultRole() });
+    return;
+  }
+
+  // GET /api/v1/profiles — list the available team profile packages
+  // (Phase 2.1, design section 4: the switcher UI reads this list).
+  if (req.method === "GET" && pathname === "/api/v1/profiles") {
+    const profiles = [...BUILTIN_PROFILES.values()]
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map((profile) => ({
+        id: profile.id,
+        name: profile.name,
+        nameZh: profile.nameZh,
+        icon: profile.icon,
+        industry: profile.industry,
+        description: profile.description,
+        roleCount: profile.roles.length,
+        version: profile.version,
+        ...(profile.reviewedBy ? { reviewedBy: profile.reviewedBy } : {}),
+      }));
+    sendJson(res, 200, { profiles });
+    return;
+  }
+
+  // GET /api/v1/team/profile — active profile detail incl. capabilities
+  // (design section 4: UI hides capability-gated entries based on this).
+  if (req.method === "GET" && pathname === "/api/v1/team/profile") {
+    const state = getTeamState();
+    const profile = getActiveProfile();
+    sendJson(res, 200, {
+      profileId: state?.profileId ?? profile.id,
+      profile,
+      teamName: state?.teamName ?? config.teamName,
+      transition: state?.transition ?? null,
+    });
+    return;
+  }
+
+  // POST /api/v1/team/profile { profileId } — six-step switch semantics
+  // (Phase 2.1, design section 2.3). Returns 202; progress arrives via the
+  // team.switch_started / team.switch_completed WS events.
+  if (req.method === "POST" && pathname === "/api/v1/team/profile") {
+    const body = await parseJsonBody(req);
+    const profileId = typeof body.profileId === "string" ? body.profileId.trim() : "";
+    if (!profileId || !hasProfile(profileId)) {
+      sendError(
+        res,
+        404,
+        `unknown team profile "${profileId || "<empty>"}" (available: ${[...BUILTIN_PROFILES.keys()].sort().join(", ")})`,
+      );
+      return;
+    }
+    const state = getTeamState();
+    if (!state) {
+      sendError(res, 503, "Team state not loaded");
+      return;
+    }
+    if (state.transition) {
+      sendJson(res, 409, {
+        error: `a team profile switch to "${state.transition.targetProfileId}" is already in progress (phase: ${state.transition.phase})`,
+        transition: state.transition,
+      });
+      return;
+    }
+
+    // Step 1: persist the transition (the crash-resume truth) and announce.
+    // The check-and-set above plus this mutation run without an await in
+    // between, so a concurrent second POST observes the transition (409).
+    const previousProfileId = state.profileId;
+    updateTeamState((s) => {
+      s.transition = { phase: "draining", targetProfileId: profileId, startedAt: Date.now() };
+    });
+    try {
+      await saveTeamState(state);
+    } catch (err) {
+      // Durability failed: roll the in-memory transition back so the team is
+      // never wedged behind a transition the crash-resume path cannot see.
+      // Nothing has been broadcast yet, so no external observer was told a
+      // switch had started.
+      updateTeamState((s) => {
+        delete s.transition;
+      });
+      sendError(res, 500, `failed to persist the team profile switch transition: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    wsServer.broadcastUpdate({ type: "team.switch_started", data: { profileId, previousProfileId } });
+    logger.info(`Controller: team profile switch started - "${previousProfileId}" -> "${profileId}"`);
+
+    void executeTeamProfileSwitch(deps, profileId).catch((err) => {
+      logger.error(`Controller: team profile switch to "${profileId}" failed: ${err instanceof Error ? err.message : String(err)}`);
+      // Never leave the team wedged in a transition: clear it so whichever
+      // team the state now holds keeps serving and the switch can be
+      // re-issued. The archive (if step 3 ran) keeps the previous team. Also
+      // lift the provisioning reconcile suspension so the manager keeps
+      // operating for whichever team survived.
+      deps.workerProvisioningManager?.setReconcileSuspended(false);
+      updateTeamState((s) => {
+        if (s.transition?.targetProfileId === profileId) {
+          delete s.transition;
+        }
+      });
+      void saveTeamState(getTeamState()!).catch(() => undefined);
+    });
+
+    sendJson(res, 202, { status: "switching", profileId, transition: state.transition });
+    return;
+  }
+
+  // GET /api/v1/archived-teams — archived team metadata list
+  // (Phase 2.1, design section 4: profileId/teamName/time/taskCount; detail
+  // queries and the archive UI stay v1.1).
+  if (req.method === "GET" && pathname === "/api/v1/archived-teams") {
+    const archives = await listArchivedTeams();
+    sendJson(res, 200, { archives });
     return;
   }
 
