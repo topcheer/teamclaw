@@ -2740,7 +2740,29 @@ async function continueControllerWorkflow(task: TaskInfo, deps: ControllerHttpDe
   });
 }
 
-async function runControllerIntake(
+/**
+ * Phase 2.1 review fix (design 2.3 concurrency matrix): intake runs create
+ * tasks and burn a controller LLM pass, so they are refused while a profile
+ * switch transition is in flight - at the runControllerIntake ENTRY, which is
+ * the single funnel for URL submissions AND internal callers (task-completion
+ * follow-ups, parallel-help, clarification resumes) that bypass the URL-level
+ * 503 gate. The message deliberately avoids every token of
+ * CONTROLLER_INTAKE_RETRYABLE_ERROR_PATTERN: a transition rejection must fail
+ * fast, never retry its way into the switched team.
+ */
+export class ControllerIntakeSwitchInProgressError extends Error {
+  readonly transition: TeamSwitchTransition;
+
+  constructor(transition: TeamSwitchTransition) {
+    super(
+      `Controller intake rejected: a team profile switch to "${transition.targetProfileId}" is in progress (phase: ${transition.phase}) - retry after the switch completes`,
+    );
+    this.name = "ControllerIntakeSwitchInProgressError";
+    this.transition = transition;
+  }
+}
+
+export async function runControllerIntake(
   message: string,
   sessionKey: string,
   deps: ControllerHttpDeps,
@@ -2750,6 +2772,10 @@ async function runControllerIntake(
     sourceTaskTitle?: string;
   },
 ): Promise<{ sessionKey: string; runId: string; reply: string; controllerRunId: string }> {
+  const activeTransition = deps.getTeamState()?.transition;
+  if (activeTransition) {
+    throw new ControllerIntakeSwitchInProgressError(activeTransition);
+  }
   const normalizedSessionKey = normalizeControllerIntakeSessionKey(sessionKey);
   return withSerializedControllerIntake(normalizedSessionKey, async () => {
     let lastError: Error | null = null;
@@ -4673,7 +4699,14 @@ const TRANSITION_BLOCKED_TASK_POST_PATHS = new Set([
   "/api/v1/controller/intake",
   "/api/v1/controller/manifest",
 ]);
-const TRANSITION_BLOCKED_TASK_POST_PATH_RES = [/^\/api\/v1\/tasks\/[^/]+\/assign$/];
+// Review fix: manual assign and parallel-help both spawn work for the
+// outgoing team (parallel-help funnels into runControllerIntake, which also
+// carries its own entry-level backstop); task handoff stays open - it is part
+// of in-flight completion the drain waits on.
+const TRANSITION_BLOCKED_TASK_POST_PATH_RES = [
+  /^\/api\/v1\/tasks\/[^/]+\/assign$/,
+  /^\/api\/v1\/tasks\/[^/]+\/parallel-help$/,
+];
 const WORKER_REGISTER_PATH = "/api/v1/workers/register";
 const WORKER_HEARTBEAT_PATH_RE = /^\/api\/v1\/workers\/[^/]+\/heartbeat$/;
 
@@ -4775,6 +4808,11 @@ export async function executeTeamProfileSwitch(
     }
     // Capability teardown for subsystems the target profile switches off
     // (minimal Phase 2.3 preview; the full 404 short-circuit lands in 2.3).
+    // NOTE: teardown is one-directional at runtime. Switching a capability
+    // back ON does not (re)start its subsystem here - TeamAuto scheduling
+    // and preview restoration are wired at controller startup only, so an
+    // off -> on switch (e.g. minimal-bank -> software-rd) takes effect for
+    // those subsystems after the next gateway restart.
     if (!target.capabilities.teamauto) {
       const scheduler = deps.getTeamAutoScheduler?.() ?? null;
       if (scheduler) {
@@ -5242,6 +5280,19 @@ async function handleRequest(
       res.setHeader("Retry-After", String(SWITCH_TASK_SUBMISSION_RETRY_AFTER_SECONDS));
       sendJson(res, 503, {
         error: `Team profile switch to "${activeTransition.targetProfileId}" is in progress (phase: ${activeTransition.phase}); task submission is temporarily unavailable - retry after the switch completes`,
+        retryAfterSeconds: SWITCH_TASK_SUBMISSION_RETRY_AFTER_SECONDS,
+        transition: { phase: activeTransition.phase, targetProfileId: activeTransition.targetProfileId },
+      });
+      return;
+    }
+    // Review fix: a bundle import during a transition would run after the
+    // step-4 flip and stamp a repo field onto the new team even for profiles
+    // with git disabled - the switch itself re-prepares repo state for
+    // git-capable targets, so imports wait it out.
+    if (req.method === "POST" && pathname === "/api/v1/repo/import") {
+      res.setHeader("Retry-After", String(SWITCH_TASK_SUBMISSION_RETRY_AFTER_SECONDS));
+      sendJson(res, 503, {
+        error: `Team profile switch to "${activeTransition.targetProfileId}" is in progress (phase: ${activeTransition.phase}); repo import is temporarily unavailable - retry after the switch completes`,
         retryAfterSeconds: SWITCH_TASK_SUBMISSION_RETRY_AFTER_SECONDS,
         transition: { phase: activeTransition.phase, targetProfileId: activeTransition.targetProfileId },
       });
@@ -6530,24 +6581,42 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
       workerId: requestedBy,
       role: requestedByRole,
     }, deps);
-    const result = await runControllerIntake(
-      buildControllerParallelHelpMessage(currentTask, getTeamState(), {
-        requestedBy,
-        requestedByRole,
-        targetRole,
-        reason,
-        requestedWorkerCount,
-        suggestedWorkstreams,
-      }),
-      sessionKey,
-      deps,
-      {
-        source: "task_follow_up",
-        sourceTaskId: currentTask.id,
-        sourceTaskTitle: currentTask.title,
-      },
-    );
-    sendJson(res, 201, result);
+    try {
+      const result = await runControllerIntake(
+        buildControllerParallelHelpMessage(currentTask, getTeamState(), {
+          requestedBy,
+          requestedByRole,
+          targetRole,
+          reason,
+          requestedWorkerCount,
+          suggestedWorkstreams,
+        }),
+        sessionKey,
+        deps,
+        {
+          source: "task_follow_up",
+          sourceTaskId: currentTask.id,
+          sourceTaskTitle: currentTask.title,
+        },
+      );
+      sendJson(res, 201, result);
+    } catch (err) {
+      if (err instanceof ControllerIntakeSwitchInProgressError) {
+        // Backstop for the race between the URL-level gate and the intake
+        // entry; same 503 + Retry-After shape as the gate.
+        res.setHeader("Retry-After", String(SWITCH_TASK_SUBMISSION_RETRY_AFTER_SECONDS));
+        sendJson(res, 503, {
+          error: err.message,
+          retryAfterSeconds: SWITCH_TASK_SUBMISSION_RETRY_AFTER_SECONDS,
+          transition: {
+            phase: err.transition.phase,
+            targetProfileId: err.transition.targetProfileId,
+          },
+        });
+        return;
+      }
+      throw err;
+    }
     return;
   }
 
@@ -6714,6 +6783,21 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
       const result = await runControllerIntake(message, sessionKey, deps);
       sendJson(res, 200, result);
     } catch (err) {
+      if (err instanceof ControllerIntakeSwitchInProgressError) {
+        // Same response shape as the URL-level transition gate (503 +
+        // Retry-After); reachable here when a switch starts between the gate
+        // and the intake entry (the gate reads the state once per request).
+        res.setHeader("Retry-After", String(SWITCH_TASK_SUBMISSION_RETRY_AFTER_SECONDS));
+        sendJson(res, 503, {
+          error: err.message,
+          retryAfterSeconds: SWITCH_TASK_SUBMISSION_RETRY_AFTER_SECONDS,
+          transition: {
+            phase: err.transition.phase,
+            targetProfileId: err.transition.targetProfileId,
+          },
+        });
+        return;
+      }
       const errorMessage = err instanceof Error ? err.message : String(err);
       logger.warn(`Controller: intake failed for ${sessionKey}: ${errorMessage}`);
       sendError(res, errorMessage.includes("timed out") ? 504 : 500, errorMessage);
@@ -7297,7 +7381,19 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
     updateTeamState((s) => {
       s.transition = { phase: "draining", targetProfileId: profileId, startedAt: Date.now() };
     });
-    await saveTeamState(state);
+    try {
+      await saveTeamState(state);
+    } catch (err) {
+      // Durability failed: roll the in-memory transition back so the team is
+      // never wedged behind a transition the crash-resume path cannot see.
+      // Nothing has been broadcast yet, so no external observer was told a
+      // switch had started.
+      updateTeamState((s) => {
+        delete s.transition;
+      });
+      sendError(res, 500, `failed to persist the team profile switch transition: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
     wsServer.broadcastUpdate({ type: "team.switch_started", data: { profileId, previousProfileId } });
     logger.info(`Controller: team profile switch started - "${previousProfileId}" -> "${profileId}"`);
 

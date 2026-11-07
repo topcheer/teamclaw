@@ -398,6 +398,22 @@ async function waitForSwitchCompletion(call, timeoutMs = 10000) {
     const assignRes = await scenario.call("POST", "/api/v1/tasks/task-pending/assign", { workerId: "w-dev" });
     assert.equal(assignRes.status, 503, "manual task assignment during a transition must be 503");
 
+    // Review fix: parallel-help funnels into runControllerIntake and would
+    // spawn new work for the outgoing team - gated like the other submission
+    // entry points (task handoff intentionally stays open).
+    const parallelHelpRes = await scenario.call("POST", "/api/v1/tasks/task-pending/parallel-help", {
+      requestedBy: "w-dev", reason: "need more capacity",
+    });
+    assert.equal(parallelHelpRes.status, 503, "parallel-help during a transition must be 503");
+    assert.equal(parallelHelpRes.headers.get("retry-after"), "5");
+
+    // Review fix: repo import during a transition would stamp a repo field
+    // onto the post-flip team even for git-disabled profiles.
+    const repoImportRes = await scenario.call("POST", "/api/v1/repo/import", {});
+    assert.equal(repoImportRes.status, 503, "repo import during a transition must be 503");
+    assert.equal(repoImportRes.headers.get("retry-after"), "5");
+    assert.match(repoImportRes.json.error, /repo import is temporarily unavailable/);
+
     // Worker register/heartbeat -> 409 with backoff hint.
     const registerRes = await scenario.call("POST", "/api/v1/workers/register", {
       workerId: "w-new", role: "credit-officer", label: "credit", url: "http://127.0.0.1:8",
@@ -417,10 +433,39 @@ async function waitForSwitchCompletion(call, timeoutMs = 10000) {
     assert.equal(profileRes.status, 200);
     assert.equal(profileRes.json.transition.phase, "draining", "GET /team/profile exposes the transition");
 
+    // Review fix: the runControllerIntake ENTRY rejects while a transition is
+    // active - the single funnel covering URL submissions AND internal
+    // callers (task-completion follow-ups, clarification resumes) that
+    // bypass the URL gate. It must fail before any runtime/LLM work and
+    // without matching the intake retry pattern (no silent retry into the
+    // switched team).
+    {
+      const runtimeProbe = { subagent: { run: async () => { throw new Error("runtime must not be reached"); } } };
+      const probeDeps = { ...scenario.deps, runtime: runtimeProbe };
+      await assert.rejects(
+        () => httpMod.runControllerIntake("follow-up message", "teamclaw-controller-web:probe", probeDeps),
+        (err) => err instanceof httpMod.ControllerIntakeSwitchInProgressError
+          && /profile switch to "minimal-bank" is in progress/.test(err.message)
+          && err.transition.phase === "draining",
+        "runControllerIntake must reject with the typed transition error before touching runtime",
+      );
+    }
+
     // Transition cleared -> the gate lifts.
     scenario.deps.updateTeamState((s) => { delete s.transition; });
     const afterRes = await scenario.call("POST", "/api/v1/tasks", { title: "allowed task" });
     assert.equal(afterRes.status, 201, "task submission works again once the transition is gone");
+    {
+      // Same funnel with the transition gone: the entry check passes and the
+      // run proceeds into runtime (the probe marks how far it got).
+      const runtimeProbe = { subagent: { run: async () => { throw new Error("runtime reached as expected"); } } };
+      const probeDeps = { ...scenario.deps, runtime: runtimeProbe };
+      await assert.rejects(
+        () => httpMod.runControllerIntake("hello", "teamclaw-controller-web:probe", probeDeps),
+        /runtime reached as expected/,
+        "with no transition the intake entry must let the run proceed to runtime",
+      );
+    }
   } finally {
     await scenario.close();
   }
