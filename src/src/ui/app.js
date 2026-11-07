@@ -9,7 +9,16 @@
   let terminalTasksVisible = 20;
   let activeTab = "tasks";
   let teamState = { workers: [], tasks: [], controllerRuns: [], messages: [], clarifications: [], modelReadiness: null, externalWorkerInstall: null };
-  let selectedExternalWorkerRole = "developer";
+  // Role registry mirror (GET /api/v1/roles) — single data source for the
+  // manual-task role options, kickoff icons, and the external-worker role
+  // default. Kept empty until the first successful /roles response; renders
+  // that need it degrade to the Auto-assign option / the generic icon.
+  let roleRegistry = [];
+  // Optional default role id advertised by the backend (e.g. profile default
+  // once /roles returns profile content); empty when the field is absent,
+  // in which case the first registry entry is the default.
+  let roleDefaultId = "";
+  let selectedExternalWorkerRole = "";
   let selectedExternalWorkerDiscoveryMode = "mdns";
   let externalWorkerInstallVisible = false;
   let selectedTaskId = null;
@@ -1019,19 +1028,12 @@
     });
   }
 
-  var ROLE_ICONS = {
-    architect: "🏗️",
-    developer: "💻",
-    designer: "🎨",
-    "security-engineer": "🔒",
-    qa: "🧪",
-    devops: "⚙️",
-    "tech-lead": "👨‍💻",
-    "data-engineer": "📊",
-    "ml-engineer": "🤖",
-    "infra-engineer": "🖧",
-    "dba": "🗄️",
-  };
+  // Role icons come from the /roles registry (RoleDefinition.icon) instead of
+  // a hand-maintained per-UI map, so profile role sets render their own icons.
+  function roleIcon(roleId) {
+    var role = roleRegistry.find(function (entry) { return entry.id === roleId; });
+    return (role && role.icon) || "👤";
+  }
 
   function renderKickoffMeetingPanel(kickoffPlan) {
     if (!kickoffPlan || !Array.isArray(kickoffPlan.assessments) || kickoffPlan.assessments.length === 0) {
@@ -1055,7 +1057,7 @@
       "</div>";
 
     var roleCards = assessments.map(function (a) {
-      var icon = ROLE_ICONS[a.role] || "👤";
+      var icon = roleIcon(a.role);
       var statusCls = a.needed ? "kickoff-role-needed" : "kickoff-role-dismissed";
       var statusLabel = a.needed ? "Confirmed" : "Not Needed";
 
@@ -1208,7 +1210,7 @@
       if (manifest.requiredRoles && manifest.requiredRoles.length) {
         reqLines.push('<div class="planning-req-section"><div class="planning-req-label">' + escapeHtml(t("planning.requiredRoles")) + "</div>");
         reqLines.push('<div class="kickoff-deps">' + manifest.requiredRoles.map(function (r) {
-          var icon = ROLE_ICONS[r] || "👤";
+          var icon = roleIcon(r);
           return '<span class="kickoff-dep-chip">' + icon + " " + escapeHtml(r) + "</span>";
         }).join("") + "</div></div>");
       }
@@ -1286,7 +1288,7 @@
 
     // Role cards
     assessments.forEach(function (a) {
-      var icon = ROLE_ICONS[a.role] || "👤";
+      var icon = roleIcon(a.role);
       var statusCls = a.needed ? "kickoff-role-needed" : "kickoff-role-dismissed";
       var statusLabel = a.needed ? "Confirmed" : "Not Needed";
 
@@ -2057,7 +2059,7 @@
       return;
     }
     if (!roles.some(function (role) { return role.id === selectedExternalWorkerRole; })) {
-      selectedExternalWorkerRole = roles[0].id;
+      selectedExternalWorkerRole = resolveDefaultRoleId(roles);
     }
     if (selectedExternalWorkerDiscoveryMode === "manual" && !info.recommendedControllerUrl) {
       selectedExternalWorkerDiscoveryMode = "mdns";
@@ -2335,10 +2337,19 @@
     try {
       const statusRes = await apiGet("/team/status");
       let rolesRes = { roles: [] };
+      let rolesLoaded = false;
       try {
         rolesRes = await apiGet("/roles");
+        rolesLoaded = true;
       } catch (rolesErr) {
         console.error("Failed to load roles:", rolesErr);
+      }
+      if (rolesLoaded) {
+        // Keep the last known registry when a later refresh fails so the
+        // manual-task options and role icons survive transient /roles errors.
+        roleRegistry = Array.isArray(rolesRes.roles) ? rolesRes.roles : [];
+        roleDefaultId = typeof rolesRes.defaultRole === "string" ? rolesRes.defaultRole : "";
+        renderTaskRoleOptions();
       }
 
       teamState = {
@@ -3101,6 +3112,38 @@
         "</div>"
       );
     }).join("");
+  }
+
+  // Manual-task form: role options are generated from the /roles registry
+  // (rendered on each refresh); the Auto-assign placeholder stays in the
+  // static HTML so i18n keeps applying to it. Preserves the current selection
+  // across refreshes when the role is still offered.
+  function renderTaskRoleOptions() {
+    const select = $("#task-role");
+    if (!select) return;
+    const previous = select.value;
+    while (select.options.length > 1) {
+      select.remove(1);
+    }
+    roleRegistry.forEach(function (role) {
+      if (!role || typeof role.id !== "string" || !role.id) return;
+      const option = document.createElement("option");
+      option.value = role.id;
+      option.textContent = role.label || role.id;
+      select.appendChild(option);
+    });
+    if (previous && Array.prototype.some.call(select.options, function (option) { return option.value === previous; })) {
+      select.value = previous;
+    }
+  }
+
+  // Default role for the external-worker install card: prefer a default the
+  // backend advertises on /roles, else fall back to the first registry entry.
+  function resolveDefaultRoleId(roles) {
+    if (roleDefaultId && roles.some(function (role) { return role.id === roleDefaultId; })) {
+      return roleDefaultId;
+    }
+    return roles.length > 0 ? roles[0].id : "";
   }
 
   function tabNameFromHash() {
