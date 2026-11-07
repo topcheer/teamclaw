@@ -1012,4 +1012,54 @@ assert.match(
   );
 }
 
+// OpenClaw startup detection must be retry-robust and must not degrade a
+// resolvable-but-busy binary into a full runtime install (#140):
+//   1. one retry of the `openclaw --help` probe with a short delay;
+//   2. exit-non-zero after retry is treated as installed-with-warning
+//      (surfaced as openClawProbeWarning), not not-installed;
+//   3. only spawn ENOENT (binary does not resolve) stays not-installed.
+{
+  assert.match(
+    desktopMainSource,
+    /async function probeOpenClawInstall\(\) \{[\s\S]*for \(let attempt = 0; attempt < 2; attempt\+\+\)[\s\S]*OPENCLAW_PROBE_RETRY_DELAY_MS/,
+    "desktop openclaw probe should retry the --help spawn once before deciding the runtime is missing",
+  );
+
+  assert.match(
+    desktopMainSource,
+    /kind === "error" && outcome\.error && outcome\.error\.code === "ENOENT"[\s\S]*return \{ installed: false, warning: null \}/,
+    "desktop openclaw probe should only report not-installed for spawn ENOENT (binary does not resolve)",
+  );
+
+  assert.match(
+    desktopMainSource,
+    /warning: `openclaw --help exited with \$\{(?:lastFailure\.code \?\? 1)\}`[\s\S]*after retry/,
+    "desktop openclaw probe should treat a resolvable-but-failing --help as installed-with-warning after the retry",
+  );
+
+  assert.match(
+    desktopMainSource,
+    /async function hasOpenClawInstalled\(\) \{\s*const probe = await probeOpenClawInstall\(\);\s*return probe\.installed;\s*\}/,
+    "desktop hasOpenClawInstalled should be a thin boolean wrapper over the retrying probe",
+  );
+
+  assert.match(
+    desktopMainSource,
+    /hasOpenClaw: probe\.installed,[\s\S]*openClawProbeWarning: probe\.warning,/,
+    "desktop local setup info should surface the probe warning to the renderer",
+  );
+
+  assert.doesNotMatch(
+    desktopMainSource,
+    /reject\(new Error\(`openclaw --help exited with/,
+    "desktop openclaw probe should not go through a rejecting promise wrapper that collapses failures into not-installed",
+  );
+
+  assert.match(
+    desktopRendererSource,
+    /openClawProbeWarning[\s\S]*"OpenClaw detected \(degraded\)"/,
+    "desktop bootstrap status pill should show a degraded-detected state when the probe warning is set",
+  );
+}
+
 console.log("PASS test-openclaw-workspace");

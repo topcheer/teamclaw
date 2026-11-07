@@ -87,31 +87,62 @@ function buildLocalInstallCommand(mode) {
   return `npx -y @teamclaws/teamclaw install --yes --install-mode ${selectedMode}`;
 }
 
-async function hasOpenClawInstalled() {
-  try {
-    await new Promise((resolve, reject) => {
+// Probe result:
+//   { installed: true,  warning: null }        - `openclaw --help` exited 0
+//   { installed: true,  warning: "<details>" } - binary resolved and ran but --help kept
+//       failing after one retry (e.g. transient failure while the gateway is busy
+//       provisioning workers). Treated as installed-with-warning instead of
+//       not-installed so the "reusing" short-circuit never silently degrades into a
+//       full runtime install attempt (#140).
+//   { installed: false, warning: null }        - binary does not resolve (spawn ENOENT):
+//       genuinely not installed; no retry is spent on this case.
+const OPENCLAW_PROBE_RETRY_DELAY_MS = 250;
+
+async function probeOpenClawInstall() {
+  let lastFailure = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, OPENCLAW_PROBE_RETRY_DELAY_MS));
+    }
+    const outcome = await new Promise((resolve) => {
       const child = spawn("openclaw", ["--help"], { stdio: "ignore", windowsHide: true });
-      child.on("error", reject);
-      child.on("exit", (code) => {
-        if (code === 0) {
-          resolve(true);
-          return;
-        }
-        reject(new Error(`openclaw --help exited with ${code ?? 1}`));
-      });
+      child.on("error", (error) => resolve({ kind: "error", error }));
+      child.on("exit", (code, signal) => resolve({ kind: "exit", code, signal }));
     });
-    return true;
-  } catch {
-    return false;
+    if (outcome.kind === "exit" && outcome.code === 0) {
+      return { installed: true, warning: null };
+    }
+    if (outcome.kind === "error" && outcome.error && outcome.error.code === "ENOENT") {
+      return { installed: false, warning: null };
+    }
+    lastFailure = outcome;
   }
+  if (lastFailure.kind === "exit") {
+    return {
+      installed: true,
+      warning: `openclaw --help exited with ${lastFailure.code ?? 1}` +
+        (lastFailure.signal ? ` (signal ${lastFailure.signal})` : "") +
+        " after retry",
+    };
+  }
+  return {
+    installed: true,
+    warning: `openclaw --help probe failed after retry: ${lastFailure.error && lastFailure.error.message ? lastFailure.error.message : "unknown error"}`,
+  };
+}
+
+async function hasOpenClawInstalled() {
+  const probe = await probeOpenClawInstall();
+  return probe.installed;
 }
 
 async function getLocalSetupInfo() {
-  const hasOpenClaw = await hasOpenClawInstalled();
+  const probe = await probeOpenClawInstall();
   return {
-    hasOpenClaw,
+    hasOpenClaw: probe.installed,
     openClawInstallCommand: "sandboxed: desktop-managed runtime (never global)",
     openClawQuickstartCommand: "openclaw onboard --flow quickstart --install-daemon",
+    openClawProbeWarning: probe.warning,
     modes: LOCAL_SETUP_MODES.map((entry) => ({
       ...entry,
       installCommand: buildLocalInstallCommand(entry.id),
@@ -723,7 +754,12 @@ async function standaloneBinary() {
   if (bundled) return bundled;
   const sandboxBin = path.join(app.getPath("userData"), "runtime", "node_modules", ".bin", "openclaw");
   if (fsSync.existsSync(sandboxBin)) return sandboxBin;
-  if (await hasOpenClawInstalled()) return "openclaw";
+  // probeOpenClawInstall treats "binary resolves but --help fails under load"
+  // as installed-with-warning (#140) - the gateway can still be spawned; do
+  // not let a busy production gateway degrade this into the missing-runtime
+  // error path.
+  const probe = await probeOpenClawInstall();
+  if (probe.installed) return "openclaw";
   throw new Error("No OpenClaw runtime available - run the one-click install first.");
 }
 
