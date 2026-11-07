@@ -20,7 +20,9 @@ import {
   resolveTeamClawWorkspaceDir,
   TEAMCLAW_AGENT_ID,
 } from "../openclaw-workspace.js";
-import { ROLES, DEFAULT_ROLE } from "../roles.js";
+// Phase 1.3: the role universe and the fallback role come from the active
+// TeamProfile loader (software-rd baseline).
+import { getActiveRoleIds, getActiveDefaultRole } from "../profile-loader.js";
 import { inferTaskRole } from "./role-inference.js";
 import type {
   PluginConfig,
@@ -408,7 +410,7 @@ export class WorkerProvisioningManager {
     if (configured.length > 0) {
       return [...new Set(configured)];
     }
-    return [DEFAULT_ROLE];
+    return [getActiveDefaultRole()];
   }
 
   private async ensureStartupProvisioningPrerequisites(): Promise<void> {
@@ -695,7 +697,7 @@ export class WorkerProvisioningManager {
     const roleIds = new Set<RoleId>(
       this.deps.config.workerProvisioningRoles.length > 0
         ? this.deps.config.workerProvisioningRoles
-        : ROLES.map((role) => role.id),
+        : getActiveRoleIds(),
     );
 
     if (!state) {

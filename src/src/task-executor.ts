@@ -11,7 +11,8 @@ import {
   resolveTeamClawWorkspaceDir,
   resolveTeamClawProjectsDir,
 } from "./openclaw-workspace.js";
-import { getRole } from "./roles.js";
+// Phase 1.3: the executor role prompt comes from the active TeamProfile.
+import { getActiveRole } from "./profile-loader.js";
 import type { RoleId, TaskAssignmentPayload, TaskExecutionEventInput, WorkerTaskResultContract } from "./types.js";
 
 // Phase 1.2: the local TEAMCLAW_ROLE_IDS_TEXT copy that used to live here was
@@ -82,7 +83,7 @@ export type RoleTaskExecutorDeps = {
 
 export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
   const { runtime, logger, role, taskTimeoutMs, getSessionKey, getIdempotencyKey, reportExecutionEvent, reportCheckpoint } = deps;
-  const roleDef = getRole(role);
+  const roleDef = getActiveRole(role);
   const roleSystemPrompt = roleDef
     ? roleDef.systemPrompt
     : `You are a ${role} in a virtual software team. Complete the assigned task.`;

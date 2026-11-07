@@ -1,6 +1,10 @@
 import type { PluginConfig } from "./types.js";
 import { parsePluginConfig } from "./types.js";
-import { ROLE_IDS } from "./roles.js";
+// Phase 1.3: the enum is driven by the active TeamProfile (software-rd
+// baseline) instead of importing the roles.ts registry directly. The
+// manifest generator evaluates this file without imports and injects an
+// equivalent getActiveRoleIds binding backed by role-ids.ts.
+import { getActiveRoleIds } from "./profile-loader.js";
 import { TEAMCLAW_PUBLISHED_RUNTIME_IMAGE } from "./install-defaults.js";
 
 function buildConfigSchema() {
@@ -120,7 +124,7 @@ function buildConfigSchema() {
           description: "Preferred on-demand roles; task-required roles can still launch automatically. Empty means no preferred startup role list, so startup readiness falls back to a warm developer worker",
           items: {
             type: "string" as const,
-            enum: ROLE_IDS,
+            enum: getActiveRoleIds(),
           },
         },
         workerProvisioningMinPerRole: {

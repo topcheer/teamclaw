@@ -79,12 +79,20 @@ assert.deepEqual(extractRoleTokens("核 保"), [], "isolated single CJK characte
 const readSource = (rel) => fs.readFileSync(path.join(projectRoot, rel), "utf8");
 
 const provisioningSource = readSource(path.join("src", "src", "controller", "worker-provisioning.ts"));
-assert.match(provisioningSource, /import \{ ROLES, DEFAULT_ROLE \} from "\.\.\/roles\.js";/, "worker-provisioning imports DEFAULT_ROLE from the role registry");
+assert.match(
+  provisioningSource,
+  /import \{ getActiveRoleIds, getActiveDefaultRole \} from "\.\.\/profile-loader\.js";/,
+  "worker-provisioning imports the profile default role (Phase 1.3 active TeamProfile face)",
+);
 assert.doesNotMatch(provisioningSource, /return \["developer"\];/, "worker-provisioning startup fallback must not hardcode developer");
 
 const httpServerSource = readSource(path.join("src", "src", "controller", "http-server.ts"));
-assert.match(httpServerSource, /import \{ ROLES, DEFAULT_ROLE,/, "http-server imports DEFAULT_ROLE from the role registry");
-assert.match(httpServerSource, /assignedRole === DEFAULT_ROLE/, "http-server fallback title check uses DEFAULT_ROLE");
+assert.match(
+  httpServerSource,
+  /import \{[\s\S]*?getActiveDefaultRole,[\s\S]*?\} from "\.\.\/profile-loader\.js";/,
+  "http-server imports the profile default role from the profile loader (Phase 1.3)",
+);
+assert.match(httpServerSource, /assignedRole === getActiveDefaultRole\(\)/, "http-server fallback title check uses the profile default role");
 
 const typesSource = readSource(path.join("src", "src", "types.ts"));
 assert.match(typesSource, /import \{ DEFAULT_ROLE \} from "\.\/roles\.js";/, "types.ts imports DEFAULT_ROLE from the role registry");

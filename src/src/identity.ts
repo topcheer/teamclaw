@@ -2,7 +2,8 @@ import os from "node:os";
 import type { PluginLogger } from "../api.js";
 import type { PluginConfig, WorkerIdentity } from "./types.js";
 import { generateId, createRegistrationRequest } from "./protocol.js";
-import { getRole } from "./roles.js";
+// Phase 1.3: the worker role label/icon come from the active TeamProfile.
+import { getActiveRole } from "./profile-loader.js";
 import { loadWorkerIdentity, saveWorkerIdentity, clearWorkerIdentity } from "./state.js";
 import { MDnsBrowser } from "./discovery.js";
 
@@ -87,7 +88,7 @@ export class IdentityManager {
       return null;
     }
 
-    const roleDef = getRole(this.config.role);
+    const roleDef = getActiveRole(this.config.role);
     const workerId = requestedWorkerId ?? generateId();
     const controllerHost = new URL(controllerUrl).hostname;
     // Prefer explicit override (set by provisioner for Docker/K8s workers),
