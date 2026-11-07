@@ -24,9 +24,14 @@
 //   6. The gateway lifecycle pins that used to live in this file are kept:
 //      they are unrelated to roles but this was their only coverage.
 //
-// This file deliberately does NOT pin types.ts: the RoleId union shape is
-// owned by test-role-single-source.mjs and is being reworked (branded
-// string); the runtime set checks below cover membership either way.
+// types.ts is read only for the RoleId union MEMBER set (section 2 asserts
+// it equals the leaf list: tsc guards the leaf->union direction because the
+// role-ids.ts array literal must stay assignable to RoleId[], while this
+// test guards the union->leaf direction - a stale seed member would widen
+// the cast-free compile-time role whitelist beyond the runtime registry).
+// The union's FORM (closed set vs hybrid branded string, design v1.3) is
+// deliberately not pinned; test-role-single-source.mjs owns the types.ts
+// VALID_ROLES derivation pins.
 
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -126,6 +131,27 @@ async function runRoleRegistrySmoke() {
       `role ${role.id} must carry a non-empty label (untyped UI surfaces render labels from the registry)`,
     );
   }
+
+  // 2b. Seed-union membership equals the leaf list (form-tolerant: collect
+  //     the quoted literals of the `export type RoleId = ...;` declaration,
+  //     whatever the surrounding union shape - closed set or hybrid branded
+  //     arm, which contributes no quoted literal). tsc already rejects a
+  //     role id added to role-ids.ts without a matching union member; this
+  //     closes the reverse gap where a union member added without a leaf
+  //     entry compiles cleanly and widens the cast-free RoleId whitelist.
+  const typesSource = await readSource("src/src/types.ts");
+  const roleIdDeclaration = typesSource.match(/export type RoleId =([\s\S]*?);/);
+  assert.ok(
+    roleIdDeclaration,
+    "types.ts must declare the RoleId type as `export type RoleId = ...;` (membership asserted against the role-ids.ts leaf)",
+  );
+  const unionMembers = [...roleIdDeclaration[1].matchAll(/"([a-z][a-z0-9-]*)"/g)].map((m) => m[1]);
+  assert.ok(unionMembers.length > 0, "types.ts RoleId declaration must list its seed members as quoted literals");
+  assertSameRoleSet(
+    unionMembers,
+    leafRoleIds,
+    "types.ts RoleId seed-union members must equal the role-ids.ts role set (a member without a registry entry silently widens the cast-free compile-time role whitelist)",
+  );
 
   // -------------------------------------------------------------------------
   // 3. Derived surfaces carry exactly the registry role set.
