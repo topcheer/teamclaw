@@ -30,6 +30,7 @@
     "productName": "TeamClaw Desktop",
     "files": [
       "main.mjs",
+      "runtime-extract.mjs",
       "preload.mjs",
       "renderer/**/*",
       "package.json"

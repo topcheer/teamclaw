@@ -5,7 +5,7 @@ import fsSync from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
-import { ensureBundledRuntime } from "./runtime-extract.mjs";
+import { ensureBundledRuntime, makeOpenclawShim } from "./runtime-extract.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -173,6 +173,7 @@ const BUNDLED_BIN_DIR = () => path.join(process.resourcesPath || "", "bin");
 // unpacked 1GB tree is history). Extracted to userData/bundled/runtime on
 // first use - see runtime-extract.mjs. Null until warmed / not bundled.
 let EXTRACTED_RUNTIME_DIR = null;
+let EXTRACTED_OPENCLAW_SHIM = null;
 async function warmBundledRuntime(onEvent) {
   if (EXTRACTED_RUNTIME_DIR) return EXTRACTED_RUNTIME_DIR;
   try {
@@ -181,6 +182,12 @@ async function warmBundledRuntime(onEvent) {
       userDataDir: app.getPath("userData"),
       onEvent,
     });
+    // Launcher shim: the entry is openclaw.mjs (a Node script). Windows has
+    // no .mjs association - shell-spawning it pops "choose an app". The shim
+    // runs it under Electron's embedded Node, no system Node needed.
+    if (EXTRACTED_RUNTIME_DIR) {
+      EXTRACTED_OPENCLAW_SHIM = makeOpenclawShim(EXTRACTED_RUNTIME_DIR, process.execPath);
+    }
   } catch (e) {
     if (onEvent) onEvent({ phase: "runtime", line: "Bundled runtime extraction failed: " + (e && e.message) });
   }
@@ -200,6 +207,11 @@ function bundledBinary(name) {
   //   openclaw  -> node_modules/openclaw/openclaw.mjs
   //   (any pkg) -> node_modules/<name>/... resolved per-package below
   if (name === "openclaw") {
+    // Extracted (compressed-form) runtime: return the LAUNCHER SHIM, never
+    // the bare .mjs - Windows cannot shell-execute .mjs (no association).
+    if (EXTRACTED_OPENCLAW_SHIM && fsSync.existsSync(EXTRACTED_OPENCLAW_SHIM)) {
+      return EXTRACTED_OPENCLAW_SHIM;
+    }
     const real = path.join(bundledRuntimeRoot(), "node_modules", "openclaw", "openclaw.mjs");
     return fsSync.existsSync(real) ? real : null;
   }

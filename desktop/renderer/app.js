@@ -1072,7 +1072,14 @@ import { createT as i18nCreateT } from "./i18n.js";
     // model list auto-refresh once a key exists (debounced). Mark manual
     // model edits so the fetch default never overwrites the user's choice.
     const provEl = document.getElementById("bootstrap-llm-provider");
-    if (provEl) provEl.addEventListener("change", updateLlmKeyHint);
+    // Provider switch ALSO re-fetches (debounced): openrouter's list is
+    // public, so switching to it must populate the picker without a manual
+    // refresh click (user-found: "list gone until I hit refresh").
+    if (provEl) provEl.addEventListener("change", () => {
+      updateLlmKeyHint();
+      clearTimeout(window.__llmFetchT);
+      window.__llmFetchT = setTimeout(scheduleLlmModelsFetch, 400);
+    });
     const keyElX = document.getElementById("bootstrap-llm-apikey");
     if (keyElX) keyElX.addEventListener("input", () => { updateLlmKeyHint(); clearTimeout(window.__llmFetchT); window.__llmFetchT = setTimeout(scheduleLlmModelsFetch, 700); });
     const modelElX = document.getElementById("bootstrap-llm-model");

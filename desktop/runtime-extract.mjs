@@ -55,6 +55,32 @@ function runTar(args, cwd) {
 }
 
 /**
+ * Create a platform launcher shim for the extracted runtime's openclaw
+ * entry. The bundled entry is openclaw.mjs - a NODE script. On Windows .mjs
+ * has no file association: spawning it through a shell pops the "choose an
+ * app to open .mjs" dialog (user-found). The shim runs it under Electron's
+ * embedded Node (ELECTRON_RUN_AS_NODE=1) so no system Node is needed.
+ * Idempotent; returns the shim path.
+ */
+export function makeOpenclawShim(runtimeDir, electronPath) {
+  if (!runtimeDir || !electronPath) return null;
+  const entry = path.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
+  if (!fs.existsSync(entry)) return null;
+  const shimDir = path.join(path.dirname(runtimeDir), "shims");
+  fs.mkdirSync(shimDir, { recursive: true });
+  if (process.platform === "win32") {
+    const shim = path.join(shimDir, "openclaw.cmd");
+    const body = `@echo off\r\nset "ELECTRON_RUN_AS_NODE=1"\r\n"${electronPath}" "${entry}" %*\r\n`;
+    fs.writeFileSync(shim, body, { flag: "w" });
+    return shim;
+  }
+  const shim = path.join(shimDir, "openclaw");
+  const body = `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 "${electronPath}" "${entry}" "$@"\n`;
+  fs.writeFileSync(shim, body, { mode: 0o755, flag: "w" });
+  return shim;
+}
+
+/**
  * Resolve the bundled runtime dir, extracting runtime.tgz on first use.
  * @param {{resourcesBinDir: string, userDataDir: string, onEvent?: (e:{phase:string,line:string})=>void}} opts
  * @returns {Promise<string|null>} usable runtime dir (node_modules/openclaw inside), or null when nothing bundled
