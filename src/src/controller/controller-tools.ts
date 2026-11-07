@@ -22,6 +22,7 @@ import {
   normalizeContractRole,
   normalizeContractStringList,
 } from "../interaction-contracts.js";
+import { ROLE_IDS } from "../roles.js";
 
 export type ControllerToolsDeps = {
   config: PluginConfig;
@@ -45,10 +46,9 @@ const EXECUTION_READY_BLOCKERS: Array<{ pattern: RegExp; reason: string }> = [
   { pattern: /需要.*先完成/u, reason: "it states another piece of work must complete first" },
 ];
 
-const VALID_ROLE_IDS = new Set([
-  "pm", "architect", "developer", "qa", "release-engineer",
-  "infra-engineer", "devops", "security-engineer", "designer", "marketing", "data-engineer",
-]);
+// Phase 1.2: derived from the roles.ts registry instead of a hand-written id
+// list (the former copy was missing data-engineer before Phase 0.2 fixed it).
+const VALID_ROLE_IDS = new Set<string>(ROLE_IDS);
 
 const ENGLISH_LATER_PHASE_CLAUSE_RE = /\b(?:after|once)\b(.+?)\b(complete|completed|ready|available|exists?)\b/i;
 const ENGLISH_LATER_PHASE_DEPENDENCY_RE = /\b(?:task|tasks|service|services|module|modules|phase|phases|api|apis|interface|interfaces|review|qa|design|developer|architect|skeleton|backend|frontend|deliverable|artifact|handoff)\b/i;

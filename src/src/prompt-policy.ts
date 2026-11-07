@@ -1,19 +1,13 @@
 import type { RoleId } from "./types.js";
 import { buildTeamClawProjectAgentRelativePath } from "./openclaw-workspace.js";
+// Phase 1.2: the role id list is derived from the canonical role-ids.ts leaf
+// module. prompt-policy.ts cannot value-import roles.ts (roles.ts imports
+// this module and evaluates its builders at module init), so the dependency-
+// free leaf keeps a single source of truth without a module cycle. roles.ts
+// asserts its ROLES registry agrees with the same list.
+import { ROLE_IDS } from "./role-ids.js";
 
-export const TEAMCLAW_ROLE_IDS: RoleId[] = [
-  "pm",
-  "architect",
-  "developer",
-  "qa",
-  "release-engineer",
-  "infra-engineer",
-  "devops",
-  "security-engineer",
-  "designer",
-  "marketing",
-  "data-engineer",
-];
+export const TEAMCLAW_ROLE_IDS: RoleId[] = ROLE_IDS;
 
 export const TEAMCLAW_ROLE_IDS_TEXT = TEAMCLAW_ROLE_IDS.join(", ");
 

@@ -122,10 +122,10 @@ assert.match(
   /export function normalizeManifestRoleList\(raw: unknown\): RoleId\[\] \{[\s\S]*?return validateRoleIdList\(raw\);/,
   "normalizeManifestRoleList must delegate to validateRoleIdList (guard behavior unchanged)",
 );
-assert.match(
+assert.doesNotMatch(
   manifestSource,
-  /const TEAMCLAW_ROLE_IDS = new Set<RoleId>\(\[/,
-  "the hand-written TEAMCLAW_ROLE_IDS copy stays in place until Phase 1.2 removes it",
+  /const TEAMCLAW_ROLE_IDS = new Set/,
+  "the hand-written TEAMCLAW_ROLE_IDS copy Phase 0.3 kept in place was removed by Phase 1.2 (single-source-of-truth convergence) and must not come back",
 );
 
 console.log("validateRoleId / validateRoleIdList smoke passed.");

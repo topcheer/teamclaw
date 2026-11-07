@@ -5,19 +5,26 @@ import path from "node:path";
 import process from "node:process";
 import vm from "node:vm";
 
-const TEAMCLAW_ROLE_IDS = [
-  "pm",
-  "architect",
-  "developer",
-  "qa",
-  "release-engineer",
-  "infra-engineer",
-  "devops",
-  "security-engineer",
-  "designer",
-  "marketing",
-  "data-engineer",
-];
+// Phase 1.2: the role id list is no longer duplicated here. It is read from
+// the canonical src/src/role-ids.ts leaf module (the same list roles.ts
+// asserts its ROLES registry against), so the manifest enum cannot drift
+// from the registry.
+function readTeamClawRoleIds(packageDir) {
+  const roleIdsPath = path.resolve(packageDir, "src", "role-ids.ts");
+  if (!existsSync(roleIdsPath)) {
+    throw new Error(`role-ids.ts not found at ${roleIdsPath}`);
+  }
+  const source = readFileSync(roleIdsPath, "utf8");
+  const match = source.match(/export\s+const\s+ROLE_IDS[^=]*=\s*(\[[\s\S]*?\])\s*;/);
+  if (!match) {
+    throw new Error(`Could not read the ROLE_IDS array literal from ${roleIdsPath}`);
+  }
+  const roleIds = vm.runInNewContext(`(${match[1]})`);
+  if (!Array.isArray(roleIds) || roleIds.length === 0 || roleIds.some((id) => typeof id !== "string" || !id)) {
+    throw new Error(`ROLE_IDS at ${roleIdsPath} must be a non-empty array of non-empty role id strings`);
+  }
+  return roleIds;
+}
 
 const TEAMCLAW_MANIFEST_ID = "teamclaw";
 const TEAMCLAW_MANIFEST_NAME = "TeamClaw";
@@ -63,7 +70,7 @@ function loadBuildConfigSchema(packageDir) {
   source += "\nglobalThis.__teamclawBuildConfigSchema = buildConfigSchema;\n";
 
   const context = {
-    ROLE_IDS: TEAMCLAW_ROLE_IDS,
+    ROLE_IDS: readTeamClawRoleIds(packageDir),
     TEAMCLAW_PUBLISHED_RUNTIME_IMAGE: readPublishedRuntimeImage(packageDir),
     parsePluginConfig: (raw) => raw,
   };
@@ -104,6 +111,12 @@ const TEAMCLAW_AGENT_TOOL_NAMES = [
   "teamclaw_submit_manifest",
   "teamclaw_submit_result_contract",
   "teamclaw_suggest_handoff",
+  // TeamAuto agent-facing tools registered by controller-tools.ts
+  // (feat(teamauto) 80c3572 declared them in the manifest; the generator
+  // list had drifted and would drop them on regeneration).
+  "teamclaw_teamauto_propose",
+  "teamclaw_teamauto_status",
+  "teamclaw_teamauto_sweep",
 ];
 const expectedManifest = {
   id: TEAMCLAW_MANIFEST_ID,
@@ -117,5 +130,13 @@ const expectedManifest = {
   configSchema: expectedConfigSchema.jsonSchema,
 };
 
-writeFileSync(manifestPath, `${JSON.stringify(expectedManifest, null, 2)}\n`, "utf8");
+// The committed manifest is pure ASCII (non-ASCII help text is stored as
+// \uXXXX escapes); plain JSON.stringify would emit literal characters and
+// produce a spurious diff on every sync, so escape non-ASCII the same way.
+const serializedManifest = JSON.stringify(expectedManifest, null, 2).replace(
+  /[\u0080-\uFFFF]/g,
+  (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`,
+);
+
+writeFileSync(manifestPath, `${serializedManifest}\n`, "utf8");
 console.log(`Updated ${manifestPath}`);

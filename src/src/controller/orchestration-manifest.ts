@@ -10,24 +10,11 @@ import type {
 import { validateRoleIdList } from "../roles.js";
 import { deriveStableProjectKey } from "../openclaw-workspace.js";
 
-const TEAMCLAW_ROLE_IDS = new Set<RoleId>([
-  "pm",
-  "architect",
-  "developer",
-  "qa",
-  "release-engineer",
-  "infra-engineer",
-  "devops",
-  "security-engineer",
-  "designer",
-  "marketing",
-  "data-engineer",
-]);
-
 export function normalizeManifestRoleList(raw: unknown): RoleId[] {
   // Phase 0.3: delegates to the shared validateRoleIdList guard in roles.ts.
-  // The hand-written TEAMCLAW_ROLE_IDS copy above intentionally stays until
-  // Phase 1.2 (single-source-of-truth convergence) removes it.
+  // The hand-written TEAMCLAW_ROLE_IDS copy this function used to keep was
+  // removed by Phase 1.2 (single-source-of-truth convergence); the role set
+  // now lives only in role-ids.ts / roles.ts.
   return validateRoleIdList(raw);
 }
 

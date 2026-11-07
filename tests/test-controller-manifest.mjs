@@ -29,6 +29,12 @@ async function transpileManifestModuleSubset(outDir) {
       output: path.join(outDir, "src", "roles.js"),
     },
     {
+      // Canonical role id list (Phase 1.2 single-source convergence); both
+      // roles.ts (drift guard) and prompt-policy.ts import it at runtime.
+      source: path.join(packageRoot, "src", "role-ids.ts"),
+      output: path.join(outDir, "src", "role-ids.js"),
+    },
+    {
       // roles.ts imports prompt-policy.js at runtime (composePrompt and role
       // operating rules); needed ever since orchestration-manifest.ts started
       // delegating its role guard to validateRoleIdList in roles.ts (Phase 0.3).

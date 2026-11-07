@@ -3,11 +3,9 @@ import { getRole } from "../roles.js";
 import { buildWorkerSessionRules, composePrompt } from "../prompt-policy.js";
 import { MessageQueue } from "./message-queue.js";
 
-const TEAMCLAW_ROLE_IDS_TEXT = [
-  "pm", "architect", "developer", "qa",
-  "release-engineer", "infra-engineer", "devops", "security-engineer",
-  "designer", "marketing", "data-engineer",
-];
+// Phase 1.2: the local TEAMCLAW_ROLE_IDS_TEXT copy that used to live here was
+// dead code (no references) and duplicated the canonical role id list; the
+// shared text is exported from prompt-policy.ts (TEAMCLAW_ROLE_IDS_TEXT).
 
 export function createWorkerPromptInjector(
   config: PluginConfig,

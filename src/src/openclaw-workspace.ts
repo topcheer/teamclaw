@@ -9,6 +9,9 @@ import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
 import type { PluginLogger } from "../api.js";
+// Dependency-free canonical role id list (Phase 1.2); see role-ids.ts for why
+// this module cannot value-import roles.ts.
+import { ROLE_IDS } from "./role-ids.js";
 
 export const TEAMCLAW_AGENT_ID = "teamclaw";
 export const TEAMCLAW_ISOLATION_MODE_INDEPENDENT = "independent";
@@ -531,19 +534,32 @@ export async function updateTeamClawWorkspaceDir(
   return { configPath, agentEntryPath: normalized };
 }
 
-const TEAMCLAW_ROLE_CATALOG: ReadonlyArray<{ id: string; label: string }> = [
-  { id: "pm", label: "Project Manager" },
-  { id: "architect", label: "Architect" },
-  { id: "developer", label: "Developer" },
-  { id: "qa", label: "QA Engineer" },
-  { id: "release-engineer", label: "Release Engineer" },
-  { id: "infra-engineer", label: "Infra Engineer" },
-  { id: "devops", label: "DevOps Engineer" },
-  { id: "security-engineer", label: "Security Engineer" },
-  { id: "designer", label: "Designer" },
-  { id: "marketing", label: "Marketing" },
-  { id: "data-engineer", label: "Data Engineer" },
-];
+// Phase 1.2: the catalog's id set and order derive from the canonical
+// role-ids.ts list (openclaw-workspace.ts sits below roles.ts in the module
+// graph, so it cannot value-import the registry itself). The labels are the
+// compact names the model-settings dialog has always shown; they
+// intentionally differ from the full registry labels in roles.ts (e.g.
+// "Project Manager" vs "Product Manager"), so they stay explicit here.
+// tests/test-role-single-source.mjs pins the derived output to the exact
+// pre-Phase-1.2 value.
+const TEAMCLAW_ROLE_CATALOG_LABELS: Record<string, string> = {
+  pm: "Project Manager",
+  architect: "Architect",
+  developer: "Developer",
+  qa: "QA Engineer",
+  "release-engineer": "Release Engineer",
+  "infra-engineer": "Infra Engineer",
+  devops: "DevOps Engineer",
+  "security-engineer": "Security Engineer",
+  designer: "Designer",
+  marketing: "Marketing",
+  "data-engineer": "Data Engineer",
+};
+
+export const TEAMCLAW_ROLE_CATALOG: ReadonlyArray<{ id: string; label: string }> = ROLE_IDS.map((id) => ({
+  id,
+  label: TEAMCLAW_ROLE_CATALOG_LABELS[id] ?? id,
+}));
 
 export type TeamClawModelCatalog = {
   defaultModel: string;
