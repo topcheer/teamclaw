@@ -170,6 +170,13 @@ import { createT as i18nCreateT } from "./i18n.js";
       ["#bootstrap-start-command-label", "bootstrap.startCommand"]
     ];
     texts.forEach(([selector, key]) => {
+      // Generic scan: any element carrying data-i18n translates itself.
+      // (Wizard/bootstrap section adopted this; new static text should too.)
+      document.querySelectorAll("[data-i18n]").forEach((el) => {
+        const k = el.getAttribute("data-i18n");
+        const v = t(k);
+        if (v && v !== k) el.textContent = v;
+      });
       if (selector === "#planning-list.closest") {
         const heading = $("#planning-list") && $("#planning-list").closest(".panel") ? $("#planning-list").closest(".panel").querySelector(".section-head h2") : null;
         if (heading) heading.textContent = t(key);
