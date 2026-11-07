@@ -5030,12 +5030,73 @@ export async function resumeTeamProfileSwitch(deps: ControllerHttpDeps): Promise
   return true;
 }
 
+// ── Issue #191: auto-assign re-entrancy gate ─────────────────────────────────
+//
+// revertTaskAssignment (dispatch failure path) fires a nested
+// `void autoAssignPendingTasks(deps)`. Before the gate, each nested call ran
+// concurrently with its OWN attemptedPairs set: it re-attempted the pair that
+// had just failed, reverted again, and spawned another nested round - with
+// unreachable workers the retry tree grew 2^n dispatch attempts (observed as
+// a 4GB OOM). The gate keeps ONE round in flight per controller deps and
+// defers nested triggers to a single follow-up round that SHARES the failed
+// pairs, collapsing the storm to linear work. Keyed weakly on the deps object
+// so separate controller instances (and separate test scenarios) never share
+// gate state.
+type AutoAssignGate = {
+  inFlight: boolean;
+  rerunQueued: boolean;
+  attemptedPairs: Set<string>;
+};
+
+const autoAssignGates = new WeakMap<ControllerHttpDeps, AutoAssignGate>();
+
+function getAutoAssignGate(deps: ControllerHttpDeps): AutoAssignGate {
+  let gate = autoAssignGates.get(deps);
+  if (!gate) {
+    gate = { inFlight: false, rerunQueued: false, attemptedPairs: new Set() };
+    autoAssignGates.set(deps, gate);
+  }
+  return gate;
+}
+
 export async function autoAssignPendingTasks(
   deps: ControllerHttpDeps,
   preferredWorkerId?: string,
 ): Promise<TaskInfo[]> {
+  const gate = getAutoAssignGate(deps);
+  if (gate.inFlight) {
+    // Nested trigger (revert path, concurrent register/heartbeat, ...):
+    // never start a parallel round. Queue exactly one follow-up; it re-reads
+    // the live state, so nothing observable is lost - only the storm is.
+    gate.rerunQueued = true;
+    return [];
+  }
+  gate.inFlight = true;
+  try {
+    return await runAutoAssignRound(deps, preferredWorkerId, gate.attemptedPairs);
+  } finally {
+    gate.inFlight = false;
+    if (gate.rerunQueued) {
+      gate.rerunQueued = false;
+      void autoAssignPendingTasks(deps).catch(() => {
+        // Best-effort follow-up round; assignment failures already surface
+        // via task state (same policy as the fire-and-forget call sites).
+      });
+    } else {
+      // The round settled with no deferred work: forget the attempted (and
+      // possibly failed) pairs so future rounds may try them again - e.g.
+      // after an unreachable worker recovers or a new task is submitted.
+      gate.attemptedPairs.clear();
+    }
+  }
+}
+
+async function runAutoAssignRound(
+  deps: ControllerHttpDeps,
+  preferredWorkerId: string | undefined,
+  attemptedPairs: Set<string>,
+): Promise<TaskInfo[]> {
   const { getTeamState, taskRouter, wsServer, logger, config } = deps;
-  const attemptedPairs = new Set<string>();
   const assignedTasks: TaskInfo[] = [];
   const maxConcurrent = config.maxConcurrentTasks;
 

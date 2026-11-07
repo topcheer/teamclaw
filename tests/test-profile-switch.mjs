@@ -363,9 +363,11 @@ async function waitForSwitchCompletion(call, timeoutMs = 10000) {
 // ---------------------------------------------------------------------------
 {
   // NOTE: the seeded worker is offline. An idle worker + pending tasks with
-  // unreachable URLs would trigger the (pre-existing) nested
-  // autoAssignPendingTasks spawn-on-revert pattern and starve the test
-  // process; the matrix semantics do not depend on worker liveness.
+  // unreachable URLs would drive dispatch through the revert path; the
+  // spawn-on-revert storm is fixed (issue #191, guarded by
+  // tests/test-autoassign-backoff.mjs), but keeping the worker offline still
+  // keeps this scenario free of dispatch side effects - the matrix semantics
+  // do not depend on worker liveness.
   const matrixState = softwareRdState();
   matrixState.workers["w-dev"].status = "offline";
   const scenario = await bootScenario({ initialState: matrixState });
