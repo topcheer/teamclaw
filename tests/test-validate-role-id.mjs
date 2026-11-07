@@ -98,13 +98,13 @@ assert.match(
 
 assert.match(
   interactionContractsSource,
-  /import \{ validateRoleId \} from "\.\/roles\.js";/,
-  "interaction-contracts.ts must import the shared role validator",
+  /import \{ validateActiveRoleId \} from "\.\/profile-loader\.js";/,
+  "interaction-contracts.ts must import the role validator from the active profile loader (Phase 1.3)",
 );
 assert.match(
   interactionContractsSource,
-  /export function normalizeContractRole\(raw: unknown\): RoleId \| undefined \{[\s\S]*?return validateRoleId\(raw\);/,
-  "normalizeContractRole must delegate to validateRoleId (guard behavior unchanged)",
+  /export function normalizeContractRole\(raw: unknown\): RoleId \| undefined \{[\s\S]*?return validateActiveRoleId\(raw\);/,
+  "normalizeContractRole must delegate to validateActiveRoleId (guard behavior unchanged)",
 );
 assert.doesNotMatch(
   interactionContractsSource,

@@ -130,11 +130,11 @@ async function runUntypedRoleRenderSmoke() {
     "desktop must read the external-worker default from the install payload",
   );
 
-  // --- Backend: install payload advertises the registry default role -------
+  // --- Backend: install payload advertises the active profile default role --
   assert.match(
     httpServerSource,
-    /defaultRole: DEFAULT_ROLE,/,
-    "buildExternalWorkerInstallInfo must expose the registry DEFAULT_ROLE so UIs restore the developer default",
+    /defaultRole: getActiveDefaultRole\(\),/,
+    "buildExternalWorkerInstallInfo must expose the active profile defaultRole so UIs restore the developer default (Phase 1.3)",
   );
 
   // --- CLI: role table derived from the packaged registry ----------------

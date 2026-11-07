@@ -1,5 +1,6 @@
 import type { PluginConfig, WorkerIdentity } from "../types.js";
-import { getRole } from "../roles.js";
+// Phase 1.3: the worker role prompt comes from the active TeamProfile.
+import { getActiveRole } from "../profile-loader.js";
 import { buildWorkerSessionRules, composePrompt } from "../prompt-policy.js";
 import { MessageQueue } from "./message-queue.js";
 
@@ -18,7 +19,7 @@ export function createWorkerPromptInjector(
       return null;
     }
 
-    const roleDef = getRole(identity.role);
+    const roleDef = getActiveRole(identity.role);
     if (!roleDef) {
       return null;
     }

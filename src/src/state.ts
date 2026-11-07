@@ -9,6 +9,10 @@ import type {
   WorkerIdentity,
 } from "./types.js";
 import { validateRoleIdList } from "./roles.js";
+// Phase 1.6: the legacy-state profileId migration defaults to the loader's
+// software-rd baseline id (single literal source). profile-loader has no
+// runtime edge back into this module, so no cycle.
+import { SOFTWARE_RD_PROFILE_ID } from "./profile-loader.js";
 
 const STATE_VERSION = 2;
 
@@ -67,6 +71,13 @@ function migrateState(raw: unknown): TeamState | null {
   // Version 1 → 2: no new required fields beyond `version` itself.
   // startupReadiness was already optional and handled by normalizeStartupReadiness above.
   state.version = STATE_VERSION;
+
+  // Phase 1.6 (design 2.3): legacy states carry no profileId; default them
+  // to the software-rd baseline. Idempotent - states saved by this build
+  // already carry the field and pass through unchanged.
+  if (typeof state.profileId !== "string" || !state.profileId.trim()) {
+    state.profileId = SOFTWARE_RD_PROFILE_ID;
+  }
 
   return state as unknown as TeamState;
 }
@@ -146,12 +157,76 @@ function enqueueAtomicWrite(filePath: string, contents: string): Promise<void> {
   });
 }
 
+// Phase 1.6 (design section 2.3): the persisted state file name is decoupled
+// from teamName. TeamClaw is single-instance-single-team per state dir, so a
+// fixed instance-scoped file name IS the instance identity - renaming a team
+// no longer orphans the old `<teamName>-team-state.json` (the collision risk
+// called out in the design). The legacy teamName-named file is still read as
+// a one-time migration source; the next save writes the new name and the
+// legacy file is simply never consulted again.
+const TEAM_STATE_FILE = "team-state.json";
+
+function teamStateFilePath(): string {
+  return path.join(STATE_DIR, TEAM_STATE_FILE);
+}
+
+function legacyTeamStateFilePath(teamName: string): string {
+  return path.join(STATE_DIR, `${teamName}-team-state.json`);
+}
+
+function isFileMissing(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException)?.code === "ENOENT";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function loadTeamState(teamName: string): Promise<TeamState | null> {
-  const filePath = path.join(STATE_DIR, `${teamName}-team-state.json`);
+  // Review fix (Phase 1.6): the instance-scoped team-state.json is the
+  // primary state file, and when it EXISTS it is authoritative. A
+  // present-but-corrupt primary is a fatal error, never a silent fallback to
+  // the legacy snapshot - falling back would rewind the team to the
+  // pre-migration state and lose everything saved since. Only a MISSING
+  // primary (ENOENT) falls through to the one-time legacy read.
+  let primaryRaw: string | null = null;
   try {
-    const raw = await fs.readFile(filePath, "utf8");
-    const parsed = JSON.parse(raw);
-    return migrateState(parsed);
+    primaryRaw = await fs.readFile(teamStateFilePath(), "utf8");
+  } catch (error) {
+    if (!isFileMissing(error)) {
+      throw new Error(
+        `TeamClaw cannot read the persisted team state ${teamStateFilePath()}: ${errorMessage(error)}`,
+      );
+    }
+  }
+
+  if (primaryRaw !== null) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(primaryRaw);
+    } catch (error) {
+      throw new Error(
+        `TeamClaw team state file ${teamStateFilePath()} is not valid JSON (${errorMessage(error)}). `
+        + "Refusing to start with a fresh team over a corrupt state file - fix or remove the file manually.",
+      );
+    }
+    const migrated = migrateState(parsed);
+    if (!migrated) {
+      throw new Error(
+        `TeamClaw team state file ${teamStateFilePath()} exists but is not a valid team state. `
+        + "Refusing to start with a fresh team over an unusable state file - fix or remove the file manually.",
+      );
+    }
+    return migrated;
+  }
+
+  // Primary absent: one-time legacy fallback (pre-Phase-1.6 file name).
+  // Lenient by design, matching the pre-Phase-1.6 single-file behavior: a
+  // missing or corrupt legacy file simply means first initialization, and a
+  // corrupt legacy file is never overwritten (saves go to the new name).
+  try {
+    const legacyRaw = await fs.readFile(legacyTeamStateFilePath(teamName), "utf8");
+    return migrateState(JSON.parse(legacyRaw));
   } catch {
     return null;
   }
@@ -159,7 +234,7 @@ async function loadTeamState(teamName: string): Promise<TeamState | null> {
 
 async function saveTeamState(state: TeamState): Promise<void> {
   await ensureDir(STATE_DIR);
-  const filePath = path.join(STATE_DIR, `${state.teamName}-team-state.json`);
+  const filePath = teamStateFilePath();
   state.version = STATE_VERSION;
   state.updatedAt = Date.now();
   state.provisioning = state.provisioning && typeof state.provisioning === "object"

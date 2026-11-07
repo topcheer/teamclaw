@@ -39,7 +39,16 @@ import {
   generateId,
 } from "../protocol.js";
 import { listWorkspaceTree, listWorkspaceSubtree, readWorkspaceFile, readWorkspaceRawFile } from "../workspace-browser.js";
-import { ROLES, DEFAULT_ROLE, normalizeRecommendedSkills, resolveRecommendedSkillsForRole, validateRoleId } from "../roles.js";
+// Phase 1.3: runtime role data comes from the active TeamProfile loader
+// (software-rd baseline) instead of the roles.ts registry; roles.ts/role-ids.ts
+// remain the type layer and the generator source.
+import {
+  getActiveRoles,
+  getActiveDefaultRole,
+  normalizeRecommendedSkills,
+  resolveActiveRoleSkills,
+  validateActiveRoleId,
+} from "../profile-loader.js";
 import {
   buildRepoSyncInfo,
   ensureControllerGitRepo,
@@ -192,8 +201,8 @@ function buildExternalWorkerInstallInfo(req: IncomingMessage, config: PluginConf
   return {
     teamName: config.teamName,
     recommendedControllerUrl,
-    defaultRole: DEFAULT_ROLE,
-    roles: ROLES.map((role) => ({ id: role.id, label: role.label, icon: role.icon })),
+    defaultRole: getActiveDefaultRole(),
+    roles: getActiveRoles().map((role) => ({ id: role.id, label: role.label, icon: role.icon })),
     autoDiscoveryCommandPrefix:
       `npx -y ${EXTERNAL_WORKER_INSTALL_SPEC} install --yes --install-mode worker --team-name ${shellEscapeSingleQuotes(config.teamName)} --worker-role `,
     manualCommandPrefix:
@@ -1785,7 +1794,7 @@ function summarizeManifestExpectedOutcome(task: TaskInfo): string {
 function inferManifestRolesFromText(text: string): RoleId[] {
   const normalized = text.toLowerCase();
   const roleIds: RoleId[] = [];
-  for (const role of ROLES) {
+  for (const role of getActiveRoles()) {
     if (normalized.includes(role.id) || normalized.includes(role.label.toLowerCase())) {
       roleIds.push(role.id);
     }
@@ -1925,7 +1934,7 @@ function buildFallbackControllerTaskTitle(request: string, assignedRole?: RoleId
   if (assignedRole === "architect") {
     return "Analyze the repository and produce an architecture/feasibility plan";
   }
-  return assignedRole === DEFAULT_ROLE
+  return assignedRole === getActiveDefaultRole()
     ? "Implement the requested software deliverable"
     : `Perform the requested ${assignedRole || "software"} work`;
 }
@@ -2177,7 +2186,7 @@ async function maybeBackfillExecutionReadyTask(
     createdBy: "controller",
     controllerRunId,
     controllerSessionKey: sessionKey,
-    recommendedSkills: resolveRecommendedSkillsForRole(assignedRole, []),
+    recommendedSkills: resolveActiveRoleSkills(assignedRole, []),
   }, deps);
   if (!task) {
     return [];
@@ -2472,7 +2481,7 @@ async function maybeConvertControllerClarificationToExecutionTask(
     createdBy: "controller",
     controllerRunId,
     controllerSessionKey: sessionKey,
-    recommendedSkills: resolveRecommendedSkillsForRole(assignedRole, []),
+    recommendedSkills: resolveActiveRoleSkills(assignedRole, []),
   }, deps);
   if (!task) {
     return [];
@@ -3300,7 +3309,7 @@ function buildRecentCompletedTaskContext(task: TaskInfo, state: TeamState | null
     "Do not try to inspect another worker's OpenClaw session or session key directly; those sessions are isolated per worker.",
     ...recentCompletedTasks.map((candidate) => {
       const roleLabel = candidate.assignedRole
-        ? (ROLES.find((role) => role.id === candidate.assignedRole)?.label ?? candidate.assignedRole)
+        ? (getActiveRoles().find((role) => role.id === candidate.assignedRole)?.label ?? candidate.assignedRole)
         : "Unassigned";
       return `- [${candidate.id}] ${candidate.title} (${roleLabel}): ${summarizeTaskForAssignment(candidate)}`;
     }),
@@ -3308,7 +3317,7 @@ function buildRecentCompletedTaskContext(task: TaskInfo, state: TeamState | null
 }
 
 function buildRecommendedSkillsContext(task: TaskInfo): string {
-  const recommendedSkills = resolveRecommendedSkillsForRole(task.assignedRole, task.recommendedSkills ?? []);
+  const recommendedSkills = resolveActiveRoleSkills(task.assignedRole, task.recommendedSkills ?? []);
   if (recommendedSkills.length === 0) {
     return "";
   }
@@ -3667,10 +3676,10 @@ function getEffectiveStartupReadiness(
   }
   // Both branches are already-validated RoleId sources: config roles go
   // through parseRoleList (validateRoleIdList) and the fallback is the
-  // centralized DEFAULT_ROLE constant — no runtime validation needed here.
+  // active profile's defaultRole — no runtime validation needed here.
   const requiredRoles = deps.config.workerProvisioningRoles.length > 0
     ? [...new Set(deps.config.workerProvisioningRoles)]
-    : [DEFAULT_ROLE];
+    : [getActiveDefaultRole()];
   const readyWorkerIds = requiredRoles
     .map((role) => Object.values(state?.workers ?? {}).find((worker) =>
       worker.role === role && (worker.status === "idle" || worker.status === "busy")
@@ -4531,7 +4540,7 @@ async function dispatchTaskToWorker(
   const repoState = await refreshControllerRepoState(deps);
   const repoInfo = buildRepoSyncInfo(repoState, sharedWorkspace);
   const description = buildTaskAssignmentDescription(task, state ?? null, repoInfo);
-  const recommendedSkills = resolveRecommendedSkillsForRole(task.assignedRole, task.recommendedSkills ?? []);
+  const recommendedSkills = resolveActiveRoleSkills(task.assignedRole, task.recommendedSkills ?? []);
   // Resume support: reuse the interrupted execution's session so the worker
   // continues the same persisted OpenClaw conversation instead of starting over.
   const executionIdentity = (task.checkpoint?.sessionKey)
@@ -5328,7 +5337,7 @@ async function handleRequest(
   if (req.method === "POST" && pathname === "/api/v1/workers/register") {
     const body = await parseJsonBody(req);
     const workerId = typeof body.workerId === "string" ? body.workerId : "";
-    const role = validateRoleId(body.role) ?? "";
+    const role = validateActiveRoleId(body.role) ?? "";
     const label = typeof body.label === "string" ? body.label : role;
     const workerUrl = typeof body.url === "string" ? body.url : "";
     const capabilities = Array.isArray(body.capabilities) ? body.capabilities as string[] : [];
@@ -5463,7 +5472,7 @@ async function handleRequest(
     const title = typeof body.title === "string" ? body.title : "";
     const description = typeof body.description === "string" ? body.description : "";
     const priority = typeof body.priority === "string" ? body.priority as TaskPriority : "medium";
-    const assignedRole = validateRoleId(body.assignedRole);
+    const assignedRole = validateActiveRoleId(body.assignedRole);
     const createdBy = typeof body.createdBy === "string" ? body.createdBy : "boss";
     const controllerSessionKey = createdBy === "controller" && typeof body.controllerSessionKey === "string" && body.controllerSessionKey.trim()
       ? normalizeControllerIntakeSessionKey(body.controllerSessionKey)
@@ -5715,7 +5724,7 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
       if (typeof body.status === "string") task.status = body.status as TaskStatus;
       if (typeof body.progress === "string") task.progress = body.progress as string;
       if (typeof body.priority === "string") task.priority = body.priority as TaskPriority;
-      const nextAssignedRole = validateRoleId(body.assignedRole);
+      const nextAssignedRole = validateActiveRoleId(body.assignedRole);
       if (nextAssignedRole) task.assignedRole = nextAssignedRole;
       if (Array.isArray(body.recommendedSkills)) {
         const recommendedSkills = normalizeRecommendedSkills(
@@ -5778,7 +5787,7 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
     const taskId = pathname.split("/")[4]!;
     const body = await parseJsonBody(req);
     const workerId = typeof body.workerId === "string" ? body.workerId : undefined;
-    const targetRole = validateRoleId(body.targetRole);
+    const targetRole = validateActiveRoleId(body.targetRole);
 
     const state = getTeamState();
     if (!state?.tasks[taskId]) {
@@ -5813,7 +5822,7 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
   if (req.method === "POST" && pathname.match(/^\/api\/v1\/tasks\/[^/]+\/handoff$/)) {
     const taskId = pathname.split("/")[4]!;
     const body = await parseJsonBody(req);
-    const targetRole = validateRoleId(body.targetRole);
+    const targetRole = validateActiveRoleId(body.targetRole);
     const handoffContract = normalizeTaskHandoffContract(body.contract, {
       targetRole,
       reason: typeof body.reason === "string" ? body.reason : targetRole ? `The next step should move to ${targetRole}.` : "The task needs a new assignee.",
@@ -6136,7 +6145,7 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
       phase: typeof body.phase === "string" ? body.phase : undefined,
       source: typeof body.source === "string" ? body.source as TaskExecutionEventInput["source"] : undefined,
       stream: typeof body.stream === "string" ? body.stream : undefined,
-      role: validateRoleId(body.role),
+      role: validateActiveRoleId(body.role),
       workerId,
       runId: typeof body.runId === "string" ? body.runId : undefined,
       sessionKey: typeof body.sessionKey === "string" ? body.sessionKey : undefined,
@@ -6175,8 +6184,8 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
     }
     const requestedBy = typeof body.requestedBy === "string" ? body.requestedBy : "";
     const reason = typeof body.reason === "string" ? body.reason.trim() : "";
-    const requestedByRole = validateRoleId(body.requestedByRole);
-    const targetRole = validateRoleId(body.targetRole);
+    const requestedByRole = validateActiveRoleId(body.requestedByRole);
+    const targetRole = validateActiveRoleId(body.targetRole);
     const requestedWorkerCount = typeof body.requestedWorkerCount === "number"
       ? Math.max(2, Math.min(10, Math.floor(body.requestedWorkerCount)))
       : undefined;
@@ -6394,8 +6403,8 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
   // POST /api/v1/messages/direct
   if (req.method === "POST" && pathname === "/api/v1/messages/direct") {
     const body = await parseJsonBody(req);
-    const fromRole = validateRoleId(body.fromRole);
-    const toRole = validateRoleId(body.toRole);
+    const fromRole = validateActiveRoleId(body.fromRole);
+    const toRole = validateActiveRoleId(body.toRole);
     const message: TeamMessage = {
       id: generateId(),
       from: typeof body.from === "string" ? body.from : "",
@@ -6425,7 +6434,7 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
   // POST /api/v1/messages/broadcast
   if (req.method === "POST" && pathname === "/api/v1/messages/broadcast") {
     const body = await parseJsonBody(req);
-    const fromRole = validateRoleId(body.fromRole);
+    const fromRole = validateActiveRoleId(body.fromRole);
     const message: TeamMessage = {
       id: generateId(),
       from: typeof body.from === "string" ? body.from : "",
@@ -6461,8 +6470,8 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
   // POST /api/v1/messages/review-request
   if (req.method === "POST" && pathname === "/api/v1/messages/review-request") {
     const body = await parseJsonBody(req);
-    const fromRole = validateRoleId(body.fromRole);
-    const toRole = validateRoleId(body.toRole);
+    const fromRole = validateActiveRoleId(body.fromRole);
+    const toRole = validateActiveRoleId(body.toRole);
     const message: TeamMessage = {
       id: generateId(),
       from: typeof body.from === "string" ? body.from : "",
@@ -6520,7 +6529,7 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
     const taskId = typeof body.taskId === "string" ? body.taskId : "";
     const requestedBy = typeof body.requestedBy === "string" ? body.requestedBy : "";
     const requestedByWorkerId = typeof body.requestedByWorkerId === "string" ? body.requestedByWorkerId : undefined;
-    const requestedByRole = validateRoleId(body.requestedByRole);
+    const requestedByRole = validateActiveRoleId(body.requestedByRole);
     const question = typeof body.question === "string" ? body.question.trim() : "";
     const blockingReason = typeof body.blockingReason === "string" ? body.blockingReason.trim() : "";
     const context = typeof body.context === "string" && body.context.trim() ? body.context.trim() : undefined;
@@ -6795,7 +6804,7 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
     const workerId = typeof requestUrl.searchParams.get("workerId") === "string" && requestUrl.searchParams.get("workerId")
       ? requestUrl.searchParams.get("workerId")!
       : undefined;
-    const role = validateRoleId(requestUrl.searchParams.get("role"));
+    const role = validateActiveRoleId(requestUrl.searchParams.get("role"));
 
     try {
       const imported = await importControllerGitBundle(config, logger, body, { taskId, workerId });
@@ -6895,7 +6904,7 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
 
   // GET /api/v1/roles
   if (req.method === "GET" && pathname === "/api/v1/roles") {
-    sendJson(res, 200, { roles: ROLES });
+    sendJson(res, 200, { roles: getActiveRoles(), defaultRole: getActiveDefaultRole() });
     return;
   }
 

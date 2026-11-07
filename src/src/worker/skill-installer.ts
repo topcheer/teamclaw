@@ -2,7 +2,9 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginLogger } from "../../api.js";
-import { normalizeRecommendedSkills } from "../roles.js";
+// Phase 1.3: recommended-skill normalization lives on the profile loader
+// face (same semantics as the registry helper).
+import { normalizeRecommendedSkills } from "../profile-loader.js";
 import { resolveTeamClawWorkspaceDir } from "../openclaw-workspace.js";
 import type { TaskAssignmentPayload, TaskExecutionEventInput } from "../types.js";
 

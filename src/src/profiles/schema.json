@@ -1,0 +1,199 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://teamclaw.local/schemas/team-profile-v1.json",
+  "title": "TeamProfile",
+  "description": "TeamClaw team profile package (vertical-team-profiles-design.md section 2.1). v1 subset: the fields TeamClaw consumes today (id/name/nameZh/industry/icon/version/description/roles/capabilities/warmupRoles/defaultRole). The remaining design fields (labelZh, params, domainInstructions, outputConstraints, glossary, workflows, knowledgePacks, deliverableHints, reviewedBy) are reserved as optional so industry packs can carry them before their consumers land (Phase 2+). NOTE: src/src/profile-loader.ts validates against this file with a self-contained interpreter of the keyword subset used below (type/enum/required/properties/additionalProperties/items/minItems/uniqueItems/minLength/pattern; additionalProperties only as literal false) - no external JSON Schema dependency is added to the runtime; extending the schema means extending that interpreter in the same change.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "id",
+    "name",
+    "nameZh",
+    "industry",
+    "icon",
+    "version",
+    "description",
+    "roles",
+    "capabilities",
+    "warmupRoles",
+    "defaultRole"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "enum": [1],
+      "description": "Profile schema format version. Additive-only evolution (design section 2.2); a version this build does not support is a fatal load error, never a silent skip."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$",
+      "minLength": 1,
+      "description": "Profile slug, e.g. software-rd, crossborder-ecom, banking."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Display name (English)."
+    },
+    "nameZh": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Display name (Chinese)."
+    },
+    "industry": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Industry identifier used for grouping."
+    },
+    "icon": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Profile emoji icon."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+      "description": "Profile version (semver)."
+    },
+    "reviewedBy": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Reserved (Phase 3): domain reviewer sign-off records; mandatory for the finance packs before release."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "description": "One-line summary of the team the profile describes."
+    },
+    "params": {
+      "type": "object",
+      "description": "Reserved (Phase 3): industry parameters, e.g. ecom primaryPlatform. Free-form until consumers land."
+    },
+    "roles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "icon",
+          "description",
+          "capabilities",
+          "recommendedSkills",
+          "systemPrompt",
+          "suggestedNextRoles"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$",
+            "minLength": 1,
+            "description": "Role id slug (TeamClaw RoleId)."
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Role display label (English)."
+          },
+          "labelZh": {
+            "type": "string",
+            "description": "Reserved (Phase 2.6): Chinese label; UI falls back to label while absent."
+          },
+          "icon": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Role emoji icon."
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "description": "One-line role summary."
+          },
+          "capabilities": {
+            "type": "array",
+            "items": { "type": "string" },
+            "uniqueItems": true,
+            "description": "Role skill tokens (also role-inference tokens)."
+          },
+          "recommendedSkills": {
+            "type": "array",
+            "items": { "type": "string" },
+            "uniqueItems": true,
+            "description": "ClawHub skills preinstalled for the role."
+          },
+          "systemPrompt": {
+            "type": "string",
+            "description": "Full role system prompt. software-rd keeps this byte-identical to the roles.ts registry (Phase 1.7 golden)."
+          },
+          "suggestedNextRoles": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Role ids suggested for follow-up tasks."
+          }
+        },
+        "additionalProperties": false
+      },
+      "description": "The role registry this team runs with."
+    },
+    "domainInstructions": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Reserved (Phase 2.4): industry guardrails; on non-software profiles these REPLACE buildRoleOperatingRules wholesale. software-rd must not set this field."
+    },
+    "outputConstraints": {
+      "type": "object",
+      "properties": {
+        "tailnote": { "type": "string" },
+        "refusals": { "type": "array", "items": { "type": "string" } },
+        "citationPolicy": { "type": "object" }
+      },
+      "additionalProperties": false,
+      "description": "Reserved (Phase 3): output-side hard constraints; mandatory for the finance packs."
+    },
+    "glossary": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Reserved (Phase 3): industry terminology injected into prompts."
+    },
+    "workflows": {
+      "type": "array",
+      "items": { "type": "object" },
+      "description": "Reserved (Phase 3): declarative workflow templates with conclusion branches (design section 2.4)."
+    },
+    "capabilities": {
+      "type": "object",
+      "required": ["git", "teamauto", "runnablePreview", "deliveryReview"],
+      "properties": {
+        "git": { "type": "boolean" },
+        "teamauto": { "type": "boolean" },
+        "runnablePreview": { "type": "boolean" },
+        "deliveryReview": { "type": "boolean" }
+      },
+      "additionalProperties": false,
+      "description": "Software capability switches. Phase 1 exposes the data; the short-circuit consumers land in Phase 2.3."
+    },
+    "warmupRoles": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" },
+      "uniqueItems": true,
+      "description": "Role ids pre-warmed at startup (cost control: 3-4 core roles max)."
+    },
+    "knowledgePacks": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Reserved (Phase 4): static knowledge pack files shipped with the profile."
+    },
+    "deliverableHints": {
+      "type": "object",
+      "description": "Reserved (Phase 2+): deliverable preview semantics for the industry (replaces the runnable-preview prompt wording)."
+    },
+    "defaultRole": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Role id used when no better signal exists (role-inference miss, unconfigured startup provisioning)."
+    }
+  },
+  "additionalProperties": false
+}

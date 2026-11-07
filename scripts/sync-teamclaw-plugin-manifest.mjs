@@ -71,6 +71,13 @@ function loadBuildConfigSchema(packageDir) {
 
   const context = {
     ROLE_IDS: readTeamClawRoleIds(packageDir),
+    // Phase 1.3: config.ts derives the workerProvisioningRoles enum from the
+    // active TeamProfile loader; stand in with the same role-ids.ts leaf the
+    // software-rd profile snapshots, so the generated manifest enum is
+    // unchanged.
+    getActiveRoleIds: () => readTeamClawRoleIds(packageDir),
+    // Phase 1.6: config.ts reads the software-rd baseline id from the loader.
+    SOFTWARE_RD_PROFILE_ID: "software-rd",
     TEAMCLAW_PUBLISHED_RUNTIME_IMAGE: readPublishedRuntimeImage(packageDir),
     parsePluginConfig: (raw) => raw,
   };

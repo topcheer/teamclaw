@@ -1,5 +1,6 @@
 import type { PluginConfig, TeamState } from "../types.js";
-import { ROLES } from "../roles.js";
+// Phase 1.3: the advertised role set comes from the active TeamProfile.
+import { getActiveRoles } from "../profile-loader.js";
 import {
   buildControllerCompletionRules,
   buildControllerDisciplineRules,
@@ -58,7 +59,7 @@ export function createControllerPromptInjector(deps: ControllerPromptDeps) {
       }
     } else {
       for (const w of workers) {
-        const roleDef = ROLES.find((r) => r.id === w.role);
+        const roleDef = getActiveRoles().find((r) => r.id === w.role);
         const statusIcon = w.status === "idle" ? "[idle]" : w.status === "busy" ? "[busy]" : "[offline]";
         const currentTask = w.currentTaskId ? ` (task: ${w.currentTaskId})` : "";
         parts.push(`- ${roleDef?.icon ?? ""} ${w.label} (${w.id}) ${statusIcon}${currentTask}`);
@@ -87,7 +88,7 @@ export function createControllerPromptInjector(deps: ControllerPromptDeps) {
 
     parts.push("");
     parts.push("### Available Roles");
-    for (const role of ROLES) {
+    for (const role of getActiveRoles()) {
       const skillLine = role.recommendedSkills.length > 0
         ? ` Recommended skills: ${role.recommendedSkills.join(", ")}.`
         : "";

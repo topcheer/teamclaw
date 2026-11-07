@@ -1,4 +1,5 @@
-import { ROLES } from "../roles.js";
+// Phase 1.3: inference candidates come from the active TeamProfile.
+import { getActiveRoles } from "../profile-loader.js";
 import type { RoleId, TaskInfo } from "../types.js";
 
 /**
@@ -99,7 +100,7 @@ export function inferTaskRole(task: Pick<TaskInfo, "assignedRole" | "title" | "d
   let bestRole: RoleId | null = null;
   let bestScore = 0;
 
-  for (const role of ROLES) {
+  for (const role of getActiveRoles()) {
     const roleTokens = [
       role.id,
       role.label,

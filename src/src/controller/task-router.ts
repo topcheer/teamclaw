@@ -1,6 +1,7 @@
 import type { PluginLogger } from "../../api.js";
 import type { TaskInfo, WorkerInfo } from "../types.js";
-import { getRole } from "../roles.js";
+// Phase 1.3: role labels come from the active TeamProfile.
+import { getActiveRole } from "../profile-loader.js";
 
 export class TaskRouter {
   private logger: PluginLogger;
@@ -33,7 +34,7 @@ export class TaskRouter {
     const scored = Object.values(workers)
       .filter((w) => w.status === "idle")
       .map((w) => {
-        const roleDef = getRole(w.role);
+        const roleDef = getActiveRole(w.role);
         const capabilities = roleDef?.capabilities ?? [];
         const matchCount = keywords.filter((k) =>
           capabilities.some((c) => c.includes(k) || k.includes(c)),

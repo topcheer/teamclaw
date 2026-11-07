@@ -17,7 +17,8 @@
 
 import type { PluginLogger } from "../../api.js";
 import type { KickoffAssessment, KickoffPlan, RoleId, TeamState, WorkerInfo } from "../types.js";
-import { getRole, ROLES } from "../roles.js";
+// Phase 1.3: role data comes from the active TeamProfile loader.
+import { getActiveRole, getActiveRoleIds } from "../profile-loader.js";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -30,7 +31,7 @@ const ASSESSMENT_TIMEOUT_MS = 120_000;
 /** Poll interval when waiting for workers to appear in state. */
 const WORKER_POLL_INTERVAL_MS = 2_000;
 
-const VALID_ROLE_IDS = new Set<string>(ROLES.map((r) => r.id));
+
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -65,7 +66,8 @@ export async function runKickoffMeeting(
   const { requirement, candidateRoles, complexity } = request;
 
   // Validate roles
-  const validRoles = candidateRoles.filter((r) => VALID_ROLE_IDS.has(r));
+  // Resolved per call so the set always reflects the active profile.
+  const validRoles = candidateRoles.filter((r) => getActiveRoleIds().includes(r));
   if (validRoles.length === 0) {
     return buildEmptyResult(complexity, "No valid candidate roles provided.");
   }
@@ -184,7 +186,7 @@ function buildKickoffSummary(plan: KickoffPlan, _requirement: string): string {
   if (needed.length > 0) {
     parts.push("### Roles Confirmed Needed");
     for (const a of needed) {
-      const roleDef = getRole(a.role);
+      const roleDef = getActiveRole(a.role);
       const icon = roleDef?.icon ?? "•";
       parts.push(`\n**${icon} ${roleDef?.label ?? a.role}**`);
       parts.push(`- Scope: ${a.scope}`);
@@ -207,7 +209,7 @@ function buildKickoffSummary(plan: KickoffPlan, _requirement: string): string {
     parts.push("");
     parts.push("### Roles Not Needed");
     for (const a of notNeeded) {
-      const roleDef = getRole(a.role);
+      const roleDef = getActiveRole(a.role);
       parts.push(`- ${roleDef?.icon ?? "•"} ${roleDef?.label ?? a.role}: ${a.scope}`);
     }
   }
@@ -252,7 +254,7 @@ function buildKickoffSummary(plan: KickoffPlan, _requirement: string): string {
  * The worker should respond with structured JSON matching KickoffAssessment.
  */
 export function buildKickoffAssessmentPrompt(role: RoleId, requirement: string): string {
-  const roleDef = getRole(role);
+  const roleDef = getActiveRole(role);
   const roleLabel = roleDef?.label ?? role;
 
   return [

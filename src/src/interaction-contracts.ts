@@ -1,4 +1,6 @@
-import { validateRoleId } from "./roles.js";
+// Phase 1.3: runtime role legitimacy is checked against the active
+// TeamProfile (software-rd baseline); roles.ts keeps the registry-layer guard.
+import { validateActiveRoleId } from "./profile-loader.js";
 import type {
   RoleId,
   TaskHandoffContract,
@@ -55,9 +57,10 @@ export function normalizeOptionalContractText(raw: unknown): string | undefined 
 }
 
 export function normalizeContractRole(raw: unknown): RoleId | undefined {
-  // Phase 0.3: single-source role validation lives in roles.ts
-  // (validateRoleId); this exported name keeps the contract-level API stable.
-  return validateRoleId(raw);
+  // Phase 0.3 introduced single-source role validation; Phase 1.3 moved the
+  // runtime check to the active TeamProfile (validateActiveRoleId). This
+  // exported name keeps the contract-level API stable.
+  return validateActiveRoleId(raw);
 }
 
 export function summarizeContractText(text: string, maxChars = 180): string {
