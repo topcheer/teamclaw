@@ -1,5 +1,48 @@
 # Changelog
 
+## 2026.11.0
+
+Released 2026-11-08. Minor release over 2026.8.1: TeamProfile
+multi-industry team architecture (Phases 0-2).
+
+### Added
+
+- TeamProfile architecture: single instance runs one team, switchable
+  between preset industry profiles (software R&D today; banking /
+  securities / insurance / cross-border e-commerce / trading content in
+  follow-up). Roles, prompts, capabilities and routing all flow from the
+  active profile (#190, #193)
+- Profile switch machinery: six-step semantics (validate -> transition
+  -> graceful drain -> atomic whole-state archive -> rebuild -> warmup)
+  with crash-idempotent resume across 11 crash points, full concurrency
+  matrix (409/503 + Retry-After), and WS events (#193)
+- Capability gates: routes (teamauto / previews / reports / repo-write)
+  gated per active profile; software-rd keeps all capabilities with
+  per-route zero-change assertions (#195)
+- Bilingual role inference: tiered weighting (labelZh 8 / label 6 /
+  tokens 3/1), per-profile stop-words, LLM-judge fallback for ambiguous
+  tasks (once per task, disposable session, confident path stays zero-LLM)
+  (#194, #196)
+- domainInstructions: non-software profiles replace the software
+  operating contract wholesale; software-rd locked byte-identical by
+  triple-proof golden (#194)
+- Role single source of truth: role-ids.ts canonical list; all six
+  former copies derive from it; UI/desktop/cli role surfaces data-driven
+  (#186, #187)
+
+### Fixed
+
+- CJK role routing: contiguous-run tokenization with exact-phrase
+  semantics; two-char ASCII tokens (qa/pm) score with standalone-boundary
+  detection so "npm" no longer routes to "pm" (#184)
+- Dispatch storm: nested autoAssign retries grew 2^n on unreachable
+  workers (OOM in tests); re-entry gate converges linearly (#196, #191)
+- Worker role folding: unknown role strings no longer silently fold to
+  developer; controller-side validation with actionable 400 (#196, #192)
+- State files decoupled from teamName (fixed team-state.json + read-only
+  legacy fallback); corrupt or unknown-profile state fails fast instead
+  of silent rollback (#190)
+
 ## 2026.7.1
 
 Released 2026-11-04. Patch release over 2026.7.0.
