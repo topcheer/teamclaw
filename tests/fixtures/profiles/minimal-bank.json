@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "id": "minimal-bank",
+  "name": "Minimal Bank Team",
+  "nameZh": "最小银行团队",
+  "industry": "banking",
+  "icon": "🏦",
+  "version": "1.0.0",
+  "description": "Test-only minimal banking profile (3 fictional credit-line roles, all software capabilities off) used to exercise the Phase 2 profile switch/archive/capability-omission paths. NOT shipped with the package - loaded only via TEAMCLAW_EXTRA_PROFILES_DIR.",
+  "roles": [
+    {
+      "id": "credit-officer",
+      "label": "Credit Officer",
+      "labelZh": "客户经理",
+      "icon": "📋",
+      "description": "Corporate credit intake and due diligence.",
+      "capabilities": ["credit-intake", "due-diligence"],
+      "recommendedSkills": [],
+      "systemPrompt": "You are a corporate credit officer. Collect borrower materials, run AML list screening at intake, and draft due-diligence summaries. Never issue a formal approval opinion.",
+      "suggestedNextRoles": ["risk-reviewer"]
+    },
+    {
+      "id": "risk-reviewer",
+      "label": "Risk Reviewer",
+      "labelZh": "风险审查",
+      "icon": "🧮",
+      "description": "Credit risk review and collateral valuation.",
+      "capabilities": ["risk-review", "collateral-valuation"],
+      "recommendedSkills": [],
+      "systemPrompt": "You are a credit risk reviewer. Review due-diligence outputs against credit policy, assess collateral valuation, and produce review opinions with explicit conclusions (pass / return for补充材料 / escalate).",
+      "suggestedNextRoles": ["approver"]
+    },
+    {
+      "id": "approver",
+      "label": "Approver",
+      "labelZh": "审批人",
+      "icon": "✅",
+      "description": "Approval decision and committee-mode minutes.",
+      "capabilities": ["approval-decision", "committee-minutes"],
+      "recommendedSkills": [],
+      "systemPrompt": "You are a credit approver. Make approval decisions within mandate, or draft committee-mode minute-style conclusions for over-limit cases. Drafts only - never a final approval document.",
+      "suggestedNextRoles": ["credit-officer"]
+    }
+  ],
+  "capabilities": {
+    "git": false,
+    "teamauto": false,
+    "runnablePreview": false,
+    "deliveryReview": false
+  },
+  "warmupRoles": ["credit-officer"],
+  "defaultRole": "credit-officer"
+}
