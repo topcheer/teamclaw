@@ -76,6 +76,8 @@ function loadBuildConfigSchema(packageDir) {
     // software-rd profile snapshots, so the generated manifest enum is
     // unchanged.
     getActiveRoleIds: () => readTeamClawRoleIds(packageDir),
+    // Phase 1.6: config.ts reads the software-rd baseline id from the loader.
+    SOFTWARE_RD_PROFILE_ID: "software-rd",
     TEAMCLAW_PUBLISHED_RUNTIME_IMAGE: readPublishedRuntimeImage(packageDir),
     parsePluginConfig: (raw) => raw,
   };

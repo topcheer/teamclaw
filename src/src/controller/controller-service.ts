@@ -17,6 +17,9 @@ import { runKickoffMeeting, buildKickoffAssessmentPrompt, ASSESSMENT_TIMEOUT_MS 
 import { resolvePreferredLanAddress } from "../networking.js";
 import { createTeamAutoScheduler, type TeamAutoScheduler } from "../teamauto/scheduler.js";
 import { getGithubAuthManager } from "./github-auth.js";
+// Phase 1.6 (design 2.3): TeamState.profileId is the single runtime truth for
+// the active TeamProfile; config teamProfile only seeds first initialization.
+import { hasProfile, setActiveProfileId, SOFTWARE_RD_PROFILE_ID } from "../profile-loader.js";
 
 export type KickoffHandler = (
   candidateRoles: RoleId[],
@@ -71,7 +74,18 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
       teamState = await loadTeamState(config.teamName);
       let repoStateChanged = false;
       if (!teamState) {
+        // Phase 1.6: first initialization seeds the active profile from the
+        // config bootstrap value. An unknown id is the one sanctioned
+        // fallback (design 2.2): warn and run the software-rd baseline.
+        const requestedProfileId = config.teamProfile;
+        let profileId = requestedProfileId;
+        if (!hasProfile(requestedProfileId)) {
+          profileId = SOFTWARE_RD_PROFILE_ID;
+          logger.warn(`Controller: configured teamProfile "${requestedProfileId}" is not a built-in profile; falling back to "${SOFTWARE_RD_PROFILE_ID}"`);
+        }
+        setActiveProfileId(profileId);
         teamState = {
+          profileId,
           teamName: config.teamName,
           workers: {},
           tasks: {},
@@ -84,8 +98,18 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
           updatedAt: Date.now(),
         };
         await saveTeamState(teamState);
-        logger.info(`Controller: created new team "${config.teamName}"`);
+        logger.info(`Controller: created new team "${config.teamName}" (profile: ${profileId})`);
       } else {
+        // Restored state: TeamState.profileId is the runtime truth (config
+        // changes do not re-seed it). v1 states migrated by state.ts always
+        // carry a known id; a dangling reference would mean the profile was
+        // removed in a newer profile package - warn and stay on the baseline.
+        if (hasProfile(teamState.profileId)) {
+          setActiveProfileId(teamState.profileId);
+        } else {
+          setActiveProfileId(SOFTWARE_RD_PROFILE_ID);
+          logger.warn(`Controller: team state references unknown team profile "${teamState.profileId}"; running the "${SOFTWARE_RD_PROFILE_ID}" baseline`);
+        }
         const previousRepoState = JSON.stringify(teamState.repo ?? null);
         teamState.repo = repoState ?? teamState.repo;
         repoStateChanged = JSON.stringify(teamState.repo ?? null) !== previousRepoState;

@@ -2,9 +2,9 @@ import type { PluginConfig } from "./types.js";
 import { parsePluginConfig } from "./types.js";
 // Phase 1.3: the enum is driven by the active TeamProfile (software-rd
 // baseline) instead of importing the roles.ts registry directly. The
-// manifest generator evaluates this file without imports and injects an
-// equivalent getActiveRoleIds binding backed by role-ids.ts.
-import { getActiveRoleIds } from "./profile-loader.js";
+// manifest generator evaluates this file without imports and injects
+// equivalent getActiveRoleIds/SOFTWARE_RD_PROFILE_ID bindings.
+import { getActiveRoleIds, SOFTWARE_RD_PROFILE_ID } from "./profile-loader.js";
 import { TEAMCLAW_PUBLISHED_RUNTIME_IMAGE } from "./install-defaults.js";
 
 function buildConfigSchema() {
@@ -37,6 +37,11 @@ function buildConfigSchema() {
           type: "string" as const,
           default: "TeamClaw",
           description: "Team name for mDNS identification",
+        },
+        teamProfile: {
+          type: "string" as const,
+          default: SOFTWARE_RD_PROFILE_ID,
+          description: "Team profile package id (software-rd baseline); seeds first initialization only - the persisted team state profile is the runtime truth",
         },
         heartbeatIntervalMs: {
           type: "number" as const,
@@ -243,6 +248,10 @@ function buildConfigSchema() {
       role: { label: "Role", help: "Worker role (worker mode only)" },
       controllerUrl: { label: "Controller URL", help: "Manual fallback if mDNS discovery fails" },
       teamName: { label: "Team Name", help: "Team identifier for mDNS" },
+      teamProfile: {
+        label: "Team Profile",
+        help: "Team profile package id; applies to the first team initialization only (Phase 2 adds profile switching)",
+      },
       heartbeatIntervalMs: { label: "Heartbeat Interval", help: "In milliseconds, minimum 1000" },
       taskTimeoutMs: {
         label: "Task Stall Threshold",

@@ -5,6 +5,10 @@ import { DEFAULT_GITHUB_CLIENT_ID } from "./controller/github-auth.js";
 import { DEFAULT_ROLE } from "./roles.js";
 import { validateRoleId, validateRoleIdList } from "./roles.js";
 import { ROLE_IDS } from "./roles.js";
+// Phase 1.6: profile-loader has no runtime edge back into this module (its
+// types.js import is type-only), so the software-rd baseline id stays a
+// single literal shared with the loader.
+import { SOFTWARE_RD_PROFILE_ID } from "./profile-loader.js";
 
 export type TeamClawMode = "controller" | "worker";
 
@@ -519,6 +523,14 @@ export type PluginConfig = {
   role: RoleId;
   controllerUrl: string;
   teamName: string;
+  /**
+   * Phase 1.6 (vertical-team-profiles-design.md section 2.3): the team
+   * profile package id. Bootstrap value for FIRST initialization only -
+   * once a TeamState exists, TeamState.profileId is the single runtime
+   * truth and config changes have no effect (profile switching lands in
+   * Phase 2).
+   */
+  teamProfile: string;
   heartbeatIntervalMs: number;
   processModel: ProcessModel;
   /**
@@ -576,6 +588,12 @@ export type WorkerIdentity = {
 export type TeamState = {
   /** Schema version for forward-compatible state migration. */
   version?: number;
+  /**
+   * Phase 1.6 (design section 2.3): the active TeamProfile id. Single
+   * runtime truth - config teamProfile only seeds first initialization.
+   * Legacy states without this field migrate to the software-rd baseline.
+   */
+  profileId: string;
   teamName: string;
   workers: Record<string, WorkerInfo>;
   tasks: Record<string, TaskInfo>;
@@ -670,6 +688,13 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
   const teamName = typeof raw.teamName === "string" && raw.teamName.trim()
     ? raw.teamName.trim()
     : "TeamClaw";
+
+  // Phase 1.6: first-initialization bootstrap value. Existence of the id is
+  // checked by the controller startup chain (unknown ids fall back to the
+  // software-rd baseline with a warning); here we only normalize the shape.
+  const teamProfile = typeof raw.teamProfile === "string" && raw.teamProfile.trim()
+    ? raw.teamProfile.trim()
+    : SOFTWARE_RD_PROFILE_ID;
 
   const heartbeatIntervalMs = typeof raw.heartbeatIntervalMs === "number" && raw.heartbeatIntervalMs >= 1000
     ? raw.heartbeatIntervalMs
@@ -804,6 +829,7 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
     role,
     controllerUrl,
     teamName,
+    teamProfile,
     heartbeatIntervalMs,
     processModel,
     roleModelOverrides: parseRoleModelOverrides(raw.roleModelOverrides),

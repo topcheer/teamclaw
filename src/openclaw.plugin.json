@@ -52,6 +52,10 @@
       "label": "Team Name",
       "help": "Team identifier for mDNS"
     },
+    "teamProfile": {
+      "label": "Team Profile",
+      "help": "Team profile package id; applies to the first team initialization only (Phase 2 adds profile switching)"
+    },
     "heartbeatIntervalMs": {
       "label": "Heartbeat Interval",
       "help": "In milliseconds, minimum 1000"
@@ -222,6 +226,11 @@
         "type": "string",
         "default": "TeamClaw",
         "description": "Team name for mDNS identification"
+      },
+      "teamProfile": {
+        "type": "string",
+        "default": "software-rd",
+        "description": "Team profile package id (software-rd baseline); seeds first initialization only - the persisted team state profile is the runtime truth"
       },
       "heartbeatIntervalMs": {
         "type": "number",
