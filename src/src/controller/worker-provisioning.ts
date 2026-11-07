@@ -20,7 +20,7 @@ import {
   resolveTeamClawWorkspaceDir,
   TEAMCLAW_AGENT_ID,
 } from "../openclaw-workspace.js";
-import { ROLES } from "../roles.js";
+import { ROLES, DEFAULT_ROLE } from "../roles.js";
 import { inferTaskRole } from "./role-inference.js";
 import type {
   PluginConfig,
@@ -408,7 +408,7 @@ export class WorkerProvisioningManager {
     if (configured.length > 0) {
       return [...new Set(configured)];
     }
-    return ["developer"];
+    return [DEFAULT_ROLE];
   }
 
   private async ensureStartupProvisioningPrerequisites(): Promise<void> {

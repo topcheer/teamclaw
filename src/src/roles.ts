@@ -325,6 +325,14 @@ for (const role of ROLES) {
 const ROLE_MAP = new Map<string, RoleDefinition>(ROLES.map((r) => [r.id, r]));
 const ROLE_IDS: RoleId[] = ROLES.map((r) => r.id);
 
+/**
+ * Single source of truth for the fallback role used when no better signal
+ * exists (role inference miss, unconfigured startup provisioning, unset
+ * worker config role). Callers must import this constant instead of
+ * hardcoding a role id.
+ */
+export const DEFAULT_ROLE: RoleId = "developer";
+
 function getRole(id: RoleId): RoleDefinition | undefined {
   return ROLE_MAP.get(id);
 }
