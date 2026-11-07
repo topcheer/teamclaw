@@ -59,7 +59,11 @@ import { createT as i18nCreateT } from "./i18n.js";
     activeClarificationId: "",
     dismissedClarificationIds: [],
     clarificationDrafts: {},
-    externalWorkerRole: 'developer',
+    // Resolved from the controller's role payload (teamStatus
+    // .externalWorkerInstall.roles) when the install card first renders —
+    // see renderExternalWorkerInstallCard. Kept empty until then so no role
+    // id is hardcoded in the renderer.
+    externalWorkerRole: '',
     externalWorkerDiscoveryMode: 'mdns',
     externalWorkerInstallVisible: false,
     language: loadLanguage(),
@@ -1824,7 +1828,11 @@ import { createT as i18nCreateT } from "./i18n.js";
       return;
     }
     if (!roles.some((role) => role.id === state.externalWorkerRole)) {
-      state.externalWorkerRole = roles[0].id;
+      // Prefer the payload-advertised default (the registry DEFAULT_ROLE on
+      // the controller) when it names a real registry entry.
+      const payloadDefaultRole = typeof info.defaultRole === 'string' ? info.defaultRole : '';
+      const validDefault = payloadDefaultRole && roles.some((role) => role.id === payloadDefaultRole);
+      state.externalWorkerRole = validDefault ? payloadDefaultRole : roles[0].id;
     }
     if (state.externalWorkerDiscoveryMode === 'manual' && !info.recommendedControllerUrl) {
       state.externalWorkerDiscoveryMode = 'mdns';

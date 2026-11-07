@@ -55,19 +55,47 @@ const AGENT_MODE_OPTIONS = [
   },
 ];
 
-const ROLE_OPTIONS = [
-  { value: "pm", label: "Product Manager" },
-  { value: "architect", label: "Software Architect" },
-  { value: "developer", label: "Developer" },
-  { value: "qa", label: "QA Engineer" },
-  { value: "release-engineer", label: "Release Engineer" },
-  { value: "infra-engineer", label: "Infrastructure Engineer" },
-  { value: "devops", label: "DevOps Engineer" },
-  { value: "security-engineer", label: "Security Engineer" },
-  { value: "designer", label: "UI/UX Designer" },
-  { value: "marketing", label: "Marketing Specialist" },
-  { value: "data-engineer", label: "Data Engineer" },
-];
+// Installer role options are derived from the packaged role registry
+// (dist/src/roles.js, compiled from src/src/roles.ts) instead of a
+// hand-maintained copy, so profile-driven role sets flow into the wizard
+// without editing this file. dist/ always ships inside the npm package; in a
+// dev checkout it appears after `npm --prefix src run build`. The dynamic
+// import keeps pre-build tooling (lint, source-level tests) working: this
+// file parses without dist present and only the interactive/install paths
+// require it.
+let ROLE_OPTIONS = [];
+let DEFAULT_WORKER_ROLE = "";
+
+async function loadRoleOptions() {
+  try {
+    const rolesModule = await import("./dist/src/roles.js");
+    const roles = Array.isArray(rolesModule.ROLES) ? rolesModule.ROLES : [];
+    ROLE_OPTIONS = roles
+      .filter((role) => role && typeof role.id === "string" && role.id.trim())
+      .map((role) => ({
+        value: role.id,
+        label: typeof role.label === "string" && role.label.trim() ? role.label : role.id,
+      }));
+    const registryDefault = rolesModule.DEFAULT_ROLE;
+    DEFAULT_WORKER_ROLE = typeof registryDefault === "string" && ROLE_OPTIONS.some((option) => option.value === registryDefault)
+      ? registryDefault
+      : "";
+  } catch {
+    // dist not built yet (dev checkout). Keep the registry empty so callers
+    // fail with the actionable guidance in ensureRoleOptionsLoaded instead
+    // of presenting a stale role list.
+    ROLE_OPTIONS = [];
+    DEFAULT_WORKER_ROLE = "";
+  }
+}
+
+function ensureRoleOptionsLoaded() {
+  if (ROLE_OPTIONS.length === 0) {
+    throw new Error(
+      "TeamClaw role registry unavailable (./dist/src/roles.js). Run `npm --prefix src run build` in the repository, or reinstall the @teamclaws/teamclaw package, then retry.",
+    );
+  }
+}
 
 const INSTALL_MODE_OPTIONS = [
   {
@@ -185,6 +213,7 @@ function parseArgs(argv) {
     }
     if (arg === "--worker-role") {
       const value = argv[index + 1];
+      ensureRoleOptionsLoaded();
       const validRoles = new Set(ROLE_OPTIONS.map((option) => option.value));
       if (!value || !validRoles.has(value)) {
         throw new Error(`--worker-role requires one of: ${ROLE_OPTIONS.map((option) => option.value).join(", ")}`);
@@ -1318,7 +1347,7 @@ async function collectInstallChoices(configPath, config, prompter, options) {
       defaultValue: options.workerRole || (
         typeof existingTeamClaw.role === "string" && existingTeamClaw.role.trim()
           ? existingTeamClaw.role.trim()
-          : "developer"
+          : DEFAULT_WORKER_ROLE || ROLE_OPTIONS[0].value
       ),
     });
     const workerPort = await prompter.number({
@@ -1410,7 +1439,7 @@ async function collectInstallChoices(configPath, config, prompter, options) {
 
   const provisioningRoles = await promptOptionalRoleList(
     prompter,
-    "Preferred on-demand roles (comma-separated, leave empty to keep workerProvisioningRoles empty and let startup readiness default to a warm developer worker)",
+    `Preferred on-demand roles (comma-separated, leave empty to keep workerProvisioningRoles empty and let startup readiness default to a warm ${DEFAULT_WORKER_ROLE} worker)`,
     resolveDefaultProvisioningRoles(existingTeamClaw),
   );
   const maxPerRole = await prompter.number({
@@ -1950,6 +1979,7 @@ async function runInstall(options) {
   if (!options.yes && (!process.stdin.isTTY || !process.stdout.isTTY)) {
     throw new Error("Interactive install requires a TTY. Re-run with --yes or in a terminal.");
   }
+  ensureRoleOptionsLoaded();
 
   const prompter = new Prompter({ yes: options.yes });
   try {
@@ -2073,6 +2103,7 @@ async function runInstall(options) {
 }
 
 async function main() {
+  await loadRoleOptions();
   const { command, options } = parseArgs(process.argv.slice(2));
   if (command === "help") {
     printHelp();

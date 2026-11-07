@@ -19,6 +19,7 @@ const controllerToolsPath = path.join(projectRoot, "src", "src", "controller", "
 const workerToolsPath = path.join(projectRoot, "src", "src", "worker", "tools.ts");
 const cliPath = path.join(projectRoot, "src", "cli.mjs");
 const uiIndexPath = path.join(projectRoot, "src", "src", "ui", "index.html");
+const uiAppPath = path.join(projectRoot, "src", "src", "ui", "app.js");
 const pluginJsonPath = path.join(projectRoot, "src", "openclaw.plugin.json");
 const readmePath = path.join(projectRoot, "README.md");
 const sitePath = path.join(projectRoot, "docs", "index.html");
@@ -51,6 +52,7 @@ async function runRoleRegistrySmoke() {
     workerToolsSource,
     cliSource,
     uiIndexSource,
+    uiAppSource,
     pluginJsonSource,
     readmeSource,
     siteSource,
@@ -67,6 +69,7 @@ async function runRoleRegistrySmoke() {
     fs.readFile(workerToolsPath, "utf8"),
     fs.readFile(cliPath, "utf8"),
     fs.readFile(uiIndexPath, "utf8"),
+    fs.readFile(uiAppPath, "utf8"),
     fs.readFile(pluginJsonPath, "utf8"),
     fs.readFile(readmePath, "utf8"),
     fs.readFile(sitePath, "utf8"),
@@ -76,10 +79,35 @@ async function runRoleRegistrySmoke() {
     assert.match(rolesSource, new RegExp(`id:\\s*"${role}"`), `roles.ts should define ${role}`);
     assert.match(typesSource, new RegExp(`\\|\\s*"${role}"`), `types.ts RoleId union should include ${role}`);
     assert.match(typesSource, new RegExp(`"${role}"`), `types.ts VALID_ROLES should include ${role}`);
-    assert.match(cliSource, new RegExp(`value:\\s*"${role}"`), `installer CLI should offer ${role}`);
-    assert.match(uiIndexSource, new RegExp(`<option value="${role}">`), `UI manual-task form should offer ${role}`);
     assert.match(readmeSource, new RegExp("`" + role + "`"), `README supported roles table should mention ${role}`);
   }
+
+  // Phase 1.4 minimal sync: the installer CLI and the web manual-task form no
+  // longer hardcode the role table — both derive it from the role registry
+  // (dist/src/roles.js for the CLI, GET /api/v1/roles for the UI), so the
+  // per-file "must contain <role id>" assertions above were replaced by
+  // data-driven wiring assertions. Deep coverage lives in
+  // tests/test-untyped-role-render.mjs.
+  assert.match(
+    cliSource,
+    /import\("\.\/dist\/src\/roles\.js"\)/,
+    "installer CLI should load its role table from the packaged role registry",
+  );
+  assert.match(
+    cliSource,
+    /value:\s*role\.id,/,
+    "installer CLI role options should be derived from registry role entries",
+  );
+  assert.match(
+    uiIndexSource,
+    /<option value="" data-i18n="manualTask\.autoAssign">Auto-assign<\/option>/,
+    "UI manual-task form should keep the Auto-assign placeholder option",
+  );
+  assert.match(
+    uiAppSource,
+    /function renderTaskRoleOptions/,
+    "UI manual-task role options should be rendered from /roles data",
+  );
 
   assert.match(
     rolesSource,
