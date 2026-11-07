@@ -426,9 +426,12 @@
                 <option value="google">Google</option>
               </select>
               <input id="bootstrap-llm-endpoint" class="compact-input" type="text" data-i18n-placeholder="wizard.llmEndpoint" placeholder="接口地址（可选）">
-              <input id="bootstrap-llm-model" class="compact-input" type="text" placeholder="model" list="bootstrap-llm-model-list" autocomplete="off">
-              <datalist id="bootstrap-llm-model-list"></datalist>
               <input id="bootstrap-llm-apikey" class="compact-input" type="password" placeholder="API Key">
+              <div class="bootstrap-llm-model-row">
+                <select id="bootstrap-llm-model-select" class="compact-input" hidden></select>
+                <input id="bootstrap-llm-model" class="compact-input" type="text" placeholder="model" hidden autocomplete="off">
+                <button id="bootstrap-llm-models-refresh" class="btn btn-small" type="button" data-i18n="wizard.refreshModels" title="Refresh model list">刷新</button>
+              </div>
             </div>
             <div id="bootstrap-llm-keyhint" class="bootstrap-status-detail" hidden></div>
             <div id="bootstrap-llm-hint" class="bootstrap-status-detail" hidden></div>

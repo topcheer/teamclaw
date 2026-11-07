@@ -838,6 +838,23 @@ import { createT as i18nCreateT } from "./i18n.js";
     google: "https://aistudio.google.com/apikey",
   };
   let llmModelsFetchToken = 0;
+  let llmModelsCache = [];
+  function applyModelFilter(forceFull) {
+    const select = document.getElementById("bootstrap-llm-model-select");
+    const modelEl = document.getElementById("bootstrap-llm-model");
+    if (!select || !modelEl || !llmModelsCache.length) return;
+    // forceFull: after a fetch-filled smart default, show the FULL list for
+    // browsing - filtering by the just-filled value collapses it to one
+    // entry (user-reported). Only real typing filters.
+    const q = forceFull ? "" : modelEl.value.trim().toLowerCase();
+    const list = q ? llmModelsCache.filter((m) => m.toLowerCase().includes(q)) : llmModelsCache.slice();
+    const current = modelEl.value.trim();
+    const options = list.includes(current) || !current ? list : [current].concat(list);
+    select.innerHTML = options.map((id) => `<option value="${escapeHtml(id)}">${escapeHtml(id)}</option>`).join("");
+    select.hidden = false;
+    modelEl.hidden = false; // stays visible as the filter/entry box
+    if (current && options.includes(current)) select.value = current;
+  }
   function updateLlmKeyHint() {
     const keyhint = document.getElementById("bootstrap-llm-keyhint");
     const prov = document.getElementById("bootstrap-llm-provider");
@@ -858,28 +875,29 @@ import { createT as i18nCreateT } from "./i18n.js";
     const prov = document.getElementById("bootstrap-llm-provider");
     const keyEl = document.getElementById("bootstrap-llm-apikey");
     const epEl = document.getElementById("bootstrap-llm-endpoint");
-    const listEl = document.getElementById("bootstrap-llm-model-list");
-    if (!prov || !keyEl || !listEl) return;
+    if (!prov || !keyEl) return;
     const token = ++llmModelsFetchToken;
     const key = keyEl.value.trim();
-    if (!key) { listEl.innerHTML = ""; return; }
     // OpenRouter's model list is public - fetch without a key too.
     if (prov.value !== "openrouter" && !key) return;
     window.teamclawDesktop.llmListModels({ provider: prov.value, endpoint: epEl ? epEl.value.trim() : "", apiKey: key })
       .then((res) => {
         if (token !== llmModelsFetchToken) return; // stale
-        if (!res || res.error || !Array.isArray(res.models) || !res.models.length) return;
-        listEl.innerHTML = res.models.map((id) => `<option value="${escapeHtml(id)}"></option>`).join("");
-        // Smart default: prefer the current prefilled/default model if the
-        // provider lists it, else a free/recommended-looking entry, else first.
+        const select = document.getElementById("bootstrap-llm-model-select");
         const modelEl = document.getElementById("bootstrap-llm-model");
-        if (modelEl && !modelEl.dataset.userEdited) {
+        if (!res || res.error || !Array.isArray(res.models) || !res.models.length || !select || !modelEl) return;
+        llmModelsCache = res.models.slice();
+        // Smart default: prefer the curated default if listed, else a free
+        // entry on openrouter, else first. Only when the user hasn't chosen.
+        if (!modelEl.dataset.userEdited) {
           const preferred = LLM_DEFAULT_MODELS[prov.value];
           const pick = res.models.find((m) => m === preferred)
             || res.models.find((m) => /free/i.test(m) && prov.value === "openrouter")
             || res.models[0];
-          if (pick) { modelEl.value = pick; updateLlmStep(); }
+          if (pick) modelEl.value = pick;
         }
+        applyModelFilter(!modelEl.dataset.userEdited);
+        updateLlmStep();
       })
       .catch(() => { /* manual input still works */ });
   }
@@ -1058,7 +1076,16 @@ import { createT as i18nCreateT } from "./i18n.js";
     const keyElX = document.getElementById("bootstrap-llm-apikey");
     if (keyElX) keyElX.addEventListener("input", () => { updateLlmKeyHint(); clearTimeout(window.__llmFetchT); window.__llmFetchT = setTimeout(scheduleLlmModelsFetch, 700); });
     const modelElX = document.getElementById("bootstrap-llm-model");
-    if (modelElX) modelElX.addEventListener("input", () => { modelElX.dataset.userEdited = modelElX.value.trim() ? "1" : ""; });
+    if (modelElX) modelElX.addEventListener("input", () => { modelElX.dataset.userEdited = modelElX.value.trim() ? "1" : ""; applyModelFilter(); });
+    const modelSel = document.getElementById("bootstrap-llm-model-select");
+    if (modelSel) modelSel.addEventListener("change", () => {
+      // Pick from the list fills the entry box WITHOUT re-filtering, so the
+      // list stays browsable after a selection.
+      if (modelElX) { modelElX.value = modelSel.value; modelElX.dataset.userEdited = modelSel.value.trim() ? "1" : ""; }
+      updateLlmStep();
+    });
+    const modelsRefresh = document.getElementById("bootstrap-llm-models-refresh");
+    if (modelsRefresh) modelsRefresh.addEventListener("click", () => { modelElX && delete modelElX.dataset.userEdited; scheduleLlmModelsFetch(); });
     const epElX = document.getElementById("bootstrap-llm-endpoint");
     if (epElX) epElX.addEventListener("input", () => { clearTimeout(window.__llmFetchT); window.__llmFetchT = setTimeout(scheduleLlmModelsFetch, 700); });
     document.querySelectorAll('input[name="llm-source"]').forEach((r) => r.addEventListener("change", () => { updateLlmKeyHint(); updateLlmStep(); }));
