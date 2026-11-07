@@ -29,6 +29,13 @@ async function transpileManifestModuleSubset(outDir) {
       output: path.join(outDir, "src", "roles.js"),
     },
     {
+      // roles.ts imports prompt-policy.js at runtime (composePrompt and role
+      // operating rules); needed ever since orchestration-manifest.ts started
+      // delegating its role guard to validateRoleIdList in roles.ts (Phase 0.3).
+      source: path.join(packageRoot, "src", "prompt-policy.ts"),
+      output: path.join(outDir, "src", "prompt-policy.js"),
+    },
+    {
       source: path.join(packageRoot, "src", "openclaw-workspace.ts"),
       output: path.join(outDir, "src", "openclaw-workspace.js"),
     },

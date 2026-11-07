@@ -326,6 +326,41 @@ const ROLE_MAP = new Map<string, RoleDefinition>(ROLES.map((r) => [r.id, r]));
 const ROLE_IDS: RoleId[] = ROLES.map((r) => r.id);
 
 /**
+ * Phase 0.3 convergence point for `as RoleId` casts: validate an untrusted
+ * value against the registered role ids. Returns the trimmed role id when
+ * `raw` is a string that matches a registered role, otherwise `undefined`.
+ * Never throws — callers treat invalid input exactly like a missing field.
+ * Semantics intentionally mirror the former normalizeContractRole guard in
+ * interaction-contracts.ts, which now delegates here.
+ */
+export function validateRoleId(raw: unknown): RoleId | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  return ROLE_MAP.get(raw.trim())?.id;
+}
+
+/**
+ * Array-filtering counterpart of validateRoleId: keeps order, drops
+ * non-strings, blank entries, and unknown roles, and dedupes by first
+ * occurrence. Phase 0.3 replaces the per-file list guards (types.ts
+ * parseRoleList, orchestration-manifest.ts normalizeManifestRoleList).
+ */
+export function validateRoleIdList(raw: unknown): RoleId[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const roleIds: RoleId[] = [];
+  for (const entry of raw) {
+    const roleId = validateRoleId(entry);
+    if (roleId && !roleIds.includes(roleId)) {
+      roleIds.push(roleId);
+    }
+  }
+  return roleIds;
+}
+
+/**
  * Single source of truth for the fallback role used when no better signal
  * exists (role inference miss, unconfigured startup provisioning, unset
  * worker config role). Callers must import this constant instead of

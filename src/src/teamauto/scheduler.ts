@@ -426,6 +426,10 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         ].join("\n"),
         status: "pending",
         priority: candidate.kind === "takeOwnership" ? "high" : "medium",
+        // candidate.role comes from the scanner's literal role union
+        // ("qa" | "developer" | "architect" | "security-engineer"), not from
+        // untrusted input, so this cast only widens a known subset of RoleId.
+        // Phase 2.3 narrows the scanner role set per team profile.
         assignedRole: candidate.role as RoleId,
         writeMode: candidate.writeMode === "write" ? "write" : "read-only",
         createdBy: "teamauto",
