@@ -39,7 +39,7 @@ import {
   generateId,
 } from "../protocol.js";
 import { listWorkspaceTree, listWorkspaceSubtree, readWorkspaceFile, readWorkspaceRawFile } from "../workspace-browser.js";
-import { ROLES, DEFAULT_ROLE, normalizeRecommendedSkills, resolveRecommendedSkillsForRole } from "../roles.js";
+import { ROLES, DEFAULT_ROLE, normalizeRecommendedSkills, resolveRecommendedSkillsForRole, validateRoleId } from "../roles.js";
 import {
   buildRepoSyncInfo,
   ensureControllerGitRepo,
@@ -5324,7 +5324,7 @@ async function handleRequest(
   if (req.method === "POST" && pathname === "/api/v1/workers/register") {
     const body = await parseJsonBody(req);
     const workerId = typeof body.workerId === "string" ? body.workerId : "";
-    const role = typeof body.role === "string" ? body.role as RoleId : "";
+    const role = validateRoleId(body.role) ?? "";
     const label = typeof body.label === "string" ? body.label : role;
     const workerUrl = typeof body.url === "string" ? body.url : "";
     const capabilities = Array.isArray(body.capabilities) ? body.capabilities as string[] : [];
@@ -5459,7 +5459,7 @@ async function handleRequest(
     const title = typeof body.title === "string" ? body.title : "";
     const description = typeof body.description === "string" ? body.description : "";
     const priority = typeof body.priority === "string" ? body.priority as TaskPriority : "medium";
-    const assignedRole = typeof body.assignedRole === "string" ? body.assignedRole as RoleId : undefined;
+    const assignedRole = validateRoleId(body.assignedRole);
     const createdBy = typeof body.createdBy === "string" ? body.createdBy : "boss";
     const controllerSessionKey = createdBy === "controller" && typeof body.controllerSessionKey === "string" && body.controllerSessionKey.trim()
       ? normalizeControllerIntakeSessionKey(body.controllerSessionKey)
@@ -5711,7 +5711,8 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
       if (typeof body.status === "string") task.status = body.status as TaskStatus;
       if (typeof body.progress === "string") task.progress = body.progress as string;
       if (typeof body.priority === "string") task.priority = body.priority as TaskPriority;
-      if (typeof body.assignedRole === "string") task.assignedRole = body.assignedRole as RoleId;
+      const nextAssignedRole = validateRoleId(body.assignedRole);
+      if (nextAssignedRole) task.assignedRole = nextAssignedRole;
       if (Array.isArray(body.recommendedSkills)) {
         const recommendedSkills = normalizeRecommendedSkills(
           body.recommendedSkills.map((entry: unknown) => String(entry ?? "")),
@@ -5773,7 +5774,7 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
     const taskId = pathname.split("/")[4]!;
     const body = await parseJsonBody(req);
     const workerId = typeof body.workerId === "string" ? body.workerId : undefined;
-    const targetRole = typeof body.targetRole === "string" ? body.targetRole as RoleId : undefined;
+    const targetRole = validateRoleId(body.targetRole);
 
     const state = getTeamState();
     if (!state?.tasks[taskId]) {
@@ -5808,7 +5809,7 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
   if (req.method === "POST" && pathname.match(/^\/api\/v1\/tasks\/[^/]+\/handoff$/)) {
     const taskId = pathname.split("/")[4]!;
     const body = await parseJsonBody(req);
-    const targetRole = typeof body.targetRole === "string" ? body.targetRole as RoleId : undefined;
+    const targetRole = validateRoleId(body.targetRole);
     const handoffContract = normalizeTaskHandoffContract(body.contract, {
       targetRole,
       reason: typeof body.reason === "string" ? body.reason : targetRole ? `The next step should move to ${targetRole}.` : "The task needs a new assignee.",
@@ -6131,7 +6132,7 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
       phase: typeof body.phase === "string" ? body.phase : undefined,
       source: typeof body.source === "string" ? body.source as TaskExecutionEventInput["source"] : undefined,
       stream: typeof body.stream === "string" ? body.stream : undefined,
-      role: typeof body.role === "string" ? body.role as RoleId : undefined,
+      role: validateRoleId(body.role),
       workerId,
       runId: typeof body.runId === "string" ? body.runId : undefined,
       sessionKey: typeof body.sessionKey === "string" ? body.sessionKey : undefined,
@@ -6170,8 +6171,8 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
     }
     const requestedBy = typeof body.requestedBy === "string" ? body.requestedBy : "";
     const reason = typeof body.reason === "string" ? body.reason.trim() : "";
-    const requestedByRole = typeof body.requestedByRole === "string" ? body.requestedByRole as RoleId : undefined;
-    const targetRole = typeof body.targetRole === "string" ? body.targetRole as RoleId : undefined;
+    const requestedByRole = validateRoleId(body.requestedByRole);
+    const targetRole = validateRoleId(body.targetRole);
     const requestedWorkerCount = typeof body.requestedWorkerCount === "number"
       ? Math.max(2, Math.min(10, Math.floor(body.requestedWorkerCount)))
       : undefined;
@@ -6389,17 +6390,19 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
   // POST /api/v1/messages/direct
   if (req.method === "POST" && pathname === "/api/v1/messages/direct") {
     const body = await parseJsonBody(req);
+    const fromRole = validateRoleId(body.fromRole);
+    const toRole = validateRoleId(body.toRole);
     const message: TeamMessage = {
       id: generateId(),
       from: typeof body.from === "string" ? body.from : "",
-      fromRole: typeof body.fromRole === "string" ? body.fromRole as RoleId : undefined,
-      toRole: typeof body.toRole === "string" ? body.toRole as RoleId : undefined,
+      fromRole,
+      toRole,
       type: "direct",
       content: typeof body.content === "string" ? body.content : "",
       contract: ensureTeamMessageContract(body.contract, {
         type: "direct",
         content: typeof body.content === "string" ? body.content : "",
-        toRole: typeof body.toRole === "string" ? body.toRole as RoleId : undefined,
+        toRole,
         taskId: typeof body.taskId === "string" ? body.taskId : undefined,
       }),
       taskId: typeof body.taskId === "string" ? body.taskId : undefined,
@@ -6418,10 +6421,11 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
   // POST /api/v1/messages/broadcast
   if (req.method === "POST" && pathname === "/api/v1/messages/broadcast") {
     const body = await parseJsonBody(req);
+    const fromRole = validateRoleId(body.fromRole);
     const message: TeamMessage = {
       id: generateId(),
       from: typeof body.from === "string" ? body.from : "",
-      fromRole: typeof body.fromRole === "string" ? body.fromRole as RoleId : undefined,
+      fromRole,
       type: "broadcast",
       content: typeof body.content === "string" ? body.content : "",
       contract: ensureTeamMessageContract(body.contract, {
@@ -6453,17 +6457,19 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
   // POST /api/v1/messages/review-request
   if (req.method === "POST" && pathname === "/api/v1/messages/review-request") {
     const body = await parseJsonBody(req);
+    const fromRole = validateRoleId(body.fromRole);
+    const toRole = validateRoleId(body.toRole);
     const message: TeamMessage = {
       id: generateId(),
       from: typeof body.from === "string" ? body.from : "",
-      fromRole: typeof body.fromRole === "string" ? body.fromRole as RoleId : undefined,
-      toRole: typeof body.toRole === "string" ? body.toRole as RoleId : undefined,
+      fromRole,
+      toRole,
       type: "review-request",
       content: typeof body.content === "string" ? body.content : "",
       contract: ensureTeamMessageContract(body.contract, {
         type: "review-request",
         content: typeof body.content === "string" ? body.content : "",
-        toRole: typeof body.toRole === "string" ? body.toRole as RoleId : undefined,
+        toRole,
         taskId: typeof body.taskId === "string" ? body.taskId : undefined,
         intent: "review-request",
         needsResponse: true,
@@ -6510,7 +6516,7 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
     const taskId = typeof body.taskId === "string" ? body.taskId : "";
     const requestedBy = typeof body.requestedBy === "string" ? body.requestedBy : "";
     const requestedByWorkerId = typeof body.requestedByWorkerId === "string" ? body.requestedByWorkerId : undefined;
-    const requestedByRole = typeof body.requestedByRole === "string" ? body.requestedByRole as RoleId : undefined;
+    const requestedByRole = validateRoleId(body.requestedByRole);
     const question = typeof body.question === "string" ? body.question.trim() : "";
     const blockingReason = typeof body.blockingReason === "string" ? body.blockingReason.trim() : "";
     const context = typeof body.context === "string" && body.context.trim() ? body.context.trim() : undefined;
@@ -6785,9 +6791,7 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
     const workerId = typeof requestUrl.searchParams.get("workerId") === "string" && requestUrl.searchParams.get("workerId")
       ? requestUrl.searchParams.get("workerId")!
       : undefined;
-    const role = typeof requestUrl.searchParams.get("role") === "string" && requestUrl.searchParams.get("role")
-      ? requestUrl.searchParams.get("role") as RoleId
-      : undefined;
+    const role = validateRoleId(requestUrl.searchParams.get("role"));
 
     try {
       const imported = await importControllerGitBundle(config, logger, body, { taskId, workerId });
