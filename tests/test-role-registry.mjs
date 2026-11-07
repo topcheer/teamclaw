@@ -126,6 +126,11 @@ async function runRoleRegistrySmoke() {
     /Exact target role ID \(pm, architect, developer, qa, release-engineer, infra-engineer, devops, security-engineer, designer, marketing, data-engineer\)/,
     "controller tools should describe target roles using the supported TeamClaw role IDs",
   );
+  const validRoleIdsMatch = controllerToolsSource.match(/const VALID_ROLE_IDS = new Set\(\[([\s\S]*?)\]\);/);
+  assert.ok(validRoleIdsMatch, "controller tools should keep a VALID_ROLE_IDS allowlist");
+  const validRoleIds = validRoleIdsMatch[1].match(/"[^"]+"/g).map((entry) => entry.slice(1, -1));
+  assert.equal(validRoleIds.length, 11, "VALID_ROLE_IDS should cover all 11 TeamClaw roles");
+  assert.ok(validRoleIds.includes("data-engineer"), "VALID_ROLE_IDS should include data-engineer");
   assert.match(
     workerToolsSource,
     /Exact target role ID \(pm, architect, developer, qa, release-engineer, infra-engineer, devops, security-engineer, designer, marketing, data-engineer\)/,

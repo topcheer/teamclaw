@@ -47,7 +47,7 @@ const EXECUTION_READY_BLOCKERS: Array<{ pattern: RegExp; reason: string }> = [
 
 const VALID_ROLE_IDS = new Set([
   "pm", "architect", "developer", "qa", "release-engineer",
-  "infra-engineer", "devops", "security-engineer", "designer", "marketing",
+  "infra-engineer", "devops", "security-engineer", "designer", "marketing", "data-engineer",
 ]);
 
 const ENGLISH_LATER_PHASE_CLAUSE_RE = /\b(?:after|once)\b(.+?)\b(complete|completed|ready|available|exists?)\b/i;
