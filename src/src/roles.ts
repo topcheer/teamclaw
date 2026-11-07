@@ -1,5 +1,10 @@
 import type { RoleDefinition, RoleId } from "./types.js";
 import { buildRoleOperatingRules, buildWorkerMemoryContractRules, composePrompt } from "./prompt-policy.js";
+// Phase 1.2 single-source convergence: the canonical role id list lives in
+// the dependency-free role-ids.ts leaf (importable by prompt-policy.ts and
+// openclaw-workspace.ts, which sit below this module). The guard below makes
+// this registry and that list impossible to drift apart silently.
+import { ROLE_IDS as CANONICAL_ROLE_IDS } from "./role-ids.js";
 
 const TEAMCLAW_ROLE_IDS_TEXT = [
   "pm",
@@ -324,6 +329,15 @@ for (const role of ROLES) {
 
 const ROLE_MAP = new Map<string, RoleDefinition>(ROLES.map((r) => [r.id, r]));
 const ROLE_IDS: RoleId[] = ROLES.map((r) => r.id);
+
+// Fail fast when the ROLES registry and the canonical role-ids.ts list
+// disagree (length, order, or membership): every consumer of either module
+// must see exactly one role set.
+if (ROLE_IDS.length !== CANONICAL_ROLE_IDS.length || ROLE_IDS.some((id, index) => id !== CANONICAL_ROLE_IDS[index])) {
+  throw new Error(
+    "roles.ts ROLES ids and role-ids.ts ROLE_IDS have drifted apart - update both so the registry, prompts, and manifest stay in sync",
+  );
+}
 
 /**
  * Phase 0.3 convergence point for `as RoleId` casts: validate an untrusted
