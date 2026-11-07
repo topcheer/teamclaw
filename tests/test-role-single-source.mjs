@@ -67,6 +67,7 @@ const [
   taskExecutorSource,
   controllerPromptSource,
   workerPromptSource,
+  orchestrationManifestSource,
   manifestGeneratorSource,
   pluginJsonSource,
 ] = await Promise.all([
@@ -79,6 +80,7 @@ const [
   readSource("src/src/task-executor.ts"),
   readSource("src/src/controller/prompt-injector.ts"),
   readSource("src/src/worker/prompt-injector.ts"),
+  readSource("src/src/controller/orchestration-manifest.ts"),
   readSource("scripts/sync-teamclaw-plugin-manifest.mjs"),
   readSource("src/openclaw.plugin.json"),
 ]);
@@ -172,6 +174,15 @@ for (const [name, source] of [
     `${name} must not re-introduce a local TEAMCLAW_ROLE_IDS_TEXT copy (Phase 1.2 removed the dead copies; the shared text lives in prompt-policy.ts)`,
   );
 }
+
+// 1g'. The orchestration-manifest role id Set that Phase 0.3 kept "until
+// Phase 1.2 removes it" is removed; normalizeManifestRoleList delegates to
+// validateRoleIdList and must not regain a hand-written copy.
+assert.doesNotMatch(
+  orchestrationManifestSource,
+  /const TEAMCLAW_ROLE_IDS = new Set/,
+  "orchestration-manifest.ts must not re-introduce a hand-written role id Set (removed by Phase 1.2; validateRoleIdList is the guard)",
+);
 
 // 1h. The manifest generator derives the role list from role-ids.ts instead
 // of embedding its own copy.
