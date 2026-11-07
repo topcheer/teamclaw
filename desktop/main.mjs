@@ -347,19 +347,25 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
 
 // Minimal LLM config: write the DESKTOP-SANDBOX openclaw.json directly
 // (userData/openclaw-state). The user's own ~/.openclaw is never touched -
-// hard requirement. Provider + endpoint + apiKey only, all else defaults.
-async function writeLlmConfig(_openclawBin, { provider, endpoint, apiKey }, onEvent) {
+// hard requirement. Provider + endpoint + apiKey + model, all else defaults.
+// Model lands on agents.defaults.model as "<provider>/<modelId>" (canonical
+// agent-model selection shape, see openclaw/src/config/model-input.ts).
+async function writeLlmConfig(_openclawBin, { provider, endpoint, apiKey, model }, onEvent) {
   if (!provider || !apiKey) {
     onEvent({ phase: "llm", line: "No LLM credentials provided - keeping defaults." });
     return;
   }
   const stateDir = path.join(app.getPath("userData"), "openclaw-state");
   await fs.mkdir(stateDir, { recursive: true });
-  const cfgPath = path.join(stateDir, "openclaw.json");
+  await writeLlmConfigFile(path.join(stateDir, "openclaw.json"), { provider, endpoint, apiKey, model });
+  onEvent({ phase: "llm", line: `LLM config written for ${provider}${model ? ` (${model})` : ""} (sandbox only).` });
+}
+
+// Shared writer: merges provider creds + default model into an openclaw
+// config file without disturbing unrelated keys.
+async function writeLlmConfigFile(cfgPath, { provider, endpoint, apiKey, model }) {
   let cfg = {};
   try { cfg = JSON.parse(await fs.readFile(cfgPath, "utf8")); } catch { cfg = {}; }
-  // Real OpenClaw schema: models.providers.<id> (NOT a top-level "vendors"
-  // key - that fails config validation and blocks every CLI command).
   cfg.models = cfg.models || {};
   cfg.models.providers = cfg.models.providers || {};
   cfg.models.providers[provider] = {
@@ -367,9 +373,28 @@ async function writeLlmConfig(_openclawBin, { provider, endpoint, apiKey }, onEv
     apiKey,
     ...(endpoint ? { baseUrl: endpoint } : {}),
   };
+  if (model) {
+    cfg.agents = cfg.agents || {};
+    cfg.agents.defaults = { ...(cfg.agents.defaults || {}) };
+    // Model refs may already be vendor-prefixed (e.g. openrouter/free) -
+    // never double-prefix with the provider id.
+    const modelRef = String(model).trim();
+    cfg.agents.defaults.model = modelRef.startsWith(`${provider}/`) ? modelRef : `${provider}/${modelRef}`;
+  }
   await fs.writeFile(cfgPath, JSON.stringify(cfg, null, 2), { mode: 0o600 });
-  onEvent({ phase: "llm", line: `LLM config written for ${provider} (sandbox only).` });
 }
+
+// Global-mode LLM write (user explicitly chose "configure" over "use
+// existing"): writes the machine-level ~/.openclaw/openclaw.json. Only the
+// chosen provider entry + agents.defaults.model are merged in.
+ipcMain.handle("llm:write-global", async (_e, llm) => {
+  const { provider, endpoint, apiKey, model } = llm || {};
+  if (!provider || !apiKey) throw new Error("Provider and API key are required");
+  const globalCfg = path.join(process.env.HOME || "", ".openclaw", "openclaw.json");
+  await fs.mkdir(path.dirname(globalCfg), { recursive: true });
+  await writeLlmConfigFile(globalCfg, { provider, endpoint, apiKey, model });
+  return { ok: true, path: globalCfg };
+});
 
 // Streamed variant: emits every stdout/stderr line through onLine and
 // resolves with the same result shape as runShellCommand.
@@ -746,6 +771,57 @@ async function standaloneStart(preferredVendor, remembered) {
     } catch { /* log not written yet */ }
     if (!controllerUrl) await new Promise((r) => setTimeout(r, 1000));
   }
+  // First-boot worker race auto-heal (user-found): a provisioned worker can
+  // spawn inside the gateway's config-normalization window and die on the
+  // config-guard ("config changed during startup - Retry startup"). The
+  // provisioner does not retry, leaving startup readiness degraded and no
+  // model ever runs. One bounded respawn fixes it: on the second boot the
+  // config journal has settled and the worker passes.
+  if (controllerUrl) {
+    const logText = async () => { try { return await fs.readFile(logPath, "utf8"); } catch { return ""; } };
+    const announceCount = (t) => (t.match(/Controller: Web UI available at/g) || []).length;
+    const respawn = async () => {
+      const before = announceCount(await logText());
+      try { child.kill("SIGTERM"); } catch { /* gone */ }
+      await new Promise((r) => { child.once("exit", r); setTimeout(r, 4000); });
+      const child2 = spawn(`"${bin}" gateway --port ${STANDALONE.port}`, {
+        cwd: standaloneStateDir(),
+        env: { ...process.env, OPENCLAW_STATE_DIR: standaloneStateDir() },
+        shell: true,
+        stdio: ["ignore", logFd, logFd],
+        detached: false,
+      });
+      STANDALONE.child = child2;
+      STANDALONE.pid = child2.pid ?? null;
+      await fs.writeFile(standalonePidFile(), String(child2.pid ?? ""), { mode: 0o600 });
+      child2.on("exit", () => {
+        STANDALONE.child = null;
+        STANDALONE.pid = null;
+        try { fsSync.rmSync(standalonePidFile(), { force: true }); } catch { /* gone */ }
+      });
+      // Wait for a NEW announce line (the old one is still in the log).
+      let url = null;
+      for (let j = 0; j < 40 && !url; j++) {
+        const t = await logText();
+        if (announceCount(t) > before) {
+          const all = t.match(/Controller: Web UI available at http:\/\/127\.0\.0\.1:(\d+)/g) || [];
+          const last = all[all.length - 1] || "";
+          const m2 = last.match(/:(\d+)$/);
+          if (m2) url = `http://127.0.0.1:${m2[1]}`;
+        }
+        if (!url) await new Promise((r) => setTimeout(r, 1000));
+      }
+      return url;
+    };
+    for (let i = 0; i < 15; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
+      const t = await logText();
+      const guardRace = /config changed during startup/.test(t) && /Provisioner: process worker [^\n]* exited/.test(t);
+      if (!guardRace) continue;
+      controllerUrl = (await respawn()) || controllerUrl;
+      break;
+    }
+  }
   STANDALONE.controllerUrl = controllerUrl;
   // If the controller still auto-shifted despite the pinned port (race with
   // another process grabbing it between probe and bind), persist the ACTUAL
@@ -842,7 +918,7 @@ ipcMain.handle("env:detect", async () => {
   const globalControllerUrl = teamclawInGlobal
     ? `http://127.0.0.1:${controllerPortFromConfig(cfg)}`
     : null;
-  return { openclaw, teamclawInGlobal, globalControllerUrl, llmConfigured: Boolean(cfg && Object.values(cfg?.models?.providers || {}).some((p) => p && p.apiKey)) };
+  return { openclaw, teamclawInGlobal, globalControllerUrl, llmConfigured: Boolean(cfg && Object.values(cfg?.models?.providers || {}).some((p) => p && p.apiKey)), llmProviders: cfg ? Object.entries(cfg?.models?.providers || {}).filter(([, p]) => p && p.apiKey).map(([id]) => id) : [], llmDefaultModel: (cfg?.agents?.defaults?.model || "") || null };
 });
 
 
@@ -1046,6 +1122,34 @@ ipcMain.handle("bootstrap:install", async (event, options) => {
     const openclawBin = await ensureOpenClawRuntime({ source, artifactUrl }, onEvent);
     await ensureTeamClawPlugin(openclawBin, onEvent);
     await writeLlmConfig(openclawBin, llm || {}, onEvent);
+    // Settle pass (user-found worker config-guard race): the FIRST gateway
+    // boot normalizes freshly-written config (e.g. agents.defaults.model is
+    // canonicalized to "provider/<catalog-id>"), and a worker provisioned in
+    // that window dies on the config-guard ("config changed during startup")
+    // - the provisioner then degrades readiness and no model ever runs.
+    // One headless boot right here lets normalization land on disk BEFORE
+    // the interactive start, so its first workers boot against settled
+    // config (verified: second boot rewrites nothing).
+    if (llm && llm.provider && llm.apiKey) {
+      onEvent({ phase: "llm", line: "Settling gateway config (one headless boot)..." });
+      try {
+        const settlePort = await findFreePort();
+        const stateDir = path.join(app.getPath("userData"), "openclaw-state");
+        const settle = spawn(`"${openclawBin}" gateway --port ${settlePort}`, {
+          cwd: stateDir,
+          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+          shell: true,
+          stdio: ["ignore", "ignore", "ignore"],
+          detached: false,
+        });
+        await new Promise((r) => setTimeout(r, 9000));
+        try { settle.kill("SIGTERM"); } catch { /* gone */ }
+        await new Promise((r) => { settle.once("exit", r); setTimeout(r, 4000); });
+        onEvent({ phase: "llm", line: "Config settled." });
+      } catch (e) {
+        onEvent({ phase: "llm", line: "Settle pass skipped: " + (e instanceof Error ? e.message : String(e)) });
+      }
+    }
     onEvent({ phase: "done", line: "Bootstrap complete.", openclawBin });
     return { ok: true, openclawBin };
   } catch (err) {

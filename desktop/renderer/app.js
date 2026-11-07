@@ -816,10 +816,67 @@ import { createT as i18nCreateT } from "./i18n.js";
   }
 
   // ---- Wizard (3 steps) ----
+  // ---- LLM hard gate (user spec, 2026-11-07) ----
+  // Private install: provider + model + apiKey are REQUIRED (endpoint
+  // optional) before Install enables. Global mode with models already
+  // configured: defaults to "use existing", user may switch to "configure".
+  const LLM_DEFAULT_MODELS = {
+    zai: "glm-4.6",
+    anthropic: "claude-sonnet-4-5",
+    openai: "gpt-6",
+    openrouter: "anthropic/claude-sonnet-4.5",
+    deepseek: "deepseek-chat",
+    google: "gemini-3-pro",
+  };
+  function llmMode() {
+    const el = document.querySelector('input[name="bootstrap-mode"]:checked');
+    return el ? el.getAttribute("data-bootstrap-mode") : "controller-manual";
+  }
+  function llmSource() {
+    const el = document.querySelector('input[name="llm-source"]:checked');
+    return el ? el.value : "custom";
+  }
+  function updateLlmStep() {
+    const useRow = document.getElementById("bootstrap-llm-use-row");
+    const fields = document.getElementById("bootstrap-llm-fields");
+    const prov = document.getElementById("bootstrap-llm-provider");
+    const modelEl = document.getElementById("bootstrap-llm-model");
+    const keyEl = document.getElementById("bootstrap-llm-apikey");
+    const hint = document.getElementById("bootstrap-llm-hint");
+    const next2 = document.getElementById("wizard-next-2");
+    if (!prov || !next2) return;
+    const env = state.envDetect;
+    const offerConfigured = llmMode() === "global" && env && env.llmConfigured;
+    if (useRow) {
+      useRow.hidden = !offerConfigured;
+      const useRadio = document.querySelector('input[name="llm-source"][value="configured"]');
+      if (offerConfigured && useRadio && !document.querySelector('input[name="llm-source"]:checked')) useRadio.checked = true;
+      if (offerConfigured) {
+        const lbl = document.getElementById("bootstrap-llm-use-label");
+        const provs = (env.llmProviders || []).join(", ");
+        if (lbl) lbl.textContent = provs ? `${t("wizard.llmUseConfigured")} (${provs})` : t("wizard.llmUseConfigured");
+      }
+    }
+    const useExisting = offerConfigured && llmSource() === "configured";
+    if (fields) fields.style.display = useExisting ? "none" : "";
+    if (modelEl) {
+      if (!modelEl.value.trim() && LLM_DEFAULT_MODELS[prov.value]) modelEl.value = LLM_DEFAULT_MODELS[prov.value];
+      modelEl.placeholder = LLM_DEFAULT_MODELS[prov.value] || "model";
+    }
+    let reason = null;
+    if (!useExisting) {
+      if (!prov.value) reason = t("wizard.needProvider");
+      else if (!keyEl || !keyEl.value.trim()) reason = t("wizard.needKey");
+      else if (!modelEl || !modelEl.value.trim()) reason = t("wizard.needModel");
+    }
+    if (hint) { hint.hidden = !reason; hint.textContent = reason || ""; }
+    next2.disabled = Boolean(reason);
+  }
   function wizardGoStep(n) {
     document.querySelectorAll("[data-wizard-step]").forEach((el) => {
       el.hidden = el.getAttribute("data-wizard-step") !== String(n);
     });
+    if (n === 2) updateLlmStep(); // hard gate: re-validate on every entry
     document.querySelectorAll("#wizard-steps .step-ind").forEach((el) => {
       const on = el.getAttribute("data-step-ind") === String(n);
       el.classList.toggle("active", on);
@@ -853,15 +910,11 @@ import { createT as i18nCreateT } from "./i18n.js";
           return;
         }
         if (env && env.openclaw && !env.teamclawInGlobal) {
-          wizardGoStep(3);
-          try {
-            const r = await desktop.instanceInstallIntoGlobal();
-            await desktop.instanceSet({ mode: "global", controllerUrl: r.controllerUrl, llmConfigured: true }).catch(() => {});
-            await connectController(r.controllerUrl, { skipConversation: true }).catch(() => {});
-            unveilShell();
-          } catch (e) {
-            if (log) log.textContent += "[error] " + (e && e.message) + "\n";
-          }
+          // LLM gate (user spec): installing INTO an existing global openclaw
+          // still passes through step 2 - models already configured default
+          // to "use existing"; the user may switch to "configure". Install
+          // itself is triggered from step 2's Install button.
+          wizardGoStep(2);
           return;
         }
         wizardGoStep(2); // case c: fresh global -> LLM step, then start-global
@@ -871,26 +924,47 @@ import { createT as i18nCreateT } from "./i18n.js";
     });
     const next2 = document.getElementById("wizard-next-2");
     if (next2) next2.addEventListener("click", async () => {
-      wizardGoStep(3);
+      updateLlmStep();
+      if (next2.disabled) return; // hard gate: never bypass via double-click
       const checked = document.querySelector('input[name="bootstrap-mode"]:checked');
       const mode = checked ? checked.getAttribute("data-bootstrap-mode") : "controller-manual";
+      const env = state.envDetect;
+      const useExisting = mode === "global" && env && env.llmConfigured && llmSource() === "configured";
+      const provEl = document.getElementById("bootstrap-llm-provider");
+      const keyEl = document.getElementById("bootstrap-llm-apikey");
+      const epEl = document.getElementById("bootstrap-llm-endpoint");
+      const modelEl = document.getElementById("bootstrap-llm-model");
+      const llm = useExisting ? null : {
+        provider: provEl.value,
+        endpoint: epEl ? epEl.value.trim() : "",
+        apiKey: keyEl ? keyEl.value.trim() : "",
+        model: modelEl ? modelEl.value.trim() : "",
+      };
+      wizardGoStep(3);
       if (mode === "global") {
-        // Fresh global: write LLM into the machine-level config via the
-        // bootstrap sandbox writer is WRONG here - global mode writes to the
-        // global state by design (user explicitly chose it).
         const log = document.getElementById("bootstrap-log");
-        const providerEl = document.getElementById("bootstrap-llm-provider");
-        const keyEl = document.getElementById("bootstrap-llm-apikey");
-        const epEl = document.getElementById("bootstrap-llm-endpoint");
+        const wizLine = (s) => { if (log) log.textContent += s + "\n"; };
         try {
-          if (log) log.textContent = "[global] Starting global gateway...\n";
-          const r = await desktop.instanceStartGlobal();
-          if (log) log.textContent += "[global] gateway pid=" + r.pid + " port=" + r.port + "\n[global] Configured mode=global; reconnect on next app start.\n";
-          await desktop.instanceSet({ mode: "global", controllerUrl: null, llmConfigured: true });
+          wizLine("[global] Starting global path...");
+          if (llm) {
+            wizLine(`[global] Writing ${llm.provider} config into the global OpenClaw...`);
+            await desktop.llmWriteGlobal(llm);
+          } else {
+            wizLine("[global] Using the existing global model configuration.");
+          }
+          if (env && env.openclaw && !env.teamclawInGlobal) {
+            const r = await desktop.instanceInstallIntoGlobal();
+            await desktop.instanceSet({ mode: "global", controllerUrl: r.controllerUrl, llmConfigured: true }).catch(() => {});
+            await connectController(r.controllerUrl, { skipConversation: true }).catch(() => {});
+            unveilShell();
+          } else {
+            const r = await desktop.instanceStartGlobal();
+            wizLine(`[global] gateway pid=${r.pid} port=${r.port}`);
+            await desktop.instanceSet({ mode: "global", controllerUrl: null, llmConfigured: true });
+          }
         } catch (e) {
-          if (log) log.textContent += "[error] " + (e && e.message) + "\n";
+          wizLine("[error] " + (e && e.message));
         }
-        void providerEl; void keyEl; void epEl;
         return;
       }
       const ib = document.getElementById("bootstrap-install-btn");
@@ -909,6 +983,12 @@ import { createT as i18nCreateT } from "./i18n.js";
     const sel = document.getElementById("bootstrap-source");
     const gl = document.getElementById("bootstrap-artifact-url");
     if (sel && gl) sel.addEventListener("change", () => { gl.hidden = sel.value !== "artifact"; });
+    // LLM hard gate: live validation while the user types/picks.
+    ["bootstrap-llm-provider", "bootstrap-llm-model", "bootstrap-llm-apikey", "bootstrap-llm-endpoint"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener(el.tagName === "SELECT" ? "change" : "input", updateLlmStep);
+    });
+    document.querySelectorAll('input[name="llm-source"]').forEach((r) => r.addEventListener("change", updateLlmStep));
   }
 
   function bootShell(msgKey) {
@@ -3621,12 +3701,13 @@ import { createT as i18nCreateT } from "./i18n.js";
       const providerEl = document.getElementById('bootstrap-llm-provider');
       const endpointEl = document.getElementById('bootstrap-llm-endpoint');
       const apikeyEl = document.getElementById('bootstrap-llm-apikey');
+      const modelEl = document.getElementById('bootstrap-llm-model');
       const sourceEl = document.getElementById('bootstrap-source');
       const artifactEl = document.getElementById('bootstrap-artifact-url');
       const source = sourceEl && sourceEl.value !== 'auto' ? sourceEl.value : undefined;
       const artifactUrl = source === 'artifact' && artifactEl ? artifactEl.value.trim() : undefined;
-      const llm = (providerEl && providerEl.value)
-        ? { provider: providerEl.value, endpoint: endpointEl ? endpointEl.value.trim() : '', apiKey: apikeyEl ? apikeyEl.value.trim() : '' }
+      const llm = (providerEl && providerEl.value && apikeyEl && apikeyEl.value.trim())
+        ? { provider: providerEl.value, endpoint: endpointEl ? endpointEl.value.trim() : '', apiKey: apikeyEl.value.trim(), model: modelEl ? modelEl.value.trim() : '' }
         : {};
 
       const installPromise = desktop.bootstrapInstall({ llm, source, artifactUrl })
@@ -3634,6 +3715,10 @@ import { createT as i18nCreateT } from "./i18n.js";
       installPromise.then(async () => {
         state.isInstallingLocal = false;
         state.isInstallingOpenClaw = false;
+        // `inst` must be read HERE: the outer scopes never define it, and the
+        // ReferenceError it used to throw was silently swallowed - the
+        // post-install connect hop never actually ran until this line.
+        const inst = await desktop.instanceGet().catch(() => null);
         state.unavailableReason = "";
         state.localSetupInfo = await desktop.getLocalSetupInfo();
         // Last hop (the "it just works" moment): after a successful install,

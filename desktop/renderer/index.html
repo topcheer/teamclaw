@@ -410,24 +410,31 @@
         </section>
         <!-- Step 2: LLM -->
         <section class="bootstrap-card" data-wizard-step="2" hidden>
-          <div class="bootstrap-label" data-i18n="wizard.llmLabel">模型服务（其余保持默认）</div>
-          <div class="bootstrap-llm-row">
-            <select id="bootstrap-llm-provider" class="compact-input">
-              <option value="" data-i18n="wizard.llmLater">稍后再配</option>
-              <option value="zai">Z.ai</option>
-              <option value="anthropic">Anthropic</option>
-              <option value="openai">OpenAI</option>
-              <option value="openrouter">OpenRouter</option>
-              <option value="deepseek">DeepSeek</option>
-              <option value="google">Google</option>
-            </select>
-            <input id="bootstrap-llm-endpoint" class="compact-input" type="text" data-i18n-placeholder="wizard.llmEndpoint" placeholder="接口地址（可选）">
-            <input id="bootstrap-llm-apikey" class="compact-input" type="password" placeholder="API Key">
+          <div class="bootstrap-label" data-i18n="wizard.llmLabelRequired">Model service (required)</div>
+          <div id="bootstrap-llm-use-row" class="bootstrap-note" hidden>
+            <label><input type="radio" name="llm-source" value="configured" checked> <span id="bootstrap-llm-use-label" data-i18n="wizard.llmUseConfigured">Use existing configuration</span></label>
+            <label><input type="radio" name="llm-source" value="custom"> <span data-i18n="wizard.llmUseCustom">Configure a provider</span></label>
+          </div>
+          <div id="bootstrap-llm-fields">
+            <div class="bootstrap-llm-row">
+              <select id="bootstrap-llm-provider" class="compact-input">
+                <option value="zai">Z.ai</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="openai">OpenAI</option>
+                <option value="openrouter">OpenRouter</option>
+                <option value="deepseek">DeepSeek</option>
+                <option value="google">Google</option>
+              </select>
+              <input id="bootstrap-llm-endpoint" class="compact-input" type="text" data-i18n-placeholder="wizard.llmEndpoint" placeholder="接口地址（可选）">
+              <input id="bootstrap-llm-model" class="compact-input" type="text" placeholder="model">
+              <input id="bootstrap-llm-apikey" class="compact-input" type="password" placeholder="API Key">
+            </div>
+            <div id="bootstrap-llm-hint" class="bootstrap-status-detail" hidden></div>
           </div>
           <div class="bootstrap-note" data-i18n="wizard.llmNote">配置只写入本应用的私有目录（沙箱），不会改动你机器上已有的任何 OpenClaw 配置。</div>
           <div class="bootstrap-actions">
             <button class="btn" data-wizard-back="1" type="button" data-i18n="wizard.back">上一步</button>
-            <button id="wizard-next-2" class="btn btn-primary" type="button" data-i18n="wizard.install">开始安装</button>
+            <button id="wizard-next-2" class="btn btn-primary" type="button" data-i18n="wizard.install" disabled>开始安装</button>
           </div>
         </section>
         <!-- Step 3: progress -->
