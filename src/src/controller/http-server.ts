@@ -47,6 +47,8 @@ import { listWorkspaceTree, listWorkspaceSubtree, readWorkspaceFile, readWorkspa
 import {
   BUILTIN_PROFILES,
   getActiveProfile,
+  getActiveProfileId,
+  getActiveRoleIds,
   getActiveRoles,
   getActiveDefaultRole,
   hasProfile,
@@ -5856,13 +5858,27 @@ async function handleRequest(
   if (req.method === "POST" && pathname === "/api/v1/workers/register") {
     const body = await parseJsonBody(req);
     const workerId = typeof body.workerId === "string" ? body.workerId : "";
-    const role = validateActiveRoleId(body.role) ?? "";
+    const rawRole = typeof body.role === "string" ? body.role.trim() : "";
+    const role = validateActiveRoleId(rawRole) ?? "";
     const label = typeof body.label === "string" ? body.label : role;
     const workerUrl = typeof body.url === "string" ? body.url : "";
     const capabilities = Array.isArray(body.capabilities) ? body.capabilities as string[] : [];
     const launchToken = typeof body.launchToken === "string" ? body.launchToken : undefined;
 
     if (!workerId || !role || !workerUrl) {
+      // Issue #192: a role string that the ACTIVE profile does not know is
+      // the actionable failure (worker config carried an id from another
+      // profile, or the team switched profiles underneath the worker) - say
+      // so with the valid id list instead of the generic "required" 400.
+      if (workerId && !role && workerUrl && rawRole) {
+        sendError(
+          res,
+          400,
+          `role "${rawRole}" is not part of the active team profile "${getActiveProfileId()}" (valid roles: ${getActiveRoleIds().join(", ")}). ` +
+            "Update the worker's role config to one of these roles, or have the controller switch the team profile.",
+        );
+        return;
+      }
       sendError(res, 400, "workerId, role, and url are required");
       return;
     }

@@ -706,7 +706,20 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
     ? raw.port
     : 9527;
 
-  const role = validateRoleId(raw.role) ?? DEFAULT_ROLE;
+  // Issue #192 (Phase 3 prerequisite): lenient worker-side role parsing.
+  // The registry validateRoleId folded any unknown role string (e.g. a
+  // minimal-bank "credit-officer") to developer, so a worker provisioned
+  // under an industry profile registered with the WRONG role against its
+  // controller (mismatch or 400). A non-empty string role is now preserved
+  // as written - RoleId is an open branded string and this explicit cast is
+  // the documented way for non-seed ids to enter (see the RoleId ruling
+  // above) - and legitimacy is finally adjudicated by the controller's
+  // validateActiveRoleId at registration, where the ACTIVE profile is the
+  // single source of truth. DEFAULT_ROLE still applies only when the role
+  // is missing, not a string, or blank.
+  const role = typeof raw.role === "string" && raw.role.trim()
+    ? (raw.role.trim() as RoleId)
+    : DEFAULT_ROLE;
 
   const controllerUrl = typeof raw.controllerUrl === "string"
     ? raw.controllerUrl.trim()
