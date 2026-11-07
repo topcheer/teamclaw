@@ -3148,14 +3148,14 @@ async function runControllerIntakeUnlocked(
     }, deps);
     try {
       const kickoffResult = await kickoffHandler(
-        recordedManifest.requiredRoles as RoleId[],
+        recordedManifest.requiredRoles,
         recordedManifest.requiredRoles.length >= 5 ? "complex" : "medium",
         message,
       );
       // Store kickoff assessments on the manifest for UI/API visibility
       recordedManifest.kickoffPlan = {
         complexity: recordedManifest.requiredRoles.length >= 5 ? "complex" : "medium",
-        candidateRoles: recordedManifest.requiredRoles as RoleId[],
+        candidateRoles: recordedManifest.requiredRoles,
         completed: true,
         assessments: kickoffResult.assessments,
         summary: kickoffResult.summary,
@@ -3664,9 +3664,12 @@ function getEffectiveStartupReadiness(
   if (!deps.workerProvisioningManager?.isEnabled()) {
     return null;
   }
+  // Both branches are already-validated RoleId sources: config roles go
+  // through parseRoleList (validateRoleIdList) and the fallback is the
+  // centralized DEFAULT_ROLE constant — no runtime validation needed here.
   const requiredRoles = deps.config.workerProvisioningRoles.length > 0
     ? [...new Set(deps.config.workerProvisioningRoles)]
-    : ["developer"];
+    : [DEFAULT_ROLE];
   const readyWorkerIds = requiredRoles
     .map((role) => Object.values(state?.workers ?? {}).find((worker) =>
       worker.role === role && (worker.status === "idle" || worker.status === "busy")
@@ -3680,7 +3683,7 @@ function getEffectiveStartupReadiness(
       startedAt: recorded?.startedAt ?? state?.createdAt ?? Date.now(),
       checkedAt: Date.now(),
       attempts: recorded?.attempts ?? 0,
-      requiredRoles: requiredRoles as RoleId[],
+      requiredRoles,
       readyWorkerIds,
       message: recorded?.status === "ready"
         ? recorded.message
@@ -3693,7 +3696,7 @@ function getEffectiveStartupReadiness(
     startedAt: state?.createdAt ?? Date.now(),
     checkedAt: Date.now(),
     attempts: 0,
-    requiredRoles: requiredRoles as RoleId[],
+    requiredRoles,
     readyWorkerIds,
     message: `Startup provisioning warm-up is still initializing for ${requiredRoles.join(", ")}.`,
   };
