@@ -45,8 +45,9 @@
     "tsconfig.build.json"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && node -e \"require('fs').cpSync('src/ui','dist/src/ui',{recursive:true})\"",
+    "build": "tsc -p tsconfig.build.json && node -e \"const fs=require('fs');fs.cpSync('src/ui','dist/src/ui',{recursive:true});fs.cpSync('src/profiles','dist/src/profiles',{recursive:true})\"",
     "manifest:sync": "cd .. && node scripts/sync-teamclaw-plugin-manifest.mjs src",
+    "profile:sync": "cd .. && node scripts/generate-software-rd-profile.mjs src",
     "pack:dry-run": "npm pack --dry-run --json --ignore-scripts",
     "release:check": "cd .. && node scripts/teamclaw-package-check.mjs src",
     "release:clawhub:dry-run": "cd .. && bash scripts/teamclaw-clawhub-release.sh --dry-run"
