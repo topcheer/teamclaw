@@ -96,4 +96,13 @@ walk(path.join(out, "runtime", "node_modules"));
 // @teamclaws subtree left top-level node_modules/.bin links pointing into
 // the deleted bundle-stage - codesign then dies on the dangling stat.
 console.log(`[prepare-bundled] materialized ${fixed} symlinks`);
-console.log("[prepare-bundled] bundle tree ready:", out);
+
+// Compressed form (user requirement): installers must NOT carry the ~1GB
+// unpacked tree. Materialize symlinks FIRST (above), then pack the whole
+// tree into runtime.tgz and drop the loose directory - the app extracts it
+// to userData on first launch (main.mjs -> runtime-extract.mjs). Materialize
+// before tar also means the archive contains zero symlinks, so Windows'
+// System32 tar.exe never needs symlink privileges to extract it.
+execSync(`tar -czf "${path.join(out, "runtime.tgz")}" -C "${out}" runtime`, { stdio: "inherit" });
+rmSync(path.join(out, "runtime"), { recursive: true, force: true });
+console.log("[prepare-bundled] bundle archive ready:", path.join(out, "runtime.tgz"));

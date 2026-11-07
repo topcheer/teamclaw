@@ -373,6 +373,48 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
           saveTeamState(teamState);
         }
 
+        // Runtime orphan-task reconciliation (user-found: one live worker but
+        // two active tasks - the second task was pinned to a worker whose
+        // registry entry was already gone). The startup sweep handles this
+        // once at boot; tasks whose worker disappears AFTER claiming sat in
+        // in_progress forever. Mirror the startup semantics: reset to pending
+        // (bounded resume attempts), re-dispatch happens via the reconcile
+        // call below. Skip workers the sweep above just released - their
+        // tasks were already handled with a broadcast.
+        {
+          let orphaned = false;
+          for (const task of Object.values(teamState.tasks)) {
+            if (
+              task.assignedWorkerId &&
+              (task.status === "assigned" || task.status === "in_progress") &&
+              !teamState.workers[task.assignedWorkerId]
+            ) {
+              const attempt = (task.resumeAttempt ?? 0) + 1;
+              const MAX_RESUME_ATTEMPTS = 3;
+              if (attempt > MAX_RESUME_ATTEMPTS) {
+                logger.warn(`Controller: task ${task.id} exceeded ${MAX_RESUME_ATTEMPTS} resume attempts (worker gone) - failing`);
+                task.status = "failed";
+                task.error = `worker disappeared without completing (resumed ${MAX_RESUME_ATTEMPTS} times)`;
+              } else {
+                logger.info(`Controller: resetting orphaned task ${task.id} for resume attempt ${attempt} (worker ${task.assignedWorkerId} missing)`);
+                task.status = "pending";
+                task.resumeAttempt = attempt;
+                if (task.checkpoint) {
+                  task.checkpoint.attempt = attempt;
+                }
+              }
+              task.assignedWorkerId = undefined;
+              task.updatedAt = now;
+              wsServer.broadcastUpdate({ type: "task:updated", data: { ...task } });
+              orphaned = true;
+            }
+          }
+          if (orphaned) {
+            saveTeamState(teamState);
+            changed = true;
+          }
+        }
+
         if (workerProvisioningManager?.isEnabled()) {
           void workerProvisioningManager.requestReconcile("periodic controller sync");
         }

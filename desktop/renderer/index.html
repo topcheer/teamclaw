@@ -353,90 +353,103 @@
 
   <div id="bootstrap-overlay" class="bootstrap-overlay hidden" aria-hidden="true">
     <section class="bootstrap-panel">
+      <button id="wizard-language-toggle" class="mini-btn" type="button" style="position:absolute;top:14px;right:110px">中文</button>
       <button id="wizard-cancel-btn" class="bootstrap-close" type="button" data-i18n="wizard.cancel">取消</button>
       <div class="bootstrap-hero">
         <div class="bootstrap-kicker">TeamClaw Desktop</div>
-        <h1 id="bootstrap-title">Let's get started</h1>
-        <p id="bootstrap-subtitle" class="bootstrap-subtitle">Choose how you want to run TeamClaw. The private local instance is recommended - it never touches your existing OpenClaw.</p>
+        <h1 id="bootstrap-title" data-i18n="bootstrap.wizardTitle">Let's get started</h1>
+        <p id="bootstrap-subtitle" class="bootstrap-subtitle" data-i18n="bootstrap.wizardSubtitle">Choose how you want to run TeamClaw. The private local instance is recommended - it never touches your existing OpenClaw.</p>
       </div>
       <div id="wizard-steps" class="wizard-steps">
-        <span data-step-ind="1" class="step-ind active">1 · 方式</span>
-        <span data-step-ind="2" class="step-ind">2 · 模型</span>
-        <span data-step-ind="3" class="step-ind">3 · 启动</span>
+        <span data-step-ind="1" class="step-ind active" data-i18n="wizard.stepMode">1 · 方式</span>
+        <span data-step-ind="2" class="step-ind" data-i18n="wizard.stepModel">2 · 模型</span>
+        <span data-step-ind="3" class="step-ind" data-i18n="wizard.stepLaunch">3 · 启动</span>
       </div>
       <div class="bootstrap-grid" id="wizard-body">
         <!-- Step 1: how to run -->
         <section class="bootstrap-card" data-wizard-step="1">
-          <div class="bootstrap-label">运行方式</div>
+          <div class="bootstrap-label" data-i18n="wizard.runMode">运行方式</div>
           <label class="bootstrap-mode">
             <input type="radio" name="bootstrap-mode" data-bootstrap-mode="controller-manual" checked>
-            <span><strong>私有本地实例（推荐）</strong><small>独立目录、独立端口，随本应用启停；不影响你已有的 OpenClaw。</small></span>
+            <span><strong data-i18n="wizard.modePrivateTitle">私有本地实例（推荐）</strong><small data-i18n="wizard.modePrivateDesc">独立目录、独立端口，随本应用启停；不影响你已有的 OpenClaw。</small></span>
           </label>
           <label class="bootstrap-mode">
             <input type="radio" name="bootstrap-mode" data-bootstrap-mode="remote">
-            <span><strong>连接现有 controller</strong><small>指向一台已在运行的 TeamClaw controller（含远程）。</small></span>
+            <span><strong data-i18n="wizard.modeRemoteTitle">连接现有 controller</strong><small data-i18n="wizard.modeRemoteDesc">指向一台已在运行的 TeamClaw controller（含远程）。</small></span>
           </label>
           <label class="bootstrap-mode">
             <input type="radio" name="bootstrap-mode" data-bootstrap-mode="global">
-            <span><strong>使用/安装全局 OpenClaw 实例</strong><small>机器级 OpenClaw：已有配置将原样复用（不改写模型配置）；全新则由向导初始化并持久化。</small></span>
+            <span><strong data-i18n="wizard.modeGlobalTitle">使用/安装全局 OpenClaw 实例</strong><small data-i18n="wizard.modeGlobalDesc">机器级 OpenClaw：已有配置将原样复用（不改写模型配置）；全新则由向导初始化并持久化。</small></span>
           </label>
           <div id="bootstrap-private-lifecycle" class="bootstrap-note">
-            内置实例随应用关闭：<label><input type="radio" name="private-lifecycle" value="app" checked> 一起关闭</label>
-            <label><input type="radio" name="private-lifecycle" value="persistent"> 保持后台运行（重启应用直接连接）</label>
+            <span data-i18n="wizard.lifecycleLabel">内置实例随应用关闭：</span><label><input type="radio" name="private-lifecycle" value="app" checked><span data-i18n="wizard.lifecycleApp"> 一起关闭</span></label>
+            <label><input type="radio" name="private-lifecycle" value="persistent"> <span data-i18n="wizard.lifecyclePersistent">保持后台运行（重启应用直接连接）</span></label>
           </div>
           <div id="bootstrap-remote-url-row" hidden>
             <input id="bootstrap-controller-url" class="compact-input" type="text" placeholder="http://127.0.0.1:9527">
             <button class="btn" type="button" data-bootstrap-connect="true">连接这个 controller</button>
           </div>
           <details class="wizard-advanced">
-            <summary>高级选项</summary>
-            <div class="bootstrap-label" style="margin-top:8px">安装源</div>
+            <summary data-i18n="wizard.advanced">高级选项</summary>
+            <div class="bootstrap-label" style="margin-top:8px" data-i18n="wizard.sourceLabel">安装源</div>
             <select id="bootstrap-source" class="compact-input">
-              <option value="auto">自动（优先内置）</option>
-              <option value="bundled">随应用内置（离线）</option>
-              <option value="official">官方源（npm）</option>
-              <option value="artifact">Artifact（默认固定源，可自定义 URL）</option>
+              <option value="auto" data-i18n="wizard.srcAuto">自动（优先内置）</option>
+              <option value="bundled" data-i18n="wizard.srcBundled">随应用内置（离线）</option>
+              <option value="official" data-i18n="wizard.srcOfficial">官方源（npm）</option>
+              <option value="artifact" data-i18n="wizard.srcArtifact">Artifact（默认固定源，可自定义 URL）</option>
             </select>
             <input id="bootstrap-artifact-url" class="compact-input" type="text" placeholder="Artifact URL（默认 runtime-latest 固定源）" hidden>
-            <div class="bootstrap-label" style="margin-top:8px">运行模式</div>
-            <label class="bootstrap-mode"><input type="radio" name="bootstrap-adv-mode" value="controller-manual" checked><span><strong>简洁</strong><small>按需拉起本地 worker</small></span></label>
-            <label class="bootstrap-mode"><input type="radio" name="bootstrap-adv-mode" value="controller-process"><span><strong>多进程</strong><small>更强隔离，占用更多</small></span></label>
+            <div class="bootstrap-label" style="margin-top:8px" data-i18n="wizard.advModeLabel">运行模式</div>
+            <label class="bootstrap-mode"><input type="radio" name="bootstrap-adv-mode" value="controller-manual" checked><span><strong data-i18n="wizard.advSimple">简洁</strong><small data-i18n="wizard.advSimpleDesc">按需拉起本地 worker</small></span></label>
+            <label class="bootstrap-mode"><input type="radio" name="bootstrap-adv-mode" value="controller-process"><span><strong data-i18n="wizard.advMulti">多进程</strong><small data-i18n="wizard.advMultiDesc">更强隔离，占用更多</small></span></label>
             <button class="btn btn-small" type="button" data-bootstrap-copy-install="true" hidden>复制安装命令</button>
           </details>
           <div class="bootstrap-actions">
-            <button id="wizard-next-1" class="btn btn-primary" type="button">下一步</button>
+            <button id="wizard-next-1" class="btn btn-primary" type="button" data-i18n="wizard.next">下一步</button>
           </div>
         </section>
         <!-- Step 2: LLM -->
         <section class="bootstrap-card" data-wizard-step="2" hidden>
-          <div class="bootstrap-label">模型服务（其余保持默认）</div>
-          <div class="bootstrap-llm-row">
-            <select id="bootstrap-llm-provider" class="compact-input">
-              <option value="">稍后再配</option>
-              <option value="zai">Z.ai</option>
-              <option value="anthropic">Anthropic</option>
-              <option value="openai">OpenAI</option>
-              <option value="openrouter">OpenRouter</option>
-              <option value="deepseek">DeepSeek</option>
-              <option value="google">Google</option>
-            </select>
-            <input id="bootstrap-llm-endpoint" class="compact-input" type="text" placeholder="接口地址（可选）">
-            <input id="bootstrap-llm-apikey" class="compact-input" type="password" placeholder="API Key">
+          <div class="bootstrap-label" data-i18n="wizard.llmLabelRequired">Model service (required)</div>
+          <div id="bootstrap-llm-use-row" class="bootstrap-note" hidden>
+            <label><input type="radio" name="llm-source" value="configured" checked> <span id="bootstrap-llm-use-label" data-i18n="wizard.llmUseConfigured">Use existing configuration</span></label>
+            <label><input type="radio" name="llm-source" value="custom"> <span data-i18n="wizard.llmUseCustom">Configure a provider</span></label>
           </div>
-          <div class="bootstrap-note">配置只写入本应用的私有目录（沙箱），不会改动你机器上已有的任何 OpenClaw 配置。</div>
+          <div id="bootstrap-llm-fields">
+            <div class="bootstrap-llm-row">
+              <select id="bootstrap-llm-provider" class="compact-input">
+                <option value="zai">Z.ai</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="openai">OpenAI</option>
+                <option value="openrouter">OpenRouter</option>
+                <option value="deepseek">DeepSeek</option>
+                <option value="google">Google</option>
+              </select>
+              <input id="bootstrap-llm-endpoint" class="compact-input" type="text" data-i18n-placeholder="wizard.llmEndpoint" placeholder="接口地址（可选）">
+              <input id="bootstrap-llm-apikey" class="compact-input" type="password" placeholder="API Key">
+              <div class="bootstrap-llm-model-row">
+                <select id="bootstrap-llm-model-select" class="compact-input" hidden></select>
+                <input id="bootstrap-llm-model" class="compact-input" type="text" placeholder="model" autocomplete="off">
+                <button id="bootstrap-llm-models-refresh" class="btn btn-small" type="button" data-i18n="wizard.refreshModels" title="Refresh model list">刷新</button>
+              </div>
+            </div>
+            <div id="bootstrap-llm-keyhint" class="bootstrap-status-detail" hidden></div>
+            <div id="bootstrap-llm-hint" class="bootstrap-status-detail" hidden></div>
+          </div>
+          <div class="bootstrap-note" data-i18n="wizard.llmNote">配置只写入本应用的私有目录（沙箱），不会改动你机器上已有的任何 OpenClaw 配置。</div>
           <div class="bootstrap-actions">
-            <button class="btn" data-wizard-back="1" type="button">上一步</button>
-            <button id="wizard-next-2" class="btn btn-primary" type="button">开始安装</button>
+            <button class="btn" data-wizard-back="1" type="button" data-i18n="wizard.back">上一步</button>
+            <button id="wizard-next-2" class="btn btn-primary" type="button" data-i18n="wizard.install" disabled>开始安装</button>
           </div>
         </section>
         <!-- Step 3: progress -->
         <section class="bootstrap-card" data-wizard-step="3" hidden>
-          <div class="bootstrap-label" id="bootstrap-status-label">进度</div>
-          <div id="bootstrap-status-detail" class="bootstrap-status-detail">准备中…</div>
+          <div class="bootstrap-label" id="bootstrap-status-label" data-i18n="wizard.progress">进度</div>
+          <div id="bootstrap-status-detail" class="bootstrap-status-detail" data-i18n="wizard.preparing">准备中…</div>
           <pre id="bootstrap-log" class="bootstrap-log"></pre>
           <div class="bootstrap-actions">
-            <button id="bootstrap-install-btn" class="btn btn-primary" type="button" data-bootstrap-install="true" hidden>开始安装</button>
-            <button class="btn" type="button" data-bootstrap-restart-wizard hidden>重新开始</button>
+            <button id="bootstrap-install-btn" class="btn btn-primary" type="button" data-bootstrap-install="true" hidden data-i18n="wizard.install">开始安装</button>
+            <button class="btn" type="button" data-bootstrap-restart-wizard hidden data-i18n="wizard.restart">重新开始</button>
           </div>
         </section>
       </div>

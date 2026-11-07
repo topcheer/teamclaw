@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld("teamclawDesktop", {
   instanceSet: (instance) => ipcRenderer.invoke("instance:set", instance),
   globalProbe: () => ipcRenderer.invoke("global:probe"),
   envDetect: () => ipcRenderer.invoke("env:detect"),
+  llmWriteGlobal: (llm) => ipcRenderer.invoke("llm:write-global", llm),
+  llmListModels: (q) => ipcRenderer.invoke("llm:list-models", q),
   instanceInstallIntoGlobal: () => ipcRenderer.invoke("instance:install-into-global"),
   instanceStartGlobal: () => ipcRenderer.invoke("instance:start-global"),
   standaloneStart: (options, instance) => ipcRenderer.invoke("standalone:start", { ...(options || {}), instance: instance || null }),
