@@ -894,7 +894,11 @@ import { createT as i18nCreateT } from "./i18n.js";
         return;
       }
       const ib = document.getElementById("bootstrap-install-btn");
-      if (ib) { ib.hidden = false; ib.click(); }
+      // The step-3 install button stays hidden - it exists only as a
+      // programmatic trigger; unhiding it left a stray "开始安装" visible
+      // for the whole install (user-reported). A hidden button still
+      // receives .click().
+      if (ib) { ib.click(); }
     });
     document.querySelectorAll("[data-wizard-back]").forEach((b) => b.addEventListener("click", () => wizardGoStep(Number(b.getAttribute("data-wizard-back")) || 1)));
     const modes = document.querySelectorAll('input[name="bootstrap-mode"]');
