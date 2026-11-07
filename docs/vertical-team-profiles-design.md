@@ -263,6 +263,16 @@ POST /api/v1/team/profile { profileId }
 
 ### Phase 2 切换机制与解耦（2-3 天，依赖 P1）
 
+> **P1 收官转交的 Phase 2 债务清单**（P1.3 切换时保留的角色表面，v1 软件基线下行为零差异；切换机制落地时逐项处理）：
+> ① `controller-tools.ts` VALID_ROLE_IDS 工具入参校验——非软件 profile 会被错杀，须换 `validateActiveRoleId`（P2.1 首项）
+> ② `prompt-policy.ts` TEAMCLAW_ROLE_IDS_TEXT（4 段 prompt 规则文本注入）
+> ③ `openclaw-workspace.ts` TEAMCLAW_ROLE_CATALOG（模型配置载荷 :750 + 手写 label 表 :545）
+> ④ `teamauto/scanner.ts:13` JOINT_REVIEW_ROLES 本地字面量（随 P2.3 scanner 类型收窄一并处理）
+> ⑤ `cli.mjs` 安装向导仍读 registry 表（离线安装场景如何感知 profile 待设计决策）
+> ⑥ config schema enum 在 `buildConfigSchema()` 求值时对 active profile 的快照时序
+> ⑦ 状态恢复分支不回写 `state.teamName`：改名 config 与 state 永久分歧（`/team/status` 出旧名、install 命令出新名）——随切换/归档 wave 处理
+> ⑧ `http-server.ts:1910` pm 偏好路由单角色字面量（非清单，记录备查）
+
 | # | 任务 | 要点 |
 |---|---|---|
 | 2.1 | 切换端点 + transition 状态机 + 归档管道 | §2.3 全语义：drain 超时强收、409/503 并发矩阵、崩溃幂等续作、整份 TeamState + roles 快照归档、v1 归档元数据列表端点 |
