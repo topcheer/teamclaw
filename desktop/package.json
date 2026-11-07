@@ -1,6 +1,6 @@
 {
   "name": "teamclaw-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "Cross-platform TeamClaw desktop client",
@@ -22,13 +22,15 @@
     "dist:win:arm64": "npm run prepare-bundled && electron-builder --win nsis --arm64",
     "dist:dir": "npm run prepare-bundled && electron-builder --dir",
     "smoke": "node --check main.mjs && node --check preload.mjs && node --check renderer/app.js",
-    "prepare-bundled": "node scripts/prepare-bundled.mjs"
+    "prepare-bundled": "node scripts/prepare-bundled.mjs",
+    "dist:mas": "electron-builder --mac mas"
   },
   "build": {
     "appId": "dev.ggcode.teamclaw",
     "productName": "TeamClaw Desktop",
     "files": [
       "main.mjs",
+      "runtime-extract.mjs",
       "preload.mjs",
       "renderer/**/*",
       "package.json"
@@ -65,7 +67,15 @@
         "from": "build/bundle",
         "to": "bin"
       }
-    ]
+    ],
+    "mas": {
+      "entitlements": "build/entitlements.mas.plist",
+      "entitlementsInherit": "build/entitlements.mas.plist",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "provisioningProfile": "build/embedded.provisionprofile",
+      "notarize": false
+    }
   },
   "devDependencies": {
     "electron": "^45.2.2",

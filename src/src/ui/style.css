@@ -652,6 +652,28 @@ body {
   color: var(--text-secondary);
 }
 
+/* TeamAuto sub-tabs (Config / Activity) */
+.ta-subtabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.ta-subtab {
+  border: 1px solid var(--border-color, rgba(255,255,255,0.15));
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 8px;
+  padding: 4px 14px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ta-subtab.active {
+  background: var(--accent-soft, rgba(226,183,111,0.15));
+  color: var(--accent, #e2b76f);
+  border-color: var(--accent, #e2b76f);
+}
+.ta-pane.is-hidden { display: none; }
+
 .clarification-reason,
 .clarification-context,
 .clarification-answer {
@@ -659,6 +681,46 @@ body {
   color: var(--text-primary);
   line-height: 1.5;
 }
+
+/* Markdown-rendered clarification context (worker-authored) */
+.clarification-context-md h1,
+.clarification-context-md h2,
+.clarification-context-md h3,
+.clarification-context-md h4 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 10px 0 4px;
+  color: var(--text-primary);
+}
+.clarification-context-md p { margin: 6px 0; }
+.clarification-context-md ul,
+.clarification-context-md ol { margin: 6px 0; padding-left: 18px; }
+.clarification-context-md li { margin: 2px 0; }
+.clarification-context-md code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  background: var(--bg-tertiary, rgba(255,255,255,0.06));
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+.clarification-context-md pre {
+  margin: 8px 0;
+  padding: 8px 10px;
+  overflow-x: auto;
+  background: var(--bg-tertiary, rgba(255,255,255,0.06));
+  border-radius: 6px;
+}
+.clarification-context-md pre code { background: none; padding: 0; }
+.clarification-context-md blockquote {
+  margin: 6px 0;
+  padding: 2px 10px;
+  border-left: 3px solid var(--border-color, rgba(255,255,255,0.15));
+  color: var(--text-secondary);
+}
+.clarification-context-md table { border-collapse: collapse; margin: 8px 0; font-size: 12px; }
+.clarification-context-md th,
+.clarification-context-md td { border: 1px solid var(--border-color, rgba(255,255,255,0.15)); padding: 4px 8px; }
+.clarification-context-md a { color: var(--accent, #e2b76f); }
 
 .clarification-answer-meta {
   color: var(--text-secondary);

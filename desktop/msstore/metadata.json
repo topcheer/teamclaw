@@ -1,0 +1,68 @@
+{
+  "$comment": "Microsoft Store submission metadata for TeamClaw Desktop. Fill the TODO/placeholder fields, then use them in Partner Center (or the Store submission API). Category IDs are the Store's own taxonomy identifiers.",
+  "product": {
+    "name": "TeamClaw Desktop",
+    "primaryCategory": "Productivity > developerTools",
+    "secondaryCategory": "DeveloperTools > codingCompilersDebugging",
+    "productType": "app",
+    "hardwareType": "pc"
+  },
+  "listings": {
+    "en-US": {
+      "title": "TeamClaw Desktop",
+      "shortDescription": "Turn OpenClaw instances into a coordinated virtual software team.",
+      "description": "TeamClaw Desktop bundles a fully offline OpenClaw + TeamClaw runtime and a native desktop cockpit for running an autonomous software team. One setup wizard wires your LLM provider, then TeamClaw sweeps your GitHub repositories on its own schedule, plans and assigns work across role-based workers (PM, architect, developer, QA, DevOps), takes ownership of unassigned issues, reviews pull requests, and writes results back with reviewable markers. Everything stays on your machine: the private instance keeps its own state directory and ports and never touches an existing OpenClaw installation.",
+      "searchTerms": [
+        "openclaw", "teamclaw", "ai coding agent", "autonomous agents",
+        "software team", "github automation", "developer tools"
+      ],
+      "releaseNotes": "Initial Store submission.",
+      "keywords": ["ai", "agents", "github", "automation", "developer"]
+    },
+    "zh-CN": {
+      "title": "TeamClaw 桌面版",
+      "shortDescription": "把 OpenClaw 实例变成一支协同的虚拟软件团队。",
+      "description": "TeamClaw 桌面版内置完全离线的 OpenClaw + TeamClaw 运行时，提供原生桌面驾驶舱来运行一支自主软件团队。一次设置向导接好你的 LLM 供应商，之后 TeamClaw 会按自己的节奏巡检你的 GitHub 仓库：规划和分配工作给角色化 worker（PM、架构、开发、QA、DevOps），认领无人处理的 issue，审查 Pull Request，并以可审查的标记回写结果。所有数据都留在你的机器上：私有实例拥有独立的状态目录和端口，绝不影响已有的 OpenClaw 安装。",
+      "searchTerms": ["openclaw", "teamclaw", "ai 编程", "自主智能体", "软件团队", "github 自动化"],
+      "releaseNotes": "首次商店提交。"
+    }
+  },
+  "ageRating": {
+    "$comment": "IARC questionnaire answers - no objectionable content.",
+    "violence": "none",
+    "sexualContent": "none",
+    "language": "none",
+    "controlledSubstances": "none",
+    "gambling": "false",
+    "userGeneratedContent": "false",
+    "dataCollection": {
+      "collectsPersonalInfo": "false",
+      "$comment": "TODO: confirm - the app itself collects nothing; LLM/GitHub traffic goes direct from the user's machine."
+    },
+    "targetAge": "13+"
+  },
+  "systemRequirements": {
+    "minimum": "Windows 10 version 2004 (build 19041)",
+    "tested": "Windows 11 24H2",
+    "memoryMb": 8192,
+    "diskMb": 2048
+  },
+  "contact": {
+    "website": "https://github.com/topcheer/teamclaw",
+    "supportEmail": "TODO@example.com",
+    "privacyPolicyUrl": "https://github.com/topcheer/teamclaw/blob/main/docs/PRIVACY.md"
+  },
+  "assets": {
+    "$comment": "Partner Center store assets - capture from the app before submitting.",
+    "screenshots": {
+      "desktop": { "count": 3, "size": "1366x768 or larger", "format": "PNG" },
+      "notes": "Recommended: Mission view, Tasks view (tabs), Controller settings"
+    },
+    "storeLogo": { "size": "512x512", "format": "PNG" },
+    "tiles": ["Square44x44", "Square150x150", "Wide310x150"]
+  },
+  "pricing": {
+    "markets": ["US", "CN"],
+    "priceTier": "free"
+  }
+}

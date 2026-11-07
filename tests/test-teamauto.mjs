@@ -23,7 +23,7 @@ const desktopAppPath = path.join(projectRoot, "desktop", "renderer", "app.js");
 const desktopI18nPath = path.join(projectRoot, "desktop", "renderer", "i18n.js");
 
 async function sourceContracts() {
-  const [scheduler, scanner, store, client, sync, norms, httpServer, service, page, uiHtml, desktopHtml, desktopApp, uiAppSrc] = await Promise.all([
+  const [scheduler, scanner, store, client, sync, norms, httpServer, service, page, uiHtml, desktopHtml, desktopApp, desktopI18n, uiAppSrc] = await Promise.all([
     fs.readFile(schedulerSrc, "utf8"),
     fs.readFile(scannerSrc, "utf8"),
     fs.readFile(storeSrc, "utf8"),
@@ -36,6 +36,7 @@ async function sourceContracts() {
     fs.readFile(uiHtmlPath, "utf8"),
     fs.readFile(desktopHtmlPath, "utf8"),
     fs.readFile(desktopAppPath, "utf8"),
+    fs.readFile(desktopI18nPath, "utf8"),
     fs.readFile(uiAppSrcPath, "utf8"),
   ]);
 
@@ -109,6 +110,16 @@ async function sourceContracts() {
   assert.match(scheduler, /createPullRequest/, "write delivery must open a PR from the task branch");
   assert.match(scheduler, /Delivered as PR:/, "the task reply must link the delivery PR");
   assert.match(scheduler, /removeTaskWorktree/, "worktrees must be cleaned up after delivery");
+  // Worktree GC (2026-11-07: 31 leaked __task- worktrees / 3GB observed):
+  // terminal tasks and boot reconciliation must reclaim worktrees, but only
+  // when the work is provably safe (pushed tip or no own commits).
+  assert.match(scheduler, /safeRemoveTaskWorktree/, "terminal write tasks (failed / no result) must safety-clean their worktree");
+  assert.match(scheduler, /gcTaskWorktrees/, "scheduler start must reconcile leftover task worktrees");
+  assert.match(scheduler, /worktree GC removed/, "GC outcome must be logged + recorded as activity");
+  assert.match(sync, /safeRemoveTaskWorktree/, "repo-sync must expose safety-checked removal");
+  assert.match(sync, /local branch ahead of pushed tip/, "unpushed work must never be silently destroyed");
+  assert.match(sync, /no own commits, branch never pushed/, "empty never-pushed worktrees must be reclaimed");
+  assert.match(sync, /worktree", "prune"/, "cleanup must survive unregistered (stale) worktree dirs");
   assert.match(httpServer, /activeWriteRoots/, "auto-assign must serialize write tasks per repo checkout");
   assert.match(httpServer, /ensureWriteWorktree/, "dispatch must place write tasks in a task-scoped worktree");
   assert.match(scheduler, /cycleKey/, "write-backs must carry the joint review cycle key");
@@ -131,10 +142,11 @@ async function sourceContracts() {
     const isDesktop = src === desktopApp;
     assert.match(src, isDesktop ? /taRunBindWithOverlay/ : /teamAutoBindWithOverlay/, "bind click must drive the stage overlay");
     if (isDesktop) {
-      // #145 extracted desktop TRANSLATIONS to renderer/i18n.js - the
-      // localized stage labels live there now, not in app.js.
-      const desktopI18n = await fs.readFile(desktopI18nPath, "utf8");
-      assert.match(desktopI18n, /bindStageVerify/, "stage labels must be localized");
+      // Desktop localized stage labels via data-i18n + bilingual catalogs
+      // (#146-155); the literal moved from app.js into i18n.js.
+      assert.match(desktopHtml, /data-i18n="teamauto\.bindStageVerify"/, "stage labels must be localized (data-i18n)");
+      assert.match(desktopI18n, /"teamauto\.bindStageVerify": "Verifying access"/, "stage label catalog must exist (en)");
+      assert.match(desktopI18n, /"teamauto\.bindStageVerify": "验证访问权限"/, "stage label catalog must exist (zh)");
     } else {
       assert.match(src, /bindStageVerify/, "stage labels must be localized");
     }

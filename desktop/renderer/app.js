@@ -106,9 +106,14 @@ import { createT as i18nCreateT } from "./i18n.js";
     if (languageToggle) {
       languageToggle.textContent = state.language === "zh" ? t("action.languageToggleEn") : t("action.languageToggleZh");
     }
+    const wizardLanguageToggle = $("#wizard-language-toggle");
+    if (wizardLanguageToggle) {
+      wizardLanguageToggle.textContent = state.language === "zh" ? t("action.languageToggleEn") : t("action.languageToggleZh");
+    }
     const texts = [
       [".connection-card h2", "connection.title"],
       ["#wizard-open-btn", "connection.setup"],
+      ["#wizard-cancel-btn", "wizard.cancel"],
       [".connection-group .connection-group-label", "connection.prodGroup"],
       [".standalone-box .connection-group-label", "connection.privateGroup"],
       ["#standalone-start-btn", "connection.privateStart"],
@@ -125,6 +130,12 @@ import { createT as i18nCreateT } from "./i18n.js";
       ["#teamauto-hint", "teamauto.hint"],
       ["#ta-repos-refresh", "teamauto.refreshRepos"],
       ["#ta-bind", "teamauto.bind"],
+      ["[data-ta-tab='repos']", "teamauto.tabRepos"],
+      ["[data-ta-tab='activity']", "teamauto.activity"],
+      ["[data-ctl-tab='models']", "ctl.tab.models"],
+      ["[data-ctl-tab='workspace']", "ctl.tab.workspace"],
+      ["[data-ctl-tab='github']", "ctl.tab.github"],
+      ["[data-ctl-tab='tunnel']", "ctl.tab.tunnel"],
       ["#ta-activity-title", "teamauto.activity"],
       ["#ctl-models-title", "ctl.models.title"],
       ["#ctl-models-hint", "ctl.models.hint"],
@@ -163,6 +174,18 @@ import { createT as i18nCreateT } from "./i18n.js";
       ["#bootstrap-start-command-label", "bootstrap.startCommand"]
     ];
     texts.forEach(([selector, key]) => {
+      // Generic scan: any element carrying data-i18n translates itself.
+      // (Wizard/bootstrap section adopted this; new static text should too.)
+      document.querySelectorAll("[data-i18n]").forEach((el) => {
+        const k = el.getAttribute("data-i18n");
+        const v = t(k);
+        if (v && v !== k) el.textContent = v;
+      });
+      document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+        const k = el.getAttribute("data-i18n-placeholder");
+        const v = t(k);
+        if (v && v !== k) el.placeholder = v;
+      });
       if (selector === "#planning-list.closest") {
         const heading = $("#planning-list") && $("#planning-list").closest(".panel") ? $("#planning-list").closest(".panel").querySelector(".section-head h2") : null;
         if (heading) heading.textContent = t(key);
@@ -793,10 +816,140 @@ import { createT as i18nCreateT } from "./i18n.js";
   }
 
   // ---- Wizard (3 steps) ----
+  // ---- LLM hard gate (user spec, 2026-11-07) ----
+  // Private install: provider + model + apiKey are REQUIRED (endpoint
+  // optional) before Install enables. Global mode with models already
+  // configured: defaults to "use existing", user may switch to "configure".
+  const LLM_DEFAULT_MODELS = {
+    zai: "glm-4.6",
+    anthropic: "claude-sonnet-4-5",
+    openai: "gpt-6",
+    openrouter: "anthropic/claude-sonnet-4.5",
+    deepseek: "deepseek-chat",
+    google: "gemini-3-pro",
+  };
+  // Where to get an API key per provider (user spec: clickable hint).
+  const LLM_KEY_URLS = {
+    zai: "https://z.ai/model-api",
+    anthropic: "https://console.anthropic.com/settings/keys",
+    openai: "https://platform.openai.com/api-keys",
+    openrouter: "https://openrouter.ai/keys",
+    deepseek: "https://platform.deepseek.com/api_keys",
+    google: "https://aistudio.google.com/apikey",
+  };
+  let llmModelsFetchToken = 0;
+  let llmModelsCache = [];
+  function applyModelFilter(forceFull) {
+    const select = document.getElementById("bootstrap-llm-model-select");
+    const modelEl = document.getElementById("bootstrap-llm-model");
+    if (!select || !modelEl || !llmModelsCache.length) return;
+    // forceFull: after a fetch-filled smart default, show the FULL list for
+    // browsing - filtering by the just-filled value collapses it to one
+    // entry (user-reported). Only real typing filters.
+    const q = forceFull ? "" : modelEl.value.trim().toLowerCase();
+    const list = q ? llmModelsCache.filter((m) => m.toLowerCase().includes(q)) : llmModelsCache.slice();
+    const current = modelEl.value.trim();
+    const options = list.includes(current) || !current ? list : [current].concat(list);
+    select.innerHTML = options.map((id) => `<option value="${escapeHtml(id)}">${escapeHtml(id)}</option>`).join("");
+    select.hidden = false;
+    modelEl.hidden = false; // stays visible as the filter/entry box
+    if (current && options.includes(current)) select.value = current;
+  }
+  function updateLlmKeyHint() {
+    const keyhint = document.getElementById("bootstrap-llm-keyhint");
+    const prov = document.getElementById("bootstrap-llm-provider");
+    if (!keyhint || !prov) return;
+    const url = LLM_KEY_URLS[prov.value];
+    // Only honor the "use existing" selection when the radio pair is
+    // actually visible (global mode). In private mode the hidden radios
+    // still exist in the DOM with `checked` on the first one - selecting it
+    // here hid the key hint for everyone (user-found).
+    const useRow = document.getElementById("bootstrap-llm-use-row");
+    const useExisting = document.querySelector('input[name="llm-source"]:checked');
+    const hideHint = Boolean(useRow && !useRow.hidden && useExisting && useExisting.value === "configured");
+    if (!url || hideHint) { keyhint.hidden = true; keyhint.innerHTML = ""; return; }
+    keyhint.hidden = false;
+    keyhint.innerHTML = `${escapeHtml(t("wizard.keyHint"))} <a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(prov.value)} → ${escapeHtml(url)}</a>`;
+  }
+  function scheduleLlmModelsFetch() {
+    const prov = document.getElementById("bootstrap-llm-provider");
+    const keyEl = document.getElementById("bootstrap-llm-apikey");
+    const epEl = document.getElementById("bootstrap-llm-endpoint");
+    if (!prov || !keyEl) return;
+    const token = ++llmModelsFetchToken;
+    const key = keyEl.value.trim();
+    // OpenRouter's model list is public - fetch without a key too.
+    if (prov.value !== "openrouter" && !key) return;
+    window.teamclawDesktop.llmListModels({ provider: prov.value, endpoint: epEl ? epEl.value.trim() : "", apiKey: key })
+      .then((res) => {
+        if (token !== llmModelsFetchToken) return; // stale
+        const select = document.getElementById("bootstrap-llm-model-select");
+        const modelEl = document.getElementById("bootstrap-llm-model");
+        if (!res || res.error || !Array.isArray(res.models) || !res.models.length || !select || !modelEl) return;
+        llmModelsCache = res.models.slice();
+        // Smart default: prefer the curated default if listed, else a free
+        // entry on openrouter, else first. Only when the user hasn't chosen.
+        if (!modelEl.dataset.userEdited) {
+          const preferred = LLM_DEFAULT_MODELS[prov.value];
+          const pick = res.models.find((m) => m === preferred)
+            || res.models.find((m) => /free/i.test(m) && prov.value === "openrouter")
+            || res.models[0];
+          if (pick) modelEl.value = pick;
+        }
+        applyModelFilter(!modelEl.dataset.userEdited);
+        updateLlmStep();
+      })
+      .catch(() => { /* manual input still works */ });
+  }
+  function llmMode() {
+    const el = document.querySelector('input[name="bootstrap-mode"]:checked');
+    return el ? el.getAttribute("data-bootstrap-mode") : "controller-manual";
+  }
+  function llmSource() {
+    const el = document.querySelector('input[name="llm-source"]:checked');
+    return el ? el.value : "custom";
+  }
+  function updateLlmStep() {
+    const useRow = document.getElementById("bootstrap-llm-use-row");
+    const fields = document.getElementById("bootstrap-llm-fields");
+    const prov = document.getElementById("bootstrap-llm-provider");
+    const modelEl = document.getElementById("bootstrap-llm-model");
+    const keyEl = document.getElementById("bootstrap-llm-apikey");
+    const hint = document.getElementById("bootstrap-llm-hint");
+    const next2 = document.getElementById("wizard-next-2");
+    if (!prov || !next2) return;
+    const env = state.envDetect;
+    const offerConfigured = llmMode() === "global" && env && env.llmConfigured;
+    if (useRow) {
+      useRow.hidden = !offerConfigured;
+      const useRadio = document.querySelector('input[name="llm-source"][value="configured"]');
+      if (offerConfigured && useRadio && !document.querySelector('input[name="llm-source"]:checked')) useRadio.checked = true;
+      if (offerConfigured) {
+        const lbl = document.getElementById("bootstrap-llm-use-label");
+        const provs = (env.llmProviders || []).join(", ");
+        if (lbl) lbl.textContent = provs ? `${t("wizard.llmUseConfigured")} (${provs})` : t("wizard.llmUseConfigured");
+      }
+    }
+    const useExisting = offerConfigured && llmSource() === "configured";
+    if (fields) fields.style.display = useExisting ? "none" : "";
+    if (modelEl) {
+      if (!modelEl.value.trim() && LLM_DEFAULT_MODELS[prov.value]) modelEl.value = LLM_DEFAULT_MODELS[prov.value];
+      modelEl.placeholder = LLM_DEFAULT_MODELS[prov.value] || "model";
+    }
+    let reason = null;
+    if (!useExisting) {
+      if (!prov.value) reason = t("wizard.needProvider");
+      else if (!keyEl || !keyEl.value.trim()) reason = t("wizard.needKey");
+      else if (!modelEl || !modelEl.value.trim()) reason = t("wizard.needModel");
+    }
+    if (hint) { hint.hidden = !reason; hint.textContent = reason || ""; }
+    next2.disabled = Boolean(reason);
+  }
   function wizardGoStep(n) {
     document.querySelectorAll("[data-wizard-step]").forEach((el) => {
       el.hidden = el.getAttribute("data-wizard-step") !== String(n);
     });
+    if (n === 2) updateLlmStep(); // hard gate: re-validate on every entry
     document.querySelectorAll("#wizard-steps .step-ind").forEach((el) => {
       const on = el.getAttribute("data-step-ind") === String(n);
       el.classList.toggle("active", on);
@@ -814,48 +967,92 @@ import { createT as i18nCreateT } from "./i18n.js";
         return; // remote: 停在步骤1 等用户填 URL 连接
       }
       if (mode === "global") {
-        // Global instance: reuse pre-existing state untouched; only a fresh
-        // global goes through the LLM step.
-        const probe = await desktop.globalProbe().catch(() => null);
-        if (probe && probe.present && probe.llmConfigured) {
+        // Three cases (user spec):
+        //  a) global already HAS teamclaw  -> just connect & remember
+        //  b) global openclaw, no teamclaw -> install INTO it (backup first)
+        //  c) no openclaw at all           -> full install, LLM step first
+        const env = state.envDetect || (await desktop.envDetect().catch(() => null));
+        const log = document.getElementById("bootstrap-log");
+        if (env && env.openclaw && env.teamclawInGlobal) {
           wizardGoStep(3);
-          const r = await desktop.instanceStartGlobal().catch((e) => ({ error: String(e && e.message || e) }));
-          const log = document.getElementById("bootstrap-log");
-          if (log) log.textContent = "[global] Reusing existing OpenClaw state (LLM untouched).\n" + JSON.stringify(r);
-          await desktop.instanceSet({ mode: "global", controllerUrl: null, llmConfigured: true }).catch(() => {});
+          if (log) log.textContent = "[global] TeamClaw already present in the global instance.\n";
+          const url = env.globalControllerUrl || "http://127.0.0.1:9527";
+          await desktop.instanceSet({ mode: "global", controllerUrl: url, llmConfigured: true }).catch(() => {});
+          await connectController(url, { skipConversation: true }).catch(() => {});
+          unveilShell();
           return;
         }
-        wizardGoStep(2); // fresh global: LLM step, then start-global
+        if (env && env.openclaw && !env.teamclawInGlobal) {
+          // LLM gate (user spec): installing INTO an existing global openclaw
+          // still passes through step 2 - models already configured default
+          // to "use existing"; the user may switch to "configure". Install
+          // itself is triggered from step 2's Install button.
+          wizardGoStep(2);
+          return;
+        }
+        wizardGoStep(2); // case c: fresh global -> LLM step, then start-global
         return;
       }
       wizardGoStep(2); // private (default)
     });
     const next2 = document.getElementById("wizard-next-2");
     if (next2) next2.addEventListener("click", async () => {
-      wizardGoStep(3);
+      updateLlmStep();
+      if (next2.disabled) return; // hard gate: never bypass via double-click
       const checked = document.querySelector('input[name="bootstrap-mode"]:checked');
       const mode = checked ? checked.getAttribute("data-bootstrap-mode") : "controller-manual";
+      const env = state.envDetect;
+      const useExisting = mode === "global" && env && env.llmConfigured && llmSource() === "configured";
+      const provEl = document.getElementById("bootstrap-llm-provider");
+      const keyEl = document.getElementById("bootstrap-llm-apikey");
+      const epEl = document.getElementById("bootstrap-llm-endpoint");
+      const modelEl = document.getElementById("bootstrap-llm-model");
+      const llm = useExisting ? null : {
+        provider: provEl.value,
+        endpoint: epEl ? epEl.value.trim() : "",
+        apiKey: keyEl ? keyEl.value.trim() : "",
+        model: modelEl ? modelEl.value.trim() : "",
+      };
+      wizardGoStep(3);
       if (mode === "global") {
-        // Fresh global: write LLM into the machine-level config via the
-        // bootstrap sandbox writer is WRONG here - global mode writes to the
-        // global state by design (user explicitly chose it).
         const log = document.getElementById("bootstrap-log");
-        const providerEl = document.getElementById("bootstrap-llm-provider");
-        const keyEl = document.getElementById("bootstrap-llm-apikey");
-        const epEl = document.getElementById("bootstrap-llm-endpoint");
+        const wizLine = (s) => { if (log) log.textContent += s + "\n"; };
         try {
-          if (log) log.textContent = "[global] Starting global gateway...\n";
-          const r = await desktop.instanceStartGlobal();
-          if (log) log.textContent += "[global] gateway pid=" + r.pid + " port=" + r.port + "\n[global] Configured mode=global; reconnect on next app start.\n";
-          await desktop.instanceSet({ mode: "global", controllerUrl: null, llmConfigured: true });
+          wizLine("[global] Starting global path...");
+          if (llm) {
+            wizLine(`[global] Writing ${llm.provider} config into the global OpenClaw...`);
+            await desktop.llmWriteGlobal(llm);
+          } else {
+            wizLine("[global] Using the existing global model configuration.");
+          }
+          if (env && env.openclaw && !env.teamclawInGlobal) {
+            const r = await desktop.instanceInstallIntoGlobal();
+            await desktop.instanceSet({ mode: "global", controllerUrl: r.controllerUrl, llmConfigured: true }).catch(() => {});
+            await connectController(r.controllerUrl, { skipConversation: true }).catch(() => {});
+            unveilShell();
+          } else {
+            // Blank machine (user-found on Windows): bare start-global spawns
+            // a binary that does not exist and the wizard sat on step 3
+            // forever. installIntoGlobal self-provisions the runtime, installs
+            // the plugin into the GLOBAL state, writes controller mode, and
+            // only then starts the gateway - so it works with nothing present.
+            wizLine("[global] No existing OpenClaw - running the full global install...");
+            const r = await desktop.instanceInstallIntoGlobal();
+            await desktop.instanceSet({ mode: "global", controllerUrl: r.controllerUrl, llmConfigured: true }).catch(() => {});
+            await connectController(r.controllerUrl, { skipConversation: true }).catch(() => {});
+            unveilShell();
+          }
         } catch (e) {
-          if (log) log.textContent += "[error] " + (e && e.message) + "\n";
+          wizLine("[error] " + (e && e.message));
         }
-        void providerEl; void keyEl; void epEl;
         return;
       }
       const ib = document.getElementById("bootstrap-install-btn");
-      if (ib) { ib.hidden = false; ib.click(); }
+      // The step-3 install button stays hidden - it exists only as a
+      // programmatic trigger; unhiding it left a stray "开始安装" visible
+      // for the whole install (user-reported). A hidden button still
+      // receives .click().
+      if (ib) { ib.click(); }
     });
     document.querySelectorAll("[data-wizard-back]").forEach((b) => b.addEventListener("click", () => wizardGoStep(Number(b.getAttribute("data-wizard-back")) || 1)));
     const modes = document.querySelectorAll('input[name="bootstrap-mode"]');
@@ -866,6 +1063,39 @@ import { createT as i18nCreateT } from "./i18n.js";
     const sel = document.getElementById("bootstrap-source");
     const gl = document.getElementById("bootstrap-artifact-url");
     if (sel && gl) sel.addEventListener("change", () => { gl.hidden = sel.value !== "artifact"; });
+    // LLM hard gate: live validation while the user types/picks.
+    ["bootstrap-llm-provider", "bootstrap-llm-model", "bootstrap-llm-apikey", "bootstrap-llm-endpoint"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.addEventListener(el.tagName === "SELECT" ? "change" : "input", updateLlmStep);
+    });
+    // Provider UX (user spec): key-acquisition hint on provider change;
+    // model list auto-refresh once a key exists (debounced). Mark manual
+    // model edits so the fetch default never overwrites the user's choice.
+    const provEl = document.getElementById("bootstrap-llm-provider");
+    // Provider switch ALSO re-fetches (debounced): openrouter's list is
+    // public, so switching to it must populate the picker without a manual
+    // refresh click (user-found: "list gone until I hit refresh").
+    if (provEl) provEl.addEventListener("change", () => {
+      updateLlmKeyHint();
+      clearTimeout(window.__llmFetchT);
+      window.__llmFetchT = setTimeout(scheduleLlmModelsFetch, 400);
+    });
+    const keyElX = document.getElementById("bootstrap-llm-apikey");
+    if (keyElX) keyElX.addEventListener("input", () => { updateLlmKeyHint(); clearTimeout(window.__llmFetchT); window.__llmFetchT = setTimeout(scheduleLlmModelsFetch, 700); });
+    const modelElX = document.getElementById("bootstrap-llm-model");
+    if (modelElX) modelElX.addEventListener("input", () => { modelElX.dataset.userEdited = modelElX.value.trim() ? "1" : ""; applyModelFilter(); });
+    const modelSel = document.getElementById("bootstrap-llm-model-select");
+    if (modelSel) modelSel.addEventListener("change", () => {
+      // Pick from the list fills the entry box WITHOUT re-filtering, so the
+      // list stays browsable after a selection.
+      if (modelElX) { modelElX.value = modelSel.value; modelElX.dataset.userEdited = modelSel.value.trim() ? "1" : ""; }
+      updateLlmStep();
+    });
+    const modelsRefresh = document.getElementById("bootstrap-llm-models-refresh");
+    if (modelsRefresh) modelsRefresh.addEventListener("click", () => { modelElX && delete modelElX.dataset.userEdited; scheduleLlmModelsFetch(); });
+    const epElX = document.getElementById("bootstrap-llm-endpoint");
+    if (epElX) epElX.addEventListener("input", () => { clearTimeout(window.__llmFetchT); window.__llmFetchT = setTimeout(scheduleLlmModelsFetch, 700); });
+    document.querySelectorAll('input[name="llm-source"]').forEach((r) => r.addEventListener("change", () => { updateLlmKeyHint(); updateLlmStep(); }));
   }
 
   function bootShell(msgKey) {
@@ -1294,6 +1524,24 @@ import { createT as i18nCreateT } from "./i18n.js";
   function bindTeamAutoControls() {
     if (teamAutoBtnBound) return;
     teamAutoBtnBound = true;
+    // Sub-tabs (Repositories | Activity): plain class toggling; both panes
+    // keep rendering so switching tabs never needs a refetch.
+    document.querySelectorAll(".ta-tab[data-ta-tab]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const tab = btn.getAttribute("data-ta-tab");
+        document.querySelectorAll(".ta-tab[data-ta-tab]").forEach((b) => b.classList.toggle("active", b === btn));
+        document.querySelectorAll(".ta-tabpane[data-ta-pane]").forEach((p) => p.classList.toggle("active", p.getAttribute("data-ta-pane") === tab));
+      });
+    });
+    // Controller settings tabs (models | workspace | github | tunnel): same
+    // toggle semantics; every pane keeps rendering from its own pollers.
+    document.querySelectorAll(".ta-tab[data-ctl-tab]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const tab = btn.getAttribute("data-ctl-tab");
+        document.querySelectorAll(".ta-tab[data-ctl-tab]").forEach((b) => b.classList.toggle("active", b === btn));
+        document.querySelectorAll(".ta-tabpane[data-ctl-pane]").forEach((p) => p.classList.toggle("active", p.getAttribute("data-ctl-pane") === tab));
+      });
+    });
     const bindBtn = document.getElementById("ta-bind");
     if (bindBtn) {
       bindBtn.addEventListener("click", async () => {
@@ -1532,6 +1780,11 @@ import { createT as i18nCreateT } from "./i18n.js";
     // v3.1 S1: overlay is the 3-step wizard; keep busy/visibility semantics only.
     const ov = $("#bootstrap-overlay");
     if (ov) ov.classList.toggle("hidden", !state.unavailableScreenVisible && state.connectionState === "connected");
+    // Fresh-machine path: when the wizard must show (no instance record and
+    // no ready runtime), lift the boot gate - otherwise "Connecting..." sits
+    // on top of the wizard forever (true-sandbox launch hung exactly here;
+    // fake HOME sandboxes masked it by adopting the real machine's state).
+    if (state.unavailableScreenVisible && state.connectionState !== "connected") unveilShell();
     const busy = Boolean(state.localSetupInfo && state.localSetupInfo.hasOpenClaw ? state.isInstallingLocal : state.isInstallingOpenClaw);
     const log = $("#bootstrap-log");
     if (log) log.parentElement && (log.parentElement.hidden = false);
@@ -2479,7 +2732,10 @@ import { createT as i18nCreateT } from "./i18n.js";
                 `${renderListIndicator(task.status || "unknown")}` +
                 `<div class="list-copy">` +
                 `<div class="list-title">${escapeHtml(task.title || task.id || t("task.title"))}</div>` +
-                `<div class="list-meta">${escapeHtml(meta || compactText(task.description, 120))}</div>` +
+              // renderWorkerLabel/formatTime return SAFE html (internally
+              // escaped) - escaping the joined string double-escapes it and
+              // leaks literal <span title=...> text into the list row.
+              `<div class="list-meta">${meta || escapeHtml(compactText(task.description, 120))}</div>` +
                 `</div>` +
                 `${renderStatusTag(task.status || "unknown")}` +
                 `</div>` +
@@ -3361,9 +3617,17 @@ import { createT as i18nCreateT } from "./i18n.js";
   async function connectSavedController() {
     state.settings = await desktop.getSettings();
     state.localSetupInfo = await desktop.getLocalSetupInfo();
-    const defaultUrl = state.settings.controllerUrl || 'http://127.0.0.1:9527';
+    // No implicit localhost fallback: connecting somewhere the user never
+    // chose (a host production controller on 9527) is worse than showing the
+    // setup screen. Only an explicitly saved URL is used here.
+    const defaultUrl = state.settings.controllerUrl || '';
     $('#controller-url').value = defaultUrl;
     state.controllerUrl = defaultUrl;
+    if (!defaultUrl) {
+      renderChrome();
+      renderUnavailableScreen();
+      return;
+    }
     state.localSetupMode = 'controller-manual';
     if (state.localSetupInfo && Array.isArray(state.localSetupInfo.modes)) {
       const preferredMode = state.localSetupInfo.modes.find((entry) => entry.recommended) || state.localSetupInfo.modes[0];
@@ -3390,11 +3654,20 @@ import { createT as i18nCreateT } from "./i18n.js";
   }
 
   async function reconnectAfterLocalInstall() {
+    // Sandbox = blank machine: NEVER fall back to the host's production
+    // controller on 9527 - an empty saved URL means show the setup state,
+    // not dial whatever else runs on this host.
+    const fallbackUrl = state.settings && state.settings.sandbox ? '' : 'http://127.0.0.1:9527';
     const reconnectUrl = normalizeBaseUrl(
       state.controllerUrl
         || (state.settings && state.settings.controllerUrl)
-        || 'http://127.0.0.1:9527',
+        || fallbackUrl,
     );
+    if (!reconnectUrl) {
+      state.unavailableScreenVisible = true;
+      renderUnavailableScreen();
+      return;
+    }
     $('#controller-url').value = reconnectUrl;
     state.controllerUrl = reconnectUrl;
     state.unavailableReason = t("bootstrap.connecting");
@@ -3437,6 +3710,9 @@ import { createT as i18nCreateT } from "./i18n.js";
     refreshWorkspaceTree().catch(() => {});
   });
   $('#language-toggle').addEventListener('click', function () {
+    setLanguage(state.language === 'zh' ? 'en' : 'zh');
+  });
+  $('#wizard-language-toggle').addEventListener('click', function () {
     setLanguage(state.language === 'zh' ? 'en' : 'zh');
   });
   $('#compose-focus-btn').addEventListener('click', function () {
@@ -3532,12 +3808,13 @@ import { createT as i18nCreateT } from "./i18n.js";
       const providerEl = document.getElementById('bootstrap-llm-provider');
       const endpointEl = document.getElementById('bootstrap-llm-endpoint');
       const apikeyEl = document.getElementById('bootstrap-llm-apikey');
+      const modelEl = document.getElementById('bootstrap-llm-model');
       const sourceEl = document.getElementById('bootstrap-source');
       const artifactEl = document.getElementById('bootstrap-artifact-url');
       const source = sourceEl && sourceEl.value !== 'auto' ? sourceEl.value : undefined;
       const artifactUrl = source === 'artifact' && artifactEl ? artifactEl.value.trim() : undefined;
-      const llm = (providerEl && providerEl.value)
-        ? { provider: providerEl.value, endpoint: endpointEl ? endpointEl.value.trim() : '', apiKey: apikeyEl ? apikeyEl.value.trim() : '' }
+      const llm = (providerEl && providerEl.value && apikeyEl && apikeyEl.value.trim())
+        ? { provider: providerEl.value, endpoint: endpointEl ? endpointEl.value.trim() : '', apiKey: apikeyEl.value.trim(), model: modelEl ? modelEl.value.trim() : '' }
         : {};
 
       const installPromise = desktop.bootstrapInstall({ llm, source, artifactUrl })
@@ -3545,28 +3822,37 @@ import { createT as i18nCreateT } from "./i18n.js";
       installPromise.then(async () => {
         state.isInstallingLocal = false;
         state.isInstallingOpenClaw = false;
+        // `inst` must be read HERE: the outer scopes never define it, and the
+        // ReferenceError it used to throw was silently swallowed - the
+        // post-install connect hop never actually ran until this line.
+        const inst = await desktop.instanceGet().catch(() => null);
         state.unavailableReason = "";
         state.localSetupInfo = await desktop.getLocalSetupInfo();
         // Last hop (the "it just works" moment): after a successful install,
         // start the private instance, wait for the controller announce, connect
         // - and open the dashboard in the browser like a running install does.
         try {
-          const st = await desktop.standaloneStart({}).catch(() => null);
+          const wizLog = (line) => { const el = document.getElementById("bootstrap-log"); if (el) el.textContent += `\n[connect] ${line}`; };
+          const st = await desktop.standaloneStart({}, inst || null).catch((e) => { wizLog("start failed: " + (e && e.message)); return null; });
           if (st && st.controllerUrl) {
+            wizLog("instance up at " + st.controllerUrl + " - waiting for controller...");
             let ok = false;
             for (let i = 0; i < 45 && !ok; i++) {
               try { const res = await fetch(`${st.controllerUrl}/api/v1/tunnel/status`, { signal: AbortSignal.timeout(1500) }); ok = res.ok; } catch {}
               if (!ok) await new Promise((w) => setTimeout(w, 1500));
             }
             if (ok) {
-              await desktop.instanceSet({ mode: "private", lifecycle: "app", controllerUrl: st.controllerUrl, llmConfigured: true }).catch(() => {});
-              await connectController(st.controllerUrl, { skipConversation: true }).catch(() => {});
+              await desktop.instanceSet({ mode: "private", lifecycle: (inst && inst.lifecycle) || "app", controllerUrl: st.controllerUrl, gatewayPort: st.port || null, controllerPort: st.controllerPort || null, llmConfigured: true }).catch(() => {});
+              await connectController(st.controllerUrl, { skipConversation: true }).catch((e) => wizLog("connect failed: " + (e && e.message)));
               // Desktop private instance intentionally does NOT open the
               // web UI in a browser - the desktop app IS the UI (user ruling).
               return;
             }
+            wizLog("controller never answered on " + st.controllerUrl);
+          } else if (st) {
+            wizLog("instance started but no controller URL (announce timeout)");
           }
-        } catch { /* fall through to the wizard screen */ }
+        } catch (e) { const el = document.getElementById("bootstrap-log"); if (el) el.textContent += `\n[connect] unexpected: ${e && e.message}`; }
         if (hasOpenClaw) {
           await reconnectAfterLocalInstall();
           return;
@@ -4020,6 +4306,16 @@ import { createT as i18nCreateT } from "./i18n.js";
       renderUnavailableScreen();
       wizardGoStep(1);
     });
+    const wizCancel = document.getElementById('wizard-cancel-btn');
+    if (wizCancel) wizCancel.addEventListener('click', () => {
+      state.unavailableScreenVisible = false;
+      renderUnavailableScreen();
+      // Explicit user dismissal wins over the boot-gate keep-open: without
+      // this the "not connected yet" branch re-shows the overlay instantly
+      // and cancel appears dead.
+      const ov = document.getElementById('bootstrap-overlay');
+      if (ov) ov.classList.add('hidden');
+    });
     const stopBtn = document.getElementById('standalone-stop-btn');
     if (stopBtn) stopBtn.addEventListener('click', async () => {
       stopBtn.disabled = true;
@@ -4092,7 +4388,7 @@ import { createT as i18nCreateT } from "./i18n.js";
         const r = await desktop.runtimeIsReady();
       if (r && r.ready) {
         bootShell("boot.startingInstance");
-        const st = await desktop.standaloneStart({}).catch(() => null);
+        const st = await desktop.standaloneStart({}, inst || null).catch(() => null);
         if (st && st.controllerUrl) {
           // Gateway just spawned: poll until the controller answers (<=30s),
           // then connect. Transient failures retry inside the window.
@@ -4103,7 +4399,7 @@ import { createT as i18nCreateT } from "./i18n.js";
           }
           if (ok) {
             await connectController(st.controllerUrl, { skipConversation: true }).catch(() => {});
-            await desktop.instanceSet({ mode: "private", lifecycle: "app", controllerUrl: st.controllerUrl, llmConfigured: true }).catch(() => {});
+            await desktop.instanceSet({ mode: "private", lifecycle: (inst && inst.lifecycle) || "app", controllerUrl: st.controllerUrl, gatewayPort: st.port || null, controllerPort: st.controllerPort || null, llmConfigured: true }).catch(() => {});
             unveilShell();
             return;
           }
@@ -4112,9 +4408,35 @@ import { createT as i18nCreateT } from "./i18n.js";
       }
     } catch { unveilShell(); }
     }
-    // No usable instance record -> wizard.
+    // No usable instance record -> wizard, with the DEFAULT option chosen
+    // from a read-only environment probe (user spec):
+    //   global openclaw + teamclaw -> connect existing (option 3 selected)
+    //   openclaw only              -> install into it (global) by default
+    //   neither                    -> full global install by default
     state.unavailableScreenVisible = true;
     renderUnavailableScreen();
+    try {
+      const env = await desktop.envDetect();
+      state.envDetect = env;
+      const pick = (mode) => {
+        const el = document.querySelector(`input[name="bootstrap-mode"][data-bootstrap-mode="${mode}"]`);
+        if (el) { el.checked = true; el.dispatchEvent(new Event("change")); }
+      };
+      // Sandbox = blank machine (user rule): the wizard defaults to the
+      // PRIVATE instance and never pre-fills the host's real controller URL.
+      // Host-probing defaults only apply to a normal (non-sandbox) launch.
+      if (state.settings && state.settings.sandbox) {
+        pick("controller-manual");
+      } else if (env.openclaw && env.teamclawInGlobal) {
+        pick("remote");
+        const urlEl = document.getElementById("bootstrap-controller-url");
+        if (urlEl && env.globalControllerUrl) urlEl.value = env.globalControllerUrl;
+      } else if (env.openclaw) {
+        pick("global"); // install into the existing global instance
+      } else {
+        pick("global"); // full global install is the default path
+      }
+    } catch { /* keep defaults */ }
     wizardGoStep(1);
   })();
   bindWizardControls();
