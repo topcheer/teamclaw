@@ -37,18 +37,27 @@ async function readRequestBody(req: IncomingMessage): Promise<Buffer> {
   });
 }
 
+/**
+ * Issue #23: the Access-Control-Allow-Origin value a response should carry.
+ * A header the security gate PINNED before dispatch (device protection on:
+ * same-origin echo, or an explicit empty value for foreign origins) wins;
+ * with nothing pinned (protection off / non-browser requests) the value is
+ * the historical wildcard, byte for byte. Every response path that sets
+ * ACAO (sendJson here, the raw-file and repo-bundle octet-stream writers in
+ * the controller routes) must go through this helper so no route can widen
+ * a pinned response back to the L0 wildcard.
+ */
+function pinnedCorsAllowOrigin(res: ServerResponse): string {
+  const pinned = res.getHeader("Access-Control-Allow-Origin");
+  return typeof pinned === "string" ? pinned : "*";
+}
+
 function sendJson(res: ServerResponse, status: number, data: unknown): void {
   const body = JSON.stringify(data);
-  // Issue #23: when the security gate has already PINNED a narrowed
-  // Access-Control-Allow-Origin on this response (device protection on:
-  // same-origin echo, or an explicit empty value for foreign origins),
-  // honor it instead of the L0 wildcard. Nothing pinned (protection off,
-  // pre-issue behavior) keeps the historical "*" byte for byte.
-  const pinnedOrigin = res.getHeader("Access-Control-Allow-Origin");
   res.writeHead(status, {
     "Content-Type": "application/json",
     "Content-Length": Buffer.byteLength(body),
-    "Access-Control-Allow-Origin": typeof pinnedOrigin === "string" ? pinnedOrigin : "*",
+    "Access-Control-Allow-Origin": pinnedCorsAllowOrigin(res),
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
   });
@@ -89,6 +98,7 @@ export {
   readRequestBody,
   sendJson,
   sendError,
+  pinnedCorsAllowOrigin,
   createRegistrationRequest,
   createHeartbeatPayload,
 };

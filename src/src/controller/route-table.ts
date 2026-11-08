@@ -7,6 +7,7 @@ import {
   readRequestBody,
   sendJson,
   sendError,
+  pinnedCorsAllowOrigin,
 } from "../protocol.js";
 import { saveTeamState, listArchivedTeams } from "../state.js";
 import { listWorkspaceTree, listWorkspaceSubtree, readWorkspaceFile, readWorkspaceRawFile } from "../workspace-browser.js";
@@ -737,7 +738,11 @@ async function workspaceRawFileRoute(ctx: RouteContext): Promise<void> {
     res.writeHead(200, {
       "Content-Type": file.contentType,
       "Cache-Control": "no-store",
-      "Access-Control-Allow-Origin": "*",
+      // Issue #23 security review follow-up: honor a CORS origin the
+      // security gate pinned (device protection on) instead of hardcoding
+      // the wildcard, which silently widened it; unpinned keeps the
+      // historical "*" byte for byte (shared helper, see protocol.ts).
+      "Access-Control-Allow-Origin": pinnedCorsAllowOrigin(res),
       "X-Content-Type-Options": "nosniff",
     });
     res.end(file.content);

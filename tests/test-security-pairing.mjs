@@ -126,7 +126,7 @@ async function bootScenario(options = {}) {
     mode: "controller",
     teamName: "Security Team",
     port: 19530,
-    gitEnabled: false,
+    gitEnabled: options.gitEnabled ?? false,
     ...(options.autoPair === false ? { security: { autoPair: false } } : {}),
   });
   assert.equal(config.security.autoPair, options.autoPair === false ? false : true, "config parse: security.autoPair default true, explicit false honored");
@@ -475,6 +475,29 @@ const mintedTokens = [];
     assert.match(persistedFresh.security.devices[0].tokenHash, /^[0-9a-f]{64}$/, "the fresh device record carries a sha256 tokenHash");
     assert.equal(fs.readFileSync(path.join(stateDir, "team-state.json"), "utf8").includes(freshWebToken), false,
       "the freshly minted web token is absent from the state file (cookie only)");
+
+    // ---- 3b. True-concurrency pair (security review follow-up): two
+    // in-flight requests racing the SAME code against the real dist server
+    // must yield exactly one 201 and one 400 already-used - the
+    // check-and-consume inside the single synchronous state mutation is
+    // structurally atomic, not a read-then-write race.
+    const raceStart = await scenario.call("POST", "/api/v1/security/pair/start", {}, { Authorization: `Bearer ${freshWebToken}` });
+    assert.equal(raceStart.status, 201, "fresh code for the race");
+    const raceCode = raceStart.json.pairingCode.code;
+    const racers = await Promise.all([
+      scenario.call("POST", "/api/v1/security/pair", { code: raceCode, kind: "cli", name: "Racer A" }),
+      scenario.call("POST", "/api/v1/security/pair", { code: raceCode, kind: "cli", name: "Racer B" }),
+    ]);
+    assert.deepEqual(racers.map((r) => r.status).sort(), [201, 400], "exactly one racer pairs; the other is rejected");
+    const winner = racers.find((r) => r.status === 201);
+    const loser = racers.find((r) => r.status === 400);
+    assert.match(loser.json.error, /already used/, "the losing racer is told the code was already consumed");
+    mintedTokens.push(winner.json.token);
+    const afterRace = await scenario.call("GET", "/api/v1/security", undefined, { Authorization: `Bearer ${freshWebToken}` });
+    assert.equal(afterRace.json.devices.length, 2, "the race minted exactly ONE additional device");
+    await waitForStateFile((s) => s.security?.devices?.length === 2);
+    assert.equal(fs.readFileSync(path.join(stateDir, "team-state.json"), "utf8").includes(winner.json.token), false,
+      "the race-winner token is also absent from the persisted state");
   } finally {
     await scenario.close();
   }
@@ -495,6 +518,54 @@ const mintedTokens = [];
     const codePair = await scenario.call("POST", "/api/v1/security/pair", { code: enable.json.pairingCode.code, kind: "cli", name: "via code" });
     assert.equal(codePair.status, 201, "the pairing-code path still works with autoPair=false");
     mintedTokens.push(codePair.json.token);
+  } finally {
+    await scenario.close();
+  }
+}
+
+// ===========================================================================
+// (Security review follow-up) the two non-sendJson CORS writers - the
+// workspace raw-file response and the repo-bundle octet-stream - used to
+// hardcode Access-Control-Allow-Origin: "*" in their res.writeHead calls,
+// which silently WIDENED a CORS origin the security gate had pinned while
+// device protection is on. They must honor the pinned origin: the
+// historical "*" while protection is off (byte for byte), the pinned value
+// (same-origin echo / explicit empty for foreign origins) once on.
+// ===========================================================================
+{
+  const scenario = await bootScenario({ gitEnabled: true });
+  try {
+    fs.writeFileSync(path.join(process.env.TEAMCLAW_WORKSPACE_DIR, "cors-probe.txt"), "cors probe\n");
+    const foreignOrigin = { Origin: "https://foreign.example.com" };
+
+    // L0: both raw-writer endpoints keep the historical wildcard bytes.
+    const rawOff = await scenario.call("GET", "/api/v1/workspace/raw/cors-probe.txt", undefined, foreignOrigin);
+    assert.equal(rawOff.status, 200, "L0: raw file serves without a token");
+    assert.equal(rawOff.headers.get("access-control-allow-origin"), "*", "L0 raw-file response keeps the wildcard byte for byte");
+    const bundleOff = await scenario.call("GET", "/api/v1/repo/bundle", undefined, foreignOrigin);
+    assert.equal(bundleOff.status, 200, "L0: repo bundle exports (git workspace bootstraps itself)");
+    assert.equal(bundleOff.headers.get("content-type"), "application/octet-stream", "the bundle response is the octet-stream writer under test");
+    assert.equal(bundleOff.headers.get("access-control-allow-origin"), "*", "L0 bundle response keeps the wildcard byte for byte");
+
+    // Protection on: the pinned origin must survive the direct writeHead.
+    const enable = await scenario.call("POST", "/api/v1/security/enable");
+    assert.equal(enable.status, 201);
+    const token = cookieToken(enable.setCookie);
+    mintedTokens.push(token);
+    const authForeign = { Authorization: `Bearer ${token}`, Origin: "https://foreign.example.com" };
+    const rawOnForeign = await scenario.call("GET", "/api/v1/workspace/raw/cors-probe.txt", undefined, authForeign);
+    assert.equal(rawOnForeign.status, 200, "protection on: paired device reads the raw file");
+    assert.equal(rawOnForeign.headers.get("access-control-allow-origin"), "", "protection on: raw-file response carries the pinned empty ACAO - never the wildcard");
+    const bundleOnForeign = await scenario.call("GET", "/api/v1/repo/bundle", undefined, authForeign);
+    assert.equal(bundleOnForeign.status, 200, "protection on: paired device exports the bundle");
+    assert.equal(bundleOnForeign.headers.get("access-control-allow-origin"), "", "protection on: bundle response carries the pinned empty ACAO - never the wildcard");
+    const authSameOrigin = { Authorization: `Bearer ${token}`, Origin: scenario.baseUrl };
+    const rawOnSame = await scenario.call("GET", "/api/v1/workspace/raw/cors-probe.txt", undefined, authSameOrigin);
+    assert.equal(rawOnSame.status, 200);
+    assert.equal(rawOnSame.headers.get("access-control-allow-origin"), scenario.baseUrl, "same-origin raw-file response echoes the UI origin");
+    const bundleOnSame = await scenario.call("GET", "/api/v1/repo/bundle", undefined, authSameOrigin);
+    assert.equal(bundleOnSame.status, 200);
+    assert.equal(bundleOnSame.headers.get("access-control-allow-origin"), scenario.baseUrl, "same-origin bundle response echoes the UI origin");
   } finally {
     await scenario.close();
   }
