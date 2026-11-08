@@ -932,9 +932,9 @@ import { createT as i18nCreateT } from "./i18n.js";
       "icon": "🏦",
       "industry": "banking",
       "description": "Corporate credit line team (v1 scope: 对公信贷) covering intake, risk review, approval, AML analysis, credit compliance and post-loan management; every output is an internal working draft pending a human decision.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "roleCount": 6,
-      "pendingSignoff": true
+      "pendingSignoff": false
     },
     {
       "id": "crossborder-ecom",
@@ -954,9 +954,9 @@ import { createT as i18nCreateT } from "./i18n.js";
       "icon": "🛡️",
       "industry": "insurance",
       "description": "Insurance team (v1: 5 roles) drafting underwriting, claims, actuarial-documentation, compliance and product-design work products; underwriting register is P&C or life by declaration, actuarial numbers and all decisions stay with humans.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "roleCount": 5,
-      "pendingSignoff": true
+      "pendingSignoff": false
     },
     {
       "id": "securities",
@@ -965,9 +965,9 @@ import { createT as i18nCreateT } from "./i18n.js";
       "icon": "📈",
       "industry": "securities",
       "description": "Research institute team (v1 scope: research only) drafting industry, macro and quant-methodology work papers behind an information barrier; drafts never leave the team without licensed-analyst sign-off and independence disclosures.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "roleCount": 4,
-      "pendingSignoff": true
+      "pendingSignoff": false
     },
     {
       "id": "software-rd",
