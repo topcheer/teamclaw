@@ -520,6 +520,12 @@ export type TeamProvisioningState = {
 export type PluginConfig = {
   mode: TeamClawMode;
   port: number;
+  /**
+   * Issue #27: explicit HTTP listen host override for the worker HTTP server.
+   * Empty/undefined = follow the default policy (127.0.0.1 on hosts,
+   * 0.0.0.0 inside containers) - same resolution the controller applies.
+   */
+  listenHost?: string;
   role: RoleId;
   controllerUrl: string;
   teamName: string;
@@ -706,6 +712,25 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
     ? raw.port
     : 9527;
 
+  // Issue #27: explicit listen-host override for the worker HTTP server.
+  // Empty/absent keeps the default policy (loopback on hosts, all interfaces
+  // in containers) resolved in worker-service.ts.
+  const listenHost = typeof raw.listenHost === "string" && raw.listenHost.trim()
+    ? raw.listenHost.trim()
+    : undefined;
+
+  // Issue #27: 9527 is ALSO the controller's default port. A controller and a
+  // worker on the same host both defaulting to it collide with a confusing
+  // EADDRINUSE at startup. Only the same-host dual-process case is a problem -
+  // an external worker legitimately using 9527 must keep working - so this
+  // stays a parse-time warning, never an error.
+  if (mode === "worker" && port === 9527) {
+    console.warn(
+      "[teamclaw] config warning: worker mode uses port 9527, which is also the controller default. " +
+      "Running a controller and this worker on the same host will conflict (EADDRINUSE); set this worker's `port` config key to another value in that topology.",
+    );
+  }
+
   // Issue #192 (Phase 3 prerequisite): lenient worker-side role parsing.
   // The registry validateRoleId folded any unknown role string (e.g. a
   // minimal-bank "credit-officer") to developer, so a worker provisioned
@@ -871,6 +896,7 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
   return {
     mode,
     port,
+    listenHost,
     role,
     controllerUrl,
     teamName,

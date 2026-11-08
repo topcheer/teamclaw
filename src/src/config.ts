@@ -23,6 +23,11 @@ function buildConfigSchema() {
           default: 9527,
           description: "HTTP server port for this instance",
         },
+        listenHost: {
+          type: "string" as const,
+          default: "",
+          description: "HTTP listen host override (empty = 127.0.0.1 on hosts, 0.0.0.0 in containers); set 0.0.0.0 for external workers reachable by a remote controller",
+        },
         role: {
           type: "string" as const,
           default: "developer",
@@ -250,6 +255,10 @@ function buildConfigSchema() {
     uiHints: {
       mode: { label: "Mode", help: "controller manages the team, worker executes tasks" },
       port: { label: "Port", help: "HTTP server port for this instance" },
+      listenHost: {
+        label: "Listen Host",
+        help: "HTTP bind address override; empty defaults to 127.0.0.1 on hosts and 0.0.0.0 in containers. Use 0.0.0.0 when a remote controller must reach this worker",
+      },
       role: { label: "Role", help: "Worker role (worker mode only)" },
       controllerUrl: { label: "Controller URL", help: "Manual fallback if mDNS discovery fails" },
       teamName: { label: "Team Name", help: "Team identifier for mDNS" },

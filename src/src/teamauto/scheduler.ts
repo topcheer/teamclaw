@@ -24,6 +24,7 @@ import {
   type TeamAutoRepoNorms,
   type TeamAutoRepoProvision,
   type TeamAutoStore,
+  type TeamAutoWriteBack,
 } from "./store.js";
 
 /**
@@ -103,6 +104,31 @@ export function sweepRetryDueAt(failures: number, lastErrorAt: number): number {
   return lastErrorAt + sweepBackoffMinutes(failures) * 60_000;
 }
 
+/**
+ * Issue #24: max write-back delivery attempts before the entry is marked
+ * terminally failed (failedAt) and never retried again.
+ */
+export const TEAMAUTO_WRITEBACK_MAX_ATTEMPTS = 6;
+
+/**
+ * Issue #24: write-back retry backoff - 1 minute after the 1st failure,
+ * doubling per attempt, capped at 2 hours. Over
+ * TEAMAUTO_WRITEBACK_MAX_ATTEMPTS attempts this spaces transient GitHub API
+ * failures (secondary rate limits, 5xx, token refresh races) across roughly
+ * an hour before giving up, instead of the pre-fix behavior (sticky error
+ * with no retry/no visibility, then a 20s hammer once the self-heal landed).
+ */
+export const WRITEBACK_RETRY_BASE_MS = 60_000;
+export const WRITEBACK_RETRY_MAX_MS = 2 * 60 * 60_000;
+export function writebackBackoffMs(attempts: number): number {
+  return Math.min(WRITEBACK_RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1), WRITEBACK_RETRY_MAX_MS);
+}
+
+/** Epoch ms when a failed write-back becomes due for its next retry. */
+export function writebackRetryDueAt(attempts: number, lastErrorAt: number): number {
+  return lastErrorAt + writebackBackoffMs(attempts);
+}
+
 /** Auto-pauses (set by the sweep catch block) are cooldowns; user pauses are not. */
 export function isAutoPause(reason: string | null | undefined): boolean {
   return !!reason && reason.startsWith("sweep failed:");
@@ -114,6 +140,85 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
   function recordActivity(store: TeamAutoStore, entry: TeamAutoActivityEntry): void {
     pushTeamAutoActivity(store, entry);
     deps.onActivity?.(entry);
+  }
+
+  /**
+   * Issue #24: a failed write-back used to be a sticky `error` field whose
+   * only trace was one warn log line - the completed task's result never
+   * reached GitHub and nothing surfaced it. Centralized failure handling:
+   * persist the failure (attempts/backoff), expose it in the activity feed,
+   * and give up terminally (failedAt) once attempts are exhausted or the
+   * caller flags the failure undeliverable.
+   */
+  function markWritebackFailure(store: TeamAutoStore, entry: TeamAutoWriteBack, message: string, options: { terminal?: boolean } = {}): void {
+    entry.error = message;
+    entry.attempts = (entry.attempts ?? 0) + 1;
+    entry.lastErrorAt = Date.now();
+    entry.nextAttemptAt = writebackRetryDueAt(entry.attempts, entry.lastErrorAt);
+    const gaveUp = options.terminal === true || entry.attempts >= TEAMAUTO_WRITEBACK_MAX_ATTEMPTS;
+    if (gaveUp && !entry.doneAt) {
+      entry.failedAt = Date.now();
+      recordActivity(store, {
+        at: Date.now(),
+        repoId: entry.repoId,
+        kind: "writeback",
+        text: `failed permanently after ${entry.attempts} attempt(s) (${entry.action} #${entry.targetId ?? "-"}, task ${entry.taskId}): ${message}`,
+      });
+      logger.warn(`TeamAuto: write-back ${entry.taskId} (${entry.repoId} ${entry.action} #${entry.targetId ?? "-"}) gave up after ${entry.attempts} attempts: ${message}`);
+      return;
+    }
+    recordActivity(store, {
+      at: Date.now(),
+      repoId: entry.repoId,
+      kind: "writeback",
+      text: `failed (attempt ${entry.attempts}/${TEAMAUTO_WRITEBACK_MAX_ATTEMPTS}, retry in ~${Math.max(1, Math.round(writebackBackoffMs(entry.attempts) / 60_000))}min) (${entry.action} #${entry.targetId ?? "-"}): ${message}`,
+    });
+    logger.warn(`TeamAuto: writeback failed (${entry.repoId} ${entry.action} #${entry.targetId ?? "-"}): ${message}`);
+  }
+
+  /**
+   * Issue #24: write-back delivery stats surfaced through getStatus() so the
+   * repos endpoint, the teamclaw_teamauto_status tool, and the activity feed
+   * can see stuck/failed deliveries instead of only warn logs.
+   */
+  function summarizeWritebacks(store: TeamAutoStore): {
+    pending: number;
+    errored: number;
+    failed: number;
+    lastError: {
+      taskId: string;
+      repoId: string;
+      action: string;
+      targetId: number | null;
+      attempts: number;
+      terminal: boolean;
+      at: number | null;
+      message: string | null;
+    } | null;
+  } {
+    const open = store.writebacks.filter((w) => !w.doneAt);
+    const failed = open.filter((w) => w.failedAt);
+    const errored = open.filter((w) => w.error && !w.failedAt);
+    const lastErrorEntry = open
+      .filter((w) => w.error)
+      .sort((a, b) => (b.lastErrorAt ?? 0) - (a.lastErrorAt ?? 0))[0];
+    return {
+      pending: open.length - failed.length - errored.length,
+      errored: errored.length,
+      failed: failed.length,
+      lastError: lastErrorEntry
+        ? {
+            taskId: lastErrorEntry.taskId,
+            repoId: lastErrorEntry.repoId,
+            action: lastErrorEntry.action,
+            targetId: lastErrorEntry.targetId,
+            attempts: lastErrorEntry.attempts ?? 0,
+            terminal: Boolean(lastErrorEntry.failedAt),
+            at: lastErrorEntry.lastErrorAt ?? null,
+            message: lastErrorEntry.error,
+          }
+        : null,
+    };
   }
   const client = createGithubClient(auth);
   const sync = createRepoSync(auth, logger);
@@ -529,15 +634,20 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     // Self-heal: an entry whose task later COMPLETED with a result (e.g. the
     // completion gate rejected an early submission, then a retry succeeded)
     // must be retried - a sticky error here would silently drop delivery.
+    // Issue #24: the retry now respects the per-entry backoff (nextAttemptAt)
+    // so a failing write-back no longer hammers GitHub on every 20s pass;
+    // legacy entries without a nextAttemptAt (pre-#24 stores) retry once
+    // immediately and then enter the normal backoff ladder. Terminally
+    // failed entries (failedAt) are never retried again.
     for (const w of s.writebacks) {
-      if (w.error && !w.doneAt && state0) {
+      if (w.error && !w.doneAt && !w.failedAt && state0) {
         const t = state0.tasks[w.taskId];
-        if (t && t.status === "completed" && t.result) {
+        if (t && t.status === "completed" && t.result && (w.nextAttemptAt ?? 0) <= Date.now()) {
           w.error = null;
         }
       }
     }
-    const pending = s.writebacks.filter((w) => !w.doneAt && !w.error);
+    const pending = s.writebacks.filter((w) => !w.doneAt && !w.error && !w.failedAt);
     if (!pending.length) {
       return;
     }
@@ -554,7 +664,18 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       const [owner, name] = entry.repoId.split("/");
       try {
         if (task.status === "failed" || !task.result) {
-          entry.error = task.status === "failed" ? (task.error ?? "task failed") : "task completed without a textual result";
+          // Undeliverable in every future pass: a failed task never gains a
+          // result, and "completed without result" cannot recover either.
+          // Mark terminal (issue #24) so the entry is counted, surfaced via
+          // activity/stats, and never pointlessly retried. Failed-without-
+          // result entries are additionally dropped by the dead-letter pass
+          // on the next reconcile.
+          markWritebackFailure(
+            s,
+            entry,
+            task.status === "failed" ? (task.error ?? "task failed") : "task completed without a textual result",
+            { terminal: true },
+          );
           // Terminal write task: its dispatch-time worktree has no delivery
           // path left - remove it when the worker never produced deliverable
           // commits (safety-checked, undelivered work is retained + logged).
@@ -591,8 +712,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
               }
               await sync.removeTaskWorktree(repoId, task.id);
             } catch (prErr) {
-              entry.error = `worktree PR delivery failed: ${prErr instanceof Error ? prErr.message : String(prErr)}`;
-              logger.warn(`TeamAuto: ${entry.error} (${task.id})`);
+              markWritebackFailure(s, entry, `worktree PR delivery failed: ${prErr instanceof Error ? prErr.message : String(prErr)}`);
             }
           }
           if (entry.action === "issueComment" && entry.targetId) {
@@ -646,15 +766,19 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
               writebackDone = true;
             }
           } else {
-            entry.error = `unsupported action ${entry.action}`;
+            markWritebackFailure(s, entry, `unsupported action ${entry.action}`, { terminal: true });
           }
           if (writebackDone) {
-            recordActivity(s, { at: Date.now(), repoId: entry.repoId, kind: "writeback", text: `${entry.action} #${entry.targetId ?? "-"} ok (${task.id})` });
+            // Delivery succeeded: clear any transient failure state so a
+            // partially-failed entry (e.g. PR opened on an earlier retry)
+            // does not linger in the errored/failed stats (issue #24).
+            entry.error = null;
+            entry.failedAt = null;
+            recordActivity(s, { at: Date.now(), repoId: entry.repoId, kind: "writeback", text: `${entry.action} #${entry.targetId ?? "-"} ok (${task.id}${entry.attempts ? `, after ${entry.attempts} failed attempt(s)` : ""})` });
           }
         }
       } catch (err) {
-        entry.error = err instanceof Error ? err.message : String(err);
-        logger.warn(`TeamAuto: writeback failed (${entry.repoId} ${entry.action} #${entry.targetId ?? "-"}): ${entry.error}`);
+        markWritebackFailure(s, entry, err instanceof Error ? err.message : String(err));
       }
       void repo;
     }
@@ -757,8 +881,10 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
             // Review F1: a terminal task with a pending write-back (push
             // ok / PR failed, 20s-retry window) still needs its worktree -
             // the retry delivers the PR from the surviving branch. Do not
-            // GC until the write-back settles (doneAt or dropped).
-            return !s.writebacks.some((w) => w.taskId === taskId && !w.doneAt);
+            // GC until the write-back settles (doneAt or dropped). Issue
+            // #24: terminally failed write-backs (failedAt) count as settled
+            // too - safeRemoveTaskWorktree still retains unpushed work.
+            return !s.writebacks.some((w) => w.taskId === taskId && !w.doneAt && !w.failedAt);
           };
           const r = await sync.gcTaskWorktrees(repo.id, isTerminal);
           removed += r.removed.length;
@@ -787,9 +913,17 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     }
   }
 
-  async function getStatus(): Promise<{ repos: TeamAutoRepo[]; budget: TeamAutoStore["budget"]; activity: NonNullable<TeamAutoStore["activity"]> }> {
+  async function getStatus(): Promise<{
+    repos: TeamAutoRepo[];
+    budget: TeamAutoStore["budget"];
+    activity: NonNullable<TeamAutoStore["activity"]>;
+    writebacks: ReturnType<typeof summarizeWritebacks>;
+  }> {
     const s = await ensureStore();
-    return { repos: s.repos, budget: s.budget, activity: s.activity ?? [] };
+    // Issue #24: failed/stuck write-back deliveries are part of the status
+    // payload (repos endpoint + teamclaw_teamauto_status tool) instead of
+    // being invisible outside warn logs.
+    return { repos: s.repos, budget: s.budget, activity: s.activity ?? [], writebacks: summarizeWritebacks(s) };
   }
 
   async function getActivity(): Promise<NonNullable<TeamAutoStore["activity"]>> {

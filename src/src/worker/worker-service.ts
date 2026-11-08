@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import http from "node:http";
 import type { OpenClawPluginService, OpenClawPluginServiceContext, PluginLogger } from "../../api.js";
 import type { PluginConfig, TaskAssignmentPayload, WorkerIdentity } from "../types.js";
@@ -8,6 +9,39 @@ import { createWorkerHttpHandler } from "./http-handler.js";
 import { buildTeamClawAgentSessionKey, ensureOpenClawWorkspaceMemoryDir } from "../openclaw-workspace.js";
 
 export type TaskExecutorResultLike = string | { text: string; contract?: Record<string, unknown> };
+
+/**
+ * Issue #27: container detection mirrors the controller's resolve step in
+ * controller-service.ts (/.dockerenv, /run/.containerenv, or the Kubernetes
+ * service env). Inside Docker/K8s the worker must bind all interfaces so
+ * port mapping, service networking, and the controller can reach it; on a
+ * host it stays loopback by default.
+ */
+export function detectWorkerContainerEnvironment(): boolean {
+  return fs.existsSync("/.dockerenv") ||
+    fs.existsSync("/run/.containerenv") ||
+    process.env.KUBERNETES_SERVICE_HOST !== undefined;
+}
+
+/**
+ * Issue #27: worker HTTP bind address resolution. Precedence:
+ * 1. explicit `listenHost` config (overrides everything),
+ * 2. 0.0.0.0 inside containers (Docker/K8s),
+ * 3. 127.0.0.1 loopback default on hosts.
+ * Previously `listen(config.port)` bound `::` (all interfaces) everywhere,
+ * exposing the unauthenticated task/message endpoints to the whole network.
+ */
+export function resolveWorkerListenHost(config: Pick<PluginConfig, "listenHost">): string {
+  const explicit = config.listenHost?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  return detectWorkerContainerEnvironment() ? "0.0.0.0" : "127.0.0.1";
+}
+
+function isLoopbackHost(host: string): boolean {
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
+}
 
 export type WorkerServiceDeps = {
   config: PluginConfig;
@@ -32,6 +66,35 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
   const activeTaskSessionKeys = new Map<string, string>();
   const cancelledTaskIds = new Set<string>();
   let consecutiveHeartbeatFailures = 0;
+  let warnedLoopbackReachability = false;
+
+  // Issue #27: with the loopback bind default, an external worker (controller
+  // on another host) still advertises its LAN IP (identity.ts getLocalIp),
+  // so the controller could never reach it. Surface that mismatch once
+  // instead of failing silently; `listenHost` is the escape hatch.
+  function warnIfLoopbackBindBlocksRemoteController(targetControllerUrl: string): void {
+    if (warnedLoopbackReachability) {
+      return;
+    }
+    const listenHost = resolveWorkerListenHost(config);
+    if (!isLoopbackHost(listenHost)) {
+      return;
+    }
+    let controllerHost: string;
+    try {
+      controllerHost = new URL(targetControllerUrl).hostname;
+    } catch {
+      return;
+    }
+    if (!controllerHost || isLoopbackHost(controllerHost)) {
+      return;
+    }
+    warnedLoopbackReachability = true;
+    logger.warn(
+      `Worker: HTTP server is bound to loopback (${listenHost}) but the controller is at ${targetControllerUrl} (different host) - the controller cannot reach this worker. ` +
+      `Set the "listenHost" plugin config (e.g. "0.0.0.0" or this machine's LAN address) for external-worker deployments.`,
+    );
+  }
 
   const taskExecutor = externalTaskExecutor
     ? async (assignment: TaskAssignmentPayload): Promise<{ text: string; contract?: Record<string, unknown> }> => {
@@ -163,12 +226,27 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
     }
 
     server = http.createServer(handler);
+    const listenHost = resolveWorkerListenHost(config);
     await new Promise<void>((resolve, reject) => {
-      server!.listen(config.port, () => {
-        logger.info(`Worker: HTTP server listening on port ${config.port}`);
+      server!.listen(config.port, listenHost, () => {
+        logger.info(`Worker: HTTP server listening on ${listenHost}:${config.port}`);
         resolve();
       });
-      server!.on("error", reject);
+      server!.on("error", (err: NodeJS.ErrnoException) => {
+        if (err.code === "EADDRINUSE") {
+          // Issue #27: the worker default port is also the controller default,
+          // so same-host dual-process setups crash here with no pointer.
+          reject(new Error(
+            `Worker: cannot listen on ${listenHost}:${config.port} - address already in use` +
+            (config.port === 9527
+              ? ". Port 9527 is also the controller default; when running a controller and this worker on the same host, point this worker's \`port\` config at another value"
+              : "") +
+            ". Adjust the `port` and `listenHost` plugin config keys to change the bind address.",
+          ));
+          return;
+        }
+        reject(err);
+      });
     });
   }
 
@@ -191,6 +269,7 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
         controllerUrl = identity.controllerUrl;
         workerId = identity.workerId;
         onIdentityEstablished(identity);
+        warnIfLoopbackBindBlocksRemoteController(controllerUrl);
         // Restart server with worker ID and task executor
         await startServer();
       }
@@ -203,6 +282,7 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
             controllerUrl = newIdentity.controllerUrl;
             workerId = newIdentity.workerId;
             onIdentityEstablished(newIdentity);
+            warnIfLoopbackBindBlocksRemoteController(controllerUrl);
             await startServer();
           }
           return;
