@@ -28,6 +28,9 @@ const uiIndexPath = path.join(projectRoot, "src", "src", "ui", "index.html");
 const uiAppPath = path.join(projectRoot, "src", "src", "ui", "app.js");
 const desktopAppPath = path.join(projectRoot, "desktop", "renderer", "app.js");
 const httpServerPath = path.join(projectRoot, "src", "src", "controller", "http-server.ts");
+// PR-D of issue #204: the team-status handler (buildExternalWorkerInstallInfo)
+// moved from http-server.ts into controller/route-table.ts.
+const routeTablePath = path.join(projectRoot, "src", "src", "controller", "route-table.ts");
 const cliPath = path.join(projectRoot, "src", "cli.mjs");
 const distRolesPath = path.join(projectRoot, "src", "dist", "src", "roles.js");
 
@@ -54,11 +57,11 @@ const roleOptionLiteralPattern = new RegExp(
 );
 
 async function runUntypedRoleRenderSmoke() {
-  const [uiIndex, uiApp, desktopApp, httpServerSource, cliSource] = await Promise.all([
+  const [uiIndex, uiApp, desktopApp, routeTableSource, cliSource] = await Promise.all([
     fs.readFile(uiIndexPath, "utf8"),
     fs.readFile(uiAppPath, "utf8"),
     fs.readFile(desktopAppPath, "utf8"),
-    fs.readFile(httpServerPath, "utf8"),
+    fs.readFile(routeTablePath, "utf8"),
     fs.readFile(cliPath, "utf8"),
   ]);
 
@@ -131,8 +134,9 @@ async function runUntypedRoleRenderSmoke() {
   );
 
   // --- Backend: install payload advertises the active profile default role --
+  // PR-D of issue #204: buildExternalWorkerInstallInfo moved to route-table.ts.
   assert.match(
-    httpServerSource,
+    routeTableSource,
     /defaultRole: getActiveDefaultRole\(\),/,
     "buildExternalWorkerInstallInfo must expose the active profile defaultRole so UIs restore the developer default (Phase 1.3)",
   );

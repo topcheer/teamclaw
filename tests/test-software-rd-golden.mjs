@@ -254,9 +254,11 @@ expectFatal((p) => { p.capabilities.git = "yes"; }, "wrong-capability-type");
 loader.validateProfilePackage(legalPackage, schema, "software-rd.json");
 
 // 3d. /roles advertises the profile defaultRole (Phase 1.4 UI hook waits on it).
-const httpServerSource = await readSource(path.join("src", "src", "controller", "http-server.ts"));
+// PR-D of issue #204: the roles route shell moved from http-server.ts into
+// controller/route-table.ts - pin the new home (body unchanged).
+const routeTableSource = await readSource(path.join("src", "src", "controller", "route-table.ts"));
 assert.match(
-  httpServerSource,
+  routeTableSource,
   /sendJson\(res, 200, \{ roles: getActiveRoles\(\), defaultRole: getActiveDefaultRole\(\) \}\);/,
   "GET /api/v1/roles must return { roles: <profile roles>, defaultRole } (the UI reads res.defaultRole)",
 );

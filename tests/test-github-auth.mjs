@@ -10,6 +10,9 @@ const projectRoot = path.resolve(scriptDir, "..");
 const githubAuthPath = path.join(projectRoot, "src", "src", "controller", "github-auth.ts");
 const githubLoginPagePath = path.join(projectRoot, "src", "src", "ui", "github-login.html");
 const httpServerPath = path.join(projectRoot, "src", "src", "controller", "http-server.ts");
+// PR-D of issue #204: the declarative route table (and with it the auth
+// route shells) moved from http-server.ts into controller/route-table.ts.
+const routeTablePath = path.join(projectRoot, "src", "src", "controller", "route-table.ts");
 const typesPath = path.join(projectRoot, "src", "src", "types.ts");
 const configPath = path.join(projectRoot, "src", "src", "config.ts");
 const uiAppPath = path.join(projectRoot, "src", "src", "ui", "app.js");
@@ -17,9 +20,10 @@ const uiHtmlPath = path.join(projectRoot, "src", "src", "ui", "index.html");
 const desktopAppPath = path.join(projectRoot, "desktop", "renderer", "app.js");
 
 async function runGithubAuthSmoke() {
-  const [githubAuthSource, httpServerSource, typesSource, configSource, uiAppSource, desktopAppSource, githubLoginPageSource] = await Promise.all([
+  const [githubAuthSource, httpServerSource, routeTableSource, typesSource, configSource, uiAppSource, desktopAppSource, githubLoginPageSource] = await Promise.all([
     fs.readFile(githubAuthPath, "utf8"),
     fs.readFile(httpServerPath, "utf8"),
+    fs.readFile(routeTablePath, "utf8"),
     fs.readFile(typesPath, "utf8"),
     fs.readFile(configPath, "utf8"),
     fs.readFile(uiAppPath, "utf8"),
@@ -66,10 +70,13 @@ async function runGithubAuthSmoke() {
     /store\.flowOrigin !== "device"/,
     "refresh must only demand a client secret for web-flow tokens",
   );
-  assert.match(httpServerSource, /beginDeviceLogin\(\)/, "login endpoint must default to the device flow");
+  // PR-D of issue #204: the auth route shells moved from http-server.ts's
+  // if chain into controller/route-table.ts - pin the new home (same
+  // method+path content, table-entry form).
+  assert.match(routeTableSource, /beginDeviceLogin\(\)/, "login endpoint must default to the device flow");
   assert.match(
-    httpServerSource,
-    /pathname === "\/ui\/auth\/github"/,
+    routeTableSource,
+    /path: "\/ui\/auth\/github"/,
     "controller must serve the standalone GitHub login page",
   );
   assert.match(
@@ -99,7 +106,7 @@ async function runGithubAuthSmoke() {
     "/api/v1/auth/github/logout",
     "/api/v1/auth/github/refresh",
   ]) {
-    assert.ok(httpServerSource.includes(`pathname === "${route}"`), `controller must route ${route}`);
+    assert.ok(routeTableSource.includes(`path: "${route}"`), `controller must route ${route}`);
   }
 
   // Config surface.

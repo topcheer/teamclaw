@@ -13,6 +13,9 @@ const skillInstallerPath = path.join(projectRoot, "src", "src", "worker", "skill
 const workerServicePath = path.join(projectRoot, "src", "src", "worker", "worker-service.ts");
 const taskExecutorPath = path.join(projectRoot, "src", "src", "task-executor.ts");
 const controllerHttpServerPath = path.join(projectRoot, "src", "src", "controller", "http-server.ts");
+// PR-D of issue #204: the declarative route table (and with it the task
+// route shells) moved from http-server.ts into controller/route-table.ts.
+const controllerRouteTablePath = path.join(projectRoot, "src", "src", "controller", "route-table.ts");
 // PR-C of issue #204: the task/result/message handler bodies moved out of
 // http-server.ts - pin their new homes (task-results.ts, task-routes.ts,
 // message-routes.ts).
@@ -33,6 +36,7 @@ async function runWorkerContractSmoke() {
     workerServiceSource,
     taskExecutorSource,
     controllerHttpServerSource,
+    controllerRouteTableSource,
     taskResultsSource,
     taskRoutesSource,
     messageRoutesSource,
@@ -48,6 +52,7 @@ async function runWorkerContractSmoke() {
     fs.readFile(workerServicePath, "utf8"),
     fs.readFile(taskExecutorPath, "utf8"),
     fs.readFile(controllerHttpServerPath, "utf8"),
+    fs.readFile(controllerRouteTablePath, "utf8"),
     fs.readFile(taskResultsPath, "utf8"),
     fs.readFile(taskRoutesPath, "utf8"),
     fs.readFile(messageRoutesPath, "utf8"),
@@ -179,7 +184,7 @@ async function runWorkerContractSmoke() {
     "controller messaging tool should also use the shared message contract helper",
   );
   assert.match(
-    controllerHttpServerSource,
+    controllerRouteTableSource,
     /POST \/api\/v1\/tasks\/:id\/result-contract|POST \/api\/v1\/tasks\/\[\^\/\]\+\/result-contract/,
     "controller HTTP server should expose a task result contract endpoint",
   );
