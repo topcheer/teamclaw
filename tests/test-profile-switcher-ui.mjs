@@ -9,6 +9,7 @@
 //   - 202 + team.switch_started/completed/failed WS tracking, 409 transition
 //     notice
 //   - capability-gated teamauto tab hidden (not removed) + CSS hidden rule
+//   - capability off->on restart hint in the confirm step (#193)
 //   - reviewedBy "Human sign-off pending" badge rendering
 //   - teamProfile.* i18n keys present in BOTH the en and zh inline dicts
 //   - existing UI behavior preserved (team-name span, full 7-tab DOM set)
@@ -132,6 +133,38 @@ assert.match(
 );
 
 // ---------------------------------------------------------------------------
+// 3b. Capability off->on restart hint (#193): switching a capability off
+// stops its subsystem immediately, switching it back on does NOT auto-start
+// it (wired at controller startup only). The confirm step must warn when any
+// capability differs between the active pack and the selected target.
+// ---------------------------------------------------------------------------
+assert.match(
+  appSource,
+  /function teamProfileCapabilitiesChanging/,
+  "confirm step must derive changing capabilities from the two packs",
+);
+assert.match(
+  appSource,
+  /return Object\.keys\(targetCaps\)\.filter\(function \(key\) \{\s*return Boolean\(activeCaps\[key\]\) !== Boolean\(targetCaps\[key\]\);\s*\}\);/,
+  "capability comparison must flag every switch that differs in EITHER direction (off stops now, on needs restart)",
+);
+assert.match(
+  appSource,
+  /var changingCaps = teamProfileCapabilitiesChanging\(profile\);/,
+  "confirm step must compute the changing capability list for the selected target",
+);
+assert.match(
+  appSource,
+  /t\("teamProfile\.capabilityRestartHint", \{ list: changingCaps\.join\(", "\) \}\)/,
+  "confirm step must render the restart hint with the capability list",
+);
+assert.match(
+  appSource,
+  /changingCaps\.length/,
+  "the restart hint must be conditional (no hint when no capability changes)",
+);
+
+// ---------------------------------------------------------------------------
 // 4. Switch tracking: 202 + WS events + 409 transition notice.
 // ---------------------------------------------------------------------------
 assert.match(
@@ -246,6 +279,7 @@ const expectedKeys = [
   "teamProfile.loadFailed",
   "teamProfile.confirmArchive",
   "teamProfile.confirmWorkers",
+  "teamProfile.capabilityRestartHint",
   "teamProfile.confirmButton",
   "teamProfile.cancel",
   "teamProfile.switching",

@@ -261,6 +261,19 @@ async function waitForSwitchCompletion(call, timeoutMs = 10000) {
     assert.equal(byId["minimal-bank"].roleCount, 4, "fixture roleCount (3 labeled roles + the Phase 2.6 labelZh-less role)");
     assert.equal(byId["minimal-bank"].nameZh, "最小银行团队", "profiles listing carries nameZh");
     assert.ok(byId["minimal-bank"].icon && byId["minimal-bank"].industry && byId["minimal-bank"].version, "profiles listing carries icon/industry/version");
+    // Phase 5 follow-up (#193): the listing carries each pack's capability
+    // switches so the switcher confirm step can warn that off -> on flips
+    // need a gateway restart to re-enable the subsystem.
+    assert.deepEqual(
+      byId["minimal-bank"].capabilities,
+      { git: false, teamauto: false, runnablePreview: false, deliveryReview: false },
+      "profiles listing carries the target pack's capability switches",
+    );
+    assert.deepEqual(
+      byId["software-rd"].capabilities,
+      { git: true, teamauto: true, runnablePreview: true, deliveryReview: true },
+      "software-rd listing keeps its all-on capability switches",
+    );
 
     const beforeRes = await scenario.call("GET", "/api/v1/team/profile");
     assert.equal(beforeRes.status, 200);

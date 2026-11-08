@@ -7505,6 +7505,11 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
         description: profile.description,
         roleCount: profile.roles.length,
         version: profile.version,
+        // Capability switches ride along so the switcher confirm step can
+        // warn that off -> on flips need a gateway restart to take effect
+        // (subsystems are wired at controller startup only; runtime teardown
+        // is one-directional). Additive field - existing consumers ignore it.
+        capabilities: profile.capabilities,
         ...(profile.reviewedBy ? { reviewedBy: profile.reviewedBy } : {}),
       }));
     sendJson(res, 200, { profiles });
