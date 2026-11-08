@@ -119,12 +119,6 @@ const VALUE_ALLOWED = new Map([
   ["planning.requiredRoles|en", "web Title Case labels vs desktop sentence-case labels (per-side style, same meaning)"],
   ["planning.deferredTasks|en", "web Title Case labels vs desktop sentence-case labels (per-side style, same meaning)"],
   ["planning.clarificationsNeeded|en", "web Title Case labels vs desktop sentence-case labels (per-side style, same meaning)"],
-  // Web repo picker offers a manual owner/repo text input, so its empty
-  // message advertises that; desktop renders the message as a <select>
-  // placeholder option and has no manual input field, so the extra sentence
-  // would be wrong there.
-  ["teamauto.noCandidates|en", "web adds 'you can type owner/repo manually' (web-only manual input); desktop is a select placeholder"],
-  ["teamauto.noCandidates|zh", "web adds manual owner/repo hint (web-only manual input); desktop is a select placeholder"],
 ]);
 
 for (const lang of ["en", "zh"]) {
