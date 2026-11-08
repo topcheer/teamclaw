@@ -14,6 +14,7 @@ const clientSrc = path.join(projectRoot, "src", "src", "teamauto", "github-clien
 const syncSrc = path.join(projectRoot, "src", "src", "teamauto", "repo-sync.ts");
 const normsSrc = path.join(projectRoot, "src", "src", "teamauto", "norms.ts");
 const httpServerSrc = path.join(projectRoot, "src", "src", "controller", "http-server.ts");
+const teamAutoRoutesSrc = path.join(projectRoot, "src", "src", "controller", "teamauto-routes.ts");
 const serviceSrc = path.join(projectRoot, "src", "src", "controller", "controller-service.ts");
 const pagePath = path.join(projectRoot, "src", "src", "ui", "teamauto.html");
 const uiHtmlPath = path.join(projectRoot, "src", "src", "ui", "index.html");
@@ -23,7 +24,7 @@ const desktopAppPath = path.join(projectRoot, "desktop", "renderer", "app.js");
 const desktopI18nPath = path.join(projectRoot, "desktop", "renderer", "i18n.js");
 
 async function sourceContracts() {
-  const [scheduler, scanner, store, client, sync, norms, httpServer, service, page, uiHtml, desktopHtml, desktopApp, desktopI18n, uiAppSrc] = await Promise.all([
+  const [scheduler, scanner, store, client, sync, norms, httpServer, teamAutoRoutes, service, page, uiHtml, desktopHtml, desktopApp, desktopI18n, uiAppSrc] = await Promise.all([
     fs.readFile(schedulerSrc, "utf8"),
     fs.readFile(scannerSrc, "utf8"),
     fs.readFile(storeSrc, "utf8"),
@@ -31,6 +32,7 @@ async function sourceContracts() {
     fs.readFile(syncSrc, "utf8"),
     fs.readFile(normsSrc, "utf8"),
     fs.readFile(httpServerSrc, "utf8"),
+    fs.readFile(teamAutoRoutesSrc, "utf8"),
     fs.readFile(serviceSrc, "utf8"),
     fs.readFile(pagePath, "utf8").catch(() => null),
     fs.readFile(uiHtmlPath, "utf8"),
@@ -51,6 +53,14 @@ async function sourceContracts() {
   }
   assert.ok(httpServer.includes('"/api/v1/teamauto/repos/"'), "controller must route per-repo teamauto actions");
   assert.ok(!httpServer.includes('"/ui/teamauto"'), "the standalone teamauto page route must be gone (tabbed UI)");
+  // PR-B of issue #204: the teamauto handler bodies moved from http-server.ts
+  // into controller/teamauto-routes.ts - pin the new home so the extraction
+  // cannot silently drop scheduler behavior.
+  assert.match(teamAutoRoutes, /handleTeamAutoActivityRequest/, "activity handler lives in teamauto-routes.ts (extracted from http-server)");
+  assert.match(teamAutoRoutes, /handleTeamAutoReposListRequest/, "repos list handler lives in teamauto-routes.ts");
+  assert.match(teamAutoRoutes, /createGithubClient\(auth\)\.listUserRepos\(\)/, "repo-candidates still lists the logged-in account's repos");
+  assert.match(teamAutoRoutes, /teamAuto\.addRepo\(repo, \{/, "repo bind still calls the scheduler");
+  assert.match(teamAutoRoutes, /teamAuto\.runSweepNow\(repoId, true\)/, "sweep-now still calls the scheduler's manual sweep");
 
   // Autonomous identity markers on every write-back.
   assert.match(scheduler, /\[teamclaw:\$\{role\}\]/, "write-backs must carry the [teamclaw:role] marker");
