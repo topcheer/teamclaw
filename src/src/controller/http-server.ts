@@ -6,17 +6,25 @@
 // ./route-table.ts, PR-D) and every handler body lives in a domain module.
 // Request pipeline, in order:
 //
-//   1. CORS preflight (OPTIONS short-circuit)
-//   2. Tunnel gate (viaTunnel classification: gate page routes / gate
+//   1. CORS preflight (OPTIONS short-circuit; wildcard while device
+//      protection is off - the historical behavior - and narrowed to the
+//      UI's own origin once it is on)
+//   2. Device-auth gate (issue #23, ./security.ts createSecurityMiddleware):
+//      zero-op while no devices are paired (L0); once devices exist every
+//      non-exempt /api request must present a valid device token and the
+//      response CORS policy is pinned before dispatch. Runs BEFORE the
+//      tunnel gate and the handleRequest gates so transition/capability/
+//      tunnel-management responses never leak to unpaired callers.
+//   3. Tunnel gate (viaTunnel classification: gate page routes / gate
 //      cookie 403 / tunnel management API - tables in ./route-table.ts)
-//   3. handleRequest gates (verbatim, NOT part of the route table):
+//   4. handleRequest gates (verbatim, NOT part of the route table):
 //      a. profile-switch transition matrix (409 worker re-register,
 //         503+Retry-After task submission / repo import)
 //      b. capability 404 gates (steady-state existence gate, after (a) on
 //         purpose: transition semantics win over the 404)
-//   4. declarative route table match (./route-table.ts, array order =
+//   5. declarative route table match (./route-table.ts, array order =
 //      the historical if/startsWith chain, one-to-one)
-//   5. fall-through 404
+//   6. fall-through 404
 //
 // Domain module index (the 18 modules this root composes; none of them may
 // import this file):
@@ -65,6 +73,19 @@ import {
   type RouteContext,
   type RouteDef,
 } from "./route-table.js";
+// Issue #23 (backend wave): the device-pairing security module owns the
+// auth middleware, the CORS narrowing policy, the WS upgrade guard and the
+// pairing handlers (registered via route-table.ts). This file only wires
+// them into the pipeline below - all pathname/method policy lives in
+// security.ts.
+import {
+  classifySecurityPeer,
+  corsPreflightDecision,
+  createSecurityMiddleware,
+  createWebSocketUpgradeGuard,
+  isProtectionOn,
+  type SecurityPeer,
+} from "./security.js";
 
 export type ControllerHttpDeps = {
   config: PluginConfig;
@@ -182,14 +203,18 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
   // tunnel manager singleton they close over) and reused for every request.
   let tunnelRoutesSingleton: { gate: readonly RouteDef[]; management: readonly RouteDef[] } | null = null;
 
+  // Issue #23: the device gate. Zero-friction ladder - while no device is
+  // paired (protection off) this is a no-op passthrough (L0, the exact
+  // pre-issue behavior); once devices exist it enforces per-device tokens
+  // on every non-exempt /api route (exemptions and 401 shape in security.ts).
+  const securityGate = createSecurityMiddleware(deps);
+
   const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    // CORS preflight
+    // CORS preflight (issue #23: wildcard while protection is off - the
+    // historical bytes - and narrowed to the UI's own origin once on).
     if (req.method === "OPTIONS") {
-      res.writeHead(200, {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      });
+      const decision = corsPreflightDecision(req, isProtectionOn(deps.getTeamState()));
+      res.writeHead(decision.status, decision.headers);
       res.end();
       return;
     }
@@ -215,6 +240,19 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
       req, res, requestUrl: url, pathname, deps, currentState: null,
     };
     const viaTunnel = tunnelManager.isTunnelRequest(typeof req.headers.host === "string" ? req.headers.host : undefined);
+
+    // ==================== Device auth gate (issue #23) ====================
+    // Runs BEFORE the tunnel gate tables, the transition matrix and the
+    // capability gates so none of those surfaces answer - or leak response
+    // shape information - to unpaired callers while protection is on.
+    // Requests arriving through the sharing tunnel are classified from the
+    // Host header (cloudflared dials in from loopback, so the socket peer
+    // address would lie); see classifySecurityPeer in ./security.ts.
+    const peer = classifySecurityPeer(req.socket.remoteAddress, viaTunnel);
+    if (!securityGate(req, res, pathname, peer)) {
+      return;
+    }
+
     if (viaTunnel) {
       if (await dispatchRoutes(tunnelRoutesSingleton.gate, tunnelCtx)) {
         return;
@@ -231,15 +269,22 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
     }
 
     try {
-      await handleRequest(req, res, pathname, deps);
+      await handleRequest(req, res, pathname, deps, peer);
     } catch (err) {
       logger.error(`Controller HTTP error: ${err instanceof Error ? err.message : String(err)}`);
       sendError(res, 500, "Internal server error");
     }
   });
 
-  // Attach WebSocket
-  wsServer.attach(server);
+  // Attach WebSocket (issue #23: while device protection is on, upgrades
+  // must carry a valid device token - ?token= query for browsers, cookie /
+  // Bearer for native clients; see createWebSocketUpgradeGuard).
+  wsServer.attach(server, {
+    verifyUpgrade: createWebSocketUpgradeGuard({
+      ...deps,
+      isTunnelHost: (host) => tunnelManagerSingleton?.isTunnelRequest(host) ?? false,
+    }),
+  });
 
   // Plugin shutdown: kill the local connector and tear down the remote
   // tunnel so gateway exits never leak orphan cloudflared processes.
@@ -277,6 +322,7 @@ async function handleRequest(
   res: ServerResponse,
   pathname: string,
   deps: ControllerHttpDeps,
+  peer?: SecurityPeer,
 ): Promise<void> {
   const requestUrl = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
   const currentState = deps.getTeamState();
@@ -352,7 +398,7 @@ async function handleRequest(
   // false) to continue matching; an exhausted table falls through to the
   // final 404 below - both semantics are preserved from the old chain.
   const handled = await dispatchRoutes(controllerRouteTable, {
-    req, res, requestUrl, pathname, deps, currentState,
+    req, res, requestUrl, pathname, deps, currentState, peer,
   });
   if (!handled) {
     sendError(res, 404, "Not found");
