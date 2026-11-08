@@ -2,7 +2,6 @@ import { normalizeSessionRole } from "../session-roles.js";
 import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
-import zlib from "node:zlib";
 import { execFileSync } from "node:child_process";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawPluginApi, PluginLogger } from "../../api.js";
@@ -11,7 +10,6 @@ import type {
   ControllerOrchestrationManifest,
   ControllerRunInfo,
   ControllerRunSource,
-  GitRepoState,
   PluginConfig,
   RepoSyncInfo,
   RoleId,
@@ -59,8 +57,6 @@ import {
 } from "../profile-loader.js";
 import {
   buildRepoSyncInfo,
-  ensureControllerGitRepo,
-  exportControllerGitBundle,
   importControllerGitBundle,
   removeTrackedWorkspaceSubtree,
 } from "../git-collaboration.js";
@@ -72,12 +68,28 @@ import { TeamWebSocketServer } from "./websocket.js";
 // keeps only the route shells. profile-switch must never import this file.
 import { startTeamProfileSwitch } from "./profile-switch.js";
 import { serveStaticFile, serveVersionedHtml } from "./ui-assets.js";
+// PR-B of issue #204: the TeamAuto route handlers, the git collaboration
+// read-side routes (+ the shared refreshControllerRepoState glue), and the
+// preview subprocess proxy live in their own modules; http-server keeps only
+// the route shells. None of them may import this file.
+import {
+  handleTeamAutoActivityRequest,
+  handleTeamAutoReposListRequest,
+  handleTeamAutoRepoCandidatesRequest,
+  handleTeamAutoRepoBindRequest,
+  handleTeamAutoRepoItemRequest,
+} from "./teamauto-routes.js";
+import {
+  refreshControllerRepoState,
+  handleRepoStatusRequest,
+  handleRepoBundleRequest,
+} from "./repo-routes.js";
+import { handlePreviewProxyRequest } from "./preview-proxy.js";
 import type { WorkerProvisioningManager } from "./worker-provisioning.js";
 import type { PreviewManager } from "./preview-manager.js";
 import { createControllerPromptInjector } from "./prompt-injector.js";
 import { getGithubAuthManager } from "./github-auth.js";
 import { createTunnelManager, gatePageHtml, computeGateCookie, GATE_COOKIE_NAME, selfHostedTokenFromEnv, type TunnelManager } from "./tunnel-manager.js";
-import { createGithubClient } from "../teamauto/github-client.js";
 import type { TeamAutoScheduler } from "../teamauto/scheduler.js";
 import { buildControllerNoWorkersMessage, shouldBlockControllerWithoutWorkers } from "./controller-capacity.js";
 import { generateDeliveryReport, isSessionComplete, renderReportHtml, type DeliveryReport } from "./delivery-report.js";
@@ -3473,40 +3485,6 @@ function buildRepoTaskContext(repoInfo: RepoSyncInfo): string {
   return lines.join("\n");
 }
 
-async function refreshControllerRepoState(deps: ControllerHttpDeps): Promise<GitRepoState | null> {
-  // Phase 2.3: the ACTIVE PROFILE's git switch outranks the legacy config
-  // knob here - refreshing (or stamping) repo state for a profile that
-  // declared git off would re-introduce exactly the repo field the switch
-  // omitted for it (design 2.3: banking keeps no repo initialization). All
-  // callers already treat null as "no repo" (same as config gitEnabled off).
-  if (!deps.config.gitEnabled || !getActiveProfile().capabilities.git) {
-    return null;
-  }
-
-  try {
-    const repo = await ensureControllerGitRepo(deps.config, deps.logger);
-    if (repo) {
-      deps.updateTeamState((s) => {
-        s.repo = repo;
-      });
-    }
-    return repo;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    deps.logger.warn(`Controller: failed to refresh git repo state: ${message}`);
-    deps.updateTeamState((s) => {
-      if (s.repo?.enabled) {
-        s.repo = {
-          ...s.repo,
-          error: message,
-          lastPreparedAt: Date.now(),
-        };
-      }
-    });
-    return deps.getTeamState()?.repo ?? null;
-  }
-}
-
 function scheduleProvisioningReconcile(deps: ControllerHttpDeps, reason: string): void {
   void deps.workerProvisioningManager?.requestReconcile(reason);
 }
@@ -5182,89 +5160,32 @@ async function handleRequest(
   }
 
   // ==================== TeamAuto ====================
-
-  const teamAuto = deps.getTeamAutoScheduler?.() ?? null;
+  // PR-B of issue #204: the handlers live in ./teamauto-routes.ts; these
+  // shells keep the method+pathname matches and forward the same deps.
 
   if (req.method === "GET" && pathname === "/api/v1/teamauto/activity") {
-    if (!teamAuto) { sendError(res, 503, "TeamAuto scheduler is not running"); return; }
-    try {
-      const activity = await teamAuto.getActivity();
-      sendJson(res, 200, { activity });
-    } catch (err) {
-      sendError(res, 500, err instanceof Error ? err.message : "failed to load activity");
-    }
+    await handleTeamAutoActivityRequest(deps, res);
     return;
   }
 
   if (req.method === "GET" && pathname === "/api/v1/teamauto/repos") {
-    if (!teamAuto) { sendError(res, 503, "TeamAuto scheduler is not running"); return; }
-    try {
-      sendJson(res, 200, await teamAuto.getStatus());
-    } catch (err) {
-      sendError(res, 500, err instanceof Error ? err.message : "failed to read TeamAuto status");
-    }
+    await handleTeamAutoReposListRequest(deps, res);
     return;
   }
 
   // Selectable repos for the bind picker (the logged-in GitHub account's).
   if (req.method === "GET" && pathname === "/api/v1/teamauto/repo-candidates") {
-    try {
-      const auth = getGithubAuthManager(config, logger);
-      const candidates = await createGithubClient(auth).listUserRepos();
-      sendJson(res, 200, { candidates });
-    } catch (err) {
-      sendError(res, 400, err instanceof Error ? err.message : "failed to list repositories");
-    }
+    await handleTeamAutoRepoCandidatesRequest(deps, res);
     return;
   }
 
   if (req.method === "POST" && pathname === "/api/v1/teamauto/repos") {
-    if (!teamAuto) { sendError(res, 503, "TeamAuto scheduler is not running"); return; }
-    let body: Record<string, unknown> = {};
-    try { body = await parseJsonBody(req); } catch { /* empty body */ }
-    const repo = typeof body.repo === "string" ? body.repo : "";
-    if (!repo) { sendError(res, 400, "repo (owner/name) is required"); return; }
-    try {
-      const created = await teamAuto.addRepo(repo, {
-        schedule: typeof body.schedule === "string" ? body.schedule : undefined,
-        keywordInclude: Array.isArray(body.keywordInclude) ? body.keywordInclude.filter((k): k is string => typeof k === "string") : undefined,
-        keywordExclude: Array.isArray(body.keywordExclude) ? body.keywordExclude.filter((k): k is string => typeof k === "string") : undefined,
-      });
-      sendJson(res, 201, created);
-    } catch (err) {
-      sendError(res, 400, err instanceof Error ? err.message : "failed to bind repo");
-    }
+    await handleTeamAutoRepoBindRequest(deps, req, res);
     return;
   }
 
   if (pathname.startsWith("/api/v1/teamauto/repos/")) {
-    if (!teamAuto) { sendError(res, 503, "TeamAuto scheduler is not running"); return; }
-    const repoId = decodeURIComponent(pathname.slice("/api/v1/teamauto/repos/".length).replace(/\/sweep$/, ""));
-    const isSweep = pathname.endsWith("/sweep");
-    if (req.method === "DELETE" && !isSweep) {
-      try { await teamAuto.removeRepo(repoId); sendJson(res, 200, { ok: true }); }
-      catch (err) { sendError(res, 400, err instanceof Error ? err.message : "failed to unbind"); }
-      return;
-    }
-    if (req.method === "PATCH" && !isSweep) {
-      let body: Record<string, unknown> = {};
-      try { body = await parseJsonBody(req); } catch { /* empty */ }
-      try {
-        const updated = await teamAuto.updateRepo(repoId, {
-          schedule: typeof body.schedule === "string" ? body.schedule : undefined,
-          maxTasksPerSweep: typeof body.maxTasksPerSweep === "number" ? body.maxTasksPerSweep : undefined,
-          fullReview: body.fullReview === "off" || body.fullReview === "weekly" || body.fullReview === "daily" ? body.fullReview : undefined,
-          takeOwnership: typeof body.takeOwnership === "boolean" ? body.takeOwnership : undefined,
-        });
-        sendJson(res, 200, updated);
-      } catch (err) { sendError(res, 400, err instanceof Error ? err.message : "failed to update"); }
-      return;
-    }
-    if (req.method === "POST" && isSweep) {
-      try { sendJson(res, 200, { summary: await teamAuto.runSweepNow(repoId, true) }); }
-      catch (err) { sendError(res, 400, err instanceof Error ? err.message : "sweep failed"); }
-      return;
-    }
+    if (await handleTeamAutoRepoItemRequest(deps, req, res, pathname)) return;
   }
 
   // ==================== GitHub Auth ====================
@@ -7018,35 +6939,20 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
   }
 
   // ==================== Git Collaboration ====================
+  // PR-B of issue #204: the repo status/bundle handlers and the shared
+  // refreshControllerRepoState glue live in ./repo-routes.ts; the POST
+  // /repo/import handler stays here (its recordTaskExecutionEvent dependency
+  // is task-lifecycle glue owned by the PR-C cut).
 
   // GET /api/v1/repo
   if (req.method === "GET" && pathname === "/api/v1/repo") {
-    const repo = await refreshControllerRepoState(deps);
-    if (!repo?.enabled) {
-      sendJson(res, 200, { enabled: false });
-      return;
-    }
-
-    sendJson(res, 200, { repo });
+    await handleRepoStatusRequest(deps, res);
     return;
   }
 
   // GET /api/v1/repo/bundle
   if (req.method === "GET" && pathname === "/api/v1/repo/bundle") {
-    try {
-      const exported = await exportControllerGitBundle(config, logger);
-      res.writeHead(200, {
-        "Content-Type": "application/octet-stream",
-        "Content-Length": exported.data.byteLength,
-        "Content-Disposition": `attachment; filename="${exported.filename}"`,
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      });
-      res.end(exported.data);
-    } catch (err) {
-      sendError(res, 503, err instanceof Error ? err.message : String(err));
-    }
+    await handleRepoBundleRequest(deps, res);
     return;
   }
 
@@ -7276,96 +7182,11 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
   }
 
   // /api/v1/previews/:id/* — proxy to preview subprocess
+  // PR-B of issue #204: the proxy implementation lives in ./preview-proxy.ts.
   if (req.method === "GET" || req.method === "HEAD" || req.method === "POST" || req.method === "PUT" || req.method === "DELETE") {
     const previewPrefix = "/api/v1/previews/";
     if (pathname.startsWith(previewPrefix)) {
-      const remaining = pathname.slice(previewPrefix.length);
-      const slashIdx = remaining.indexOf("/");
-      const previewId = slashIdx >= 0 ? remaining.slice(0, slashIdx) : remaining;
-      const subPath = slashIdx >= 0 ? remaining.slice(slashIdx) : "/";
-
-      const state = deps.getTeamState();
-      const preview = state?.previews?.[previewId];
-      if (!preview || preview.status !== "healthy") {
-        const status = preview?.status ?? "unknown";
-        const errMsg = preview?.lastError;
-        sendJson(res, 503, { error: "Preview not available", previewId, status, lastError: errMsg ?? undefined });
-        return;
-      }
-
-      const proxyPathPrefix = `/api/v1/previews/${encodeURIComponent(previewId)}`;
-      const proxyReq = http.request(
-        {
-          hostname: "127.0.0.1",
-          port: preview.targetPort,
-          path: subPath + (requestUrl.search || ""),
-          method: req.method,
-          headers: {
-            ...req.headers,
-            host: `127.0.0.1:${preview.targetPort}`,
-            "accept-encoding": "identity",
-            "x-forwarded-for": req.socket.remoteAddress ?? "",
-            "x-forwarded-host": req.headers.host ?? "",
-            "x-forwarded-proto": "http",
-          },
-        },
-        (proxyRes: http.IncomingMessage) => {
-          const contentType = (proxyRes.headers["content-type"] ?? "").toLowerCase();
-          if (proxyRes.statusCode !== 200 && proxyRes.statusCode !== 201 && proxyRes.statusCode !== 301 && proxyRes.statusCode !== 302 && proxyRes.statusCode !== 304) {
-            res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
-            proxyRes.pipe(res);
-            return;
-          }
-
-          if (contentType.includes("text/html")) {
-            const chunks: Buffer[] = [];
-            proxyRes.on("data", (chunk: Buffer) => chunks.push(chunk));
-            proxyRes.on("end", () => {
-              let raw = Buffer.concat(chunks);
-              // Decompress if the upstream response is compressed (brotli/gzip/deflate).
-              const encoding = (proxyRes.headers["content-encoding"] ?? "").toLowerCase();
-              try {
-                if (encoding === "br") {
-                  raw = zlib.brotliDecompressSync(raw);
-                } else if (encoding === "gzip") {
-                  raw = zlib.gunzipSync(raw);
-                } else if (encoding === "deflate") {
-                  raw = zlib.inflateSync(raw);
-                }
-              } catch {
-                // If decompression fails, use raw bytes as-is.
-              }
-              const body = raw.toString("utf-8");
-              // Rewrite absolute-path references (href="/...", src="/...", action="/...")
-              // to include the proxy prefix so all navigation stays within the proxy.
-              const rewritten = body.replace(
-                /\b(href|src|action)\s*=\s*"\/([^"]*)"/g,
-                `$1="${proxyPathPrefix}/$2"`,
-              ).replace(
-                /\b(href|src|action)\s*=\s*'\/([^']*)'/g,
-                `$1='${proxyPathPrefix}/$2'`,
-              );
-              const resHeaders = { ...proxyRes.headers };
-              // We've decoded and rewritten the body — remove upstream encoding headers.
-              delete resHeaders["content-encoding"];
-              delete resHeaders["transfer-encoding"];
-              resHeaders["content-length"] = String(Buffer.byteLength(rewritten, "utf-8"));
-              res.writeHead(proxyRes.statusCode ?? 200, resHeaders);
-              res.end(rewritten);
-            });
-          } else {
-            res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
-            proxyRes.pipe(res);
-          }
-        },
-      );
-      proxyReq.on("error", (err: Error) => {
-        deps.logger.warn(`Controller: preview proxy error for ${previewId}: ${String(err)}`);
-        if (!res.headersSent) {
-          sendJson(res, 502, { error: "Preview proxy error", previewId, message: String(err) });
-        }
-      });
-      req.pipe(proxyReq);
+      handlePreviewProxyRequest(deps, req, res, requestUrl, pathname);
       return;
     }
   }
