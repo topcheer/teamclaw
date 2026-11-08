@@ -103,12 +103,12 @@ for (const card of snapshot) {
     `${card.id}: pendingSignoff must follow the reviewedBy "Human sign-off pending" rule`,
   );
 }
-// Finance packs were human-signed 2026-11-08 (reviewedBy carries the sign-off
-// entry) so their badge is off; the trade packs still carry the pending trail
-// and keep the badge; the software-rd baseline never had one.
+// All five industry packs were human-signed by the repo owner on
+// 2026-11-08 (reviewedBy carries the sign-off entries); software-rd never
+// carried a pending badge.
 assert.equal(snapshot.find((p) => p.id === "software-rd").pendingSignoff, false);
 assert.equal(snapshot.find((p) => p.id === "banking").pendingSignoff, false);
-assert.equal(snapshot.find((p) => p.id === "trading-co").pendingSignoff, true);
+assert.equal(snapshot.find((p) => p.id === "trading-co").pendingSignoff, false);
 
 // ---------------------------------------------------------------------------
 // 2. Default selection: software-rd, applied at render time.

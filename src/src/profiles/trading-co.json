@@ -5,10 +5,11 @@
   "nameZh": "贸易公司团队",
   "industry": "foreign-trade",
   "icon": "🚢",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "reviewedBy": [
     "drafted-by: Agent M (implementation team)",
-    "AI domain review 2026-11-08: trading-co approved as-is; crossborder-ecom approved after Temu full/semi-managed mode fix + fund-repatriation compliance line (2 mandatory items applied). Human sign-off pending with repo owner."
+    "AI domain review 2026-11-08: trading-co approved as-is; crossborder-ecom approved after Temu full/semi-managed mode fix + fund-repatriation compliance line (2 mandatory items applied). Human sign-off recorded 2026-11-08.",
+    "Human sign-off: zhanju (repo owner), 2026-11-08 - approved via the TeamProfile implementation session after AI domain review conditions were applied."
   ],
   "description": "Foreign-trade company team (export operations): market development, order merchandising, procurement and QC, documentation, supply-chain planning, payment risk, and trade analytics.",
   "roles": [
