@@ -767,7 +767,7 @@ async function standaloneBinary() {
   throw new Error("No OpenClaw runtime available - run the one-click install first.");
 }
 
-async function seedStandaloneConfig(preferredVendor, controllerPort) {
+async function seedStandaloneConfig(preferredVendor, controllerPort, teamProfile) {
   // Minimal-config seeding: a full copy of the user's config made the
   // gateway normalize production-specific fields at startup, tripping its
   // own config-guard ("config changed during startup") in a loop. Instead
@@ -802,6 +802,10 @@ async function seedStandaloneConfig(preferredVendor, controllerPort) {
       ...(cfg.plugins.entries.teamclaw?.config || {}),
       mode: "controller",
       teamName: "private",
+      // Wizard team type (Phase 5.2): bootstrap value only - first write
+      // wins, and the controller ignores it once a TeamState exists
+      // (vertical-team-profiles-design.md 2.3 single source of truth).
+      ...((teamProfile && !cfg.plugins.entries.teamclaw?.config?.teamProfile) ? { teamProfile } : {}),
       // Pin the controller port so restarts land on the remembered one; the
       // plugin auto-shifts (9527 -> 9627 ...) when it is occupied, and the
       // actual bound port is recorded back into settings afterwards.
@@ -812,7 +816,7 @@ async function seedStandaloneConfig(preferredVendor, controllerPort) {
   return dst;
 }
 
-async function standaloneStart(preferredVendor, remembered) {
+async function standaloneStart(preferredVendor, remembered, teamProfile) {
   if (STANDALONE.child) return { ok: true, alreadyRunning: true, port: STANDALONE.port };
   // Port memory: reuse the ports recorded in settings.instance so restarts
   // land on the SAME gateway/controller ports (probed + persisted below).
@@ -864,15 +868,15 @@ async function standaloneStart(preferredVendor, remembered) {
   const gwPort = await pickPortWithFallback(Number(remembered?.gatewayPort) || null, ctrlPort + 100);
   // Land the chosen pair BEFORE spawning anything (config + settings).
   await persistInstancePorts({ mode: "private", gatewayPort: gwPort, controllerPort: ctrlPort });
-  if (needsSeed) await seedStandaloneConfig(preferredVendor, ctrlPort);
+  if (needsSeed) await seedStandaloneConfig(preferredVendor, ctrlPort, teamProfile);
   else {
     // Pin the conflict-checked controller port into the sandbox config so
     // the plugin does not race its own auto-shift against a taken 9527.
     try {
       const c = JSON.parse(await fs.readFile(sandboxCfgPath, "utf8"));
       const cur = c?.plugins?.entries?.teamclaw?.config?.port;
-      if (cur !== ctrlPort) await seedStandaloneConfig(preferredVendor, ctrlPort);
-    } catch { await seedStandaloneConfig(preferredVendor, ctrlPort); }
+      if (cur !== ctrlPort) await seedStandaloneConfig(preferredVendor, ctrlPort, teamProfile);
+    } catch { await seedStandaloneConfig(preferredVendor, ctrlPort, teamProfile); }
   }
   STANDALONE.port = gwPort;
   const logPath = path.join(standaloneStateDir(), "gateway.log");
@@ -1004,7 +1008,7 @@ function standaloneStatus() {
 }
 
 ipcMain.handle("standalone:start", async (_e, options) =>
-  standaloneStart(options?.preferredVendor, options?.instance || null)
+  standaloneStart(options?.preferredVendor, options?.instance || null, options?.teamProfile || null)
 );
 ipcMain.handle("standalone:stop", () => standaloneStop());
 ipcMain.handle("standalone:status", () => standaloneStatus());
@@ -1136,7 +1140,7 @@ const GLOBAL_GATEWAY = { child: null, port: null };
 // Backs up the global cfg to the desktop dir first, then registers the plugin
 // with the system openclaw CLI (global state, no sandbox env) and restarts the
 // LaunchAgent gateway so the controller comes up.
-ipcMain.handle("instance:install-into-global", async (event) => {
+ipcMain.handle("instance:install-into-global", async (event, options) => {
   const onEvent = (e) => { try { event.sender.send("bootstrap:install-event", e); } catch {} };
   const globalCfg = path.join(process.env.HOME || process.env.USERPROFILE || process.cwd(), ".openclaw", "openclaw.json");
   try {
@@ -1167,7 +1171,11 @@ ipcMain.handle("instance:install-into-global", async (event) => {
   // The plugin defaults to WORKER mode; the desktop app needs this instance to
   // BE the controller. Without this the global gateway loads teamclaw as a
   // worker ("Identity: no controller found") and no dashboard API ever exists.
+  // options.teamProfile (Phase 5.2 wizard team type) is a bootstrap value:
+  // first write wins - an existing teamProfile is never overwritten, and the
+  // controller ignores it once a TeamState exists (design 2.3).
   const gCfgPath = path.join(gHome, ".openclaw", "openclaw.json");
+  const teamProfile = (options && options.teamProfile) || null;
   try {
     const c = JSON.parse(await fs.readFile(gCfgPath, "utf8"));
     c.plugins = c.plugins || {};
@@ -1176,7 +1184,12 @@ ipcMain.handle("instance:install-into-global", async (event) => {
     c.plugins.entries.teamclaw = {
       ...prev,
       enabled: true,
-      config: { ...(prev.config || {}), mode: "controller", teamName: prev.config?.teamName || "global" },
+      config: {
+        ...(prev.config || {}),
+        mode: "controller",
+        teamName: prev.config?.teamName || "global",
+        ...((teamProfile && !prev.config?.teamProfile) ? { teamProfile } : {}),
+      },
     };
     await fs.writeFile(gCfgPath, JSON.stringify(c, null, 2), { mode: 0o600 });
     onEvent({ phase: "teamclaw", line: "Global instance set to controller mode." });

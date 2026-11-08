@@ -66,6 +66,12 @@ import { createT as i18nCreateT } from "./i18n.js";
     externalWorkerRole: '',
     externalWorkerDiscoveryMode: 'mdns',
     externalWorkerInstallVisible: false,
+    // Wizard team-type step (Phase 5.2): "" falls back to
+    // DEFAULT_TEAM_PROFILE_ID at render/read time; wizardCurrentProfileId is
+    // the connected controller's active profile (reconfigure echo, best
+    // effort - only shown as a chip, never written).
+    wizardTeamProfileId: "",
+    wizardCurrentProfileId: "",
     language: loadLanguage(),
   };
 
@@ -91,6 +97,7 @@ import { createT as i18nCreateT } from "./i18n.js";
     document.documentElement.lang = state.language === "zh" ? "zh-CN" : "en";
     applyStaticTranslations();
     renderChrome();
+    renderWizardTeamProfiles(); // Phase 5.2: card names/chips follow the language
     renderMissionSummary();
     renderConversation();
     renderPlanning();
@@ -905,6 +912,160 @@ import { createT as i18nCreateT } from "./i18n.js";
       })
       .catch(() => { /* manual input still works */ });
   }
+  // ---- Wizard step 1: team type (Phase 5.2, design table row 5.2) ----
+  // Snapshot of the six built-in team profile packages' DISPLAY metadata,
+  // derived from src/src/profiles/*.json (same shape as GET /api/v1/profiles,
+  // with reviewedBy pre-reduced to a pendingSignoff boolean using the web
+  // switcher's rule: a reviewedBy entry containing "Human sign-off pending").
+  // Why a renderer snapshot instead of fetching /api/v1/profiles: this step
+  // runs BEFORE anything is installed or connected (install-time one-shot
+  // choice, not the web's runtime polling), and the desktop app bundle does
+  // not ship src/src/profiles - so neither source exists at wizard time.
+  // MAINTENANCE POINT: when a pack changes or a pack is added, refresh this
+  // array from src/src/profiles/ - tests/test-desktop-wizard.mjs fails CI on
+  // any drift between this snapshot and the pack JSONs.
+  const WIZARD_TEAM_PROFILES = [
+    {
+      "id": "banking",
+      "name": "Banking Corporate Credit Team",
+      "nameZh": "银行对公信贷团队",
+      "icon": "🏦",
+      "industry": "banking",
+      "description": "Corporate credit line team (v1 scope: 对公信贷) covering intake, risk review, approval, AML analysis, credit compliance and post-loan management; every output is an internal working draft pending a human decision.",
+      "version": "0.1.0",
+      "roleCount": 6,
+      "pendingSignoff": true
+    },
+    {
+      "id": "crossborder-ecom",
+      "name": "Cross-border E-commerce Team",
+      "nameZh": "跨境电商团队",
+      "icon": "🛒",
+      "industry": "e-commerce",
+      "description": "Cross-border e-commerce operating team (Amazon, TikTok Shop, Temu, Shopify): sourcing, listing, traffic growth, finance and remittance, customer service, logistics, compliance, store operations, and analytics.",
+      "version": "1.0.0",
+      "roleCount": 9,
+      "pendingSignoff": true
+    },
+    {
+      "id": "insurance",
+      "name": "Insurance Operations Team",
+      "nameZh": "保险运营团队",
+      "icon": "🛡️",
+      "industry": "insurance",
+      "description": "Insurance team (v1: 5 roles) drafting underwriting, claims, actuarial-documentation, compliance and product-design work products; underwriting register is P&C or life by declaration, actuarial numbers and all decisions stay with humans.",
+      "version": "0.1.0",
+      "roleCount": 5,
+      "pendingSignoff": true
+    },
+    {
+      "id": "securities",
+      "name": "Securities Research Institute Team",
+      "nameZh": "证券研究所团队",
+      "icon": "📈",
+      "industry": "securities",
+      "description": "Research institute team (v1 scope: research only) drafting industry, macro and quant-methodology work papers behind an information barrier; drafts never leave the team without licensed-analyst sign-off and independence disclosures.",
+      "version": "0.1.0",
+      "roleCount": 4,
+      "pendingSignoff": true
+    },
+    {
+      "id": "software-rd",
+      "name": "Software R&D Team",
+      "nameZh": "软件研发团队",
+      "icon": "💻",
+      "industry": "software",
+      "description": "Baseline software R&D team: the 11-role roles.ts registry transplanted field-by-field as the behavior-parity reference profile (Phase 1.3).",
+      "version": "1.0.0",
+      "roleCount": 11,
+      "pendingSignoff": false
+    },
+    {
+      "id": "trading-co",
+      "name": "Trading Company Team",
+      "nameZh": "贸易公司团队",
+      "icon": "🚢",
+      "industry": "foreign-trade",
+      "description": "Foreign-trade company team (export operations): market development, order merchandising, procurement and QC, documentation, supply-chain planning, payment risk, and trade analytics.",
+      "version": "1.0.0",
+      "roleCount": 7,
+      "pendingSignoff": true
+    }
+  ];
+  const DEFAULT_TEAM_PROFILE_ID = "software-rd";
+
+  function selectedWizardTeamProfile() {
+    return state.wizardTeamProfileId || DEFAULT_TEAM_PROFILE_ID;
+  }
+
+  function renderWizardTeamProfiles() {
+    const grid = document.getElementById("bootstrap-profile-grid");
+    if (!grid) return;
+    const zh = state.language === "zh";
+    const selected = selectedWizardTeamProfile();
+    grid.innerHTML = WIZARD_TEAM_PROFILES.map((p) => {
+      // Same bilingual presentation rule as the web switcher (PR #201):
+      // current-language name first, the other language as a muted suffix.
+      const primary = zh ? (p.nameZh || p.name || p.id) : (p.name || p.nameZh || p.id);
+      const secondary = zh ? (p.name !== primary ? p.name : "") : (p.nameZh !== primary ? p.nameZh : "");
+      return (
+        '<label class="bootstrap-profile-card">' +
+        `<input type="radio" name="bootstrap-team-profile" value="${escapeHtml(p.id)}"${p.id === selected ? " checked" : ""}>` +
+        '<span class="profile-main">' +
+        `<span class="profile-name">${escapeHtml(p.icon)} ${escapeHtml(primary)}` +
+        (secondary ? ` <span class="profile-name-alt">${escapeHtml(secondary)}</span>` : "") +
+        // Pending-signoff badge: same derivation as the web switcher - any
+        // reviewedBy entry saying "Human sign-off pending" (finance packs and
+        // the trade packs both carry it; software-rd does not).
+        (p.pendingSignoff ? ` <span class="profile-chip pending" title="${escapeHtml(t("wizard.pendingSignoff"))}">${escapeHtml(t("wizard.pendingSignoff"))}</span>` : "") +
+        (state.wizardCurrentProfileId && p.id === state.wizardCurrentProfileId ? ` <span class="profile-chip">${escapeHtml(t("wizard.teamProfileCurrent"))}</span>` : "") +
+        "</span>" +
+        `<span class="profile-desc" title="${escapeHtml(p.description)}">${escapeHtml(p.description)}</span>` +
+        '<span class="profile-meta">' +
+        `<span class="profile-chip">${escapeHtml(p.industry)}</span>` +
+        `<span class="profile-chip">v${escapeHtml(p.version)}</span>` +
+        `<span class="profile-chip">${escapeHtml(t("wizard.teamProfileRoleCount", { n: p.roleCount }))}</span>` +
+        "</span></span></label>"
+      );
+    }).join("");
+  }
+
+  function updateWizardProfileFollowNote() {
+    // Follow-the-controller branch (design 2.3): the desktop wizard never
+    // installs a worker (main.mjs always seeds controller mode), so "connect
+    // to an existing controller" is the branch where the team type is NOT
+    // chosen here - it follows whatever the controller already runs.
+    const note = document.getElementById("bootstrap-profile-follow-note");
+    if (note) note.hidden = llmMode() !== "remote";
+  }
+
+  function wizardTeamProfileForInstall() {
+    // Install-time resolution: remote (follow-controller) writes no instance
+    // config, so the choice is inert there; private/global seed it into
+    // plugins.entries.teamclaw.config.teamProfile (first init only, 2.3).
+    return llmMode() === "remote" ? null : selectedWizardTeamProfile();
+  }
+
+  async function syncWizardProfileFromController() {
+    // Reconfigure path (best effort): when a controller is already connected,
+    // echo its ACTIVE profile onto the cards so the wizard reflects reality.
+    // The write itself still only matters on first initialization (2.3).
+    if (!state.controllerUrl) return;
+    try {
+      const res = await fetch(`${state.controllerUrl}/api/v1/team/profile`, { signal: AbortSignal.timeout(2500) });
+      if (!res.ok) return;
+      const data = await res.json();
+      const id = data && typeof data.profileId === "string" ? data.profileId : "";
+      if (id && WIZARD_TEAM_PROFILES.some((p) => p.id === id)) {
+        state.wizardCurrentProfileId = id;
+        if (!state.wizardTeamProfileId || state.wizardTeamProfileId === DEFAULT_TEAM_PROFILE_ID) {
+          state.wizardTeamProfileId = id;
+        }
+        renderWizardTeamProfiles();
+      }
+    } catch { /* best effort - keep the default selection */ }
+  }
+
   function llmMode() {
     const el = document.querySelector('input[name="bootstrap-mode"]:checked');
     return el ? el.getAttribute("data-bootstrap-mode") : "controller-manual";
@@ -953,7 +1114,8 @@ import { createT as i18nCreateT } from "./i18n.js";
     document.querySelectorAll("[data-wizard-step]").forEach((el) => {
       el.hidden = el.getAttribute("data-wizard-step") !== String(n);
     });
-    if (n === 2) updateLlmStep(); // hard gate: re-validate on every entry
+    if (n === 1) renderWizardTeamProfiles(); // Phase 5.2: cards reflect language + current selection
+    if (n === 3) updateLlmStep(); // hard gate: re-validate on every entry
     document.querySelectorAll("#wizard-steps .step-ind").forEach((el) => {
       const on = el.getAttribute("data-step-ind") === String(n);
       el.classList.toggle("active", on);
@@ -968,7 +1130,7 @@ import { createT as i18nCreateT } from "./i18n.js";
       if (mode === "remote") {
         const row = document.getElementById("bootstrap-remote-url-row");
         if (row) row.hidden = false;
-        return; // remote: 停在步骤1 等用户填 URL 连接
+        return; // remote: 停在方式步骤等用户填 URL 连接
       }
       if (mode === "global") {
         // Three cases (user spec):
@@ -978,7 +1140,7 @@ import { createT as i18nCreateT } from "./i18n.js";
         const env = state.envDetect || (await desktop.envDetect().catch(() => null));
         const log = document.getElementById("bootstrap-log");
         if (env && env.openclaw && env.teamclawInGlobal) {
-          wizardGoStep(3);
+          wizardGoStep(4);
           if (log) log.textContent = "[global] TeamClaw already present in the global instance.\n";
           const url = env.globalControllerUrl || "http://127.0.0.1:9527";
           await desktop.instanceSet({ mode: "global", controllerUrl: url, llmConfigured: true }).catch(() => {});
@@ -1003,16 +1165,16 @@ import { createT as i18nCreateT } from "./i18n.js";
         }
         if (env && env.openclaw && !env.teamclawInGlobal) {
           // LLM gate (user spec): installing INTO an existing global openclaw
-          // still passes through step 2 - models already configured default
-          // to "use existing"; the user may switch to "configure". Install
-          // itself is triggered from step 2's Install button.
-          wizardGoStep(2);
+          // still passes through the model step - models already configured
+          // default to "use existing"; the user may switch to "configure".
+          // Install itself is triggered from the model step's Install button.
+          wizardGoStep(3);
           return;
         }
-        wizardGoStep(2); // case c: fresh global -> LLM step, then start-global
+        wizardGoStep(3); // case c: fresh global -> LLM step, then start-global
         return;
       }
-      wizardGoStep(2); // private (default)
+      wizardGoStep(3); // private (default)
     });
     const next2 = document.getElementById("wizard-next-2");
     if (next2) next2.addEventListener("click", async () => {
@@ -1032,7 +1194,7 @@ import { createT as i18nCreateT } from "./i18n.js";
         apiKey: keyEl ? keyEl.value.trim() : "",
         model: modelEl ? modelEl.value.trim() : "",
       };
-      wizardGoStep(3);
+      wizardGoStep(4);
       if (mode === "global") {
         const log = document.getElementById("bootstrap-log");
         const wizLine = (s) => { if (log) log.textContent += s + "\n"; };
@@ -1045,18 +1207,19 @@ import { createT as i18nCreateT } from "./i18n.js";
             wizLine("[global] Using the existing global model configuration.");
           }
           if (env && env.openclaw && !env.teamclawInGlobal) {
-            const r = await desktop.instanceInstallIntoGlobal();
+            const r = await desktop.instanceInstallIntoGlobal({ teamProfile: wizardTeamProfileForInstall() || undefined });
             await desktop.instanceSet({ mode: "global", controllerUrl: r.controllerUrl, llmConfigured: true }).catch(() => {});
             await connectController(r.controllerUrl, { skipConversation: true }).catch(() => {});
             unveilShell();
           } else {
             // Blank machine (user-found on Windows): bare start-global spawns
-            // a binary that does not exist and the wizard sat on step 3
-            // forever. installIntoGlobal self-provisions the runtime, installs
-            // the plugin into the GLOBAL state, writes controller mode, and
-            // only then starts the gateway - so it works with nothing present.
+            // a binary that does not exist and the wizard sat on the launch
+            // step forever. installIntoGlobal self-provisions the runtime,
+            // installs the plugin into the GLOBAL state, writes controller
+            // mode, and only then starts the gateway - so it works with
+            // nothing present.
             wizLine("[global] No existing OpenClaw - running the full global install...");
-            const r = await desktop.instanceInstallIntoGlobal();
+            const r = await desktop.instanceInstallIntoGlobal({ teamProfile: wizardTeamProfileForInstall() || undefined });
             await desktop.instanceSet({ mode: "global", controllerUrl: r.controllerUrl, llmConfigured: true }).catch(() => {});
             await connectController(r.controllerUrl, { skipConversation: true }).catch(() => {});
             unveilShell();
@@ -1074,11 +1237,22 @@ import { createT as i18nCreateT } from "./i18n.js";
       if (ib) { ib.click(); }
     });
     document.querySelectorAll("[data-wizard-back]").forEach((b) => b.addEventListener("click", () => wizardGoStep(Number(b.getAttribute("data-wizard-back")) || 1)));
+    // Phase 5.2: team-type step - initial render + selection tracking.
+    const nextTeam = document.getElementById("wizard-next-team");
+    if (nextTeam) nextTeam.addEventListener("click", () => wizardGoStep(2));
+    const profileGrid = document.getElementById("bootstrap-profile-grid");
+    if (profileGrid) profileGrid.addEventListener("change", (e) => {
+      const input = e.target && e.target.closest ? e.target.closest('input[name="bootstrap-team-profile"]') : null;
+      if (input && input.value) state.wizardTeamProfileId = input.value;
+    });
+    renderWizardTeamProfiles();
     const modes = document.querySelectorAll('input[name="bootstrap-mode"]');
     modes.forEach((m) => m.addEventListener("change", () => {
       const row = document.getElementById("bootstrap-remote-url-row");
       if (row) row.hidden = !m.checked || m.getAttribute("data-bootstrap-mode") !== "remote";
+      updateWizardProfileFollowNote();
     }));
+    updateWizardProfileFollowNote();
     const sel = document.getElementById("bootstrap-source");
     const gl = document.getElementById("bootstrap-artifact-url");
     if (sel && gl) sel.addEventListener("change", () => { gl.hidden = sel.value !== "artifact"; });
@@ -1812,12 +1986,13 @@ import { createT as i18nCreateT } from "./i18n.js";
   }
 
   // #197: #141's degraded-detected pill was lost in the #182 v3.1 wizard
-  // rebase. Restore it on the wizard's step-1 card: when the openclaw binary
+  // rebase. Restore it on the wizard's RUN-MODE card (step 2 since Phase 5.2
+  // inserted the team-type step in front): when the openclaw binary
   // resolves but the --help probe kept failing under load, detection degrades
   // to "detected (degraded)" (probe warning as tooltip) instead of reading
   // as a healthy install.
   function renderOpenClawDetectPill() {
-    const stepOne = document.querySelector('[data-wizard-step="1"]');
+    const stepOne = document.querySelector('[data-wizard-step="2"]');
     if (!stepOne) return;
     const info = state.localSetupInfo;
     const hasOpenClaw = Boolean(info && info.hasOpenClaw);
@@ -3889,7 +4064,11 @@ import { createT as i18nCreateT } from "./i18n.js";
         // - and open the dashboard in the browser like a running install does.
         try {
           const wizLog = (line) => { const el = document.getElementById("bootstrap-log"); if (el) el.textContent += `\n[connect] ${line}`; };
-          const st = await desktop.standaloneStart({}, inst || null).catch((e) => { wizLog("start failed: " + (e && e.message)); return null; });
+          // Phase 5.2: seed the wizard's team-type choice into the private
+          // instance config (first init only - main.mjs preserves an existing
+          // teamProfile, and the controller ignores it once a TeamState
+          // exists, design 2.3).
+          const st = await desktop.standaloneStart({ teamProfile: wizardTeamProfileForInstall() || undefined }, inst || null).catch((e) => { wizLog("start failed: " + (e && e.message)); return null; });
           if (st && st.controllerUrl) {
             wizLog("instance up at " + st.controllerUrl + " - waiting for controller...");
             let ok = false;
@@ -4361,6 +4540,9 @@ import { createT as i18nCreateT } from "./i18n.js";
       state.unavailableScreenVisible = true;
       renderUnavailableScreen();
       wizardGoStep(1);
+      // Reconfigure path: best-effort echo of the connected controller's
+      // active profile onto the cards (Phase 5.2, report as best effort).
+      syncWizardProfileFromController().catch(() => {});
     });
     const wizCancel = document.getElementById('wizard-cancel-btn');
     if (wizCancel) wizCancel.addEventListener('click', () => {
@@ -4494,6 +4676,9 @@ import { createT as i18nCreateT } from "./i18n.js";
       }
     } catch { /* keep defaults */ }
     wizardGoStep(1);
+    // First boot can still have a remembered controller connection (e.g. the
+    // user re-runs setup): echo its active profile when reachable.
+    syncWizardProfileFromController().catch(() => {});
   })();
   bindWizardControls();
   connectSavedController();
