@@ -52,6 +52,12 @@ assert.match(mgr, /nativeDownload/, "curl-less https download fallback exists (d
 assert.match(http, /tunnelManagerSingleton\.recover\(\)/, "controller reconnects a persisted share at boot");
 assert.match(http, /\/api\/v1\/tunnel\/start/, "start endpoint present");
 assert.match(http, /serveVersionedHtml/, "index.html is served with content-versioned asset URLs (?v=<hash>) so tunnel/CDN browser-cache freezes cannot pin a stale app.js");
+// PR-A of issue #204: the versioned-serving implementation moved from
+// http-server.ts into controller/ui-assets.ts - pin the new home too so the
+// extraction cannot silently drop the versioning logic.
+const uiAssets = await read("src/src/controller/ui-assets.ts");
+assert.match(uiAssets, /serveVersionedHtml/, "content-versioned HTML serving lives in ui-assets.ts (extracted from http-server)");
+assert.match(uiAssets, /uiAssetVersion/, "the ?v=<hash> asset versioning cache lives in ui-assets.ts (extracted from http-server)");
 assert.match(http, /\/api\/v1\/tunnel\/stop/, "stop endpoint present");
 assert.match(http, /GitHub login required/, "sharing requires github login (server-derived username)");
 

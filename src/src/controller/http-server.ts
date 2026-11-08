@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
 import zlib from "node:zlib";
-import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawPluginApi, PluginLogger } from "../../api.js";
@@ -40,7 +39,7 @@ import {
   sendError,
   generateId,
 } from "../protocol.js";
-import { saveTeamState, archiveTeamState, listArchivedTeams, findTeamSwitchArchive } from "../state.js";
+import { saveTeamState, listArchivedTeams } from "../state.js";
 import { listWorkspaceTree, listWorkspaceSubtree, readWorkspaceFile, readWorkspaceRawFile } from "../workspace-browser.js";
 // Phase 1.3: runtime role data comes from the active TeamProfile loader
 // (software-rd baseline) instead of the roles.ts registry; roles.ts/role-ids.ts
@@ -55,7 +54,6 @@ import {
   hasProfile,
   normalizeRecommendedSkills,
   resolveActiveRoleSkills,
-  setActiveProfileId,
   validateActiveRoleId,
   type TeamProfileCapabilities,
 } from "../profile-loader.js";
@@ -69,6 +67,11 @@ import {
 import { TaskRouter } from "./task-router.js";
 import { MessageRouter } from "./message-router.js";
 import { TeamWebSocketServer } from "./websocket.js";
+// PR-A of issue #204: the profile switch state machine (drain/archive/warm)
+// and the static UI asset serving live in their own modules; http-server
+// keeps only the route shells. profile-switch must never import this file.
+import { startTeamProfileSwitch } from "./profile-switch.js";
+import { serveStaticFile, serveVersionedHtml } from "./ui-assets.js";
 import type { WorkerProvisioningManager } from "./worker-provisioning.js";
 import type { PreviewManager } from "./preview-manager.js";
 import { createControllerPromptInjector } from "./prompt-injector.js";
@@ -3624,67 +3627,9 @@ async function cancelTaskExecution(
   }, deps);
 }
 
-// Tunnel/CDN caches rewrite the origin's Cache-Control: no-cache into a long
-// browser freeze for cacheable extensions like .js (observed: Cloudflare
-// Browser Cache TTL max-age=14400 on tunneled UI assets). A UI update then
-// never reaches visitors through the tunnel. Serving content-versioned URLs
-// (?v=<hash>) makes every UI deploy a URL no browser or edge has ever seen,
-// so stale-cache behavior cannot recur.
-const uiAssetVersionCache = new Map<string, { mtimeMs: number; version: string }>();
-
-function uiAssetVersion(uiPath: string, file: string): string {
-  const full = path.join(uiPath, file);
-  try {
-    const mtimeMs = fs.statSync(full).mtimeMs;
-    const cached = uiAssetVersionCache.get(full);
-    if (cached && cached.mtimeMs === mtimeMs) return cached.version;
-    const version = createHash("sha1").update(fs.readFileSync(full)).digest("hex").slice(0, 10);
-    uiAssetVersionCache.set(full, { mtimeMs, version });
-    return version;
-  } catch {
-    return String(Date.now()); // unreadable asset: bust for this request
-  }
-}
-
-const UI_HTML_ASSET_REFS = [
-  "/ui/style.css",
-  "/ui/app.js",
-  "/ui/assets/teamclaw-app-icon.png",
-];
-
-function serveVersionedHtml(res: ServerResponse, htmlPath: string): void {
-  try {
-    const uiPath = path.dirname(htmlPath);
-    let html = fs.readFileSync(htmlPath, "utf8");
-    for (const ref of UI_HTML_ASSET_REFS) {
-      html = html.split(`"${ref}"`).join(`"${ref}?v=${uiAssetVersion(uiPath, ref.slice("/ui/".length))}"`);
-    }
-    res.writeHead(200, {
-      "Content-Type": "text/html; charset=utf-8",
-      "Access-Control-Allow-Origin": "*",
-      "Cache-Control": "no-cache",
-    });
-    res.end(html);
-  } catch {
-    sendError(res, 404, "File not found");
-  }
-}
-
-function serveStaticFile(res: ServerResponse, filePath: string, contentType: string): void {
-  try {
-    const content = fs.readFileSync(filePath);
-    res.writeHead(200, {
-      "Content-Type": contentType,
-      "Access-Control-Allow-Origin": "*",
-      // UI assets change with every plugin deploy on a localhost controller;
-      // always revalidate so browsers never stick to a stale app.js.
-      "Cache-Control": "no-cache",
-    });
-    res.end(content);
-  } catch {
-    sendError(res, 404, "File not found");
-  }
-}
+// Static UI asset serving (content-versioned HTML + cache-busting file
+// serving) lives in ./ui-assets.ts since PR-A of issue #204; the /ui route
+// shells below call it unchanged.
 
 function workspaceRequestErrorStatus(err: unknown): number {
   if (err && typeof err === "object" && "code" in err && (err as { code?: unknown }).code === "ENOENT") {
@@ -4674,20 +4619,13 @@ async function assignTaskToWorker(
 }
 
 // ===========================================================================
-// Team profile switch (Phase 2.1, vertical-team-profiles-design.md 2.3).
-//
-// Six-step semantics of POST /api/v1/team/profile:
-//   0. validate profileId + reject concurrent switches (409)   [endpoint]
-//   1. transition = { draining, target, startedAt }; persisted + WS event
-//   2. graceful drain of in-flight tasks (timeout -> force-collect),
-//      terminate workers                                        [drainTeam...]
-//   3. archive the WHOLE TeamState + roles snapshot             [state.ts]
-//   4. fresh capability-conditioned TeamState for the target
-//   5. warm the target profile's warmupRoles                    [provisioner]
-//   6. clear transition, persist, broadcast team.switch_completed
+// Team profile switch dispatch-layer constants (Phase 2.1,
+// vertical-team-profiles-design.md 2.3). The six-step switch machine itself
+// (drain -> archive -> rebuild -> warm -> settle) lives in
+// ./profile-switch.ts since PR-A of issue #204; these constants below gate
+// request dispatch while a transition is in flight and stay with the router.
 // ===========================================================================
 
-const SWITCH_DRAIN_POLL_INTERVAL_MS = 500;
 /** Advisory backoff hint carried in 409 bodies for worker register/heartbeat. */
 const SWITCH_WORKER_BACKOFF_HINT_MS = 5000;
 const SWITCH_TASK_SUBMISSION_RETRY_AFTER_SECONDS = 5;
@@ -4769,257 +4707,6 @@ function disabledCapabilityForPath(method: string, pathname: string): Capability
     }
   }
   return null;
-}
-
-function sleepForSwitchDrain(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function taskInFlightForDrain(task: TaskInfo): boolean {
-  return Boolean(task.assignedWorkerId) && (task.status === "assigned" || task.status === "in_progress");
-}
-
-/**
- * Design 2.3 step 2: graceful drain. Waits until no task is assigned /
- * in-progress any more (in-flight workers report results through their
- * normal endpoints, which stay open during the transition), then returns.
- * On timeout the remaining in-flight tasks are force-collected (failed with
- * an explicit error so the archive records the forced end) and all workers
- * are marked offline. Managed workers are terminated by the caller through
- * the provisioning manager's onWorkerRemoved (the terminateManagedWorker
- * single point); external workers observe 409 heartbeats and back off.
- */
-async function drainTeamForProfileSwitch(
-  deps: ControllerHttpDeps,
-): Promise<{ timedOut: boolean; forceCollected: string[] }> {
-  const { config, logger, getTeamState, updateTeamState } = deps;
-  const deadline = Date.now() + config.teamSwitchDrainTimeoutMs;
-  while (Date.now() < deadline) {
-    const state = getTeamState();
-    if (!state || !Object.values(state.tasks).some(taskInFlightForDrain)) {
-      return { timedOut: false, forceCollected: [] };
-    }
-    await sleepForSwitchDrain(SWITCH_DRAIN_POLL_INTERVAL_MS);
-  }
-
-  const forceCollected: string[] = [];
-  updateTeamState((state) => {
-    for (const task of Object.values(state.tasks)) {
-      if (taskInFlightForDrain(task)) {
-        task.status = "failed";
-        task.error = `team profile switch drain timeout (${config.teamSwitchDrainTimeoutMs}ms) - in-flight task force-collected into the team archive`;
-        task.updatedAt = Date.now();
-        forceCollected.push(task.id);
-      }
-    }
-    for (const worker of Object.values(state.workers)) {
-      worker.status = "offline";
-      worker.currentTaskId = undefined;
-    }
-  });
-  logger.warn(
-    `Controller: profile switch drain timed out after ${config.teamSwitchDrainTimeoutMs}ms - force-collected ${forceCollected.length} in-flight task(s)`,
-  );
-  return { timedOut: true, forceCollected };
-}
-
-export type TeamProfileSwitchOptions = {
-  /**
-   * Crash resume (design 2.3): the archive file for this switch already
-   * exists, so skip the drain+archive steps (2-3) and rebuild the new team
-   * directly (steps 4-6).
-   */
-  skipArchive?: boolean;
-};
-
-/**
- * Run switch steps 2-6 (step 1 - setting and persisting the transition -
- * belongs to the POST endpoint / crash resume). Exported so the controller
- * startup chain can resume an interrupted switch with the same semantics.
- */
-export async function executeTeamProfileSwitch(
-  deps: ControllerHttpDeps,
-  targetProfileId: string,
-  options: TeamProfileSwitchOptions = {},
-): Promise<void> {
-  const { config, logger, getTeamState, updateTeamState, wsServer, workerProvisioningManager } = deps;
-  const target = BUILTIN_PROFILES.get(targetProfileId);
-  if (!target) {
-    throw new Error(`TeamClaw team profile "${targetProfileId}" is not available in this installation`);
-  }
-  const setPhase = (phase: "draining" | "archiving" | "warming"): void => {
-    updateTeamState((state) => {
-      if (state.transition?.targetProfileId === targetProfileId) {
-        state.transition.phase = phase;
-      }
-    });
-  };
-
-  if (!options.skipArchive) {
-    // Step 2: drain in-flight work, then stop every worker.
-    setPhase("draining");
-    workerProvisioningManager?.setReconcileSuspended(true);
-    const drain = await drainTeamForProfileSwitch(deps);
-    for (const workerId of Object.keys(getTeamState()?.provisioning?.workers ?? {})) {
-      if (workerProvisioningManager?.hasManagedWorker(workerId)) {
-        await workerProvisioningManager
-          .onWorkerRemoved(workerId, `team profile switch to "${targetProfileId}"`)
-          .catch((err) => logger.warn(`Controller: failed to terminate managed worker ${workerId} during profile switch: ${String(err)}`));
-      }
-    }
-    // Capability teardown for subsystems the target profile switches off
-    // (minimal Phase 2.3 preview; the full 404 short-circuit lands in 2.3).
-    // NOTE: teardown is one-directional at runtime. Switching a capability
-    // back ON does not (re)start its subsystem here - TeamAuto scheduling
-    // and preview restoration are wired at controller startup only, so an
-    // off -> on switch (e.g. minimal-bank -> software-rd) takes effect for
-    // those subsystems after the next gateway restart.
-    if (!target.capabilities.teamauto) {
-      const scheduler = deps.getTeamAutoScheduler?.() ?? null;
-      if (scheduler) {
-        try {
-          await scheduler.stop();
-        } catch { /* scheduler already stopped */ }
-      }
-    }
-    if (!target.capabilities.runnablePreview && deps.previewManager) {
-      try {
-        await deps.previewManager.stopAll();
-      } catch { /* previews already stopped */ }
-    }
-
-    // Step 3: archive the whole previous TeamState with a roles snapshot.
-    // The phase flip is persisted BEFORE the archive write so a crash between
-    // the two leaves an unambiguous "archive may exist" state for the resume
-    // path (file existence check).
-    setPhase("archiving");
-    const sourceState = getTeamState();
-    if (sourceState) {
-      await saveTeamState(sourceState);
-      const sourceProfile = getActiveProfile();
-      await archiveTeamState(sourceState, {
-        id: sourceProfile.id,
-        name: sourceProfile.name,
-        nameZh: sourceProfile.nameZh,
-        version: sourceProfile.version,
-        roles: sourceProfile.roles,
-      });
-      logger.info(
-        `Controller: archived team "${sourceState.teamName}" (profile ${sourceProfile.id}, `
-          + `${Object.keys(sourceState.tasks).length} task(s))${drain.timedOut ? " after drain timeout" : ""}`,
-      );
-    }
-  }
-
-  // Step 4: fresh TeamState for the target profile, conditioned on its
-  // capability switches (design 2.3: banking omits repo/previews/reports).
-  // setActiveProfileId and the state mutation below are both synchronous, so
-  // no request can observe the new state against the old profile.
-  const repoState = target.capabilities.git
-    ? await ensureControllerGitRepo(config, logger).catch((err) => {
-        logger.warn(`Controller: failed to prepare git collaboration repo for profile "${target.id}": ${err instanceof Error ? err.message : String(err)}`);
-        return null;
-      })
-    : null;
-  setActiveProfileId(target.id);
-  const newCreatedAt = Date.now();
-  updateTeamState((state) => {
-    state.profileId = target.id;
-    state.teamName = target.name;
-    state.workers = {};
-    state.tasks = {};
-    state.controllerRuns = {};
-    state.projects = {};
-    state.messages = [];
-    state.clarifications = {};
-    state.provisioning = { workers: {} };
-    if (target.capabilities.git && repoState) {
-      state.repo = repoState;
-    } else {
-      delete state.repo;
-    }
-    if (target.capabilities.runnablePreview) {
-      state.previews = {};
-    } else {
-      delete state.previews;
-    }
-    if (target.capabilities.deliveryReview) {
-      state.reports = {};
-    } else {
-      delete state.reports;
-    }
-    state.createdAt = newCreatedAt;
-  });
-  await saveTeamState(getTeamState()!);
-
-  // Step 5: warm the new profile's warmupRoles through the provisioning
-  // pipeline (launch dispatch; registration/readiness tracking continues in
-  // the background exactly like a cold start).
-  setPhase("warming");
-  await saveTeamState(getTeamState()!);
-  workerProvisioningManager?.setReconcileSuspended(false);
-  if (workerProvisioningManager?.isEnabled() && target.warmupRoles.length > 0) {
-    await workerProvisioningManager
-      .warmRolesForTeamSwitch(target.warmupRoles, `profile switch warmup (${target.id})`)
-      .catch((err) => logger.warn(`Controller: profile switch warmup failed: ${err instanceof Error ? err.message : String(err)}`));
-  }
-
-  // Step 6: settle - clear the transition, persist, announce.
-  updateTeamState((state) => {
-    delete state.transition;
-  });
-  await saveTeamState(getTeamState()!);
-  wsServer.broadcastUpdate({ type: "team.switch_completed", data: { profileId: target.id } });
-  logger.info(`Controller: team profile switch to "${target.id}" completed`);
-}
-
-/**
- * Design 2.3 crash semantics: on controller startup, an unfinished persisted
- * transition is resumed idempotently. If the archive file for this switch
- * already exists AND the phase is at/after "archiving", jump straight to
- * building the new team (skipArchive); otherwise re-run the drain from
- * scratch (drain is idempotent - a completed drain simply finds no in-flight
- * tasks). Returns true when a transition was resumed.
- */
-export async function resumeTeamProfileSwitch(deps: ControllerHttpDeps): Promise<boolean> {
-  const state = deps.getTeamState();
-  const transition = state?.transition;
-  if (!state || !transition) {
-    return false;
-  }
-  if (!hasProfile(transition.targetProfileId)) {
-    // Same red line as restoring an unknown profileId (design 2.2): a team
-    // mid-switch to an unavailable profile must never silently land on a
-    // different profile.
-    throw new Error(
-      `Controller: interrupted team profile switch references profile "${transition.targetProfileId}", which is not available in this installation. `,
-    );
-  }
-  deps.logger.info(
-    `Controller: resuming interrupted team profile switch to "${transition.targetProfileId}" (phase: ${transition.phase}, started at ${new Date(transition.startedAt).toISOString()})`,
-  );
-  // A persisted state whose profileId already equals the target means step 4
-  // flipped the team identity onto the NEW team. Step 4 strictly follows the
-  // completed archive write in the same execution (the archive file lands
-  // atomically before step 4 runs), so that flip PROVES the archive exists.
-  // This covers both phase "warming" and the ghost-archive window between
-  // the step-4 flip reaching disk and the warming phase persisting - on disk
-  // that window reads as (phase "archiving", profileId = target), where
-  // looking up the SOURCE-named archive file with state.profileId would miss
-  // it and a re-drain would seal the already-emptied NEW team as a ghost
-  // archive entry. (Alternative considered: persisting a sourceProfileId on
-  // the transition - rejected; this flip predicate is the identical proof
-  // without transition-shape or migration churn, and it also degrades the
-  // manually-corrupted (draining, target) combination the same safe way.)
-  const step4Flipped = state.profileId === transition.targetProfileId;
-  const archiveExists = step4Flipped
-    || transition.phase === "warming"
-    || Boolean(await findTeamSwitchArchive(state.profileId, transition.startedAt));
-  const phaseAtOrAfterArchive = transition.phase === "archiving" || transition.phase === "warming";
-  await executeTeamProfileSwitch(deps, transition.targetProfileId, {
-    skipArchive: archiveExists && (phaseAtOrAfterArchive || step4Flipped),
-  });
-  return true;
 }
 
 // ── Issue #191: auto-assign re-entrancy gate ─────────────────────────────────
@@ -7570,43 +7257,10 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
     wsServer.broadcastUpdate({ type: "team.switch_started", data: { profileId, previousProfileId } });
     logger.info(`Controller: team profile switch started - "${previousProfileId}" -> "${profileId}"`);
 
-    void executeTeamProfileSwitch(deps, profileId).catch(async (err) => {
-      const detail = err instanceof Error ? err.message : String(err);
-      logger.error(`Controller: team profile switch to "${profileId}" failed: ${detail}`);
-      // Never leave the team wedged in a transition: clear it so whichever
-      // team the state now holds keeps serving and the switch can be
-      // re-issued. The archive (if step 3 ran) keeps the previous team. Also
-      // lift the provisioning reconcile suspension so the manager keeps
-      // operating for whichever team survived.
-      deps.workerProvisioningManager?.setReconcileSuspended(false);
-      // Honest worst case for the failure payload: once the step-3 archive
-      // write has landed (or step 4 already flipped the team identity - which
-      // strictly proves the archive landed), the state on disk may be
-      // partially switched and a restart is the reliable recovery. Detect
-      // with the same resume-path predicate: a source-named archive file at
-      // or after the transition's startedAt.
-      const transition = state.transition;
-      let archivePreserved = state.profileId === profileId;
-      if (!archivePreserved && transition) {
-        archivePreserved = Boolean(await findTeamSwitchArchive(previousProfileId, transition.startedAt).catch(() => null));
-      }
-      const reason = archivePreserved
-        ? `${detail} (archive preserved, team state may be partially switched, restart recommended)`
-        : detail;
-      // Broadcast BEFORE clearing the transition: the web switcher releases
-      // its loading/confirm state on this event instead of silently timing
-      // out on the reconcile fallback.
-      wsServer.broadcastUpdate({
-        type: "team.switch_failed",
-        data: { previousProfileId, targetProfileId: profileId, reason },
-      });
-      updateTeamState((s) => {
-        if (s.transition?.targetProfileId === profileId) {
-          delete s.transition;
-        }
-      });
-      void saveTeamState(getTeamState()!).catch(() => undefined);
-    });
+    // Steps 2-6 plus the failure broadcast path live in ./profile-switch.ts
+    // (startTeamProfileSwitch: fire-and-forget executeTeamProfileSwitch with
+    // the archive-preservation-aware team.switch_failed unwedging).
+    startTeamProfileSwitch(deps, state, profileId, previousProfileId);
 
     sendJson(res, 202, { status: "switching", profileId, transition: state.transition });
     return;
