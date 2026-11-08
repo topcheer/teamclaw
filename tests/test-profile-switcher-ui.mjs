@@ -6,7 +6,8 @@
 //   - header mini-button + modal elements exist in index.html
 //   - /profiles, /team/profile, /archived-teams fetch wiring in app.js
 //   - two-step switch flow (cards -> archive-consequence confirm -> POST)
-//   - 202 + team.switch_started/completed WS tracking, 409 transition notice
+//   - 202 + team.switch_started/completed/failed WS tracking, 409 transition
+//     notice
 //   - capability-gated teamauto tab hidden (not removed) + CSS hidden rule
 //   - reviewedBy "Human sign-off pending" badge rendering
 //   - teamProfile.* i18n keys present in BOTH the en and zh inline dicts
@@ -148,6 +149,29 @@ assert.match(
   /case "team\.switch_completed":[\s\S]*?refreshAll\(\);[\s\S]*?finishTeamProfileSwitch\(/,
   "completion must trigger a full refresh and close the modal",
 );
+// Phase 2 follow-up (#201 review): server-side switch failure feedback. The
+// loading/confirm state must be released by the explicit team.switch_failed
+// event (toast + full refresh), not left to the reconcile timeout.
+assert.match(
+  appSource,
+  /case "team\.switch_failed":/,
+  "WS team.switch_failed must be handled",
+);
+assert.match(
+  appSource,
+  /case "team\.switch_failed":[\s\S]*?refreshAll\(\);[\s\S]*?releaseTeamProfileSwitchUi\(\);[\s\S]*?showNotice\(/,
+  "failure must trigger a full refresh, release the loading state, and toast",
+);
+assert.match(
+  appSource,
+  /t\("teamProfile\.switchFailed", \{ name: teamProfileDisplayNameById\(failedTargetId\) \}\)/,
+  "failure toast must name the failed target profile",
+);
+assert.match(
+  appSource,
+  /String\(failedData\.reason \|\| ""\)/,
+  "failure toast body must surface the server-provided reason verbatim",
+);
 assert.match(
   appSource,
   /result\.status === 202/,
@@ -228,6 +252,7 @@ const expectedKeys = [
   "teamProfile.switchStarted",
   "teamProfile.transitionPending",
   "teamProfile.switchCompleted",
+  "teamProfile.switchFailed",
   "teamProfile.archivedTitle",
   "teamProfile.archivedEmpty",
   "teamProfile.archivedTasks",

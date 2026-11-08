@@ -230,6 +230,7 @@
       "teamProfile.switchStarted": "Switch started - waiting for the new team to warm up…",
       "teamProfile.transitionPending": "A switch to {name} is already in progress (phase: {phase}).",
       "teamProfile.switchCompleted": "Team profile switched to {name}",
+      "teamProfile.switchFailed": "Team profile switch to {name} failed",
       "teamProfile.archivedTitle": "Archived teams",
       "teamProfile.archivedEmpty": "No archived teams yet.",
       "teamProfile.archivedTasks": "{n} tasks"
@@ -408,6 +409,7 @@
       "teamProfile.switchStarted": "切换已开始 - 等待新团队预热完成…",
       "teamProfile.transitionPending": "到 {name} 的切换正在进行中（阶段：{phase}）。",
       "teamProfile.switchCompleted": "团队画像已切换到 {name}",
+      "teamProfile.switchFailed": "切换到 {name} 的团队画像失败",
       "teamProfile.archivedTitle": "已归档团队",
       "teamProfile.archivedEmpty": "暂无已归档团队。",
       "teamProfile.archivedTasks": "{n} 个任务"
@@ -2357,6 +2359,24 @@
           "success",
           t("teamProfile.switchCompleted", { name: teamProfileDisplayNameById(completedProfileId) }),
           "",
+        );
+        break;
+      }
+      case "team.switch_failed": {
+        // Server-side switch failure: release the loading/confirm state with
+        // an explicit failure toast instead of waiting for the reconcile
+        // fallback to silently re-enable the button. The reason may state
+        // that the archive was preserved and the team is partially switched;
+        // the state may have moved partway, so re-pull everything.
+        const failedData = event.data || {};
+        const failedTargetId = failedData.targetProfileId || pendingSwitchProfileId || "";
+        refreshAll();
+        releaseTeamProfileSwitchUi();
+        showNotice(
+          "team:switch_failed",
+          "attention",
+          t("teamProfile.switchFailed", { name: teamProfileDisplayNameById(failedTargetId) }),
+          String(failedData.reason || ""),
         );
         break;
       }

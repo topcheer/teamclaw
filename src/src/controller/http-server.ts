@@ -7562,14 +7562,36 @@ function computeTeamStats(state: TeamState): TeamStatsResponse {
     wsServer.broadcastUpdate({ type: "team.switch_started", data: { profileId, previousProfileId } });
     logger.info(`Controller: team profile switch started - "${previousProfileId}" -> "${profileId}"`);
 
-    void executeTeamProfileSwitch(deps, profileId).catch((err) => {
-      logger.error(`Controller: team profile switch to "${profileId}" failed: ${err instanceof Error ? err.message : String(err)}`);
+    void executeTeamProfileSwitch(deps, profileId).catch(async (err) => {
+      const detail = err instanceof Error ? err.message : String(err);
+      logger.error(`Controller: team profile switch to "${profileId}" failed: ${detail}`);
       // Never leave the team wedged in a transition: clear it so whichever
       // team the state now holds keeps serving and the switch can be
       // re-issued. The archive (if step 3 ran) keeps the previous team. Also
       // lift the provisioning reconcile suspension so the manager keeps
       // operating for whichever team survived.
       deps.workerProvisioningManager?.setReconcileSuspended(false);
+      // Honest worst case for the failure payload: once the step-3 archive
+      // write has landed (or step 4 already flipped the team identity - which
+      // strictly proves the archive landed), the state on disk may be
+      // partially switched and a restart is the reliable recovery. Detect
+      // with the same resume-path predicate: a source-named archive file at
+      // or after the transition's startedAt.
+      const transition = state.transition;
+      let archivePreserved = state.profileId === profileId;
+      if (!archivePreserved && transition) {
+        archivePreserved = Boolean(await findTeamSwitchArchive(previousProfileId, transition.startedAt).catch(() => null));
+      }
+      const reason = archivePreserved
+        ? `${detail} (archive preserved, team state may be partially switched, restart recommended)`
+        : detail;
+      // Broadcast BEFORE clearing the transition: the web switcher releases
+      // its loading/confirm state on this event instead of silently timing
+      // out on the reconcile fallback.
+      wsServer.broadcastUpdate({
+        type: "team.switch_failed",
+        data: { previousProfileId, targetProfileId: profileId, reason },
+      });
       updateTeamState((s) => {
         if (s.transition?.targetProfileId === profileId) {
           delete s.transition;
