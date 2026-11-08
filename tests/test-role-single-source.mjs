@@ -303,3 +303,15 @@ assert.deepEqual(
 );
 
 console.log("Role single-source-of-truth smoke passed.");
+
+// Issue #204 P2: normalizeSessionRole must live in one place (session-roles.ts).
+{
+  const httpServerSrc = await readSource("src/src/controller/http-server.ts");
+  const taskExecutorSrc = await readSource("src/src/task-executor.ts");
+  const sharedSrc = await readSource("src/src/session-roles.ts");
+  assert.match(sharedSrc, /export function normalizeSessionRole/, "shared session-roles.ts exports normalizeSessionRole");
+  assert.doesNotMatch(httpServerSrc, /function normalizeSessionRole/, "http-server must not redefine normalizeSessionRole");
+  assert.doesNotMatch(taskExecutorSrc, /function normalizeSessionRole/, "task-executor must not redefine normalizeSessionRole");
+  assert.match(httpServerSrc, /from "\.\.\/session-roles\.js"/, "http-server imports the shared normalizer");
+  assert.match(taskExecutorSrc, /from "\.\/session-roles\.js"/, "task-executor imports the shared normalizer");
+}

@@ -16,7 +16,14 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tc-gc-test-"));
 process.env.OPENCLAW_STATE_DIR = path.join(tmp, "state");
 process.env.OPENCLAW_HOME = path.join(tmp, "state");
 process.env.HOME = path.join(tmp, "state");
+// Issue #204 (P1 test isolation): repoDir() -> resolveTeamAutoPaths() ->
+// resolveTeamClawProjectsDir() reads the HOST openclaw.json via the inherited
+// OPENCLAW_CONFIG_PATH when no explicit workspace override is set, landing
+// fixtures in the real shared workspace and colliding across runs.
+// TEAMCLAW_WORKSPACE_DIR has top precedence over any config file - set it.
+process.env.TEAMCLAW_WORKSPACE_DIR = path.join(tmp, "workspace");
 fs.mkdirSync(process.env.OPENCLAW_STATE_DIR, { recursive: true });
+fs.mkdirSync(process.env.TEAMCLAW_WORKSPACE_DIR, { recursive: true });
 
 const root = path.resolve(import.meta.dirname, "..");
 const mod = await import(path.join(root, "src", "dist", "src", "teamauto", "repo-sync.js"));
