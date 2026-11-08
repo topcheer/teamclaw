@@ -30,6 +30,16 @@
   let selectedWorkspaceFile = null;
   let selectedWorkspaceView = "source";
   let workspaceLoaded = false;
+  // Team profile switcher (Phase 5.1): registry mirror of GET /api/v1/profiles
+  // and the latest GET /api/v1/team/profile response (active profile detail
+  // incl. capabilities + transition tracking). Empty until the first
+  // successful fetch; capability-gated entries stay visible meanwhile so
+  // older controllers behave exactly as before.
+  let teamProfileRegistry = [];
+  let activeTeamProfile = null;
+  let pendingSwitchTarget = null;
+  let pendingSwitchProfileId = "";
+  let teamProfileSwitchInFlight = false;
   let clarificationPromptOpen = false;
   let activeClarificationId = null;
   let dismissedClarificationIds = [];
@@ -204,7 +214,25 @@
       "detail.kicker": "Task Details",
       "live.idle": "Idle",
       "clarification.kicker": "Clarification needed",
-      "clarification.title": "Human input required"
+      "clarification.title": "Human input required",
+      "teamProfile.kicker": "Team profile",
+      "teamProfile.title": "Switch team profile",
+      "teamProfile.headerButtonTitle": "Team profile - click to view or switch",
+      "teamProfile.current": "Current",
+      "teamProfile.pendingSignoff": "Pending human sign-off",
+      "teamProfile.roleCount": "{n} roles",
+      "teamProfile.loadFailed": "Failed to load team profiles",
+      "teamProfile.confirmArchive": "The current team's {n} task(s) will be archived as read-only history. This cannot be undone.",
+      "teamProfile.confirmWorkers": "All workers stop and re-warm for the new team; task submissions are rejected while the switch runs.",
+      "teamProfile.confirmButton": "Switch team",
+      "teamProfile.cancel": "Back",
+      "teamProfile.switching": "Switching…",
+      "teamProfile.switchStarted": "Switch started - waiting for the new team to warm up…",
+      "teamProfile.transitionPending": "A switch to {name} is already in progress (phase: {phase}).",
+      "teamProfile.switchCompleted": "Team profile switched to {name}",
+      "teamProfile.archivedTitle": "Archived teams",
+      "teamProfile.archivedEmpty": "No archived teams yet.",
+      "teamProfile.archivedTasks": "{n} tasks"
     },
     zh: {
       "action.refresh": "刷新",
@@ -364,7 +392,25 @@
       "detail.kicker": "任务详情",
       "live.idle": "空闲",
       "clarification.kicker": "需要澄清",
-      "clarification.title": "需要人工输入"
+      "clarification.title": "需要人工输入",
+      "teamProfile.kicker": "团队画像",
+      "teamProfile.title": "切换团队画像",
+      "teamProfile.headerButtonTitle": "团队画像 - 点击查看或切换",
+      "teamProfile.current": "当前",
+      "teamProfile.pendingSignoff": "待人工签署",
+      "teamProfile.roleCount": "{n} 个角色",
+      "teamProfile.loadFailed": "加载团队画像失败",
+      "teamProfile.confirmArchive": "当前团队的 {n} 个任务将归档为只读历史，此操作不可撤销。",
+      "teamProfile.confirmWorkers": "所有 worker 将停止并按新团队重新预热；切换期间提交的任务会被拒绝。",
+      "teamProfile.confirmButton": "切换团队",
+      "teamProfile.cancel": "返回",
+      "teamProfile.switching": "切换中…",
+      "teamProfile.switchStarted": "切换已开始 - 等待新团队预热完成…",
+      "teamProfile.transitionPending": "到 {name} 的切换正在进行中（阶段：{phase}）。",
+      "teamProfile.switchCompleted": "团队画像已切换到 {name}",
+      "teamProfile.archivedTitle": "已归档团队",
+      "teamProfile.archivedEmpty": "暂无已归档团队。",
+      "teamProfile.archivedTasks": "{n} 个任务"
     }
   };
 
@@ -2286,6 +2332,34 @@
       case "report:ready":
         handleReportReady(event.data || {});
         break;
+      case "team.switch_started": {
+        // Section 2.3 switch semantics: archive + re-warm in progress. Pull
+        // fresh state so the transition notice surfaces; task submissions
+        // get 503 server-side while the transition runs.
+        const startedData = event.data || {};
+        refreshAll();
+        renderTeamProfileTransitionNotice({
+          phase: "draining",
+          targetProfileId: startedData.profileId || "",
+        });
+        break;
+      }
+      case "team.switch_completed": {
+        // Full re-pull (roles/workers/tasks change wholesale with the new
+        // profile); close the switcher modal when this UI initiated it.
+        const completedProfileId = (event.data || {}).profileId || "";
+        refreshAll();
+        if (teamProfileSwitchInFlight || pendingSwitchProfileId) {
+          finishTeamProfileSwitch(completedProfileId);
+        }
+        showNotice(
+          "team:switch_completed",
+          "success",
+          t("teamProfile.switchCompleted", { name: teamProfileDisplayNameById(completedProfileId) }),
+          "",
+        );
+        break;
+      }
     }
   }
 
@@ -2361,6 +2435,22 @@
         modelReadiness: statusRes.modelReadiness || null,
         externalWorkerInstall: statusRes.externalWorkerInstall || null,
       };
+
+      // Active team profile (Phase 5.1): drives the header indicator, the
+      // capability-gated tab visibility, and the switch transition notice.
+      // Tolerated like /roles - an older controller without the endpoint
+      // keeps the default (software-rd) presentation.
+      try {
+        activeTeamProfile = await apiGet("/team/profile");
+      } catch (profileErr) {
+        console.error("Failed to load team profile:", profileErr);
+      }
+      if (activeTeamProfile) {
+        applyCapabilitiesVisibility(activeTeamProfile);
+        renderTeamProfileHeaderButton();
+        renderTeamProfileTransitionNotice();
+        reconcileTeamProfileSwitch();
+      }
 
       renderWorkers(teamState.workers);
       renderTasks(teamState.tasks);
@@ -3767,8 +3857,374 @@
   bindWorkspacePrompt();
   promptWorkspaceIfDefault();
   updateWorkspacePathIndicator();
+  bindTeamProfileModal();
   bindModelSettings();
   bindGithubCorner();
+
+  // ==================== Team profile switcher (Phase 5.1) ====================
+  // Header mini-button + modal over the model-settings-modal precedent:
+  // step 1 lists GET /api/v1/profiles cards, step 2 confirms the section 2.3
+  // archive consequences, then POST /api/v1/team/profile is tracked via the
+  // team.switch_started / team.switch_completed WS events. The archived
+  // teams section lists GET /api/v1/archived-teams metadata read-only.
+
+  function profileDisplayLabel(profile) {
+    if (!profile) return "";
+    if (currentLanguage === "zh") {
+      return profile.nameZh || profile.name || profile.id || "";
+    }
+    return profile.name || profile.nameZh || profile.id || "";
+  }
+
+  function teamProfileDisplayNameById(profileId) {
+    if (!profileId) return "";
+    var entry = teamProfileRegistry.filter(function (p) { return p.id === profileId; })[0];
+    if (entry) return profileDisplayLabel(entry);
+    if (activeTeamProfile && activeTeamProfile.profile && activeTeamProfile.profile.id === profileId) {
+      return profileDisplayLabel(activeTeamProfile.profile);
+    }
+    return profileId;
+  }
+
+  // reviewedBy carries the review-trail strings from the profile packs; a
+  // "Human sign-off pending" entry means the finance-domain review is not
+  // countersigned yet and the card must say so rather than hide it.
+  function profileHasPendingSignoff(profile) {
+    return (profile && Array.isArray(profile.reviewedBy) ? profile.reviewedBy : []).some(function (entry) {
+      return String(entry).indexOf("Human sign-off pending") !== -1;
+    });
+  }
+
+  function renderTeamProfileHeaderButton() {
+    var button = $("#team-profile-toggle");
+    if (!button) return;
+    var profile = activeTeamProfile && activeTeamProfile.profile;
+    var icon = profile && profile.icon ? profile.icon + " " : "";
+    var label = profile
+      ? profileDisplayLabel(profile)
+      : ((activeTeamProfile && activeTeamProfile.profileId) || "Team");
+    button.textContent = icon + label;
+    button.title = t("teamProfile.headerButtonTitle");
+  }
+
+  // UI contract (design section 4 / P2.3): GET /team/profile carries the
+  // active capabilities and the UI hides capability-gated entries. The
+  // teamauto tab is hidden (NOT removed) so the DOM keeps its full tab set
+  // for contract tests; unknown/missing capabilities default to visible so
+  // software-rd and older controllers behave exactly as before.
+  function applyCapabilitiesVisibility(profileInfo) {
+    var caps = profileInfo && profileInfo.profile && profileInfo.profile.capabilities;
+    var teamautoEnabled = !caps || caps.teamauto !== false;
+    var teamautoTab = $('[data-tab="teamauto"]');
+    if (teamautoTab) {
+      teamautoTab.hidden = !teamautoEnabled;
+    }
+    if (!teamautoEnabled && activeTab === "teamauto") {
+      activateTab("tasks");
+    }
+  }
+
+  function openTeamProfileModal() {
+    var modal = $("#team-profile-modal");
+    if (!modal) return;
+    showTeamProfileListStep();
+    renderTeamProfileTransitionNotice();
+    modal.classList.add("open");
+    modal.setAttribute("aria-hidden", "false");
+    refreshTeamProfileModalData();
+  }
+
+  function closeTeamProfileModal() {
+    var modal = $("#team-profile-modal");
+    if (!modal) return;
+    modal.classList.remove("open");
+    modal.setAttribute("aria-hidden", "true");
+    // A switch in flight keeps its confirm-step state so the completion
+    // event still closes cleanly; otherwise reset for the next open.
+    if (!teamProfileSwitchInFlight) {
+      showTeamProfileListStep();
+    }
+  }
+
+  function refreshTeamProfileModalData() {
+    apiGet("/profiles").then(function (data) {
+      teamProfileRegistry = data && Array.isArray(data.profiles) ? data.profiles : [];
+      renderTeamProfileCards();
+    }).catch(function (err) {
+      var listEl = $("#team-profile-list");
+      if (listEl) {
+        listEl.innerHTML = '<div class="empty-state">' + escapeHtml(t("teamProfile.loadFailed")) + "</div>";
+      }
+      showError(err instanceof Error ? err.message : t("teamProfile.loadFailed"));
+    });
+    renderTeamProfileArchives();
+  }
+
+  function renderTeamProfileCards() {
+    var listEl = $("#team-profile-list");
+    if (!listEl) return;
+    if (!teamProfileRegistry.length) {
+      listEl.innerHTML = '<div class="empty-state">' + escapeHtml(t("teamProfile.loadFailed")) + "</div>";
+      return;
+    }
+    var activeId = (activeTeamProfile && activeTeamProfile.profileId) || "";
+    var locked = Boolean(activeTeamProfile && activeTeamProfile.transition);
+    listEl.innerHTML = teamProfileRegistry.map(function (profile) {
+      var isActive = profile.id === activeId;
+      var pending = profileHasPendingSignoff(profile);
+      var primary = currentLanguage === "zh"
+        ? (profile.nameZh || profile.name || profile.id)
+        : (profile.name || profile.nameZh || profile.id);
+      var secondary = currentLanguage === "zh"
+        ? (profile.name && profile.name !== primary ? profile.name : "")
+        : (profile.nameZh && profile.nameZh !== primary ? profile.nameZh : "");
+      return (
+        '<button type="button" class="team-profile-card' + (isActive ? " active" : "") + (locked ? " is-locked" : "") +
+          '" data-profile-id="' + escapeHtml(profile.id) + '"' + (isActive ? ' aria-current="true"' : "") + '>' +
+        '  <span class="team-profile-card-icon">' + escapeHtml(profile.icon || "") + "</span>" +
+        '  <span class="team-profile-card-main">' +
+        '    <span class="team-profile-card-name">' + escapeHtml(primary) +
+        (secondary ? ' <span class="team-profile-card-name-alt">' + escapeHtml(secondary) + "</span>" : "") +
+        (pending ? ' <span class="team-profile-chip pending" title="' + escapeHtml((profile.reviewedBy || []).join(" | ")) + '">' + escapeHtml(t("teamProfile.pendingSignoff")) + "</span>" : "") +
+        "</span>" +
+        '    <span class="team-profile-card-desc">' + escapeHtml(profile.description || "") + "</span>" +
+        '    <span class="team-profile-card-meta">' +
+        '      <span class="team-profile-chip">' + escapeHtml(profile.industry || "") + "</span>" +
+        '      <span class="team-profile-chip">v' + escapeHtml(profile.version || "") + "</span>" +
+        '      <span class="team-profile-chip">' + escapeHtml(t("teamProfile.roleCount", { n: profile.roleCount || 0 })) + "</span>" +
+        "    </span>" +
+        "  </span>" +
+        (isActive ? '<span class="team-profile-card-current">' + escapeHtml(t("teamProfile.current")) + "</span>" : "") +
+        "</button>"
+      );
+    }).join("");
+  }
+
+  function showTeamProfileListStep() {
+    var listEl = $("#team-profile-list");
+    var confirmEl = $("#team-profile-confirm");
+    var statusEl = $("#team-profile-switch-status");
+    if (!teamProfileSwitchInFlight) {
+      pendingSwitchTarget = null;
+      pendingSwitchProfileId = "";
+      if (listEl) listEl.hidden = false;
+      if (confirmEl) confirmEl.hidden = true;
+      if (statusEl) statusEl.hidden = true;
+      resetTeamProfileConfirmButton();
+      renderTeamProfileCards();
+    } else {
+      // Keep the confirm step visible while the switch runs.
+      if (listEl) listEl.hidden = true;
+      if (confirmEl) confirmEl.hidden = false;
+    }
+  }
+
+  function showTeamProfileConfirmStep(profile) {
+    if (!profile) return;
+    var listEl = $("#team-profile-list");
+    var confirmEl = $("#team-profile-confirm");
+    var bodyEl = $("#team-profile-confirm-body");
+    var statusEl = $("#team-profile-switch-status");
+    pendingSwitchTarget = profile;
+    pendingSwitchProfileId = profile.id;
+    if (listEl) listEl.hidden = true;
+    if (confirmEl) confirmEl.hidden = false;
+    if (statusEl) statusEl.hidden = true;
+    var taskCount = (teamState.tasks || []).length;
+    if (bodyEl) {
+      bodyEl.innerHTML = (
+        "<h3>" + escapeHtml((profile.icon ? profile.icon + " " : "") + profileDisplayLabel(profile)) + "</h3>" +
+        '<p class="team-profile-confirm-warning">' + escapeHtml(t("teamProfile.confirmArchive", { n: taskCount })) + "</p>" +
+        '<p class="workspace-prompt-note">' + escapeHtml(t("teamProfile.confirmWorkers")) + "</p>"
+      );
+    }
+    resetTeamProfileConfirmButton();
+  }
+
+  function resetTeamProfileConfirmButton() {
+    var button = $("#team-profile-confirm-btn");
+    if (!button) return;
+    button.disabled = false;
+    button.textContent = t("teamProfile.confirmButton");
+  }
+
+  // POST /team/profile resolves 202 immediately; progress arrives through
+  // the WS events, so this fetch is separate from apiRequest to read the
+  // 409 (transition in progress) status and body directly.
+  function submitTeamProfileSwitch(profileId) {
+    var button = $("#team-profile-confirm-btn");
+    var statusEl = $("#team-profile-switch-status");
+    if (!profileId) return;
+    if (button) {
+      button.disabled = true;
+      button.textContent = t("teamProfile.switching");
+    }
+    if (statusEl) {
+      statusEl.hidden = false;
+      statusEl.textContent = t("teamProfile.switchStarted");
+    }
+    teamProfileSwitchInFlight = true;
+    pendingSwitchProfileId = profileId;
+    fetch(API_BASE + "/team/profile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profileId: profileId }),
+    }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (data) {
+        return { status: res.status, ok: res.ok, data: data };
+      });
+    }).then(function (result) {
+      if (result.status === 202) {
+        // Progress + completion arrive via team.switch_started /
+        // team.switch_completed; reconcileTeamProfileSwitch covers a lost
+        // WS connection on every refreshAll.
+        renderTeamProfileTransitionNotice({ phase: "draining", targetProfileId: profileId });
+        return;
+      }
+      if (result.status === 409) {
+        var transition = (result.data && result.data.transition) ||
+          (activeTeamProfile && activeTeamProfile.transition) || null;
+        renderTeamProfileTransitionNotice(transition, result.data && result.data.error);
+        releaseTeamProfileSwitchUi();
+        return;
+      }
+      throw new Error((result.data && (result.data.error || result.data.message)) || ("Request failed: " + result.status));
+    }).catch(function (err) {
+      showError(err instanceof Error ? err.message : "Failed to switch team profile");
+      releaseTeamProfileSwitchUi();
+    });
+  }
+
+  function releaseTeamProfileSwitchUi() {
+    teamProfileSwitchInFlight = false;
+    pendingSwitchProfileId = "";
+    resetTeamProfileConfirmButton();
+    var statusEl = $("#team-profile-switch-status");
+    if (statusEl) statusEl.hidden = true;
+  }
+
+  function finishTeamProfileSwitch(completedProfileId) {
+    var targetId = completedProfileId || pendingSwitchProfileId || "";
+    releaseTeamProfileSwitchUi();
+    pendingSwitchTarget = null;
+    closeTeamProfileModal();
+    showTeamProfileListStep();
+    showNotice(
+      "team:switch_completed",
+      "success",
+      t("teamProfile.switchCompleted", { name: teamProfileDisplayNameById(targetId) }),
+      "",
+    );
+  }
+
+  // Called from refreshAll: if a switch this UI initiated is no longer in a
+  // transition, it either completed (profileId moved to the target - close
+  // the modal) or aborted (re-enable the button).
+  function reconcileTeamProfileSwitch() {
+    if (!pendingSwitchProfileId && !teamProfileSwitchInFlight) return;
+    if (activeTeamProfile.transition) {
+      renderTeamProfileTransitionNotice(activeTeamProfile.transition);
+      return;
+    }
+    if (activeTeamProfile.profileId === pendingSwitchProfileId) {
+      finishTeamProfileSwitch(activeTeamProfile.profileId);
+    } else {
+      releaseTeamProfileSwitchUi();
+    }
+  }
+
+  function renderTeamProfileTransitionNotice(transition, errorText) {
+    var el = $("#team-profile-transition");
+    if (!el) return;
+    var tr = transition || (activeTeamProfile && activeTeamProfile.transition) || null;
+    if (!tr) {
+      el.hidden = true;
+      el.textContent = "";
+      return;
+    }
+    el.hidden = false;
+    el.textContent = t("teamProfile.transitionPending", {
+      name: teamProfileDisplayNameById(tr.targetProfileId),
+      phase: tr.phase || "",
+    }) + (errorText ? " - " + errorText : "");
+  }
+
+  function renderTeamProfileArchives() {
+    var el = $("#team-profile-archives");
+    if (!el) return;
+    apiGet("/archived-teams").then(function (data) {
+      var archives = data && Array.isArray(data.archives) ? data.archives : [];
+      if (!archives.length) {
+        el.innerHTML = '<div class="empty-state">' + escapeHtml(t("teamProfile.archivedEmpty")) + "</div>";
+        return;
+      }
+      el.innerHTML = archives.map(function (archive) {
+        var when = archive.archivedAt ? new Date(archive.archivedAt).toLocaleString() : "";
+        return (
+          '<div class="team-profile-archive-row">' +
+          '<span class="team-profile-archive-team">' + escapeHtml(archive.teamName || archive.profileName || archive.profileId || "") + "</span>" +
+          '<span class="team-profile-archive-profile">' + escapeHtml(archive.profileName || archive.profileId || "") + "</span>" +
+          '<span class="team-profile-archive-meta">' + escapeHtml(when) + " · " + escapeHtml(t("teamProfile.archivedTasks", { n: archive.taskCount || 0 })) + "</span>" +
+          "</div>"
+        );
+      }).join("");
+    }).catch(function () {
+      el.innerHTML = '<div class="empty-state">' + escapeHtml(t("teamProfile.archivedEmpty")) + "</div>";
+    });
+  }
+
+  function bindTeamProfileModal() {
+    var toggle = $("#team-profile-toggle");
+    if (toggle && !toggle.dataset.bound) {
+      toggle.dataset.bound = "true";
+      toggle.addEventListener("click", openTeamProfileModal);
+    }
+    var modal = $("#team-profile-modal");
+    if (!modal || modal.dataset.bound === "true") return;
+    modal.dataset.bound = "true";
+
+    modal.addEventListener("click", function (event) {
+      if (event.target && event.target.hasAttribute && event.target.hasAttribute("data-team-profile-close")) {
+        closeTeamProfileModal();
+      }
+    });
+
+    var listEl = $("#team-profile-list");
+    if (listEl) {
+      listEl.addEventListener("click", function (event) {
+        var card = event.target instanceof Element ? event.target.closest("[data-profile-id]") : null;
+        if (!card) return;
+        var profileId = card.getAttribute("data-profile-id") || "";
+        var profile = teamProfileRegistry.filter(function (p) { return p.id === profileId; })[0];
+        if (!profile) return;
+        var activeId = (activeTeamProfile && activeTeamProfile.profileId) || "";
+        if (profileId === activeId) return; // current team: informational only
+        if (activeTeamProfile && activeTeamProfile.transition) {
+          // A switch is already running (section 2.3 409 matrix): surface
+          // the in-progress notice instead of a second confirmation.
+          renderTeamProfileTransitionNotice(activeTeamProfile.transition);
+          return;
+        }
+        showTeamProfileConfirmStep(profile);
+      });
+    }
+
+    var backButton = $("#team-profile-confirm-back");
+    if (backButton) {
+      backButton.addEventListener("click", function () {
+        if (teamProfileSwitchInFlight) return; // switch already submitted
+        showTeamProfileListStep();
+      });
+    }
+
+    var confirmButton = $("#team-profile-confirm-btn");
+    if (confirmButton) {
+      confirmButton.addEventListener("click", function () {
+        if (!pendingSwitchTarget || teamProfileSwitchInFlight) return;
+        submitTeamProfileSwitch(pendingSwitchTarget.id);
+      });
+    }
+  }
 
   function bindModelSettings() {
   /* Module-level IIFE helper: delegated here to keep startup order simple. */

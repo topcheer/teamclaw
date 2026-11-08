@@ -29,6 +29,9 @@
       <button id="language-toggle" class="header-mini-btn" type="button">中文</button>
       <button id="toast-settings-toggle" class="header-mini-btn" type="button" title="Toast notifications">Toasts</button>
       <button id="worker-install-toggle" class="header-mini-btn" type="button" hidden>Add worker</button>
+      <!-- Team profile indicator (Phase 5.1): shows the active profile's
+           icon + localized name; click opens #team-profile-modal. -->
+      <button id="team-profile-toggle" class="header-mini-btn team-profile-toggle" type="button" title="Team profile">Team</button>
       <span id="team-name">Team</span>
       <button id="github-corner-login" class="header-mini-btn" type="button">Login</button>
       <span id="github-corner-user" class="github-corner-user hidden" role="button" tabindex="0" title="GitHub: click to sign out">
@@ -323,6 +326,36 @@
           <button id="model-settings-save" class="btn btn-primary" type="button">Save</button>
           <button id="model-settings-close" class="btn btn-small" type="button" data-model-settings-close>Cancel</button>
         </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Team profile switcher modal (Phase 5.1): step 1 lists
+       GET /api/v1/profiles cards, step 2 confirms the archive consequences
+       before POST /api/v1/team/profile; the archived-teams section lists
+       GET /api/v1/archived-teams metadata (read-only). -->
+  <div id="team-profile-modal" class="workspace-prompt-modal" aria-hidden="true">
+    <div class="workspace-prompt-backdrop" data-team-profile-close></div>
+    <section class="workspace-prompt-panel team-profile-panel" role="dialog" aria-modal="true" aria-labelledby="team-profile-title">
+      <header class="workspace-prompt-header">
+        <div class="workspace-prompt-kicker" data-i18n="teamProfile.kicker">Team profile</div>
+        <h2 id="team-profile-title" data-i18n="teamProfile.title">Switch team profile</h2>
+      </header>
+      <div class="workspace-prompt-body">
+        <div id="team-profile-transition" class="team-profile-transition" hidden></div>
+        <div id="team-profile-list" class="team-profile-list"></div>
+        <div id="team-profile-confirm" class="team-profile-confirm" hidden>
+          <div id="team-profile-confirm-body" class="team-profile-confirm-body"></div>
+          <div class="workspace-prompt-actions">
+            <button id="team-profile-confirm-btn" class="btn btn-primary" type="button" data-i18n="teamProfile.confirmButton">Switch team</button>
+            <button id="team-profile-confirm-back" class="btn btn-small" type="button" data-i18n="teamProfile.cancel">Back</button>
+          </div>
+        </div>
+        <p id="team-profile-switch-status" class="team-profile-switch-status" hidden></p>
+        <section class="team-profile-archived">
+          <h3 data-i18n="teamProfile.archivedTitle">Archived teams</h3>
+          <div id="team-profile-archives" class="team-profile-archives"></div>
+        </section>
       </div>
     </section>
   </div>
