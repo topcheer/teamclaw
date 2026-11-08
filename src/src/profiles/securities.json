@@ -7,7 +7,8 @@
   "icon": "📈",
   "version": "0.1.0",
   "reviewedBy": [
-    "drafted-by: Agent N (implementation team), pending domain review"
+    "drafted-by: Agent N (implementation team)",
+    "AI domain review 2026-11-08: approved conditional on removing bare 「押品」 token from banking risk-reviewer capabilities (applied); securities/insurance approved as-is; glossary version-cutoff implemented as no-citation-number policy (accepted deviation). Human sign-off pending with repo owner."
   ],
   "description": "Research institute team (v1 scope: research only) drafting industry, macro and quant-methodology work papers behind an information barrier; drafts never leave the team without licensed-analyst sign-off and independence disclosures.",
   "roles": [
@@ -59,6 +60,7 @@
         "backtest-methodology",
         "financial-engineering",
         "量化研究",
+        "量化",
         "因子",
         "回测",
         "金融工程"

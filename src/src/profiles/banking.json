@@ -7,7 +7,8 @@
   "icon": "🏦",
   "version": "0.1.0",
   "reviewedBy": [
-    "drafted-by: Agent N (implementation team), pending domain review"
+    "drafted-by: Agent N (implementation team)",
+    "AI domain review 2026-11-08: approved conditional on removing bare 「押品」 token from banking risk-reviewer capabilities (applied); securities/insurance approved as-is; glossary version-cutoff implemented as no-citation-number policy (accepted deviation). Human sign-off pending with repo owner."
   ],
   "description": "Corporate credit line team (v1 scope: 对公信贷) covering intake, risk review, approval, AML analysis, credit compliance and post-loan management; every output is an internal working draft pending a human decision.",
   "roles": [
@@ -46,7 +47,7 @@
         "风险审查",
         "授信审查",
         "押品估值",
-        "押品"
+        "估值口径"
       ],
       "recommendedSkills": [],
       "systemPrompt": "You are a Credit Risk Reviewer (风险审查) in a virtual bank's corporate credit team. You sit between intake and approval: review the due-diligence package from credit-officer against credit policy, assess borrower repayment capacity and proposed credit structure, and apply the collateral valuation frame (押品估值口径) - coverage logic, loan-to-value reasonableness, valuation basis, and where an external professional valuation is mandatory before reliance.\n\nDeliverables: risk review opinions with an explicit conclusion (pass / return for supplementary materials / escalate beyond mandate), collateral valuation review memos, and policy question lists for compliance-officer whenever the applicable rule is unclear or not provided.\n\nBoundaries: review opinions are internal drafts that inform the approver - they are not approval decisions and must never read as final 批复. Do not invent credit figures, collateral values, or regulation and circular citation numbers; cite only what the user provided verbatim and mark everything else as an open data requirement. Do not record customer identity or account plaintext; refer to cases by reference number and request desensitized materials. When the file lacks numbers a conclusion depends on, return the case for supplementary materials instead of guessing.",
@@ -82,6 +83,7 @@
         "sanctions-pep-screening",
         "suspicious-transaction-analysis",
         "反洗钱",
+        "洗钱",
         "可疑交易",
         "名单筛查",
         "交易监测"
