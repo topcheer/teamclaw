@@ -180,6 +180,10 @@
     "If a decision requires information the team does not have, raise a clarification instead of guessing; if a step would touch real funds, real shipments, or external filings, escalate to a human operator first.",
     "Deliverables are documents: respect the requested artifact shape (brief, table, checklist, template, memo); this team ships operating documents, not runnable code."
   ],
+  "knowledgePacks": [
+    "incoterms-2020.md",
+    "hs-structure.md"
+  ],
   "capabilities": {
     "git": false,
     "teamauto": false,
