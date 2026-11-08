@@ -40,6 +40,10 @@
       "label": "Port",
       "help": "HTTP server port for this instance"
     },
+    "listenHost": {
+      "label": "Listen Host",
+      "help": "HTTP bind address override; empty defaults to 127.0.0.1 on hosts and 0.0.0.0 in containers. Use 0.0.0.0 when a remote controller must reach this worker"
+    },
     "role": {
       "label": "Role",
       "help": "Worker role (worker mode only)"
@@ -215,6 +219,11 @@
         "type": "number",
         "default": 9527,
         "description": "HTTP server port for this instance"
+      },
+      "listenHost": {
+        "type": "string",
+        "default": "",
+        "description": "HTTP listen host override (empty = 127.0.0.1 on hosts, 0.0.0.0 in containers); set 0.0.0.0 for external workers reachable by a remote controller"
       },
       "role": {
         "type": "string",
