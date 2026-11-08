@@ -1808,6 +1808,39 @@ import { createT as i18nCreateT } from "./i18n.js";
     const log = $("#bootstrap-log");
     if (log) log.parentElement && (log.parentElement.hidden = false);
     void busy;
+    renderOpenClawDetectPill();
+  }
+
+  // #197: #141's degraded-detected pill was lost in the #182 v3.1 wizard
+  // rebase. Restore it on the wizard's step-1 card: when the openclaw binary
+  // resolves but the --help probe kept failing under load, detection degrades
+  // to "detected (degraded)" (probe warning as tooltip) instead of reading
+  // as a healthy install.
+  function renderOpenClawDetectPill() {
+    const stepOne = document.querySelector('[data-wizard-step="1"]');
+    if (!stepOne) return;
+    const info = state.localSetupInfo;
+    const hasOpenClaw = Boolean(info && info.hasOpenClaw);
+    const probeWarning = info && info.openClawProbeWarning;
+    let pill = document.getElementById("local-pill");
+    if (!hasOpenClaw) {
+      if (pill) pill.hidden = true;
+      return;
+    }
+    if (!pill) {
+      pill = document.createElement("div");
+      pill.id = "local-pill";
+      pill.className = "pill";
+      stepOne.insertBefore(pill, stepOne.firstChild);
+    }
+    pill.hidden = false;
+    pill.className = `pill ${probeWarning ? "pill-connecting" : "pill-connected"}`;
+    pill.title = probeWarning ? String(probeWarning) : "";
+    // En copy stays literal in source - pinned by tests/test-openclaw-workspace.mjs
+    // (#141 contract); zh copy goes through i18n.
+    pill.textContent = probeWarning
+      ? (state.language === "zh" ? t("bootstrap.openclawDetectedDegraded") : "OpenClaw detected (degraded)")
+      : (state.language === "zh" ? t("bootstrap.openclawDetected") : "OpenClaw detected");
   }
 
   function buildExternalWorkerCommand(info, roleId, discoveryMode) {
