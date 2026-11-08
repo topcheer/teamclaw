@@ -88,6 +88,18 @@ export type TeamAutoWriteBack = {
   error: string | null;
   /** Joint full-review cycle id: same-cycle sections share one umbrella issue. */
   cycleKey?: string;
+  /**
+   * Issue #24: failed delivery attempts so far. Drives the retry backoff and
+   * the terminal give-up marker instead of a sticky error that nothing ever
+   * retried or surfaced.
+   */
+  attempts?: number;
+  /** Epoch ms of the last failed delivery attempt. */
+  lastErrorAt?: number;
+  /** Epoch ms when the next retry becomes due (exponential backoff gate). */
+  nextAttemptAt?: number;
+  /** Terminal marker: set when retry attempts are exhausted; never retried again. */
+  failedAt?: number | null;
 };
 
 export type TeamAutoActivityKind = "bind" | "provision" | "sweep" | "task" | "writeback";
