@@ -25,6 +25,19 @@ await runRegressionSmoke();
 
 async function runRegressionSmoke() {
   const httpServerSource = await fs.readFile(httpServerPath, "utf8");
+  // PR-C of issue #204: the auto-assign loop, the task-create endpoint and
+  // the controller-managed task creation moved out of http-server.ts - pin
+  // the new homes (task-assignment.ts / task-routes.ts /
+  // controller-planning.ts).
+  const taskAssignmentSource = await fs.readFile(
+    path.join(projectRoot, "src", "src", "controller", "task-assignment.ts"), "utf8",
+  );
+  const taskRoutesSource = await fs.readFile(
+    path.join(projectRoot, "src", "src", "controller", "task-routes.ts"), "utf8",
+  );
+  const controllerPlanningSource = await fs.readFile(
+    path.join(projectRoot, "src", "src", "controller", "controller-planning.ts"), "utf8",
+  );
 
   // --- ba4173d: prevent task-routing spin loop in single-process mode ---
   //
@@ -36,13 +49,13 @@ async function runRegressionSmoke() {
   // to a scheduled reconcile.
 
   assert.doesNotMatch(
-    httpServerSource,
+    taskAssignmentSource,
     /provisioned > 0[\s\S]*?continue;[\s\S]*?\/\/ re-check assignments/,
     "autoAssignPendingTasks should not tight-loop on provisioned workers (ba4173d)",
   );
 
   assert.match(
-    httpServerSource,
+    taskAssignmentSource,
     /scheduleProvisioningReconcile/,
     "autoAssignPendingTasks should delegate provisioning retries to scheduleProvisioningReconcile instead of looping (ba4173d)",
   );
@@ -83,15 +96,15 @@ async function runRegressionSmoke() {
   // use the parenthesised form.
 
   assert.match(
-    httpServerSource,
+    controllerPlanningSource,
     /inheritedProject\?\.projectId \?\? \(explicitProjectId \|\| undefined\)/,
     "controller task creation should parenthesise the project-ID fallback to avoid precedence bug (97a8ff9)",
   );
 
   assert.match(
-    httpServerSource,
+    taskRoutesSource,
     /inheritedProject\?\.projectId \?\? \(explicitProjectName \|\| undefined\)/,
-    "controller intake task creation should parenthesise the project-name fallback to avoid precedence bug (97a8ff9)",
+    "controller task creation endpoint should parenthesise the project-name fallback to avoid precedence bug (97a8ff9)",
   );
 
   console.log("Regression smoke passed.");

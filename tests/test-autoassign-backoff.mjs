@@ -40,11 +40,13 @@ import { fileURLToPath } from "node:url";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, "..");
 
-const httpServerMod = await import(
-  path.join(projectRoot, "src", "dist", "src", "controller", "http-server.js")
+// PR-C of issue #204: the gated auto-assign loop moved from http-server.ts
+// into controller/task-assignment.ts - import the new home (dist build).
+const taskAssignmentMod = await import(
+  path.join(projectRoot, "src", "dist", "src", "controller", "task-assignment.js")
 ).catch(() => null);
-assert.ok(httpServerMod, "http-server module must be built (run npm --prefix src run build first)");
-assert.equal(typeof httpServerMod.autoAssignPendingTasks, "function", "autoAssignPendingTasks must stay exported (issue #191 test)");
+assert.ok(taskAssignmentMod, "task-assignment module must be built (run npm --prefix src run build first)");
+assert.equal(typeof taskAssignmentMod.autoAssignPendingTasks, "function", "autoAssignPendingTasks must stay exported (issue #191 test)");
 
 const realFetch = globalThis.fetch;
 let assignAttempts = 0;
@@ -157,7 +159,7 @@ try {
     assignAttempts = 0;
     assignSucceeds = false;
 
-    const assigned = await httpServerMod.autoAssignPendingTasks(deps);
+    const assigned = await taskAssignmentMod.autoAssignPendingTasks(deps);
     assert.equal(assigned.length, 0, "no task can be assigned while every worker is unreachable");
 
     await settle();
@@ -189,7 +191,7 @@ try {
     assignAttempts = 0;
     assignSucceeds = true;
 
-    const assigned = await httpServerMod.autoAssignPendingTasks(deps);
+    const assigned = await taskAssignmentMod.autoAssignPendingTasks(deps);
     await settle();
     assert.equal(assigned.length, 1, "reachable worker must receive the task");
     assert.equal(assigned[0].status, "assigned", "task must be assigned on the normal path");
@@ -204,7 +206,7 @@ try {
     assignAttempts = 0;
     assignSucceeds = false;
 
-    await httpServerMod.autoAssignPendingTasks(deps);
+    await taskAssignmentMod.autoAssignPendingTasks(deps);
     await settle();
     assert.equal(assignAttempts, 1, "first round attempts the pair once");
     assert.equal(deps.getTeamState().tasks.t1.status, "pending", "task reverts to pending");
@@ -213,7 +215,7 @@ try {
     // re-attempt the pair - the shared attemptedPairs set must not leak
     // across settled rounds.
     assignSucceeds = true;
-    const assigned = await httpServerMod.autoAssignPendingTasks(deps);
+    const assigned = await taskAssignmentMod.autoAssignPendingTasks(deps);
     await settle();
     assert.equal(assigned.length, 1, "recovered worker must receive the task on the next round");
     assert.equal(assignAttempts, 2, "recovery round re-attempts the pair exactly once more");
@@ -244,10 +246,10 @@ try {
     assignSucceeds = true;
     assignOrder = [];
 
-    const round1 = httpServerMod.autoAssignPendingTasks(deps);
+    const round1 = taskAssignmentMod.autoAssignPendingTasks(deps);
     // While round 1 hangs: a task lands, then the register-shaped trigger.
     state.tasks.t1 = makeTask("t1");
-    const nested = await httpServerMod.autoAssignPendingTasks(deps, "w2");
+    const nested = await taskAssignmentMod.autoAssignPendingTasks(deps, "w2");
     assert.deepEqual(nested, [], "nested trigger must defer (queue), never run a parallel round");
     releaseRouter();
     await round1;
@@ -277,8 +279,8 @@ try {
     assignSucceeds = false;
 
     const [first, second] = await Promise.all([
-      httpServerMod.autoAssignPendingTasks(deps),
-      httpServerMod.autoAssignPendingTasks(deps),
+      taskAssignmentMod.autoAssignPendingTasks(deps),
+      taskAssignmentMod.autoAssignPendingTasks(deps),
     ]);
     assert.deepEqual(second, [], "the losing concurrent trigger must defer, not start a second round");
     assert.equal(first.length, 0, "unreachable worker assigns nothing");

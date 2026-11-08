@@ -14,9 +14,17 @@ const controllerToolsPath = path.join(projectRoot, "src", "src", "controller", "
 const controllerCapacityPath = path.join(projectRoot, "src", "src", "controller", "controller-capacity.ts");
 const orchestrationManifestPath = path.join(projectRoot, "src", "src", "controller", "orchestration-manifest.ts");
 const workerProvisioningPath = path.join(projectRoot, "src", "src", "controller", "worker-provisioning.ts");
+// PR-C of issue #204: the task/team lifecycle domain (cut line b) moved out
+// of http-server.ts into dedicated modules - pin the new homes.
+const taskExecutionPath = path.join(projectRoot, "src", "src", "controller", "task-execution.ts");
+const taskAssignmentPath = path.join(projectRoot, "src", "src", "controller", "task-assignment.ts");
+const taskRoutesPath = path.join(projectRoot, "src", "src", "controller", "task-routes.ts");
+const taskResultsPath = path.join(projectRoot, "src", "src", "controller", "task-results.ts");
+const controllerPlanningPath = path.join(projectRoot, "src", "src", "controller", "controller-planning.ts");
+const controllerIntakePath = path.join(projectRoot, "src", "src", "controller", "controller-intake.ts");
 
 async function runControllerIntakePromptSmoke() {
-  const [httpServerSource, promptInjectorSource, promptPolicySource, controllerToolsSource, controllerCapacitySource, orchestrationManifestSource, workerProvisioningSource] = await Promise.all([
+  const [httpServerSource, promptInjectorSource, promptPolicySource, controllerToolsSource, controllerCapacitySource, orchestrationManifestSource, workerProvisioningSource, taskExecutionSource, taskAssignmentSource, taskRoutesSource, taskResultsSource, controllerPlanningSource, controllerIntakeSource] = await Promise.all([
     fs.readFile(httpServerPath, "utf8"),
     fs.readFile(promptInjectorPath, "utf8"),
     fs.readFile(promptPolicyPath, "utf8"),
@@ -24,15 +32,21 @@ async function runControllerIntakePromptSmoke() {
     fs.readFile(controllerCapacityPath, "utf8"),
     fs.readFile(orchestrationManifestPath, "utf8"),
     fs.readFile(workerProvisioningPath, "utf8"),
+    fs.readFile(taskExecutionPath, "utf8"),
+    fs.readFile(taskAssignmentPath, "utf8"),
+    fs.readFile(taskRoutesPath, "utf8"),
+    fs.readFile(taskResultsPath, "utf8"),
+    fs.readFile(controllerPlanningPath, "utf8"),
+    fs.readFile(controllerIntakePath, "utf8"),
   ]);
 
   assert.match(
-    httpServerSource,
+    controllerIntakeSource,
     /export function buildControllerIntakeSystemPrompt/,
-    "controller HTTP server should expose a dedicated intake prompt builder",
+    "controller intake module should expose a dedicated intake prompt builder",
   );
   assert.match(
-    httpServerSource,
+    controllerIntakeSource,
     /extraSystemPrompt:\s*buildControllerIntakeSystemPrompt\(deps\)/,
     "controller intake should pass the TeamClaw controller system prompt into subagent.run",
   );
@@ -159,12 +173,12 @@ async function runControllerIntakePromptSmoke() {
     "controller readiness guard should no longer reject every 完成后 phrase, because internal completion actions like 发布事件 are execution-ready work",
   );
   assert.match(
-    httpServerSource,
+    taskRoutesSource,
     /createdBy === "controller" && shouldBlockControllerWithoutWorkers\(deps\.config,\s*getTeamState\(\)\)/,
     "controller task endpoint should enforce the same no-worker guard for controller-created tasks",
   );
   assert.match(
-    httpServerSource,
+    taskRoutesSource,
     /const controllerSessionKey = createdBy === "controller"[\s\S]*normalizeControllerIntakeSessionKey\(body\.controllerSessionKey\)/,
     "controller task endpoint should persist the normalized controller session key for controller-owned tasks",
   );
@@ -174,52 +188,52 @@ async function runControllerIntakePromptSmoke() {
     "controller HTTP server should expose a controller manifest endpoint",
   );
   assert.match(
-    httpServerSource,
-    /buildControllerManifestReply/,
-    "controller HTTP server should synthesize final replies from the structured manifest",
+    controllerPlanningSource,
+    /function buildControllerManifestReply\(/,
+    "controller planning should synthesize final replies from the structured manifest",
   );
   assert.match(
-    httpServerSource,
+    taskExecutionSource,
     /CONTROLLER_INTAKE_AGENT_SESSION_RE/,
-    "controller HTTP server should normalize OpenClaw runtime session keys back to the TeamClaw controller session key format",
+    "controller task-execution should normalize OpenClaw runtime session keys back to the TeamClaw controller session key format",
   );
   assert.match(
-    httpServerSource,
+    controllerIntakeSource,
     /const controllerIntakeQueue = new Map<string, Promise<void>>\(\);/,
-    "controller HTTP server should keep a per-session intake queue so overlapping follow-up runs do not execute concurrently on the same controller session",
+    "controller intake should keep a per-session intake queue so overlapping follow-up runs do not execute concurrently on the same controller session",
   );
   assert.match(
-    httpServerSource,
+    controllerIntakeSource,
     /return withSerializedControllerIntake\(normalizedSessionKey,\s*async\s*\(\)\s*=>\s*\{/,
     "controller intake should serialize same-session follow-up runs before starting a new subagent execution",
   );
   assert.match(
-    httpServerSource,
+    controllerIntakeSource,
     /phase:\s*"model_rate_limit_waiting"/,
     "controller intake should emit a structured waiting event when upstream model rate limits stall orchestration",
   );
   assert.match(
-    httpServerSource,
+    controllerIntakeSource,
     /phase:\s*"model_rate_limit_probe"/,
     "controller intake should emit a probe event before re-checking a controller workflow that has been rate-limited for several minutes",
   );
   assert.match(
-    httpServerSource,
+    controllerIntakeSource,
     /phase:\s*"model_rate_limit_still_waiting"/,
     "controller intake should suppress duplicate 429 chatter by emitting a still-waiting event instead of repeating the first waiting message forever",
   );
   assert.match(
-    httpServerSource,
+    controllerIntakeSource,
     /buildControllerRateLimitProbeMessage\(/,
     "controller intake should ask the same workflow session whether a rate-limited orchestration step has already completed",
   );
   assert.match(
-    httpServerSource,
+    controllerIntakeSource,
     /CONTROLLER_RUN_WAIT_SLICE_MS/,
     "controller intake should poll long-running runs in slices so rate-limit errors can be observed without failing the whole workflow immediately",
   );
   assert.match(
-    httpServerSource,
+    controllerIntakeSource,
     /nextProbeAt:\s*Date\.now\(\) \+ deps\.config\.taskTimeoutMs|nextProbeAt = Date\.now\(\) \+ deps\.config\.taskTimeoutMs|nextProbeAt = now \+ deps\.config\.taskTimeoutMs/,
     "controller intake should still honor the configured TeamClaw task timeout even when it polls the run in shorter slices",
   );
@@ -229,27 +243,27 @@ async function runControllerIntakePromptSmoke() {
     "controller manifest recording should prefer the currently active run for the session",
   );
   assert.match(
-    httpServerSource,
+    controllerPlanningSource,
     /manifest_backfilled/,
     "controller HTTP server should backfill a minimal manifest when the model misses the required manifest tool call",
   );
   assert.match(
-    httpServerSource,
+    controllerPlanningSource,
     /function reconcileControllerManifestTaskBindings\(/,
     "controller intake should reconcile manifest execution-ready tasks back onto real TeamClaw tasks so reused tasks stay linked to the workflow",
   );
   assert.match(
-    httpServerSource,
+    controllerIntakeSource,
     /const reconciledTasks = reconcileControllerManifestTaskBindings\(sessionKey,\s*createdTaskIds,\s*recordedManifest,\s*controllerRun\.id,\s*deps\)/,
     "controller intake should bind manifest-declared tasks to the current session before finalizing the run",
   );
   assert.match(
-    httpServerSource,
+    controllerPlanningSource,
     /function resolveControllerWorkflowSessionKey\(/,
     "controller result handling should be able to recover the workflow session from controller run metadata when a task is missing its direct session link",
   );
   assert.match(
-    httpServerSource,
+    taskResultsSource,
     /if \(!error && updatedTask\.createdBy === "controller"\) \{/,
     "controller result handling should attempt workflow continuation for controller tasks even when the direct session link must be recovered lazily",
   );
@@ -384,47 +398,47 @@ async function runControllerIntakePromptSmoke() {
     "docker provisioning should not pin the Docker API to v1.41 because newer daemons may reject that legacy client version",
   );
   assert.match(
-    httpServerSource,
+    taskRoutesSource,
     /if \(previousWorker\.status !== "offline"\) \{\s*previousWorker\.status = "idle";\s*\}/,
     "controller handoff should not revive offline workers back to idle when re-routing a task",
   );
   assert.match(
-    httpServerSource,
+    taskResultsSource,
     /task .* failed; retiring managed worker before retry|onWorkerRemoved\(\s*updatedTask\.assignedWorkerId,\s*`task \$\{taskId\} failed; retiring managed worker before retry`/,
     "controller should retire a managed worker after task failure so retries do not reuse a dirty ephemeral workspace",
   );
   assert.match(
-    httpServerSource,
+    taskResultsSource,
     /if \(assignedWorker\.status !== "offline"\) \{\s*assignedWorker\.status = "idle";\s*\}/,
     "controller lifecycle transitions should avoid resurrecting offline workers during result or clarification cleanup",
   );
   assert.match(
-    httpServerSource,
+    taskRoutesSource,
     /const avoidPreviousManagedWorker = Boolean\(/,
     "controller handoff should detect when the previous assignee was a managed worker so retries can avoid immediately reusing it",
   );
   assert.match(
-    httpServerSource,
+    taskRoutesSource,
     /scheduleProvisioningReconcile\(deps,\s*`handoff:\$\{taskId\}`\)/,
     "controller handoff should trigger provisioning reconcile when a fresh worker is needed for the retried task",
   );
   assert.match(
-    httpServerSource,
+    taskExecutionSource,
     /executionSessionKey:\s*buildTeamClawAgentSessionKey\(`teamclaw-task-\$\{taskId\}-\$\{attemptId\}`\)/,
     "controller dispatch should generate a fresh execution session key for each task assignment attempt",
   );
   assert.match(
-    httpServerSource,
+    taskExecutionSource,
     /executionIdempotencyKey: `teamclaw-\$\{taskId\}-\$\{workerId\}-\$\{attemptId\}`/,
     "controller dispatch should generate a fresh execution idempotency key for each task assignment attempt",
   );
   assert.match(
-    httpServerSource,
+    taskExecutionSource,
     /function resetTaskForFreshAttempt\(task: TaskInfo\)/,
-    "controller HTTP server should reset terminal task state before a fresh assignment attempt",
+    "controller task-execution should reset terminal task state before a fresh assignment attempt",
   );
   assert.match(
-    httpServerSource,
+    taskAssignmentSource,
     /resetTaskForFreshAttempt\(task\);/,
     "controller retry paths should clear stale execution state before reassigning or resuming a task",
   );

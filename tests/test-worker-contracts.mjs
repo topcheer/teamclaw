@@ -13,6 +13,12 @@ const skillInstallerPath = path.join(projectRoot, "src", "src", "worker", "skill
 const workerServicePath = path.join(projectRoot, "src", "src", "worker", "worker-service.ts");
 const taskExecutorPath = path.join(projectRoot, "src", "src", "task-executor.ts");
 const controllerHttpServerPath = path.join(projectRoot, "src", "src", "controller", "http-server.ts");
+// PR-C of issue #204: the task/result/message handler bodies moved out of
+// http-server.ts - pin their new homes (task-results.ts, task-routes.ts,
+// message-routes.ts).
+const taskResultsPath = path.join(projectRoot, "src", "src", "controller", "task-results.ts");
+const taskRoutesPath = path.join(projectRoot, "src", "src", "controller", "task-routes.ts");
+const messageRoutesPath = path.join(projectRoot, "src", "src", "controller", "message-routes.ts");
 const controllerToolsPath = path.join(projectRoot, "src", "src", "controller", "controller-tools.ts");
 const gitCollaborationPath = path.join(projectRoot, "src", "src", "git-collaboration.ts");
 const interactionContractsPath = path.join(projectRoot, "src", "src", "interaction-contracts.ts");
@@ -27,6 +33,9 @@ async function runWorkerContractSmoke() {
     workerServiceSource,
     taskExecutorSource,
     controllerHttpServerSource,
+    taskResultsSource,
+    taskRoutesSource,
+    messageRoutesSource,
     controllerToolsSource,
     gitCollaborationSource,
     interactionContractsSource,
@@ -39,6 +48,9 @@ async function runWorkerContractSmoke() {
     fs.readFile(workerServicePath, "utf8"),
     fs.readFile(taskExecutorPath, "utf8"),
     fs.readFile(controllerHttpServerPath, "utf8"),
+    fs.readFile(taskResultsPath, "utf8"),
+    fs.readFile(taskRoutesPath, "utf8"),
+    fs.readFile(messageRoutesPath, "utf8"),
     fs.readFile(controllerToolsPath, "utf8"),
     fs.readFile(gitCollaborationPath, "utf8"),
     fs.readFile(interactionContractsPath, "utf8"),
@@ -172,29 +184,29 @@ async function runWorkerContractSmoke() {
     "controller HTTP server should expose a task result contract endpoint",
   );
   assert.match(
-    controllerHttpServerSource,
+    taskResultsSource,
     /ensureTaskResultContract/,
-    "controller HTTP server should backfill a result contract when the worker misses the explicit contract tool",
+    "controller task results should backfill a result contract when the worker misses the explicit contract tool",
   );
   assert.match(
-    controllerHttpServerSource,
+    taskResultsSource,
     /task\.resultContract = contract/,
-    "controller HTTP server should persist structured task result contracts on tasks",
+    "controller task results should persist structured task result contracts on tasks",
   );
   assert.match(
-    controllerHttpServerSource,
+    taskRoutesSource,
     /task\.progressContract = progressContract/,
-    "controller HTTP server should persist structured progress contracts on tasks",
+    "controller task routes should persist structured progress contracts on tasks",
   );
   assert.match(
-    controllerHttpServerSource,
+    taskRoutesSource,
     /lastHandoff = handoffContract/,
-    "controller HTTP server should persist structured handoff contracts on tasks",
+    "controller task routes should persist structured handoff contracts on tasks",
   );
   assert.match(
-    controllerHttpServerSource,
+    messageRoutesSource,
     /contract:\s*ensureTeamMessageContract/,
-    "controller HTTP server should normalize message contracts for routed team messages",
+    "controller message routes should normalize message contracts for routed team messages",
   );
   assert.match(
     interactionContractsSource,
