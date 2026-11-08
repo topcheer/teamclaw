@@ -13,6 +13,7 @@ on:
     branches: [main]
     paths:
       - "src/src/profiles/**"
+      - "src/src/profiles/knowledge/**"
       - "src/src/profile-loader.ts"
       - "src/src/roles.ts"
       - "src/src/types.ts"
@@ -34,10 +35,12 @@ on:
       - "tests/test-profile-packs.mjs"
       - "tests/test-role-inference-cjk.mjs"
       - "tests/test-desktop-wizard.mjs"
+      - "tests/test-knowledge-packs.mjs"
       - ".github/workflows/teamclaw-profile-smoke.yml"
   pull_request:
     paths:
       - "src/src/profiles/**"
+      - "src/src/profiles/knowledge/**"
       - "src/src/profile-loader.ts"
       - "src/src/roles.ts"
       - "src/src/types.ts"
@@ -59,6 +62,7 @@ on:
       - "tests/test-profile-packs.mjs"
       - "tests/test-role-inference-cjk.mjs"
       - "tests/test-desktop-wizard.mjs"
+      - "tests/test-knowledge-packs.mjs"
       - ".github/workflows/teamclaw-profile-smoke.yml"
   workflow_dispatch:
 
@@ -86,3 +90,5 @@ jobs:
         run: node tests/test-role-inference-cjk.mjs
       - name: Desktop wizard pack snapshot
         run: node tests/test-desktop-wizard.mjs
+      - name: Knowledge packs smoke (Phase 4)
+        run: node tests/test-knowledge-packs.mjs

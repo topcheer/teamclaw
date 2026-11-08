@@ -87,6 +87,21 @@ for (const [name, text] of [["incoterms-2020.md", incotermsText], ["hs-structure
     /\d+(\.\d+)?\s*%/,
     `knowledge/${name} must not carry percentage figures (volatile numbers stay out of packs by design)`,
   );
+  assert.doesNotMatch(
+    text,
+    /\d+\s*(?:per cent|percent)/i,
+    `knowledge/${name} must not carry spelled-out percentage figures (the % guard's blind spot)`,
+  );
+  // Currency-prefixed figures are volatile numbers too. vat-principles.md is
+  // exempted from the blanket ban: its EUR figures are exactly the two
+  // as-of examples locked paragraph-by-paragraph below.
+  if (name !== "vat-principles.md") {
+    assert.doesNotMatch(
+      text,
+      /\b(?:USD|CNY|RMB|EUR|GBP|£|¥|\$)\s?\d/i,
+      `knowledge/${name} must not carry currency-amount figures (volatile numbers stay out of packs by design)`,
+    );
+  }
   // Dist sync: the build copies src/profiles into dist/src/profiles
   // recursively; the loader reads the dist copy, so stale dist = fatal load.
   const distCopy = fs.readFileSync(path.join(DIST_KNOWLEDGE_DIR, name), "utf8");
@@ -102,7 +117,15 @@ for (const term of ["EXW", "FCA", "CPT", "CIP", "DAP", "DPU", "DDP", "FAS", "FOB
 assert.match(hsText, /ZERO rate figures/i, "hs-structure.md must state the no-rebate-figures rule explicitly");
 assert.match(hsText, /ESSENTIAL CHARACTER/i, "hs-structure.md must carry the GRI 3 essential-character logic");
 
-// vat pack: thresholds only as as-of examples, flagged as expirable.
+// vat pack: thresholds only as as-of examples, flagged as expirable. The only
+// allowed currency figure family is EUR (paragraph-locked below); every other
+// currency prefix is banned here like in the other packs.
+assert.doesNotMatch(
+  vatText,
+  /\b(?:USD|CNY|RMB|GBP|£|¥|\$)\s?\d/i,
+  "vat-principles.md must not carry non-EUR currency figures (the EUR examples are the paragraph-locked exception)",
+);
+
 assert.match(vatText, /One Stop Shop/, "vat-principles.md must explain OSS");
 assert.match(vatText, /Import One Stop Shop/, "vat-principles.md must explain IOSS");
 assert.match(vatText, /deemed supplier/i, "vat-principles.md must explain the EU deemed-supplier concept");

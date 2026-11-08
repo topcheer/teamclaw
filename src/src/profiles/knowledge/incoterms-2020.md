@@ -128,8 +128,8 @@
 
 - Delivery point: goods placed on board the vessel nominated by the buyer
   at the named port of shipment.
-- Risk transfer: when the goods are on board (the 2020 rules dropped the
-  earlier "ship's rail" wording).
+- Risk transfer: when the goods are on board (the 2010 rules dropped the
+  earlier "ship's rail" wording; 2020 keeps the on-board standard).
 - Cost split: seller bears costs through loading on board plus export
   clearance; main carriage onward is the buyer's.
 - Customs responsibility: export - seller; import - buyer.
@@ -170,7 +170,9 @@
 - FCA gained the optional on-board bill-of-lading arrangement described
   above.
 - Security-related requirements were allocated explicitly between seller
-  (A1-A10) and buyer (B1-B10) obligations and costs.
+  (A1-A9) and buyer (B1-B9) obligations, with the 2020 restructure collapsing
+  the 2010 ten-article format to nine articles and consolidating costs under
+  A9/B9.
 - Arrangements where a party uses its own transport are recognized in FCA
   and the D-terms.
 
