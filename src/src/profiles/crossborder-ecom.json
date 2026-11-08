@@ -5,10 +5,11 @@
   "nameZh": "跨境电商团队",
   "industry": "e-commerce",
   "icon": "🛒",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "reviewedBy": [
     "drafted-by: Agent M (implementation team)",
-    "AI domain review 2026-11-08: trading-co approved as-is; crossborder-ecom approved after Temu full/semi-managed mode fix + fund-repatriation compliance line (2 mandatory items applied). Human sign-off pending with repo owner."
+    "AI domain review 2026-11-08: trading-co approved as-is; crossborder-ecom approved after Temu full/semi-managed mode fix + fund-repatriation compliance line (2 mandatory items applied). Human sign-off recorded 2026-11-08.",
+    "Human sign-off: zhanju (repo owner), 2026-11-08 - approved via the TeamProfile implementation session after AI domain review conditions were applied."
   ],
   "description": "Cross-border e-commerce operating team (Amazon, TikTok Shop, Temu, Shopify): sourcing, listing, traffic growth, finance and remittance, customer service, logistics, compliance, store operations, and analytics.",
   "params": {

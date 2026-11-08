@@ -161,8 +161,8 @@ for (const file of ["banking.json", "securities.json", "insurance.json", "softwa
 
 // The knowledge pack wiring must not touch the desktop-wizard six-card
 // metadata (name/version/roles) - the wizard snapshot locks them field-wise.
-assert.equal(tradingCo.version, "1.0.0", "trading-co version must stay 1.0.0 (wizard card pins it)");
-assert.equal(crossborderEcom.version, "1.0.0", "crossborder-ecom version must stay 1.0.0 (wizard card pins it)");
+assert.equal(tradingCo.version, "1.0.1", "trading-co version tracks the pack (bumped at human sign-off; wizard card synced)");
+assert.equal(crossborderEcom.version, "1.0.1", "crossborder-ecom version tracks the pack (bumped at human sign-off; wizard card synced)");
 assert.equal(tradingCo.roles.length, 7, "trading-co role count unchanged");
 assert.equal(crossborderEcom.roles.length, 9, "crossborder-ecom role count unchanged");
 

@@ -943,9 +943,9 @@ import { createT as i18nCreateT } from "./i18n.js";
       "icon": "🛒",
       "industry": "e-commerce",
       "description": "Cross-border e-commerce operating team (Amazon, TikTok Shop, Temu, Shopify): sourcing, listing, traffic growth, finance and remittance, customer service, logistics, compliance, store operations, and analytics.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "roleCount": 9,
-      "pendingSignoff": true
+      "pendingSignoff": false
     },
     {
       "id": "insurance",
@@ -987,9 +987,9 @@ import { createT as i18nCreateT } from "./i18n.js";
       "icon": "🚢",
       "industry": "foreign-trade",
       "description": "Foreign-trade company team (export operations): market development, order merchandising, procurement and QC, documentation, supply-chain planning, payment risk, and trade analytics.",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "roleCount": 7,
-      "pendingSignoff": true
+      "pendingSignoff": false
     }
   ];
   const DEFAULT_TEAM_PROFILE_ID = "software-rd";
