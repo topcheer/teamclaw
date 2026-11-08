@@ -17,6 +17,23 @@
     })();
   </script>
   <link rel="stylesheet" href="./style.css">
+  <style>
+    /* Phase 5.2 wizard team-type cards (vertical-team-profiles-design.md 5.2).
+       Kept inline: these wizard-local classes have no style.css counterpart
+       and the card grid ships with the same file that renders it. */
+    .bootstrap-profile-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 4px 0 10px; }
+    .bootstrap-profile-card { display: flex; gap: 8px; align-items: flex-start; padding: 10px; border: 1px solid var(--border, #2d2b27); border-radius: 8px; cursor: pointer; }
+    .bootstrap-profile-card:has(input:checked) { border-color: var(--ok-text, #6cbe80); background: rgba(108, 190, 128, 0.08); }
+    .bootstrap-profile-card > input { margin-top: 3px; flex: none; }
+    .bootstrap-profile-card .profile-main { min-width: 0; }
+    .bootstrap-profile-card .profile-name { display: block; font-weight: 600; }
+    .bootstrap-profile-card .profile-name-alt { font-weight: 400; color: var(--muted, #a8a49a); }
+    .bootstrap-profile-card .profile-desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--muted, #a8a49a); font-size: 12px; line-height: 1.45; margin-top: 2px; }
+    .bootstrap-profile-card .profile-meta { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+    .profile-chip { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border, #2d2b27); color: var(--muted, #a8a49a); white-space: nowrap; }
+    .profile-chip.pending { color: var(--warn, #d9a664); border-color: var(--warn, #d9a664); }
+    @media (max-width: 640px) { .bootstrap-profile-grid { grid-template-columns: 1fr; } }
+  </style>
 </head>
 <body>
   <header class="titlebar" aria-label="Window title bar">
@@ -361,13 +378,26 @@
         <p id="bootstrap-subtitle" class="bootstrap-subtitle" data-i18n="bootstrap.wizardSubtitle">Choose how you want to run TeamClaw. The private local instance is recommended - it never touches your existing OpenClaw.</p>
       </div>
       <div id="wizard-steps" class="wizard-steps">
-        <span data-step-ind="1" class="step-ind active" data-i18n="wizard.stepMode">1 · 方式</span>
-        <span data-step-ind="2" class="step-ind" data-i18n="wizard.stepModel">2 · 模型</span>
-        <span data-step-ind="3" class="step-ind" data-i18n="wizard.stepLaunch">3 · 启动</span>
+        <span data-step-ind="1" class="step-ind active" data-i18n="wizard.stepTeam">1 · 团队</span>
+        <span data-step-ind="2" class="step-ind" data-i18n="wizard.stepMode">2 · 方式</span>
+        <span data-step-ind="3" class="step-ind" data-i18n="wizard.stepModel">3 · 模型</span>
+        <span data-step-ind="4" class="step-ind" data-i18n="wizard.stepLaunch">4 · 启动</span>
       </div>
       <div class="bootstrap-grid" id="wizard-body">
-        <!-- Step 1: how to run -->
+        <!-- Step 1: team type (Phase 5.2 - six built-in packs; the choice is
+             written into the instance config and only bootstraps the FIRST
+             initialization, design 2.3). Cards are rendered by app.js from
+             the WIZARD_TEAM_PROFILES snapshot. -->
         <section class="bootstrap-card" data-wizard-step="1">
+          <div class="bootstrap-label" data-i18n="wizard.teamTypeLabel">团队类型</div>
+          <div id="bootstrap-profile-grid" class="bootstrap-profile-grid" role="radiogroup"></div>
+          <div class="bootstrap-note" data-i18n="wizard.teamTypeNote">选择仅在实例首次初始化时生效；之后可在团队切换器中切换。</div>
+          <div class="bootstrap-actions">
+            <button id="wizard-next-team" class="btn btn-primary" type="button" data-i18n="wizard.next">下一步</button>
+          </div>
+        </section>
+        <!-- Step 2: how to run -->
+        <section class="bootstrap-card" data-wizard-step="2">
           <div class="bootstrap-label" data-i18n="wizard.runMode">运行方式</div>
           <label class="bootstrap-mode">
             <input type="radio" name="bootstrap-mode" data-bootstrap-mode="controller-manual" checked>
@@ -389,6 +419,7 @@
             <input id="bootstrap-controller-url" class="compact-input" type="text" placeholder="http://127.0.0.1:9527">
             <button class="btn" type="button" data-bootstrap-connect="true">连接这个 controller</button>
           </div>
+          <div id="bootstrap-profile-follow-note" class="bootstrap-note" hidden data-i18n="wizard.followControllerNote">团队类型由所连接的 controller 决定（跟随 controller），此处无需选择。</div>
           <details class="wizard-advanced">
             <summary data-i18n="wizard.advanced">高级选项</summary>
             <div class="bootstrap-label" style="margin-top:8px" data-i18n="wizard.sourceLabel">安装源</div>
@@ -408,8 +439,8 @@
             <button id="wizard-next-1" class="btn btn-primary" type="button" data-i18n="wizard.next">下一步</button>
           </div>
         </section>
-        <!-- Step 2: LLM -->
-        <section class="bootstrap-card" data-wizard-step="2" hidden>
+        <!-- Step 3: LLM -->
+        <section class="bootstrap-card" data-wizard-step="3" hidden>
           <div class="bootstrap-label" data-i18n="wizard.llmLabelRequired">Model service (required)</div>
           <div id="bootstrap-llm-use-row" class="bootstrap-note" hidden>
             <label><input type="radio" name="llm-source" value="configured" checked> <span id="bootstrap-llm-use-label" data-i18n="wizard.llmUseConfigured">Use existing configuration</span></label>
@@ -438,12 +469,12 @@
           </div>
           <div class="bootstrap-note" data-i18n="wizard.llmNote">配置只写入本应用的私有目录（沙箱），不会改动你机器上已有的任何 OpenClaw 配置。</div>
           <div class="bootstrap-actions">
-            <button class="btn" data-wizard-back="1" type="button" data-i18n="wizard.back">上一步</button>
+            <button class="btn" data-wizard-back="2" type="button" data-i18n="wizard.back">上一步</button>
             <button id="wizard-next-2" class="btn btn-primary" type="button" data-i18n="wizard.install" disabled>开始安装</button>
           </div>
         </section>
         <!-- Step 3: progress -->
-        <section class="bootstrap-card" data-wizard-step="3" hidden>
+        <section class="bootstrap-card" data-wizard-step="4" hidden>
           <div class="bootstrap-label" id="bootstrap-status-label" data-i18n="wizard.progress">进度</div>
           <div id="bootstrap-status-detail" class="bootstrap-status-detail" data-i18n="wizard.preparing">准备中…</div>
           <pre id="bootstrap-log" class="bootstrap-log"></pre>
