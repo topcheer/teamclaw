@@ -1,3 +1,4 @@
+import { normalizeSessionRole } from "../session-roles.js";
 import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
@@ -1247,17 +1248,6 @@ type SessionProgressEntry = {
   stream: string;
   isRateLimit: boolean;
 };
-
-function normalizeSessionRole(value: unknown): string {
-  if (typeof value !== "string") {
-    return "";
-  }
-  const normalized = value.trim().toLowerCase().replace(/[-\s]+/g, "_");
-  if (normalized === "toolresult") {
-    return "tool_result";
-  }
-  return normalized;
-}
 
 function normalizeBlockType(value: unknown): string {
   if (typeof value !== "string") {

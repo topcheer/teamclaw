@@ -1,3 +1,4 @@
+import { normalizeSessionRole } from "./session-roles.js";
 import type { OpenClawPluginApi, PluginLogger } from "../api.js";
 import {
   buildDeliverableMetadataPolicy,
@@ -809,17 +810,6 @@ function getNewSessionProgressEntries(
   }
 
   return entries.slice(overlap);
-}
-
-function normalizeSessionRole(value: unknown): string {
-  if (typeof value !== "string") {
-    return "";
-  }
-  const normalized = value.trim().toLowerCase().replace(/[-\s]+/g, "_");
-  if (normalized === "toolresult") {
-    return "tool_result";
-  }
-  return normalized;
 }
 
 function renderSessionMessage(message: Record<string, unknown>, role: string): { message: string; stream: string } {
