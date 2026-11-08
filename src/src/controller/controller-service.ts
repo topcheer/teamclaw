@@ -328,14 +328,24 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
       if (getActiveProfile().capabilities.teamauto) {
         try {
           const auth = getGithubAuthManager(config, logger);
-          const httpDepsForAutoAssign = { config, logger, getTeamState: () => teamState, updateTeamState: updateState, taskRouter, messageRouter, wsServer } as Parameters<typeof autoAssignPendingTasks>[0];
           teamAutoSchedulerRef = createTeamAutoScheduler({
             logger,
             auth,
             getTeamState: () => teamState,
             updateTeamState: updateState,
             onTasksCreated: async () => {
-              await autoAssignPendingTasks(httpDepsForAutoAssign);
+              // Same deps object as every HTTP call site (issue #191 gate
+              // review): the autoAssign re-entrancy gate is keyed per deps
+              // object, so an ad-hoc object here would open a SECOND gate -
+              // a TeamAuto round and an HTTP round could then run concurrently
+              // with separate attemptedPairs sets (double dispatch attempts,
+              // same-task double LLM-judge window). The ad-hoc object also
+              // silently dropped workerProvisioningManager/getTeamAutoScheduler
+              // for these rounds (no reconcile nudge; teamauto write tasks
+              // dispatched from this path fell back to the shared checkout
+              // instead of a task-scoped worktree). It was a leftover from
+              // before the shared httpDeps existed, not a deliberate split.
+              await autoAssignPendingTasks(httpDeps);
             },
             onActivity: (entry) => {
               wsServer.broadcastUpdate({

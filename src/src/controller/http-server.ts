@@ -5046,7 +5046,8 @@ export async function resumeTeamProfileSwitch(deps: ControllerHttpDeps): Promise
 // gate state.
 type AutoAssignGate = {
   inFlight: boolean;
-  rerunQueued: boolean;
+  /** Follow-up round queued by a nested trigger; carries that trigger's preferredWorkerId hint. */
+  rerunQueued: { preferredWorkerId: string | undefined } | null;
   attemptedPairs: Set<string>;
 };
 
@@ -5055,7 +5056,7 @@ const autoAssignGates = new WeakMap<ControllerHttpDeps, AutoAssignGate>();
 function getAutoAssignGate(deps: ControllerHttpDeps): AutoAssignGate {
   let gate = autoAssignGates.get(deps);
   if (!gate) {
-    gate = { inFlight: false, rerunQueued: false, attemptedPairs: new Set() };
+    gate = { inFlight: false, rerunQueued: null, attemptedPairs: new Set() };
     autoAssignGates.set(deps, gate);
   }
   return gate;
@@ -5070,7 +5071,18 @@ export async function autoAssignPendingTasks(
     // Nested trigger (revert path, concurrent register/heartbeat, ...):
     // never start a parallel round. Queue exactly one follow-up; it re-reads
     // the live state, so nothing observable is lost - only the storm is.
-    gate.rerunQueued = true;
+    // The follow-up carries the nested trigger's preferredWorkerId hint
+    // (worker register/heartbeat triggers pass theirs; it only biases which
+    // candidate is attempted first). A later id-less trigger (revert path)
+    // must not erase a hint that is already queued; a later trigger WITH an
+    // id wins as the most recent signal about where capacity appeared.
+    if (gate.rerunQueued) {
+      if (preferredWorkerId !== undefined) {
+        gate.rerunQueued.preferredWorkerId = preferredWorkerId;
+      }
+    } else {
+      gate.rerunQueued = { preferredWorkerId };
+    }
     return [];
   }
   gate.inFlight = true;
@@ -5079,8 +5091,9 @@ export async function autoAssignPendingTasks(
   } finally {
     gate.inFlight = false;
     if (gate.rerunQueued) {
-      gate.rerunQueued = false;
-      void autoAssignPendingTasks(deps).catch(() => {
+      const rerun = gate.rerunQueued;
+      gate.rerunQueued = null;
+      void autoAssignPendingTasks(deps, rerun.preferredWorkerId).catch(() => {
         // Best-effort follow-up round; assignment failures already surface
         // via task state (same policy as the fire-and-forget call sites).
       });
