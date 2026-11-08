@@ -411,6 +411,11 @@ v1.0（2026-11-07 上午）：
 - v1 仅内置 Profile，自定义留 v2。
 - 行业工具集成 P4 按需启动，不预建。
 
+v1.3.1（2026-11-08 实施期裁决，Phase 4 落地时）：
+- **知识包落地为「无率概念包」**：`hs-structure.md`/`vat-principles.md` 取代 §2.2 字面列出的 `hs-refund-snapshot.json`/`vat-rates.json` 率数据快照——静态率快照的过期风险比引导 TBD 更危险（设计 Phase 4 例外的本意是压幻觉而非引幻觉）；incoterms-2020.md 按字面落地（稳定国际规则）。三包经交叉 review 事实核对（修正 2 处 Incoterms 归属错误：ship's rail 废除属 2010 修订、2020 为 A1-A9/B1-B9 九条结构）。
+- **包内容变更纪律**：今后任何 knowledge pack 内容变更必须 bump 所属 profile 的 version 并同步 desktop wizard 快照（WIZARD_TEAM_PROFILES）——当前无自动守卫强制此点，靠约定与 review 把关。
+- 版本不 bump 的本次落地（1.0.0 保持）记录为有意取舍：知识包是 additive 参考材料，desktop 快照锁 version。
+
 v1.3（2026-11-08 实施期裁决）：
 - **RoleId 采用混合形态**：`种子 11 字面量联合 | (string & { __roleId: true })`。原设计的纯 branded string 在仓库锁定的 TS 5.9 下不可行（#33050 修复封死字面量直赋通道，严格形态 57 编译错且与 manifest 生成器/ single-source 测试两条文本契约死锁）；混合形态经全量验证达成 P1.1 全部目标（脱离闭集、Profile 角色经 validateRoleId 进入、未知字面量编译期拒绝），零越权改动。裁决人：编排者（Agent G 停工上报触发，探针证据见其实施报告）。
 
