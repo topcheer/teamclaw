@@ -173,7 +173,7 @@ assert.deepEqual(loader.getActiveRoleIds(), rolesMod.ROLE_IDS, "active role ids 
 assert.equal(loader.getActiveDefaultRole(), rolesMod.DEFAULT_ROLE, "active defaultRole must equal the registry default");
 assert.equal(loader.getActiveRole("qa")?.label, "QA Engineer", "getActiveRole resolves profile roles");
 assert.equal(loader.hasProfile("software-rd"), true, "software-rd must be a built-in profile");
-assert.equal(loader.hasProfile("banking"), false, "banking is a Phase 3 package, not built-in in v1");
+assert.equal(loader.hasProfile("banking"), true, "banking is a built-in Phase 3 finance package");
 
 // validateActiveRoleId mirrors validateRoleId over the active profile set.
 const { validateRoleId } = rolesMod;
