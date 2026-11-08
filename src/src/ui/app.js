@@ -367,7 +367,7 @@
       "teamauto.confirmUnbind": "确定解绑该仓库？",
       "teamauto.empty": "尚未绑定仓库。在上方选择后点击绑定。",
       "teamauto.activity": "动态",
-      "teamauto.activityEmpty": "暂无 TeamAuto 动态-扫描与写回会出现在这里。",
+      "teamauto.activityEmpty": "暂无 TeamAuto 动态 - 扫描与写回会出现在这里。",
       "worker.add": "添加 worker",
       "worker.hide": "隐藏 worker 命令",
       "worker.cardTitle": "注册新的外部 worker",
