@@ -34,6 +34,10 @@ const [
   workspaceSource,
   workerProvisioningSource,
   controllerHttpServerSource,
+  // PR-D of issue #204: the declarative route table + the handlers that
+  // were inline in http-server.ts (workspace/model-config routes, manifest
+  // recording, run delete, team status) moved into controller/route-table.ts.
+  controllerRouteTableSource,
   controllerPlanningSource,
   controllerRunsSource,
   projectRegistrySource,
@@ -66,6 +70,7 @@ const [
   fs.readFile(workspaceSourcePath, "utf8"),
   fs.readFile(workerProvisioningPath, "utf8"),
   fs.readFile(controllerHttpServerPath, "utf8"),
+  fs.readFile(path.join(projectRoot, "src", "src", "controller", "route-table.ts"), "utf8"),
   // PR-C of issue #204: the software-requirement heuristics moved from
   // http-server.ts into controller/controller-planning.ts.
   fs.readFile(path.join(projectRoot, "src", "src", "controller", "controller-planning.ts"), "utf8"),
@@ -190,14 +195,16 @@ assert.match(
   "task executor should pass the shared workspace override into subagent runs",
 );
 
+// PR-D of issue #204: the status/health handlers moved from http-server.ts
+// into controller/route-table.ts - pin the new home (bodies unchanged).
 assert.match(
-  controllerHttpServerSource,
+  controllerRouteTableSource,
   /const modelReadiness = getTeamClawModelReadiness\(\);[\s\S]*modelReadiness,/,
   "controller APIs should expose TeamClaw model readiness in status and health responses",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  controllerRouteTableSource,
   /const externalWorkerInstall = buildExternalWorkerInstallInfo\(req,\s*config\);[\s\S]*externalWorkerInstall,/,
   "controller status API should expose copyable external worker install metadata",
 );
@@ -274,10 +281,18 @@ assert.match(
   "desktop renderer should keep core mission, planning, task, and workspace render functions defined",
 );
 
+// PR-D of issue #204: the project-path shell moved from the http-server.ts
+// if chain into controller/route-table.ts - pin the route entry AND the same
+// handler content (safe directory resolution + 404 miss + absolutePath echo).
 assert.match(
-  controllerHttpServerSource,
-  /if \(req\.method === "GET" && pathname === "\/api\/v1\/workspace\/project-path"\) \{[\s\S]*resolveSafeProjectDirectory\(projectDir\)[\s\S]*absolutePath[\s\S]*sendJson\(res, 200, \{[\s\S]*absolutePath,/,
+  controllerRouteTableSource,
+  /\{ method: "GET", path: "\/api\/v1\/workspace\/project-path", handler: workspaceProjectPathRoute \}/,
   "controller should expose a safe local project-path endpoint for desktop shell integrations",
+);
+assert.match(
+  controllerRouteTableSource,
+  /function workspaceProjectPathRoute\(ctx: RouteContext\): Promise<void> \{[\s\S]*resolveSafeProjectDirectory\(projectDir\)[\s\S]*absolutePath[\s\S]*sendJson\(res, 200, \{[\s\S]*absolutePath,/,
+  "the project-path handler must keep the safe-directory resolution and absolutePath response shape",
 );
 
 assert.match(
@@ -635,7 +650,7 @@ assert.match(
 );
 
 assert.match(
-  controllerHttpServerSource,
+  controllerRouteTableSource,
   /run\.manifest = manifest;[\s\S]*projectId: manifest\.projectName \?\? run\.projectId,[\s\S]*run\.projectId = project\.projectId;[\s\S]*if \(!task\.projectId\) \{\s*task\.projectId = run\.projectId;/,
   "controller manifest submission should sync canonical project identity back onto runs and created tasks",
 );
@@ -670,8 +685,11 @@ assert.match(
   "controller clarification sync should retire stale pending questions when a newer run replaces the clarification set",
 );
 
+// PR-D of issue #204: the reconciliation moved out of http-server.ts (PR-C)
+// and the dispatch moved into route-table.ts - the negative pin guards both
+// homes so the pattern cannot reappear in either.
 assert.doesNotMatch(
-  controllerHttpServerSource,
+  controllerHttpServerSource + controllerRouteTableSource,
   /const supersedingRun = sessionRuns\.find\(\(run\) =>[\s\S]*run\.status === "completed"/,
   "controller clarification superseding should not auto-answer just because a later controller run completed",
 );
@@ -791,8 +809,13 @@ assert.match(
 );
 
 assert.match(
-  controllerHttpServerSource,
-  /DELETE \/api\/v1\/controller\/runs\/:id[\s\S]*const stillExists = !!getTeamState\(\)\?\.controllerRuns\[runId\];[\s\S]*Planning run cleanup could not be confirmed/,
+  controllerRouteTableSource,
+  /\{ method: "DELETE", path: \/\^\\\/api\\\/v1\\\/controller\\\/runs\\\/\[\^\/\]\+\$\/, handler: controllerRunDeleteRoute \}/,
+  "planning-run delete API should stay routed (PR-D table entry)",
+);
+assert.match(
+  controllerRouteTableSource,
+  /function controllerRunDeleteRoute[\s\S]*const stillExists = !!getTeamState\(\)\?\.controllerRuns\[runId\];[\s\S]*Planning run cleanup could not be confirmed/,
   "planning-run delete API should confirm the run is really gone before returning success",
 );
 

@@ -14,6 +14,9 @@ const clientSrc = path.join(projectRoot, "src", "src", "teamauto", "github-clien
 const syncSrc = path.join(projectRoot, "src", "src", "teamauto", "repo-sync.ts");
 const normsSrc = path.join(projectRoot, "src", "src", "teamauto", "norms.ts");
 const httpServerSrc = path.join(projectRoot, "src", "src", "controller", "http-server.ts");
+// PR-D of issue #204: the declarative route table (and with it every route
+// shell) moved from http-server.ts's if chain into controller/route-table.ts.
+const routeTableSrc = path.join(projectRoot, "src", "src", "controller", "route-table.ts");
 const teamAutoRoutesSrc = path.join(projectRoot, "src", "src", "controller", "teamauto-routes.ts");
 const serviceSrc = path.join(projectRoot, "src", "src", "controller", "controller-service.ts");
 const pagePath = path.join(projectRoot, "src", "src", "ui", "teamauto.html");
@@ -24,7 +27,7 @@ const desktopAppPath = path.join(projectRoot, "desktop", "renderer", "app.js");
 const desktopI18nPath = path.join(projectRoot, "desktop", "renderer", "i18n.js");
 
 async function sourceContracts() {
-  const [scheduler, scanner, store, client, sync, norms, httpServer, teamAutoRoutes, taskAssignment, service, page, uiHtml, desktopHtml, desktopApp, desktopI18n, uiAppSrc] = await Promise.all([
+  const [scheduler, scanner, store, client, sync, norms, httpServer, routeTable, teamAutoRoutes, taskAssignment, service, page, uiHtml, desktopHtml, desktopApp, desktopI18n, uiAppSrc] = await Promise.all([
     fs.readFile(schedulerSrc, "utf8"),
     fs.readFile(scannerSrc, "utf8"),
     fs.readFile(storeSrc, "utf8"),
@@ -32,6 +35,7 @@ async function sourceContracts() {
     fs.readFile(syncSrc, "utf8"),
     fs.readFile(normsSrc, "utf8"),
     fs.readFile(httpServerSrc, "utf8"),
+    fs.readFile(routeTableSrc, "utf8"),
     fs.readFile(teamAutoRoutesSrc, "utf8"),
     // PR-C of issue #204: the auto-assign loop and the write-worktree
     // dispatch moved from http-server.ts into controller/task-assignment.ts.
@@ -51,11 +55,13 @@ async function sourceContracts() {
   assert.match(service, /await teamAutoSchedulerRef\?\.stop\(\)/, "scheduler must stop with the service");
 
   // API surface.
+  // PR-D of issue #204: the shells moved into controller/route-table.ts's
+  // declarative table - pin the new home with the same method+path content.
   for (const route of ["/api/v1/teamauto/repos", "/api/v1/teamauto/repo-candidates"]) {
-    assert.ok(httpServer.includes(`pathname === "${route}"`), `controller must route ${route}`);
+    assert.ok(routeTable.includes(`path: "${route}"`), `controller must route ${route}`);
   }
-  assert.ok(httpServer.includes('"/api/v1/teamauto/repos/"'), "controller must route per-repo teamauto actions");
-  assert.ok(!httpServer.includes('"/ui/teamauto"'), "the standalone teamauto page route must be gone (tabbed UI)");
+  assert.ok(routeTable.includes('"/api/v1/teamauto/repos/"'), "controller must route per-repo teamauto actions");
+  assert.ok(!httpServer.includes('"/ui/teamauto"') && !routeTable.includes('"/ui/teamauto"'), "the standalone teamauto page route must be gone (tabbed UI)");
   // PR-B of issue #204: the teamauto handler bodies moved from http-server.ts
   // into controller/teamauto-routes.ts - pin the new home so the extraction
   // cannot silently drop scheduler behavior.
@@ -148,7 +154,8 @@ async function sourceContracts() {
   );
   assert.match(scheduler, /candidates\.filter\(\(c\) => c\.kind === "fullReview"\)/, "cap split must separate full reviews from regular candidates");
   assert.match(scheduler, /dropping dead write-back/, "reconcile must drop undeliverable write-backs (task missing / failed without result)");
-  assert.match(httpServer, /\/api\/v1\/teamauto\/activity/, "controller must expose the activity endpoint");
+  // PR-D of issue #204: the activity route shell lives in route-table.ts now.
+  assert.match(routeTable, /\/api\/v1\/teamauto\/activity/, "controller must expose the activity endpoint");
   assert.match(uiAppSrc, /teamauto-activity/, "web UI must render the activity feed");
   assert.match(desktopApp, /ta-activity/, "desktop must render the activity feed");
   assert.match(scheduler, /provisioning failed \(\$\{repo\.provision\.message\}\)/, "sweeps must report failed provisioning instead of running");

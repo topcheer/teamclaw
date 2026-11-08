@@ -14,7 +14,6 @@ async function sourceContracts() {
   const executor = await read("src/src/task-executor.ts");
   const indexSrc = await read("src/index.ts");
   const worker = await read("src/src/worker/worker-service.ts");
-  const httpServer = await read("src/src/controller/http-server.ts");
   // PR-C of issue #204: the checkpoint endpoint handler moved into
   // controller/task-routes.ts; the dispatch that carries checkpoints moved
   // into controller/task-assignment.ts.
@@ -43,7 +42,10 @@ async function sourceContracts() {
   assert.match(indexSrc, /\/api\/v1\/tasks\/\$\{taskId\}\/checkpoint/, "worker must POST checkpoints to the controller");
 
   // Controller endpoint persists into task.checkpoint.
-  assert.match(httpServer, /\/api\/v1\/tasks\/[^/]+\/checkpoint/, "controller must expose the checkpoint endpoint");
+  // PR-D of issue #204: the checkpoint route shell moved from http-server.ts
+  // into controller/route-table.ts - pin the new home (same regex path).
+  const routeTable = await read("src/src/controller/route-table.ts");
+  assert.match(routeTable, /\/api\/v1\/tasks\/[^/]+\/checkpoint/, "controller must expose the checkpoint endpoint");
   assert.match(taskRoutes, /task\.checkpoint = \{/, "the endpoint must store the checkpoint on the task");
   assert.match(taskRoutes, /progressNotes: notes\.slice\(-10\)/, "progress notes must stay bounded");
 

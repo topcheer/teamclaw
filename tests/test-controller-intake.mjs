@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, "..");
-const httpServerPath = path.join(projectRoot, "src", "src", "controller", "http-server.ts");
+// PR-D of issue #204: the manifest route pins moved to route-table.ts
+// (read inside runControllerIntakePromptSmoke below).
 const promptInjectorPath = path.join(projectRoot, "src", "src", "controller", "prompt-injector.ts");
 const promptPolicyPath = path.join(projectRoot, "src", "src", "prompt-policy.ts");
 const controllerToolsPath = path.join(projectRoot, "src", "src", "controller", "controller-tools.ts");
@@ -24,8 +25,12 @@ const controllerPlanningPath = path.join(projectRoot, "src", "src", "controller"
 const controllerIntakePath = path.join(projectRoot, "src", "src", "controller", "controller-intake.ts");
 
 async function runControllerIntakePromptSmoke() {
-  const [httpServerSource, promptInjectorSource, promptPolicySource, controllerToolsSource, controllerCapacitySource, orchestrationManifestSource, workerProvisioningSource, taskExecutionSource, taskAssignmentSource, taskRoutesSource, taskResultsSource, controllerPlanningSource, controllerIntakeSource] = await Promise.all([
-    fs.readFile(httpServerPath, "utf8"),
+  // PR-D of issue #204: the controller manifest route (shell + inline
+  // handler body) moved from http-server.ts into controller/route-table.ts
+  // - pin the new home.
+  const routeTablePath = path.join(projectRoot, "src", "src", "controller", "route-table.ts");
+  const [routeTableSource, promptInjectorSource, promptPolicySource, controllerToolsSource, controllerCapacitySource, orchestrationManifestSource, workerProvisioningSource, taskExecutionSource, taskAssignmentSource, taskRoutesSource, taskResultsSource, controllerPlanningSource, controllerIntakeSource] = await Promise.all([
+    fs.readFile(routeTablePath, "utf8"),
     fs.readFile(promptInjectorPath, "utf8"),
     fs.readFile(promptPolicyPath, "utf8"),
     fs.readFile(controllerToolsPath, "utf8"),
@@ -183,7 +188,7 @@ async function runControllerIntakePromptSmoke() {
     "controller task endpoint should persist the normalized controller session key for controller-owned tasks",
   );
   assert.match(
-    httpServerSource,
+    routeTableSource,
     /POST \/api\/v1\/controller\/manifest/,
     "controller HTTP server should expose a controller manifest endpoint",
   );
@@ -238,7 +243,7 @@ async function runControllerIntakePromptSmoke() {
     "controller intake should still honor the configured TeamClaw task timeout even when it polls the run in shorter slices",
   );
   assert.match(
-    httpServerSource,
+    routeTableSource,
     /findLatestControllerRunIdForSession\(sessionKey,\s*deps\.getTeamState\(\),\s*\{\s*preferActive:\s*true/,
     "controller manifest recording should prefer the currently active run for the session",
   );
