@@ -82,12 +82,14 @@ assert.equal(typeof parsePluginConfig, "function", "parsePluginConfig must stay 
     "parsePluginConfig must not fold config.role through the registry validator (issue #192 root cause)",
   );
 
-  const httpServerSource = await fs.promises.readFile(
-    path.join(projectRoot, "src", "src", "controller", "http-server.ts"),
+  // PR-C of issue #204: the worker register handler moved from
+  // http-server.ts into controller/worker-routes.ts - pin the new home.
+  const workerRoutesSource = await fs.promises.readFile(
+    path.join(projectRoot, "src", "src", "controller", "worker-routes.ts"),
     "utf8",
   );
   assert.match(
-    httpServerSource,
+    workerRoutesSource,
     /is not part of the active team profile/,
     "worker register endpoint must answer unknown-role 400s with an actionable profile-aware message (issue #192 direction 3)",
   );

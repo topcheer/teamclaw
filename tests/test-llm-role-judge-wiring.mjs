@@ -192,9 +192,11 @@ const UNCONFIDENT_TITLE = "整理今日跨部门会议纪要并归档";
   assert.match(serviceSource, /teamclaw-role-judge:/,
     "the judge must run on a dedicated one-shot session prefix, never the intake conversation");
 
-  const httpServerSource = await readSource(path.join("src", "src", "controller", "http-server.ts"));
-  assert.match(httpServerSource, /await taskRouter\s*\.autoAssignPendingTasks|await taskRouter\s*\n\s*\.autoAssignPendingTasks/,
-    "http-server dispatch loop must await the (now-async) router candidate call");
+  // PR-C of issue #204: the dispatch loop moved from http-server.ts into
+  // controller/task-assignment.ts - pin the new home.
+  const taskAssignmentSource = await readSource(path.join("src", "src", "controller", "task-assignment.ts"));
+  assert.match(taskAssignmentSource, /await taskRouter\s*\.autoAssignPendingTasks|await taskRouter\s*\n\s*\.autoAssignPendingTasks/,
+    "the task-assignment dispatch loop must await the (now-async) router candidate call");
 }
 
 console.log("test-llm-role-judge-wiring: all assertions passed (Phase 2.5 production wiring: judge seam live in dispatch, fake-injected, safe degradation)");

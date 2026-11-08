@@ -5,7 +5,10 @@ import type { KickoffAssessment, PluginConfig, RoleId, TeamState } from "../type
 import { loadTeamState, saveTeamState } from "../state.js";
 import { MDnsAdvertiser } from "../discovery.js";
 import { WORKER_TIMEOUT_MS } from "../protocol.js";
-import { createControllerHttpServer, autoAssignPendingTasks, type ControllerHttpDeps } from "./http-server.js";
+import { createControllerHttpServer, type ControllerHttpDeps } from "./http-server.js";
+// PR-C of issue #204: the assignment pipeline incl. the gated auto-assign
+// loop lives in ./task-assignment.js, not http-server.ts.
+import { autoAssignPendingTasks } from "./task-assignment.js";
 // PR-A of issue #204: the profile switch state machine (incl. crash resume)
 // lives in ./profile-switch.ts, not http-server.ts.
 import { resumeTeamProfileSwitch } from "./profile-switch.js";

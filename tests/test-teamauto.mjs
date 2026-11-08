@@ -24,7 +24,7 @@ const desktopAppPath = path.join(projectRoot, "desktop", "renderer", "app.js");
 const desktopI18nPath = path.join(projectRoot, "desktop", "renderer", "i18n.js");
 
 async function sourceContracts() {
-  const [scheduler, scanner, store, client, sync, norms, httpServer, teamAutoRoutes, service, page, uiHtml, desktopHtml, desktopApp, desktopI18n, uiAppSrc] = await Promise.all([
+  const [scheduler, scanner, store, client, sync, norms, httpServer, teamAutoRoutes, taskAssignment, service, page, uiHtml, desktopHtml, desktopApp, desktopI18n, uiAppSrc] = await Promise.all([
     fs.readFile(schedulerSrc, "utf8"),
     fs.readFile(scannerSrc, "utf8"),
     fs.readFile(storeSrc, "utf8"),
@@ -33,6 +33,9 @@ async function sourceContracts() {
     fs.readFile(normsSrc, "utf8"),
     fs.readFile(httpServerSrc, "utf8"),
     fs.readFile(teamAutoRoutesSrc, "utf8"),
+    // PR-C of issue #204: the auto-assign loop and the write-worktree
+    // dispatch moved from http-server.ts into controller/task-assignment.ts.
+    fs.readFile(path.join(projectRoot, "src", "src", "controller", "task-assignment.ts"), "utf8"),
     fs.readFile(serviceSrc, "utf8"),
     fs.readFile(pagePath, "utf8").catch(() => null),
     fs.readFile(uiHtmlPath, "utf8"),
@@ -135,8 +138,8 @@ async function sourceContracts() {
   assert.match(sync, /local branch ahead of pushed tip/, "unpushed work must never be silently destroyed");
   assert.match(sync, /no own commits, branch never pushed/, "empty never-pushed worktrees must be reclaimed");
   assert.match(sync, /worktree", "prune"/, "cleanup must survive unregistered (stale) worktree dirs");
-  assert.match(httpServer, /activeWriteRoots/, "auto-assign must serialize write tasks per repo checkout");
-  assert.match(httpServer, /ensureWriteWorktree/, "dispatch must place write tasks in a task-scoped worktree");
+  assert.match(taskAssignment, /activeWriteRoots/, "auto-assign must serialize write tasks per repo checkout");
+  assert.match(taskAssignment, /ensureWriteWorktree/, "dispatch must place write tasks in a task-scoped worktree");
   assert.match(scheduler, /cycleKey/, "write-backs must carry the joint review cycle key");
   assert.match(scheduler, /Joint full review/, "same-cycle sections must converge into one umbrella issue");
   assert.ok(

@@ -15,6 +15,11 @@ async function sourceContracts() {
   const indexSrc = await read("src/index.ts");
   const worker = await read("src/src/worker/worker-service.ts");
   const httpServer = await read("src/src/controller/http-server.ts");
+  // PR-C of issue #204: the checkpoint endpoint handler moved into
+  // controller/task-routes.ts; the dispatch that carries checkpoints moved
+  // into controller/task-assignment.ts.
+  const taskRoutes = await read("src/src/controller/task-routes.ts");
+  const taskAssignment = await read("src/src/controller/task-assignment.ts");
   const service = await read("src/src/controller/controller-service.ts");
 
   // Types: checkpoint shape + payload/task fields.
@@ -39,12 +44,12 @@ async function sourceContracts() {
 
   // Controller endpoint persists into task.checkpoint.
   assert.match(httpServer, /\/api\/v1\/tasks\/[^/]+\/checkpoint/, "controller must expose the checkpoint endpoint");
-  assert.match(httpServer, /task\.checkpoint = \{/, "the endpoint must store the checkpoint on the task");
-  assert.match(httpServer, /progressNotes: notes\.slice\(-10\)/, "progress notes must stay bounded");
+  assert.match(taskRoutes, /task\.checkpoint = \{/, "the endpoint must store the checkpoint on the task");
+  assert.match(taskRoutes, /progressNotes: notes\.slice\(-10\)/, "progress notes must stay bounded");
 
   // Dispatch carries checkpoint and reuses the interrupted session key.
-  assert.match(httpServer, /checkpoint: task\.checkpoint,/, "assignments must carry the checkpoint");
-  assert.match(httpServer, /task\.checkpoint\?\.sessionKey/, "resumed assignments must reuse the interrupted session key");
+  assert.match(taskAssignment, /checkpoint: task\.checkpoint,/, "assignments must carry the checkpoint");
+  assert.match(taskAssignment, /task\.checkpoint\?\.sessionKey/, "resumed assignments must reuse the interrupted session key");
 
   // Worker injects the resumed-execution context into the prompt.
   assert.match(worker, /## RESUMED EXECUTION/, "resumed assignments must inject the resume context block");

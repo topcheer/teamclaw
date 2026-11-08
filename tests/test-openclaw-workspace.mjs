@@ -34,6 +34,15 @@ const [
   workspaceSource,
   workerProvisioningSource,
   controllerHttpServerSource,
+  controllerPlanningSource,
+  controllerRunsSource,
+  projectRegistrySource,
+  taskCleanupSource,
+  taskResultsSource,
+  taskRoutesSource,
+  clarificationRoutesSource,
+  controllerIntakeSource,
+  taskAssignmentSource,
   taskExecutorSource,
   networkingSource,
   webUiSource,
@@ -57,6 +66,17 @@ const [
   fs.readFile(workspaceSourcePath, "utf8"),
   fs.readFile(workerProvisioningPath, "utf8"),
   fs.readFile(controllerHttpServerPath, "utf8"),
+  // PR-C of issue #204: the software-requirement heuristics moved from
+  // http-server.ts into controller/controller-planning.ts.
+  fs.readFile(path.join(projectRoot, "src", "src", "controller", "controller-planning.ts"), "utf8"),
+  fs.readFile(path.join(projectRoot, "src", "src", "controller", "controller-runs.ts"), "utf8"),
+  fs.readFile(path.join(projectRoot, "src", "src", "controller", "project-registry.ts"), "utf8"),
+  fs.readFile(path.join(projectRoot, "src", "src", "controller", "task-cleanup.ts"), "utf8"),
+  fs.readFile(path.join(projectRoot, "src", "src", "controller", "task-results.ts"), "utf8"),
+  fs.readFile(path.join(projectRoot, "src", "src", "controller", "task-routes.ts"), "utf8"),
+  fs.readFile(path.join(projectRoot, "src", "src", "controller", "clarification-routes.ts"), "utf8"),
+  fs.readFile(path.join(projectRoot, "src", "src", "controller", "controller-intake.ts"), "utf8"),
+  fs.readFile(path.join(projectRoot, "src", "src", "controller", "task-assignment.ts"), "utf8"),
   fs.readFile(taskExecutorPath, "utf8"),
   fs.readFile(networkingPath, "utf8"),
   fs.readFile(webUiPath, "utf8"),
@@ -261,37 +281,37 @@ assert.match(
 );
 
 assert.match(
-  controllerHttpServerSource,
+  controllerPlanningSource,
   /function looksLikeSoftwareRequirement\(request: string\): boolean \{[\s\S]*stderr[\s\S]*stdout[\s\S]*日志[\s\S]*输出[\s\S]*配置[\s\S]*文件/,
   "controller should treat common code-change requests like logging, output, config, and file behavior as software requirements",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  controllerPlanningSource,
   /if \(requiredRoles\.length === 1 && requiredRoles\[0\] === "architect" && implementationLikeRequest\) \{[\s\S]*return "developer";/,
   "fallback role selection should prefer developer when a backfilled architect-only manifest actually describes implementation work",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  controllerPlanningSource,
   /const likelyTechnicalRequest = looksLikeSoftwareRequirement\(request\)[\s\S]*manifest\.requiredRoles\.length > 0[\s\S]*日志\|输出\|文件\|配置\|命令\|修复\|实现\|修改[\s\S]*if \(!likelyTechnicalRequest\) \{/,
   "fallback task creation should still trigger for simple technical requests even when the original manifest was backfilled",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  controllerPlanningSource,
   /function looksLikeManualExecutionClarification\(question: string\): boolean \{[\s\S]*git pull[\s\S]*go build[\s\S]*still crash/,
   "controller should recognize manual run/rebuild/repro clarification prompts as execution candidates",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  controllerPlanningSource,
   /async function maybeConvertControllerClarificationToExecutionTask\([\s\S]*manifest\.clarificationsNeeded = false;[\s\S]*phase: "clarification_converted_to_task"/,
   "controller should convert manual-action clarifications into execution-ready tasks instead of blocking on human input",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  controllerIntakeSource,
   /const convertedClarificationTaskIds = await maybeConvertControllerClarificationToExecutionTask\([\s\S]*syncControllerRunClarifications\(controllerRun\.id, sessionKey, recordedManifest, deps\);/,
   "controller intake should convert manual-action clarifications before syncing pending clarification state",
 );
@@ -303,7 +323,7 @@ assert.match(
 );
 
 assert.match(
-  controllerHttpServerSource,
+  taskAssignmentSource,
   /answeredClarifications: Object\.values\(state\.clarifications\)[\s\S]*clarification\.status === "answered" && clarification\.answer[\s\S]*clarification\.taskId === task\.id[\s\S]*answer: clarification\.answer \|\| ""/,
   "task context snapshot should include recent answered clarifications for resumed work",
 );
@@ -339,7 +359,7 @@ assert.match(
 );
 
 assert.match(
-  controllerHttpServerSource,
+  controllerIntakeSource,
   /const progressSnapshot:[\s\S]*fingerprints:[\s\S]*latestMessages:[\s\S]*const syncControllerSessionProgress = async \(\): Promise<void> => \{[\s\S]*getSessionMessages\({[\s\S]*buildSessionProgressEntries\(progressSnapshot\.latestMessages, message\)[\s\S]*recordControllerRunEvent\(controllerRun\.id, \{/,
   "controller intake should summarize LLM session messages into planning timeline progress events",
 );
@@ -351,7 +371,7 @@ assert.match(
 );
 
 assert.match(
-  controllerHttpServerSource,
+  controllerRunsSource,
   /if \(source === "task_follow_up"\) \{[\s\S]*compactSourceTitle[\s\S]*Controller follow-up after \$\{compactSourceTitle\}/,
   "controller follow-up run titles should compact the source task title instead of letting long text dominate the visible label",
 );
@@ -591,25 +611,25 @@ assert.match(
 );
 
 assert.match(
-  controllerHttpServerSource,
+  projectRegistrySource,
   /const GENERIC_PROJECT_FOLLOW_UP_RE =[\s\S]*function syncProjectRegistryEntry\([\s\S]*function resolveProjectIdentityForSession\(/,
   "controller http server should maintain a stable project registry and resolve project identity beyond session inheritance",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  controllerRunsSource,
   /createControllerRun\([\s\S]*resolveExistingProjectIdentityFromMessage\(message, existingState\)[\s\S]*projectId: projectId \|\| undefined,[\s\S]*syncProjectRegistryEntry\(teamState,/,
   "controller intake should register and reuse stable project identity when creating runs",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  controllerPlanningSource,
   /projectName: actualCreatedTasks\.find\(\(task\) => task\.projectId\)\?\.projectId/,
   "backfilled controller manifests should preserve the created task project identity",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  taskRoutesSource,
   /const explicitProjectName = typeof body\.projectName === "string"[\s\S]*const projectId = inheritedProject\?\.projectId \?\? \(explicitProjectName \|\| undefined\)[\s\S]*task\.projectId = project\.projectId;/,
   "controller task creation should preserve stable project identity across sessions and explicit project names",
 );
@@ -639,13 +659,13 @@ assert.match(
 );
 
 assert.match(
-  controllerHttpServerSource,
+  controllerIntakeSource,
   /const supersedingRun = sessionRuns\.find\(\(run\) =>[\s\S]*run\.manifest\?\.createdTasks\.length[\s\S]*run\.manifest\?\.requirementFullyComplete[\s\S]*\),/,
   "controller clarification superseding should require real downstream progress instead of any completed follow-up run",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  controllerIntakeSource,
   /const desiredQuestionKeys = new Set\([\s\S]*entries\.map\(\(entry\) => normalizeComparableText\(entry\.question\)\)[\s\S]*clarification\.status === "pending"[\s\S]*!desiredQuestionKeys\.has\(key\)[\s\S]*Automatically superseded by the latest controller clarification set\./,
   "controller clarification sync should retire stale pending questions when a newer run replaces the clarification set",
 );
@@ -657,61 +677,61 @@ assert.doesNotMatch(
 );
 
 assert.match(
-  controllerHttpServerSource,
+  taskResultsSource,
   /function allowsNoChangeCompletion\(/,
   "controller completion gate should define a helper for evidence-backed no-change completions",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  taskResultsSource,
   /function buildEffectiveTaskResultContract\([\s\S]*submittedContract[\s\S]*filterStaleDeliverables\([\s\S]*backfillWorkerTaskResultContract\(task, result, error\)/,
   "controller result handling should build an effective task result contract before deciding whether the task is blocked or complete",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  taskRoutesSource,
   /const effectiveContract = buildEffectiveTaskResultContract\(currentTask, result, error, submittedContract(?: \?\? undefined)?\);[\s\S]*if \(!error && effectiveContract\.outcome === "blocked"\)/,
   "controller should route blocked effective result contracts into clarification flow before marking the task completed",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  controllerPlanningSource,
   /For any large-scale requirement, prefer parallel fan-out over serial mega-phases[\s\S]*create multiple developer tasks when the work can proceed concurrently/,
   "controller follow-up prompt should encourage parallel developer fan-out for large-scale requirements",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  controllerPlanningSource,
   /function buildControllerParallelHelpMessage\([\s\S]*## Parallel Help Request[\s\S]*Suggested parallel workstreams:/,
   "controller should build a dedicated follow-up prompt when a worker requests more parallel help",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  controllerPlanningSource,
   /if \(inferredRoles\.size === 0\) \{[\s\S]*inferredRoles\.add\("architect"\);[\s\S]*function isArchitectureFirstRequirement\(request: string\)[\s\S]*function chooseFallbackAssignedRole\(manifest: ControllerOrchestrationManifest, request: string\): RoleId[\s\S]*const assignedRole = chooseFallbackAssignedRole\(manifest, request\);/,
   "controller fallback intake routing should default architecture-first requirements to architect instead of blindly preferring developer",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  taskRoutesSource,
   /POST \/api\/v1\/tasks\/:id\/parallel-help[\s\S]*recordTaskExecutionEvent\([\s\S]*parallel_help_requested[\s\S]*runControllerIntake\([\s\S]*buildControllerParallelHelpMessage\(/,
   "controller should accept worker parallel-help requests, log an execution event, and trigger a follow-up orchestration run",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  taskCleanupSource,
   /async function deleteTaskCascade\([\s\S]*cancelTaskExecution\(taskId, existingTask\.assignedWorkerId, "cleanup deletion", deps\)[\s\S]*stopTaskPreviews\(taskId, "task deleted during cleanup"\)[\s\S]*delete state\.tasks\[taskId\][\s\S]*clarification\.taskId === taskId[\s\S]*message\.taskId === taskId/,
   "task cleanup should cascade through active execution, previews, clarifications, messages, and the task record itself",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  taskCleanupSource,
   /function resolveSafeProjectDirectory\([\s\S]*segment === "\.\."[\s\S]*path\.resolve\(projectsRoot, normalized\)[\s\S]*relative\.startsWith\("\.\."\)/,
   "project cleanup should reject path traversal and constrain deletions to the TeamClaw projects root",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  taskCleanupSource,
   /async function deleteProjectDirectoryIfUnused\([\s\S]*stillReferencedByTask[\s\S]*stillReferencedByRun[\s\S]*removeTrackedWorkspaceSubtree\(deps\.config, deps\.logger, safeProjectPath\)[\s\S]*fs\.promises\.rm\(safeProjectPath, \{ recursive: true, force: true \}\)[\s\S]*deletedProjectDirs\.push\(projectDir\)/,
   "project cleanup should only remove unused project directories and confirm the deletion",
 );
@@ -723,49 +743,49 @@ assert.match(
 );
 
 assert.match(
-  controllerHttpServerSource,
+  taskCleanupSource,
   /async function deleteProjectCascade\([\s\S]*deleteControllerRunCascade\(runId, deps\)[\s\S]*deleteTaskCascade\(taskId, deps, summary\)[\s\S]*deleteProjectDirectoryIfUnused\(projectDir, deps, summary\)[\s\S]*type: "project:deleted"/,
   "project delete should cascade through related runs and tasks before removing the project directory",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  taskRoutesSource,
   /DELETE \/api\/v1\/tasks\/:id[\s\S]*const stillExists = !!getTeamState\(\)\?\.tasks\[taskId\];[\s\S]*Task cleanup could not be confirmed/,
   "task delete API should confirm the task is really gone before returning success",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  taskCleanupSource,
   /async function deleteControllerRunCascade\([\s\S]*const linkedTaskIds = new Set<string>\(run\.createdTaskIds\)[\s\S]*task\.controllerRunId === run\.id[\s\S]*await deleteTaskCascade\(taskId, deps, summary\)[\s\S]*delete state\.controllerRuns\[runId\]/,
   "planning-run cleanup should only cascade into tasks explicitly owned by that run before removing it",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  taskCleanupSource,
   /function canAutoDeleteStaleControllerRun\([\s\S]*task\.controllerRunId === run\.id[\s\S]*clarification\.controllerRunId === run\.id[\s\S]*return !hasPendingClarification;/,
   "stale planning run cleanup should only auto-delete orphaned runs that have no active owned tasks or pending clarifications",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  controllerPlanningSource,
   /function tagControllerCreatedTasks\([\s\S]*task\.controllerRunId = controllerRunId/,
   "controller-created tasks should be bound to a specific controller run to avoid session-wide delete mistakes",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  controllerPlanningSource,
   /function reconcileControllerManifestTaskBindings\([\s\S]*matchedTask\.controllerRunId = controllerRunId/,
   "manifest-linked tasks should also be rebound to the specific controller run that owns them",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  controllerPlanningSource,
   /function looksLikeSupplementalHumanContextUpdate\([\s\S]*function getActiveTasksForSupplementalHumanContext\([\s\S]*function forwardSupplementalHumanContextToActiveTasks\([\s\S]*intent: "update"[\s\S]*message:new/,
   "controller should detect supplemental human context updates and forward them to active tasks as direct update messages",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  controllerPlanningSource,
   /async function maybeBackfillExecutionReadyTask\([\s\S]*const forwardedTaskIds = await forwardSupplementalHumanContextToActiveTasks\([\s\S]*if \(forwardedTaskIds\.length > 0\) \{\s*return \[\];/,
   "controller fallback task synthesis should stop and avoid creating a new execution task when the intake can be routed as supplemental context to active work",
 );
@@ -855,31 +875,31 @@ assert.match(
 );
 
 assert.match(
-  controllerHttpServerSource,
+  taskResultsSource,
   /\.go", ".mod", ".sum"/,
   "completion gate should treat Go source and module files as meaningful project changes",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  taskResultsSource,
   /function projectHasMeaningfulDeliverableEvidence\([\s\S]*deliverable\.kind !== "file" && deliverable\.kind !== "directory"[\s\S]*fs\.statSync\(fullPath\)/,
   "completion gate should accept existing file or directory deliverables under the project root as meaningful change evidence",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  taskRoutesSource,
   /!projectHasMeaningfulFileChanges\(gatedTask, effectiveContract\)/,
   "completion gate should evaluate meaningful project changes against the effective result contract",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  taskResultsSource,
   /already fixed[\s\S]*无需改动/,
   "controller no-change completion helper should recognize both English and Chinese no-change verification signals",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  taskResultsSource,
   /deliverable\.kind === "command"[\s\S]*deliverable\.kind === "note"/,
   "controller no-change completion helper should treat command or note deliverables as verification evidence",
 );
@@ -933,7 +953,7 @@ assert.match(
 );
 
 assert.match(
-  controllerHttpServerSource,
+  taskAssignmentSource,
   /function buildTaskContextSnapshot\([\s\S]*requirementSummary:[\s\S]*recentCompletedTasks:[\s\S]*kickoffSummary:/,
   "controller should build a richer same-session context snapshot for worker assignments",
 );
@@ -945,7 +965,7 @@ assert.match(
 );
 
 assert.match(
-  controllerHttpServerSource,
+  controllerIntakeSource,
   /Would you like TeamClaw to continue with one of these adjacent next steps\?/,
   "controller should surface completion opportunities as a structured next-step clarification prompt",
 );
@@ -957,7 +977,7 @@ assert.match(
 );
 
 assert.match(
-  controllerHttpServerSource,
+  taskRoutesSource,
   /taskRequiresMeaningfulProjectChangeGate\(gatedTask\)[\s\S]*!projectHasMeaningfulFileChanges\(gatedTask, effectiveContract\)[\s\S]*!allowsNoChangeCompletion\(gatedTask, submittedContract(?: \?\? undefined)?, result\)/,
   "controller completion gate should only fail no-change developer tasks when they do not qualify as evidence-backed verification completions",
 );
@@ -987,13 +1007,13 @@ assert.match(
 );
 
 assert.match(
-  controllerHttpServerSource,
+  clarificationRoutesSource,
   /async function requestTaskClarification\([\s\S]*task\.status = "blocked";[\s\S]*clarification_requested/,
   "controller should expose a reusable clarification blocker helper for worker/runtime stalls",
 );
 
 assert.match(
-  controllerHttpServerSource,
+  taskRoutesSource,
   /const effectiveContract = buildEffectiveTaskResultContract\(currentTask, result, error, submittedContract(?: \?\? undefined)?\);[\s\S]*effectiveContract\.outcome === "blocked"[\s\S]*await requestTaskClarification\(/,
   "controller should block tasks and request clarification when the effective worker result contract is blocked",
 );

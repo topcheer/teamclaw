@@ -52,6 +52,10 @@ const httpMod = await dist("controller/http-server.js");
 // PR-A of issue #204: the switch state machine (incl. crash resume) moved
 // from http-server.ts into controller/profile-switch.ts - pin the new home.
 const profileSwitchMod = await dist("controller/profile-switch.js");
+// PR-C of issue #204: the controller intake orchestration (incl. the
+// switch-in-progress entry gate) moved from http-server.ts into
+// controller/controller-intake.ts - pin the new home.
+const controllerIntakeMod = await dist("controller/controller-intake.js");
 const { TaskRouter } = await dist("controller/task-router.js");
 const { MessageRouter } = await dist("controller/message-router.js");
 const { TeamWebSocketServer } = await dist("controller/websocket.js");
@@ -480,8 +484,8 @@ async function waitForSwitchCompletion(call, timeoutMs = 10000) {
       const runtimeProbe = { subagent: { run: async () => { throw new Error("runtime must not be reached"); } } };
       const probeDeps = { ...scenario.deps, runtime: runtimeProbe };
       await assert.rejects(
-        () => httpMod.runControllerIntake("follow-up message", "teamclaw-controller-web:probe", probeDeps),
-        (err) => err instanceof httpMod.ControllerIntakeSwitchInProgressError
+        () => controllerIntakeMod.runControllerIntake("follow-up message", "teamclaw-controller-web:probe", probeDeps),
+        (err) => err instanceof controllerIntakeMod.ControllerIntakeSwitchInProgressError
           && /profile switch to "minimal-bank" is in progress/.test(err.message)
           && err.transition.phase === "draining",
         "runControllerIntake must reject with the typed transition error before touching runtime",
@@ -498,7 +502,7 @@ async function waitForSwitchCompletion(call, timeoutMs = 10000) {
       const runtimeProbe = { subagent: { run: async () => { throw new Error("runtime reached as expected"); } } };
       const probeDeps = { ...scenario.deps, runtime: runtimeProbe };
       await assert.rejects(
-        () => httpMod.runControllerIntake("hello", "teamclaw-controller-web:probe", probeDeps),
+        () => controllerIntakeMod.runControllerIntake("hello", "teamclaw-controller-web:probe", probeDeps),
         /runtime reached as expected/,
         "with no transition the intake entry must let the run proceed to runtime",
       );

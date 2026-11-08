@@ -309,9 +309,14 @@ console.log("Role single-source-of-truth smoke passed.");
   const httpServerSrc = await readSource("src/src/controller/http-server.ts");
   const taskExecutorSrc = await readSource("src/src/task-executor.ts");
   const sharedSrc = await readSource("src/src/session-roles.ts");
+  // PR-C of issue #204: session role rendering moved from http-server.ts
+  // into controller/controller-intake.ts (renderSessionMessage) - pin the
+  // shared normalizer import in the new home too.
+  const controllerIntakeSrc = await readSource("src/src/controller/controller-intake.ts");
   assert.match(sharedSrc, /export function normalizeSessionRole/, "shared session-roles.ts exports normalizeSessionRole");
   assert.doesNotMatch(httpServerSrc, /function normalizeSessionRole/, "http-server must not redefine normalizeSessionRole");
   assert.doesNotMatch(taskExecutorSrc, /function normalizeSessionRole/, "task-executor must not redefine normalizeSessionRole");
-  assert.match(httpServerSrc, /from "\.\.\/session-roles\.js"/, "http-server imports the shared normalizer");
+  assert.doesNotMatch(controllerIntakeSrc, /function normalizeSessionRole/, "controller-intake must not redefine normalizeSessionRole");
+  assert.match(controllerIntakeSrc, /from "\.\.\/session-roles\.js"/, "controller-intake imports the shared normalizer");
   assert.match(taskExecutorSrc, /from "\.\/session-roles\.js"/, "task-executor imports the shared normalizer");
 }

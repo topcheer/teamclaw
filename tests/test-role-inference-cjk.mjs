@@ -235,13 +235,15 @@ assert.match(
 );
 assert.doesNotMatch(provisioningSource, /return \["developer"\];/, "worker-provisioning startup fallback must not hardcode developer");
 
-const httpServerSource = readSource(path.join("src", "src", "controller", "http-server.ts"));
+// PR-C of issue #204: the fallback title builder moved from http-server.ts
+// into controller/controller-planning.ts - pin the new home.
+const controllerPlanningSource = readSource(path.join("src", "src", "controller", "controller-planning.ts"));
 assert.match(
-  httpServerSource,
+  controllerPlanningSource,
   /import \{[\s\S]*?getActiveDefaultRole,[\s\S]*?\} from "\.\.\/profile-loader\.js";/,
-  "http-server imports the profile default role from the profile loader (Phase 1.3)",
+  "controller-planning imports the profile default role from the profile loader (Phase 1.3)",
 );
-assert.match(httpServerSource, /assignedRole === getActiveDefaultRole\(\)/, "http-server fallback title check uses the profile default role");
+assert.match(controllerPlanningSource, /assignedRole === getActiveDefaultRole\(\)/, "fallback title check uses the profile default role");
 
 const typesSource = readSource(path.join("src", "src", "types.ts"));
 assert.match(typesSource, /import \{ DEFAULT_ROLE \} from "\.\/roles\.js";/, "types.ts imports DEFAULT_ROLE from the role registry");
