@@ -5,7 +5,10 @@ import type { KickoffAssessment, PluginConfig, RoleId, TeamState } from "../type
 import { loadTeamState, saveTeamState } from "../state.js";
 import { MDnsAdvertiser } from "../discovery.js";
 import { WORKER_TIMEOUT_MS } from "../protocol.js";
-import { createControllerHttpServer, autoAssignPendingTasks, resumeTeamProfileSwitch, type ControllerHttpDeps } from "./http-server.js";
+import { createControllerHttpServer, autoAssignPendingTasks, type ControllerHttpDeps } from "./http-server.js";
+// PR-A of issue #204: the profile switch state machine (incl. crash resume)
+// lives in ./profile-switch.ts, not http-server.ts.
+import { resumeTeamProfileSwitch } from "./profile-switch.js";
 import { TaskRouter } from "./task-router.js";
 import { MessageRouter } from "./message-router.js";
 import { TeamWebSocketServer } from "./websocket.js";

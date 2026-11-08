@@ -49,6 +49,9 @@ fs.mkdirSync(stateDir, { recursive: true });
 
 const stateMod = await dist("state.js");
 const httpMod = await dist("controller/http-server.js");
+// PR-A of issue #204: the switch state machine (incl. crash resume) moved
+// from http-server.ts into controller/profile-switch.ts - pin the new home.
+const profileSwitchMod = await dist("controller/profile-switch.js");
 const { TaskRouter } = await dist("controller/task-router.js");
 const { MessageRouter } = await dist("controller/message-router.js");
 const { TeamWebSocketServer } = await dist("controller/websocket.js");
@@ -524,7 +527,7 @@ async function waitForSwitchCompletion(call, timeoutMs = 10000) {
     });
     assert.equal(listArchiveFiles().length, 1, "pre-seeded archive file for the crash construction");
 
-    const resumed = await httpMod.resumeTeamProfileSwitch(scenario.deps);
+    const resumed = await profileSwitchMod.resumeTeamProfileSwitch(scenario.deps);
     assert.equal(resumed, true, "resume reports that a transition was resumed");
 
     const state = scenario.getTeamState();
@@ -538,7 +541,7 @@ async function waitForSwitchCompletion(call, timeoutMs = 10000) {
     const rolesRes = await scenario.call("GET", "/api/v1/roles");
     assert.equal(rolesRes.json.roles[0].id, "credit-officer", "active profile switched by the resume");
 
-    const again = await httpMod.resumeTeamProfileSwitch(scenario.deps);
+    const again = await profileSwitchMod.resumeTeamProfileSwitch(scenario.deps);
     assert.equal(again, false, "resume without a pending transition is a no-op");
 
     assert.equal(readStateFile().profileId, "minimal-bank", "resumed state is persisted");
@@ -584,7 +587,7 @@ async function waitForSwitchCompletion(call, timeoutMs = 10000) {
   try {
     assert.equal(listArchiveFiles().length, 0, "no archive on disk for this branch");
 
-    const resumed = await httpMod.resumeTeamProfileSwitch(scenario.deps);
+    const resumed = await profileSwitchMod.resumeTeamProfileSwitch(scenario.deps);
     assert.equal(resumed, true);
 
     const files = listArchiveFiles();
@@ -679,7 +682,7 @@ async function waitForSwitchCompletion(call, timeoutMs = 10000) {
     assert.equal(listArchiveFiles().length, 1, "pre-seeded source archive for the crash construction");
     assert.match(listArchiveFiles()[0], /^software-rd-/);
 
-    const resumed = await httpMod.resumeTeamProfileSwitch(scenario.deps);
+    const resumed = await profileSwitchMod.resumeTeamProfileSwitch(scenario.deps);
     assert.equal(resumed, true, "the ghost-window combination still resumes");
 
     const files = listArchiveFiles();
