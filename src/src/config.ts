@@ -105,6 +105,18 @@ function buildConfigSchema() {
           default: "",
           description: "GitHub App OAuth client secret; the TEAMCLAW_GITHUB_CLIENT_SECRET environment variable takes precedence",
         },
+        security: {
+          type: "object" as const,
+          default: {},
+          description: "Controller device-pairing security (issue #23); protection itself is enabled per-team via POST /api/v1/security/enable",
+          properties: {
+            autoPair: {
+              type: "boolean" as const,
+              default: true,
+              description: "Allow zero-input pairing from LAN peers (POST /api/v1/security/pair-auto); disable to require a pairing code for every new device",
+            },
+          },
+        },
         agentIsolationMode: {
           type: "string" as const,
           enum: ["independent", "main"],
@@ -308,6 +320,10 @@ function buildConfigSchema() {
         label: "GitHub Client Secret",
         hint: "optional - prefer the TEAMCLAW_GITHUB_CLIENT_SECRET env var",
         help: "GitHub App OAuth client secret; the TEAMCLAW_GITHUB_CLIENT_SECRET environment variable takes precedence",
+      },
+      security: {
+        label: "Device Pairing Security",
+        help: "Controller device-pairing options; autoPair allows LAN devices to pair with zero input (POST /api/v1/security/pair-auto), disable it to require a pairing code for every new device",
       },
       agentIsolationMode: {
         label: "Agent Isolation Mode",

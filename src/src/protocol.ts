@@ -39,10 +39,16 @@ async function readRequestBody(req: IncomingMessage): Promise<Buffer> {
 
 function sendJson(res: ServerResponse, status: number, data: unknown): void {
   const body = JSON.stringify(data);
+  // Issue #23: when the security gate has already PINNED a narrowed
+  // Access-Control-Allow-Origin on this response (device protection on:
+  // same-origin echo, or an explicit empty value for foreign origins),
+  // honor it instead of the L0 wildcard. Nothing pinned (protection off,
+  // pre-issue behavior) keeps the historical "*" byte for byte.
+  const pinnedOrigin = res.getHeader("Access-Control-Allow-Origin");
   res.writeHead(status, {
     "Content-Type": "application/json",
     "Content-Length": Buffer.byteLength(body),
-    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Origin": typeof pinnedOrigin === "string" ? pinnedOrigin : "*",
     "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
   });

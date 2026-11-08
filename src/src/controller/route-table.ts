@@ -116,6 +116,22 @@ import {
   handleClarificationCreateRequest,
   handleClarificationListRequest,
 } from "./clarification-routes.js";
+// Issue #23 (backend wave): device-pairing security domain module. It owns
+// the token/pairing primitives, the auth middleware (wired by
+// http-server.ts), the WS upgrade guard and the handlers registered in the
+// security section of the table below. It imports this file as TYPE ONLY
+// (RouteContext), so the module graph stays acyclic.
+import {
+  buildTeamStatusSecurity,
+  handleSecurityDeviceDeleteRequest,
+  handleSecurityEnableRequest,
+  handleSecurityGetRequest,
+  handleSecurityPairAutoRequest,
+  handleSecurityPairRequest,
+  handleSecurityPairStartRequest,
+  handleSecurityResetRequest,
+} from "./security.js";
+import type { SecurityPeer } from "./security.js";
 
 // ===========================================================================
 // PR-D of issue #204: declarative route table + dispatcher.
@@ -158,6 +174,14 @@ export type RouteContext = {
    * handlers never read state.
    */
   currentState: TeamState | null;
+  /**
+   * Issue #23: per-request peer classification (loopback/LAN/tunnel)
+   * computed by the composition root alongside the device-auth gate; the
+   * pairing handlers read it to enforce their origin rules (enable:
+   * loopback only; pair-auto: LAN only). Absent for the tunnel-side
+   * tables.
+   */
+  peer?: SecurityPeer;
 };
 
 export type RouteHandler = (ctx: RouteContext) => Promise<boolean | void> | boolean | void;
@@ -1125,6 +1149,7 @@ async function teamStatusRoute(ctx: RouteContext): Promise<void> {
       modelReadiness,
       externalWorkerInstall,
       provisioning: startupReadiness ? { startupReadiness } : undefined,
+      security: buildTeamStatusSecurity(null),
     });
     return;
   }
@@ -1150,6 +1175,9 @@ async function teamStatusRoute(ctx: RouteContext): Promise<void> {
     taskCount: Object.keys(state.tasks).length,
     workerCount: Object.keys(state.workers).length,
     pendingClarificationCount: clarifications.filter((item) => item.status === "pending").length,
+    // Issue #23: device-pairing protection state + the non-LAN-peer
+    // suggestion signal (additive field; consumers ignore it pre-issue).
+    security: buildTeamStatusSecurity(state),
   });
 }
 
@@ -1478,6 +1506,25 @@ export const controllerRouteTable: readonly RouteDef[] = [
   { method: "GET", path: "/api/v1/reports/", prefix: true, handler: reportsSessionRoute },
   // GET /api/v1/health
   { method: "GET", path: "/api/v1/health", handler: healthRoute },
+
+  // ==================== Device pairing security (issue #23) ====================
+  // The five POST endpoints are EXEMPT from the device-auth middleware and
+  // enforce their own stricter origin rules inside controller/security.ts:
+  //   enable    - loopback only (mints the FIRST device; remote = attacker)
+  //   pair/start- authenticated device or loopback (mints a fresh code,
+  //               invalidating the previous one)
+  //   pair      - one-shot 60s code exchange -> {token, deviceId}
+  //   pair-auto - LAN peer + config.security.autoPair + protection on
+  //   reset     - authenticated device or loopback (anti-lockout hatch)
+  // GET /security and DELETE /security/devices/:id are NOT exempt: the
+  // middleware itself guarantees the caller holds a valid device token.
+  { method: "POST", path: "/api/v1/security/enable", handler: handleSecurityEnableRequest },
+  { method: "POST", path: "/api/v1/security/pair/start", handler: handleSecurityPairStartRequest },
+  { method: "POST", path: "/api/v1/security/pair", handler: handleSecurityPairRequest },
+  { method: "POST", path: "/api/v1/security/pair-auto", handler: handleSecurityPairAutoRequest },
+  { method: "GET", path: "/api/v1/security", handler: handleSecurityGetRequest },
+  { method: "DELETE", path: /^\/api\/v1\/security\/devices\/[^/]+$/, handler: handleSecurityDeviceDeleteRequest },
+  { method: "POST", path: "/api/v1/security/reset", handler: handleSecurityResetRequest },
 ];
 
 // ===========================================================================

@@ -193,6 +193,22 @@ const EXPECTED_ROUTES = [
   ["GET", "exact", "/api/v1/health"],
 ];
 
+// Issue #23 (backend wave): the device-pairing security routes, appended
+// AFTER the historical table (no path overlaps with any pre-issue route,
+// so the append cannot reorder historical matching). These have no
+// pre-PR-D if-chain counterpart - the git cross-check in Section 3
+// therefore compares only the historical EXPECTED_ROUTES prefix, and this
+// list is pinned separately as the table's stable suffix.
+const SECURITY_ROUTES = [
+  ["POST", "exact", "/api/v1/security/enable"],
+  ["POST", "exact", "/api/v1/security/pair/start"],
+  ["POST", "exact", "/api/v1/security/pair"],
+  ["POST", "exact", "/api/v1/security/pair-auto"],
+  ["GET", "exact", "/api/v1/security"],
+  ["DELETE", "regex", "^\\/api\\/v1\\/security\\/devices\\/[^/]+$"],
+  ["POST", "exact", "/api/v1/security/reset"],
+];
+
 /** Normalizes a live RouteDef into {method, kind, value} for comparison. */
 function routeToSpec(route, index) {
   assert.equal(typeof route.handler, "function", `route #${index} must bind a handler function`);
@@ -209,9 +225,10 @@ function routeToSpec(route, index) {
 }
 
 const tableSpecs = routeTableMod.controllerRouteTable.map(routeToSpec);
-assert.equal(tableSpecs.length, EXPECTED_ROUTES.length,
-  `controllerRouteTable must have exactly ${EXPECTED_ROUTES.length} entries in the historical order (got ${tableSpecs.length})`);
-EXPECTED_ROUTES.forEach(([method, kind, value], i) => {
+assert.equal(tableSpecs.length, EXPECTED_ROUTES.length + SECURITY_ROUTES.length,
+  `controllerRouteTable must have exactly ${EXPECTED_ROUTES.length} historical + ${SECURITY_ROUTES.length} security entries in order (got ${tableSpecs.length})`);
+const FULL_EXPECTED_ROUTES = [...EXPECTED_ROUTES, ...SECURITY_ROUTES];
+FULL_EXPECTED_ROUTES.forEach(([method, kind, value], i) => {
   const actual = tableSpecs[i];
   const methodMatches = Array.isArray(method)
     ? Array.isArray(actual.method) && method.join("|") === actual.method.join("|")
@@ -251,9 +268,11 @@ assert.equal(routeTableMod.controllerRouteTable[3].handler, routeTableMod.contro
       assert.equal(old.value, value, `old-chain entry #${i} (${method}) path value (git ${chain.commit.slice(0, 8)})`);
     }
     // table == old chain, transitively table == expectation == old chain.
-    assert.deepEqual(tableSpecs.map(s => JSON.stringify([s.method, s.kind, s.value])),
+    // (Issue #23: only the historical PREFIX - the security routes appended
+    // after /api/v1/health have no pre-PR-D counterpart by construction.)
+    assert.deepEqual(tableSpecs.slice(0, EXPECTED_ROUTES.length).map(s => JSON.stringify([s.method, s.kind, s.value])),
       chain.specs.map(s => JSON.stringify([s.method, s.kind, s.value])),
-      "the live route table must equal the extracted pre-PR-D if chain entry by entry, in order");
+      "the historical prefix of the live route table must equal the extracted pre-PR-D if chain entry by entry, in order");
     console.log(`test-route-table: git cross-check passed against ${chain.commit.slice(0, 8)} (pre-PR-D http-server.ts).`);
   }
 }
@@ -538,4 +557,5 @@ function parseOldChain(src) {
 }
 
 console.log("test-route-table: all assertions passed (PR-D declarative route table parity: dispatcher semantics, " +
-  `${EXPECTED_ROUTES.length}-entry ordered table, git cross-check, tunnel tables, dist-server order probes, structural pins)`);
+  `${EXPECTED_ROUTES.length}-entry ordered historical table + ${SECURITY_ROUTES.length} security routes (issue #23), ` +
+  "git cross-check, tunnel tables, dist-server order probes, structural pins)");
