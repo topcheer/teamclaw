@@ -31,3 +31,8 @@ desktop/dist
 
 # Agent tooling runtime (multi-instance shared worktrees, memory, quarantine)
 .ggcode/
+
+# One-off build/log artifacts (issue #28)
+/firebase-debug.log
+/*.tgz
+src/*.tgz
