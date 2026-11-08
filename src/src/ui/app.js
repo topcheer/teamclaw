@@ -40,6 +40,14 @@
   let pendingSwitchTarget = null;
   let pendingSwitchProfileId = "";
   let teamProfileSwitchInFlight = false;
+  // Device pairing security (issue #23, client wave): the `security` object
+  // from GET /team/status (protection/suggested/deviceCount) plus pairing
+  // modal bookkeeping. The suggestion banner renders only while protection
+  // is off AND a non-LAN peer was observed; enable is loopback-only server
+  // side, so a remote browser never gets an actionable enable path.
+  let securityStatus = null;
+  let securityPairingExpiresAt = 0;
+  let securityPairTimer = null;
   let clarificationPromptOpen = false;
   let activeClarificationId = null;
   let dismissedClarificationIds = [];
@@ -234,7 +242,26 @@
       "teamProfile.switchFailed": "Team profile switch to {name} failed",
       "teamProfile.archivedTitle": "Archived teams",
       "teamProfile.archivedEmpty": "No archived teams yet.",
-      "teamProfile.archivedTasks": "{n} tasks"
+      "teamProfile.archivedTasks": "{n} tasks",
+      "security.bannerTitle": "Device protection recommended",
+      "security.bannerHint": "External access was detected from outside your local network. Enable device pairing so only your paired devices can control this team.",
+      "security.enableAction": "Enable protection",
+      "security.pairTitle": "Pair your devices",
+      "security.pairHint": "This browser is paired automatically. To pair another device (worker, desktop or CLI), run this command within 60 seconds:",
+      "security.pairExpiresIn": "Expires in {n}s",
+      "security.pairExpired": "Pairing code expired - request a new one.",
+      "security.pairNewCode": "New pairing code",
+      "security.devicesTitle": "Device security",
+      "security.statusOn": "Protection enabled · {n} paired device(s)",
+      "security.statusOff": "Local mode · protection off",
+      "security.revoke": "Revoke",
+      "security.selfRevokeWarn": "Revoking this browser will sign it out; it must re-pair from the controller host.",
+      "security.selfRevoked": "This device was revoked. Re-pair it from the controller host.",
+      "security.resetAll": "Reset all devices",
+      "security.resetConfirm": "This revokes every paired device and returns the controller to unpaired local mode. Continue?",
+      "security.resetDone": "Device protection reset - the controller is back to local mode.",
+      "security.devicesUnavailable": "Device management needs a paired browser.",
+      "security.noDevices": "No paired devices yet."
     },
     zh: {
       "action.refresh": "刷新",
@@ -414,7 +441,26 @@
       "teamProfile.switchFailed": "切换到 {name} 的团队画像失败",
       "teamProfile.archivedTitle": "已归档团队",
       "teamProfile.archivedEmpty": "暂无已归档团队。",
-      "teamProfile.archivedTasks": "{n} 个任务"
+      "teamProfile.archivedTasks": "{n} 个任务",
+      "security.bannerTitle": "建议启用设备保护",
+      "security.bannerHint": "检测到来自局域网之外的外部访问。启用设备配对后，只有已配对的设备才能操作这个团队。",
+      "security.enableAction": "启用保护",
+      "security.pairTitle": "配对设备",
+      "security.pairHint": "本浏览器已自动配对。要在其他设备（worker、桌面端或 CLI）上配对，请在 60 秒内运行以下命令：",
+      "security.pairExpiresIn": "{n} 秒后失效",
+      "security.pairExpired": "配对码已过期 - 请生成新的配对码。",
+      "security.pairNewCode": "添加配对码",
+      "security.devicesTitle": "设备安全",
+      "security.statusOn": "保护已启用 · {n} 台设备",
+      "security.statusOff": "本机模式 · 未启用",
+      "security.revoke": "撤销",
+      "security.selfRevokeWarn": "撤销本浏览器会使它退出配对，需在 controller 主机上重新配对。",
+      "security.selfRevoked": "本设备已被撤销。请在 controller 主机上重新配对。",
+      "security.resetAll": "重置全部设备",
+      "security.resetConfirm": "这将撤销所有已配对设备，并让 controller 回到未保护的本机模式。继续？",
+      "security.resetDone": "设备保护已重置 - controller 已回到本机模式。",
+      "security.devicesUnavailable": "需要在已配对的浏览器中管理设备。",
+      "security.noDevices": "暂无已配对设备。"
     }
   };
 
@@ -2076,6 +2122,273 @@
     );
   }
 
+  // =========================================================================
+  // Device pairing security (issue #23, client wave) - zero friction by
+  // design: this browser NEVER logs in (the loopback enable call sets the
+  // HttpOnly session cookie), the banner only appears when the backend
+  // observed a non-LAN peer while protection is off, and the pairing modal
+  // shows a one-shot 60s code plus the copyable CLI command for the FIRST
+  // external device.
+  // =========================================================================
+
+  function renderSecurityBanner() {
+    var banner = $("#security-suggest-banner");
+    if (!banner) return;
+    var suggested = Boolean(securityStatus && securityStatus.suggested && !securityStatus.protection);
+    if (!suggested) {
+      banner.hidden = true;
+      banner.innerHTML = "";
+      return;
+    }
+    banner.hidden = false;
+    banner.innerHTML = (
+      "<div style='display:flex;gap:12px;align-items:center;flex-wrap:wrap'>" +
+        "<div style='flex:1;min-width:220px'>" +
+          "<strong>" + escapeHtml(t("security.bannerTitle")) + "</strong> " +
+          escapeHtml(t("security.bannerHint")) +
+        "</div>" +
+        "<button id='security-enable-btn' class='btn btn-primary btn-small' type='button'>" +
+          escapeHtml(t("security.enableAction")) +
+        "</button>" +
+      "</div>"
+    );
+    var enableBtn = $("#security-enable-btn");
+    if (enableBtn) {
+      enableBtn.addEventListener("click", function () {
+        enableBtn.disabled = true;
+        enableProtection();
+      });
+    }
+  }
+
+  function enableProtection() {
+    // Same-origin fetch carries the loopback enable's session cookie
+    // automatically; the response body never contains the token.
+    apiPost("/security/enable", {})
+      .then(function (data) {
+        securityStatus = { protection: true, suggested: false, deviceCount: 1 };
+        renderSecurityBanner();
+        if (data && data.pairingCode && data.pairingCode.code) {
+          openSecurityPairModal(data.pairingCode.code, data.pairingCode.expiresAt || 0);
+        }
+        refreshAll();
+      })
+      .catch(function (err) {
+        showError(err instanceof Error ? err.message : "Failed to enable device protection");
+        renderSecurityBanner();
+      });
+  }
+
+  function securityPairCommand(code) {
+    // Controller URL is this page's own origin - the console browser IS the
+    // machine-name source of truth for the CLI command it hands out.
+    return "npx @teamclaws/teamclaw pair " + window.location.origin + " --code " + code;
+  }
+
+  function openSecurityPairModal(code, expiresAt) {
+    var modal = $("#security-pair-modal");
+    if (!modal) return;
+    renderSecurityPairCode(code, expiresAt);
+    modal.classList.add("open");
+    modal.setAttribute("aria-hidden", "false");
+  }
+
+  function closeSecurityPairModal() {
+    var modal = $("#security-pair-modal");
+    if (!modal) return;
+    modal.classList.remove("open");
+    modal.setAttribute("aria-hidden", "true");
+    stopSecurityPairTimer();
+  }
+
+  function stopSecurityPairTimer() {
+    if (securityPairTimer) {
+      clearInterval(securityPairTimer);
+      securityPairTimer = null;
+    }
+  }
+
+  function renderSecurityPairCode(code, expiresAt) {
+    var codeEl = $("#security-pair-code");
+    var countdownEl = $("#security-pair-countdown");
+    var commandEl = $("#security-pair-command");
+    if (!codeEl || !countdownEl || !commandEl) return;
+    codeEl.textContent = code || "";
+    commandEl.textContent = securityPairCommand(code || "");
+    stopSecurityPairTimer();
+    securityPairingExpiresAt = expiresAt || (Date.now() + 60_000);
+    var tick = function () {
+      var remaining = Math.max(0, Math.ceil((securityPairingExpiresAt - Date.now()) / 1000));
+      if (remaining <= 0) {
+        countdownEl.textContent = t("security.pairExpired");
+        stopSecurityPairTimer();
+        return;
+      }
+      countdownEl.textContent = t("security.pairExpiresIn", { n: remaining });
+    };
+    tick();
+    securityPairTimer = setInterval(tick, 1000);
+  }
+
+  function requestSecurityPairCode() {
+    // A new code invalidates the previous one by replacement (backend
+    // semantics); the console browser may mint one because its session
+    // cookie authenticates it (or it is the loopback console).
+    apiPost("/security/pair/start", {})
+      .then(function (data) {
+        if (data && data.pairingCode && data.pairingCode.code) {
+          var modal = $("#security-pair-modal");
+          if (modal && !modal.classList.contains("open")) {
+            openSecurityPairModal(data.pairingCode.code, data.pairingCode.expiresAt || 0);
+          } else {
+            renderSecurityPairCode(data.pairingCode.code, data.pairingCode.expiresAt || 0);
+          }
+        }
+      })
+      .catch(function (err) {
+        showError(err instanceof Error ? err.message : "Failed to issue a pairing code");
+      });
+  }
+
+  function securityDeviceKindIcon(kind) {
+    var icons = { web: "\uD83C\uDF10", worker: "\u2699\uFE0F", desktop: "\uD83D\uDDA5\uFE0F", cli: "\u2328\uFE0F" };
+    return icons[kind] || "\uD83D\uDD11";
+  }
+
+  function securityDeviceSeenLabel(device) {
+    if (!device || typeof device.lastSeenAt !== "number" || !device.lastSeenAt) {
+      return "";
+    }
+    try {
+      return new Date(device.lastSeenAt).toLocaleString(currentLanguage === "zh" ? "zh-CN" : "en");
+    } catch (_err) {
+      return "";
+    }
+  }
+
+  function renderSecurityDevices() {
+    var statusEl = $("#security-devices-status");
+    var listEl = $("#security-devices-list");
+    var actionsEl = $("#security-devices-actions");
+    if (!statusEl || !listEl || !actionsEl) return;
+    var protection = Boolean(securityStatus && securityStatus.protection);
+    statusEl.textContent = protection
+      ? t("security.statusOn", { n: (securityStatus && securityStatus.deviceCount) || 0 })
+      : t("security.statusOff");
+    if (!protection) {
+      listEl.innerHTML = "";
+      actionsEl.innerHTML = "";
+      return;
+    }
+    // GET /security requires a paired caller (this browser's cookie). An
+    // unpaired browser keeps the status line and gets the manage-elsewhere
+    // note instead of a device list.
+    apiGet("/security")
+      .then(function (data) {
+        var devices = (data && Array.isArray(data.devices)) ? data.devices : [];
+        if (!devices.length) {
+          listEl.innerHTML = '<div class="empty-state">' + escapeHtml(t("security.noDevices")) + "</div>";
+        } else {
+          listEl.innerHTML = devices.map(function (device) {
+            var seen = securityDeviceSeenLabel(device);
+            return (
+              '<div class="team-profile-archive-row" data-security-device="' + escapeHtml(device.id) + '">' +
+                "<span>" + securityDeviceKindIcon(device.kind) + " <strong>" + escapeHtml(device.name || device.id) + "</strong>" +
+                  ' <small style="opacity:.65">(' + escapeHtml(device.kind || "") + ")</small></span>" +
+                "<span style='opacity:.75'>" + (seen ? escapeHtml(seen) : "") + "</span>" +
+                '<button class="btn btn-small" type="button" data-security-revoke="' + escapeHtml(device.id) + '"' +
+                  (device.kind === "web" ? ' title="' + escapeHtml(t("security.selfRevokeWarn")) + '"' : "") + ">" +
+                  escapeHtml(t("security.revoke")) +
+                "</button>" +
+              "</div>"
+            );
+          }).join("");
+          listEl.querySelectorAll("[data-security-revoke]").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+              revokeSecurityDevice(btn.getAttribute("data-security-revoke") || "");
+            });
+          });
+        }
+        actionsEl.innerHTML =
+          '<button id="security-reset-btn" class="btn btn-small" type="button">' + escapeHtml(t("security.resetAll")) + "</button> " +
+          '<button id="security-new-code-btn" class="btn btn-small" type="button">' + escapeHtml(t("security.pairNewCode")) + "</button>";
+        var resetBtn = $("#security-reset-btn");
+        if (resetBtn) {
+          resetBtn.addEventListener("click", resetSecurityProtection);
+        }
+        var newCodeBtn = $("#security-new-code-btn");
+        if (newCodeBtn) {
+          newCodeBtn.addEventListener("click", requestSecurityPairCode);
+        }
+      })
+      .catch(function () {
+        listEl.innerHTML = '<div class="empty-state">' + escapeHtml(t("security.devicesUnavailable")) + "</div>";
+        actionsEl.innerHTML =
+          '<button id="security-new-code-btn" class="btn btn-small" type="button">' + escapeHtml(t("security.pairNewCode")) + "</button>";
+        var fallbackNewCode = $("#security-new-code-btn");
+        if (fallbackNewCode) {
+          fallbackNewCode.addEventListener("click", requestSecurityPairCode);
+        }
+      });
+  }
+
+  function revokeSecurityDevice(deviceId) {
+    if (!deviceId) return;
+    apiRequest("/security/devices/" + encodeURIComponent(deviceId), { method: "DELETE" })
+      .then(function (data) {
+        if (data && data.revokedSelf) {
+          // This browser just unpaired itself: every later API call will be
+          // 401 until it re-pairs from the controller host.
+          showError(t("security.selfRevoked"));
+        }
+        renderSecurityDevices();
+        refreshAll();
+      })
+      .catch(function (err) {
+        showError(err instanceof Error ? err.message : "Failed to revoke device");
+      });
+  }
+
+  function resetSecurityProtection() {
+    if (!window.confirm(t("security.resetConfirm"))) return;
+    apiPost("/security/reset", {})
+      .then(function () {
+        showError(t("security.resetDone"));
+        renderSecurityDevices();
+        refreshAll();
+      })
+      .catch(function (err) {
+        showError(err instanceof Error ? err.message : "Failed to reset device protection");
+      });
+  }
+
+  function bindSecurityUi() {
+    var pairModal = $("#security-pair-modal");
+    if (pairModal && !pairModal.dataset.bound) {
+      pairModal.dataset.bound = "true";
+      pairModal.addEventListener("click", function (event) {
+        if (event.target && event.target.hasAttribute && event.target.hasAttribute("data-security-pair-close")) {
+          closeSecurityPairModal();
+        }
+      });
+      var copyBtn = $("#security-pair-copy");
+      if (copyBtn) {
+        copyBtn.addEventListener("click", function () {
+          var commandEl = $("#security-pair-command");
+          if (!commandEl || !commandEl.textContent) return;
+          copyText(commandEl.textContent).then(function () {
+            copyBtn.textContent = t("action.copied");
+            setTimeout(function () { copyBtn.textContent = t("action.copyCommand"); }, 1500);
+          }).catch(function () {});
+        });
+      }
+      var newCodeBtn = $("#security-pair-new");
+      if (newCodeBtn) {
+        newCodeBtn.addEventListener("click", requestSecurityPairCode);
+      }
+    }
+  }
+
   function renderExternalWorkerInstallToggle() {
     var button = $("#worker-install-toggle");
     if (!button) return;
@@ -2457,6 +2770,15 @@
         modelReadiness: statusRes.modelReadiness || null,
         externalWorkerInstall: statusRes.externalWorkerInstall || null,
       };
+
+      // Issue #23: the /team/status `security` object drives the suggestion
+      // banner (protection off + non-LAN peer observed) and the device
+      // section status line. Absent on older controllers => null => hidden.
+      securityStatus = statusRes.security || null;
+      renderSecurityBanner();
+      if (($("#team-profile-modal") || {}).classList?.contains("open")) {
+        renderSecurityDevices();
+      }
 
       // Active team profile (Phase 5.1): drives the header indicator, the
       // capability-gated tab visibility, and the switch transition notice.
@@ -3880,6 +4202,7 @@
   promptWorkspaceIfDefault();
   updateWorkspacePathIndicator();
   bindTeamProfileModal();
+  bindSecurityUi();
   bindModelSettings();
   bindGithubCorner();
 
@@ -3954,6 +4277,9 @@
     modal.classList.add("open");
     modal.setAttribute("aria-hidden", "false");
     refreshTeamProfileModalData();
+    // Issue #23: the devices section lives at the bottom of this modal; it
+    // re-renders on every refreshAll while the modal is open.
+    renderSecurityDevices();
   }
 
   function closeTeamProfileModal() {

@@ -57,6 +57,12 @@
 
     <div class="content">
       <div id="runtime-alert" class="runtime-alert hidden"></div>
+      <!-- Device-pairing security suggestion banner (issue #23): non-blocking,
+           rendered only while protection is off AND a non-LAN peer was
+           observed (the /team/status security.suggested signal). The Enable
+           call is loopback-only server side; remote browsers never get an
+           actionable enable path. -->
+      <div id="security-suggest-banner" class="runtime-alert" hidden></div>
       <section id="external-worker-install" class="worker-install-card hidden"></section>
       <div class="tabs">
         <button class="tab" data-tab="planning">
@@ -356,6 +362,44 @@
           <h3 data-i18n="teamProfile.archivedTitle">Archived teams</h3>
           <div id="team-profile-archives" class="team-profile-archives"></div>
         </section>
+        <!-- Device-pairing security section (issue #23): status line always
+             reflects /team/status.security; the device list / revoke / reset
+             controls fetch GET /api/v1/security (paired browsers only). -->
+        <section class="team-profile-archived" id="security-devices-section">
+          <h3 data-i18n="security.devicesTitle">Device security</h3>
+          <div id="security-devices-status" style="font-size:12.5px;margin-bottom:8px"></div>
+          <div id="security-devices-list" class="team-profile-archives"></div>
+          <div id="security-devices-actions" class="workspace-prompt-actions"></div>
+        </section>
+      </div>
+    </section>
+  </div>
+
+  <!-- Device pairing modal (issue #23): opened right after POST
+       /api/v1/security/enable succeeds, or when the devices section issues a
+       new code. Shows the one-shot 60s pairing code, the countdown, and the
+       copyable CLI command for the next device. Closing needs no further
+       action: this browser was paired by the enable response's session
+       cookie, so it never logs in. -->
+  <div id="security-pair-modal" class="workspace-prompt-modal" aria-hidden="true">
+    <div class="workspace-prompt-backdrop" data-security-pair-close></div>
+    <section class="workspace-prompt-panel" role="dialog" aria-modal="true" aria-labelledby="security-pair-title" style="max-width:560px">
+      <header class="workspace-prompt-header">
+        <div>
+          <div class="workspace-prompt-kicker" data-i18n="security.devicesTitle">Device security</div>
+          <h2 id="security-pair-title" data-i18n="security.pairTitle">Pair your devices</h2>
+        </div>
+        <button id="security-pair-close" class="btn btn-small" type="button" data-security-pair-close data-i18n="action.close">Close</button>
+      </header>
+      <div class="workspace-prompt-body">
+        <p data-i18n="security.pairHint">This browser is paired automatically. To pair another device (worker, desktop or CLI), run this command within 60 seconds:</p>
+        <div id="security-pair-code" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:32px;letter-spacing:6px;font-weight:700;text-align:center;margin:10px 0 4px"></div>
+        <div id="security-pair-countdown" style="text-align:center;font-size:12.5px;opacity:.75;margin-bottom:10px"></div>
+        <pre id="security-pair-command" class="worker-install-command" style="margin:0 0 12px"><code></code></pre>
+        <div class="workspace-prompt-actions">
+          <button id="security-pair-copy" class="btn" type="button" data-i18n="action.copyCommand">Copy command</button>
+          <button id="security-pair-new" class="btn" type="button" data-i18n="security.pairNewCode">New pairing code</button>
+        </div>
       </div>
     </section>
   </div>
