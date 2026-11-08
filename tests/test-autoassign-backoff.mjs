@@ -149,6 +149,24 @@ const settle = async (ms = 60) => {
   await new Promise((resolve) => setTimeout(resolve, ms));
 };
 
+// Shared hanging-router harness for the queued-hint contracts (f/g): the
+// first router call hangs until released so round 1 stays in flight.
+let releaseHangingRouter = () => {};
+function hangOnceRouter() {
+  releaseHangingRouter = () => {};
+  let first = true;
+  return {
+    autoAssignPendingTasks(taskMap, workerMap) {
+      // Snapshot pairs at CALL time (contract-d semantics): round 1 sees the
+      // empty task set it started with; the deferred follow-up re-snapshots.
+      const pairs = defaultAutoAssignPairs(taskMap, workerMap);
+      if (!first) return pairs;
+      first = false;
+      return new Promise((resolve) => { releaseHangingRouter = () => resolve(pairs); });
+    },
+  };
+}
+
 let failed = false;
 try {
   // ── Contract a: unreachable-worker storm is linear (T*W attempts) ──────
@@ -263,6 +281,44 @@ try {
     );
     assert.equal(state.tasks.t1.assignedWorkerId, "w2", "task lands on the hinted worker");
     assert.equal(state.tasks.t1.status, "assigned");
+  }
+
+  // ── Contract f: a no-id trigger never erases a queued hint ──────────────
+  {
+    // Production: revertTaskAssignment fires autoAssignPendingTasks(deps)
+    // with no preferredWorkerId while a register-shaped trigger's hint is
+    // already queued. The queued w2 hint must survive (Wave-12 review note:
+    // this path was declared but untested).
+    const { deps, state } = makeDeps({ tasks: {}, workers: { w1: makeWorker("w1"), w2: makeWorker("w2") }, router: hangOnceRouter() });
+    assignAttempts = 0; assignSucceeds = true; assignOrder = [];
+    const round1 = taskAssignmentMod.autoAssignPendingTasks(deps);
+    state.tasks.t1 = makeTask("t1");
+    const hinted = await taskAssignmentMod.autoAssignPendingTasks(deps, "w2");
+    const hintless = await taskAssignmentMod.autoAssignPendingTasks(deps);
+    assert.deepEqual(hinted, [], "hinted trigger defers");
+    assert.deepEqual(hintless, [], "no-id trigger also defers (round 1 still in flight)");
+    releaseHangingRouter();
+    await round1; await settle(120);
+    assert.equal(assignAttempts, 1);
+    assert.match(assignOrder[0] || "", /\/worker\/w2/, "queued w2 hint must survive the later no-id trigger");
+    assert.equal(state.tasks.t1.assignedWorkerId, "w2");
+  }
+
+  // ── Contract g: a newer id-trigger updates the queued hint ──────────────
+  {
+    // Production: w2 registers (hint queued), then w3 registers before the
+    // deferred round starts. Latest capacity signal wins.
+    const { deps, state } = makeDeps({ tasks: {}, workers: { w1: makeWorker("w1"), w2: makeWorker("w2"), w3: makeWorker("w3") }, router: hangOnceRouter() });
+    assignAttempts = 0; assignSucceeds = true; assignOrder = [];
+    const round1 = taskAssignmentMod.autoAssignPendingTasks(deps);
+    state.tasks.t1 = makeTask("t1");
+    await taskAssignmentMod.autoAssignPendingTasks(deps, "w2");
+    await taskAssignmentMod.autoAssignPendingTasks(deps, "w3");
+    releaseHangingRouter();
+    await round1; await settle(120);
+    assert.equal(assignAttempts, 1);
+    assert.match(assignOrder[0] || "", /\/worker\/w3/, "newer register hint (w3) must replace the queued w2 hint");
+    assert.equal(state.tasks.t1.assignedWorkerId, "w3");
   }
 
   // ── Contract e: one gate per deps - concurrent triggers run ONE round ───
