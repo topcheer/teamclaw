@@ -26,7 +26,13 @@ export type WsEvent =
   // colon convention used by the domain events above - they are the external
   // contract UI/desktop/workers will subscribe to.
   | { type: "team.switch_started"; data: { profileId: string; previousProfileId: string } }
-  | { type: "team.switch_completed"; data: { profileId: string } };
+  | { type: "team.switch_completed"; data: { profileId: string } }
+  // Phase 2 follow-up (#201 review): the switch failed mid-flight. Broadcast
+  // BEFORE the transition is cleared so UI waiters see the failure instead of
+  // silently timing out on reconcile. `reason` states the honest worst case:
+  // once the step-3 archive write has landed, the team may be partially
+  // switched and a restart is the reliable way back to a known-good team.
+  | { type: "team.switch_failed"; data: { previousProfileId: string; targetProfileId: string; reason: string } };
 
 export class TeamWebSocketServer {
   private wss: WebSocketServer | null = null;

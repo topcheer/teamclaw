@@ -6,8 +6,10 @@
 //   - header mini-button + modal elements exist in index.html
 //   - /profiles, /team/profile, /archived-teams fetch wiring in app.js
 //   - two-step switch flow (cards -> archive-consequence confirm -> POST)
-//   - 202 + team.switch_started/completed WS tracking, 409 transition notice
+//   - 202 + team.switch_started/completed/failed WS tracking, 409 transition
+//     notice
 //   - capability-gated teamauto tab hidden (not removed) + CSS hidden rule
+//   - capability off->on restart hint in the confirm step (#193)
 //   - reviewedBy "Human sign-off pending" badge rendering
 //   - teamProfile.* i18n keys present in BOTH the en and zh inline dicts
 //   - existing UI behavior preserved (team-name span, full 7-tab DOM set)
@@ -131,6 +133,38 @@ assert.match(
 );
 
 // ---------------------------------------------------------------------------
+// 3b. Capability off->on restart hint (#193): switching a capability off
+// stops its subsystem immediately, switching it back on does NOT auto-start
+// it (wired at controller startup only). The confirm step must warn when any
+// capability differs between the active pack and the selected target.
+// ---------------------------------------------------------------------------
+assert.match(
+  appSource,
+  /function teamProfileCapabilitiesChanging/,
+  "confirm step must derive changing capabilities from the two packs",
+);
+assert.match(
+  appSource,
+  /return Object\.keys\(targetCaps\)\.filter\(function \(key\) \{\s*return Boolean\(activeCaps\[key\]\) !== Boolean\(targetCaps\[key\]\);\s*\}\);/,
+  "capability comparison must flag every switch that differs in EITHER direction (off stops now, on needs restart)",
+);
+assert.match(
+  appSource,
+  /var changingCaps = teamProfileCapabilitiesChanging\(profile\);/,
+  "confirm step must compute the changing capability list for the selected target",
+);
+assert.match(
+  appSource,
+  /t\("teamProfile\.capabilityRestartHint", \{ list: changingCaps\.join\(", "\) \}\)/,
+  "confirm step must render the restart hint with the capability list",
+);
+assert.match(
+  appSource,
+  /changingCaps\.length/,
+  "the restart hint must be conditional (no hint when no capability changes)",
+);
+
+// ---------------------------------------------------------------------------
 // 4. Switch tracking: 202 + WS events + 409 transition notice.
 // ---------------------------------------------------------------------------
 assert.match(
@@ -147,6 +181,29 @@ assert.match(
   appSource,
   /case "team\.switch_completed":[\s\S]*?refreshAll\(\);[\s\S]*?finishTeamProfileSwitch\(/,
   "completion must trigger a full refresh and close the modal",
+);
+// Phase 2 follow-up (#201 review): server-side switch failure feedback. The
+// loading/confirm state must be released by the explicit team.switch_failed
+// event (toast + full refresh), not left to the reconcile timeout.
+assert.match(
+  appSource,
+  /case "team\.switch_failed":/,
+  "WS team.switch_failed must be handled",
+);
+assert.match(
+  appSource,
+  /case "team\.switch_failed":[\s\S]*?refreshAll\(\);[\s\S]*?releaseTeamProfileSwitchUi\(\);[\s\S]*?showNotice\(/,
+  "failure must trigger a full refresh, release the loading state, and toast",
+);
+assert.match(
+  appSource,
+  /t\("teamProfile\.switchFailed", \{ name: teamProfileDisplayNameById\(failedTargetId\) \}\)/,
+  "failure toast must name the failed target profile",
+);
+assert.match(
+  appSource,
+  /String\(failedData\.reason \|\| ""\)/,
+  "failure toast body must surface the server-provided reason verbatim",
 );
 assert.match(
   appSource,
@@ -222,12 +279,14 @@ const expectedKeys = [
   "teamProfile.loadFailed",
   "teamProfile.confirmArchive",
   "teamProfile.confirmWorkers",
+  "teamProfile.capabilityRestartHint",
   "teamProfile.confirmButton",
   "teamProfile.cancel",
   "teamProfile.switching",
   "teamProfile.switchStarted",
   "teamProfile.transitionPending",
   "teamProfile.switchCompleted",
+  "teamProfile.switchFailed",
   "teamProfile.archivedTitle",
   "teamProfile.archivedEmpty",
   "teamProfile.archivedTasks",

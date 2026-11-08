@@ -20,12 +20,20 @@
 //    one attempt.
 // c. Recovery semantics: once the storm settles, the failed pairs are
 //    forgotten - a later round (worker recovered) attempts and assigns them.
+// d. The deferred follow-up round carries the nested trigger's
+//    preferredWorkerId (worker register/heartbeat hint) instead of dropping
+//    it - it biases which candidate dispatches first.
+// e. One gate per deps object: two concurrent triggers on the SAME deps run
+//    a single round (the loser defers), and the TeamAuto onTasksCreated hook
+//    passes the very same httpDeps object as the HTTP call sites (source
+//    pin) so TeamAuto-triggered and HTTP-triggered rounds share that gate.
 //
 // No real network: global fetch is patched. The taskRouter dep is replaced
 // with a deterministic fake that proposes every pending-task x idle-worker
 // pair, which is the maximal fan-out shape of the real router.
 
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -41,11 +49,15 @@ assert.equal(typeof httpServerMod.autoAssignPendingTasks, "function", "autoAssig
 const realFetch = globalThis.fetch;
 let assignAttempts = 0;
 let assignSucceeds = false;
+// Worker URLs in /api/v1/tasks/assign dispatch order (per scenario) so tests
+// can observe WHICH candidate a round attempts first.
+let assignOrder = [];
 
 globalThis.fetch = async (url, init) => {
   const target = String(url);
   if (target.endsWith("/api/v1/tasks/assign")) {
     assignAttempts += 1;
+    assignOrder.push(target);
     if (!assignSucceeds) {
       throw new Error("connect ECONNREFUSED 127.0.0.1:1 (simulated unreachable worker)");
     }
@@ -82,7 +94,24 @@ function makeWorker(id) {
   };
 }
 
-function makeDeps({ tasks, workers }) {
+// Deterministic worst-case router: proposes every pending task x idle worker
+// pair on every call, so a nested round without shared state would re-attempt
+// ALL pairs (the #191 blowup shape).
+function defaultAutoAssignPairs(taskMap, workerMap) {
+  const pending = Object.values(taskMap).filter(
+    (t) => t.status === "pending" || t.status === "assigned",
+  );
+  const idle = Object.values(workerMap).filter((w) => w.status === "idle");
+  const pairs = [];
+  for (const task of pending) {
+    for (const worker of idle) {
+      pairs.push({ task, worker });
+    }
+  }
+  return pairs;
+}
+
+function makeDeps({ tasks, workers, router }) {
   const state = {
     profileId: "software-rd",
     teamName: "backoff-test",
@@ -95,23 +124,8 @@ function makeDeps({ tasks, workers }) {
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
-  // Deterministic worst-case router: proposes every pending task x idle
-  // worker pair on every call, so a nested round without shared state would
-  // re-attempt ALL pairs (the #191 blowup shape).
-  const taskRouter = {
-    autoAssignPendingTasks(taskMap, workerMap) {
-      const pending = Object.values(taskMap).filter(
-        (t) => t.status === "pending" || t.status === "assigned",
-      );
-      const idle = Object.values(workerMap).filter((w) => w.status === "idle");
-      const pairs = [];
-      for (const task of pending) {
-        for (const worker of idle) {
-          pairs.push({ task, worker });
-        }
-      }
-      return pairs;
-    },
+  const taskRouter = router ?? {
+    autoAssignPendingTasks: defaultAutoAssignPairs,
   };
   return {
     deps: {
@@ -205,7 +219,101 @@ try {
     assert.equal(assignAttempts, 2, "recovery round re-attempts the pair exactly once more");
   }
 
-  console.log("test-autoassign-backoff: all assertions passed (issue #191 linear dispatch, normal path, recovery)");
+  // ── Contract d: deferred round carries the nested trigger's hint ────────
+  {
+    // Round 1 is in flight with NO work to do (its router call hangs until
+    // released and snapshots the empty task set). While it hangs, a task
+    // lands AND a worker-register-shaped trigger arrives with
+    // preferredWorkerId=w2 (production: the register/heartbeat paths call
+    // autoAssignPendingTasks(deps, workerId)). The deferred follow-up must
+    // carry that hint: it attempts w2 first even though w1 sorts ahead in
+    // the router's candidate order. Pre-fix the follow-up dropped the hint
+    // and dispatched to w1.
+    let releaseRouter;
+    const routerGate = new Promise((resolve) => { releaseRouter = resolve; });
+    let routerCalls = 0;
+    const hangingRouter = {
+      autoAssignPendingTasks(taskMap, workerMap) {
+        routerCalls += 1;
+        const pairs = defaultAutoAssignPairs(taskMap, workerMap);
+        return routerCalls === 1 ? routerGate.then(() => pairs) : pairs;
+      },
+    };
+    const { deps, state } = makeDeps({ tasks: {}, workers: { w1: makeWorker("w1"), w2: makeWorker("w2") }, router: hangingRouter });
+    assignAttempts = 0;
+    assignSucceeds = true;
+    assignOrder = [];
+
+    const round1 = httpServerMod.autoAssignPendingTasks(deps);
+    // While round 1 hangs: a task lands, then the register-shaped trigger.
+    state.tasks.t1 = makeTask("t1");
+    const nested = await httpServerMod.autoAssignPendingTasks(deps, "w2");
+    assert.deepEqual(nested, [], "nested trigger must defer (queue), never run a parallel round");
+    releaseRouter();
+    await round1;
+    await settle(120);
+
+    assert.equal(assignAttempts, 1, "hinted follow-up round needs exactly one dispatch");
+    assert.match(
+      assignOrder[0] || "",
+      /\/worker\/w2/,
+      "deferred round must dispatch to the nested trigger's preferredWorkerId first (not the router's first candidate w1)",
+    );
+    assert.equal(state.tasks.t1.assignedWorkerId, "w2", "task lands on the hinted worker");
+    assert.equal(state.tasks.t1.status, "assigned");
+  }
+
+  // ── Contract e: one gate per deps - concurrent triggers run ONE round ───
+  {
+    // Production shape after the controller-service unification: TeamAuto's
+    // onTasksCreated and any HTTP endpoint both call autoAssignPendingTasks
+    // on the SAME deps object. Two triggers racing must not run two parallel
+    // rounds with separate attemptedPairs sets: T*W attempts total, not
+    // 2*T*W.
+    const tasks = Object.fromEntries(["t1", "t2"].map((id) => [id, makeTask(id)]));
+    const workers = Object.fromEntries(["w1"].map((id) => [id, makeWorker(id)]));
+    const { deps } = makeDeps({ tasks, workers });
+    assignAttempts = 0;
+    assignSucceeds = false;
+
+    const [first, second] = await Promise.all([
+      httpServerMod.autoAssignPendingTasks(deps),
+      httpServerMod.autoAssignPendingTasks(deps),
+    ]);
+    assert.deepEqual(second, [], "the losing concurrent trigger must defer, not start a second round");
+    assert.equal(first.length, 0, "unreachable worker assigns nothing");
+    await settle(200);
+    assert.equal(
+      assignAttempts,
+      2 * 1,
+      "two concurrent triggers on one deps object stay linear: exactly T*W attempts (2 tasks x 1 worker), not 2*T*W",
+    );
+  }
+
+  // ── Contract e (source pin): TeamAuto hook shares the HTTP deps object ──
+  {
+    // The autoAssign re-entrancy gate is keyed per deps object identity
+    // (WeakMap), so a separate ad-hoc object in the TeamAuto onTasksCreated
+    // callback would silently open a SECOND gate (TeamAuto round and HTTP
+    // round able to run concurrently with separate attemptedPairs sets -
+    // the same-task double LLM-judge window). The callback must pass the
+    // same httpDeps every HTTP call site uses.
+    const controllerServiceSource = fs.readFileSync(
+      path.join(projectRoot, "src", "src", "controller", "controller-service.ts"),
+      "utf8",
+    );
+    assert.ok(
+      !controllerServiceSource.includes("httpDepsForAutoAssign"),
+      "controller-service must not build a second ad-hoc deps object for auto-assign",
+    );
+    assert.match(
+      controllerServiceSource,
+      /onTasksCreated:[\s\S]*?await autoAssignPendingTasks\(httpDeps\)/,
+      "TeamAuto onTasksCreated must call autoAssignPendingTasks with the shared httpDeps (single gate for TeamAuto + HTTP triggers)",
+    );
+  }
+
+  console.log("test-autoassign-backoff: all assertions passed (issue #191 linear dispatch, normal path, recovery, deferred-round hint, single shared gate)");
 } catch (err) {
   failed = true;
   console.error("test-autoassign-backoff FAILED:", err);

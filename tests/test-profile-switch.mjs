@@ -157,7 +157,19 @@ async function bootScenario(options = {}) {
     await stateMod.saveTeamState(teamState);
   }
   const getTeamState = () => teamState;
+  // One-shot failure injection for the "archive landed, later step failed"
+  // construction: the next updateTeamState that observes (phase "archiving"
+  // + an archive file on disk) is exactly step 4's rebuild - throw there.
+  let failNextUpdateAfterArchive = Boolean(options.failUpdateAfterArchive);
   const updateTeamState = (updater) => {
+    if (
+      failNextUpdateAfterArchive
+      && teamState?.transition?.phase === "archiving"
+      && listArchiveFiles().length > 0
+    ) {
+      failNextUpdateAfterArchive = false;
+      throw new Error("simulated post-archive failure (state rebuild)");
+    }
     updater(teamState);
     void stateMod.saveTeamState(teamState);
     return teamState;
@@ -165,7 +177,14 @@ async function bootScenario(options = {}) {
 
   const wsServer = new TeamWebSocketServer(logger);
   const wsEvents = [];
-  wsServer.broadcastUpdate = (event) => { wsEvents.push(event); };
+  // Snapshots the in-memory transition phase at each broadcast so tests can
+  // prove event ordering (e.g. team.switch_failed must fire BEFORE the
+  // failure path clears the transition).
+  const wsTransitionPhaseAtBroadcast = [];
+  wsServer.broadcastUpdate = (event) => {
+    wsEvents.push(event);
+    wsTransitionPhaseAtBroadcast.push(teamState?.transition ? teamState.transition.phase : null);
+  };
 
   const deps = {
     config,
@@ -192,7 +211,7 @@ async function bootScenario(options = {}) {
   };
 
   return {
-    deps, server, call, wsEvents,
+    deps, server, call, wsEvents, wsTransitionPhaseAtBroadcast,
     getTeamState,
     setTeamState(next) { teamState = next; },
     async close() {
@@ -242,6 +261,19 @@ async function waitForSwitchCompletion(call, timeoutMs = 10000) {
     assert.equal(byId["minimal-bank"].roleCount, 4, "fixture roleCount (3 labeled roles + the Phase 2.6 labelZh-less role)");
     assert.equal(byId["minimal-bank"].nameZh, "最小银行团队", "profiles listing carries nameZh");
     assert.ok(byId["minimal-bank"].icon && byId["minimal-bank"].industry && byId["minimal-bank"].version, "profiles listing carries icon/industry/version");
+    // Phase 5 follow-up (#193): the listing carries each pack's capability
+    // switches so the switcher confirm step can warn that off -> on flips
+    // need a gateway restart to re-enable the subsystem.
+    assert.deepEqual(
+      byId["minimal-bank"].capabilities,
+      { git: false, teamauto: false, runnablePreview: false, deliveryReview: false },
+      "profiles listing carries the target pack's capability switches",
+    );
+    assert.deepEqual(
+      byId["software-rd"].capabilities,
+      { git: true, teamauto: true, runnablePreview: true, deliveryReview: true },
+      "software-rd listing keeps its all-on capability switches",
+    );
 
     const beforeRes = await scenario.call("GET", "/api/v1/team/profile");
     assert.equal(beforeRes.status, 200);
@@ -660,6 +692,104 @@ async function waitForSwitchCompletion(call, timeoutMs = 10000) {
     assert.equal(state.transition, undefined, "transition cleared");
     assert.equal(Object.keys(state.tasks).length, 0);
     assert.equal(readStateFile().profileId, "minimal-bank", "resumed state persisted");
+  } finally {
+    await scenario.close();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 8 (Phase 2 follow-up, #201 review): switch failure semantics.
+// The failure path must broadcast team.switch_failed BEFORE clearing the
+// transition (the web switcher's loading state is released by the event, not
+// by the reconcile timeout), and the reason must be honest about the worst
+// case once the archive write has landed.
+// ---------------------------------------------------------------------------
+async function waitForSwitchFailed(scenario, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const event = scenario.wsEvents.find((entry) => entry.type === "team.switch_failed");
+    if (event) {
+      return event;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.fail("team.switch_failed was not broadcast within the timeout");
+}
+
+{
+  // 8a: the archive write itself fails (read-only archive dir). No archive
+  // landed, so the reason is the raw error; the previous team survives and
+  // keeps serving; the switch can be re-issued once the cause is fixed.
+  const scenario = await bootScenario({ initialState: softwareRdState() });
+  try {
+    fs.mkdirSync(archivedDir(), { recursive: true });
+    fs.chmodSync(archivedDir(), 0o555);
+    const switchRes = await scenario.call("POST", "/api/v1/team/profile", { profileId: "minimal-bank" });
+    assert.equal(switchRes.status, 202, "the switch still starts asynchronously before failing");
+
+    const failed = await waitForSwitchFailed(scenario);
+    assert.deepEqual(
+      { previousProfileId: failed.data.previousProfileId, targetProfileId: failed.data.targetProfileId },
+      { previousProfileId: "software-rd", targetProfileId: "minimal-bank" },
+      "team.switch_failed payload names both sides of the failed switch",
+    );
+    assert.ok(typeof failed.data.reason === "string" && failed.data.reason.length > 0, "reason carries the underlying error");
+    assert.doesNotMatch(
+      failed.data.reason,
+      /partially switched/,
+      "no archive landed: the reason must not claim a partial switch",
+    );
+    const broadcastIdx = scenario.wsEvents.indexOf(failed);
+    assert.equal(
+      scenario.wsTransitionPhaseAtBroadcast[broadcastIdx],
+      "archiving",
+      "team.switch_failed must be broadcast while the transition is still set (before the failure path clears it)",
+    );
+
+    await waitForSwitchCompletion(scenario.call);
+    const after = scenario.getTeamState();
+    assert.equal(after.profileId, "software-rd", "the previous team keeps serving after the failure");
+    assert.equal(after.transition, undefined, "the transition must be cleared so the team is not wedged");
+    assert.equal(Object.keys(after.tasks).length, 2, "the previous team's tasks are intact");
+    assert.equal(listArchiveFiles().length, 0, "no archive file was written");
+
+    // Not wedged: with the archive dir writable again the switch re-issues.
+    fs.chmodSync(archivedDir(), 0o755);
+    const retry = await scenario.call("POST", "/api/v1/team/profile", { profileId: "minimal-bank" });
+    assert.equal(retry.status, 202, "a failed switch must not wedge the transition gate");
+    await waitForSwitchCompletion(scenario.call);
+    assert.equal(scenario.getTeamState().profileId, "minimal-bank", "the re-issued switch completes");
+    assert.equal(listArchiveFiles().length, 1, "the retry archives the previous team exactly once");
+  } finally {
+    fs.chmodSync(archivedDir(), 0o755);
+    await scenario.close();
+  }
+}
+
+{
+  // 8b: the archive landed but a later step failed (state rebuild throws).
+  // The reason must state the honest worst case: archive preserved, team may
+  // be partially switched, restart recommended.
+  const scenario = await bootScenario({ initialState: softwareRdState(), failUpdateAfterArchive: true });
+  try {
+    const switchRes = await scenario.call("POST", "/api/v1/team/profile", { profileId: "minimal-bank" });
+    assert.equal(switchRes.status, 202);
+
+    const failed = await waitForSwitchFailed(scenario);
+    assert.equal(failed.data.previousProfileId, "software-rd");
+    assert.equal(failed.data.targetProfileId, "minimal-bank");
+    assert.match(
+      failed.data.reason,
+      /archive preserved, team state may be partially switched, restart recommended/,
+      "post-archive failures must carry the honest partial-switch warning",
+    );
+    assert.match(failed.data.reason, /simulated post-archive failure/, "reason keeps the underlying error detail");
+
+    await waitForSwitchCompletion(scenario.call);
+    const after = scenario.getTeamState();
+    assert.equal(after.transition, undefined, "transition cleared after the failure");
+    assert.equal(after.profileId, "software-rd", "the pre-flip team identity is what survived");
+    assert.equal(listArchiveFiles().length, 1, "the archive written before the failure is preserved");
   } finally {
     await scenario.close();
   }

@@ -224,12 +224,14 @@
       "teamProfile.loadFailed": "Failed to load team profiles",
       "teamProfile.confirmArchive": "The current team's {n} task(s) will be archived as read-only history. This cannot be undone.",
       "teamProfile.confirmWorkers": "All workers stop and re-warm for the new team; task submissions are rejected while the switch runs.",
+      "teamProfile.capabilityRestartHint": "Capabilities {list} change with this switch: turning one off stops it immediately, and turning one back on only takes effect after a gateway restart.",
       "teamProfile.confirmButton": "Switch team",
       "teamProfile.cancel": "Back",
       "teamProfile.switching": "Switching…",
       "teamProfile.switchStarted": "Switch started - waiting for the new team to warm up…",
       "teamProfile.transitionPending": "A switch to {name} is already in progress (phase: {phase}).",
       "teamProfile.switchCompleted": "Team profile switched to {name}",
+      "teamProfile.switchFailed": "Team profile switch to {name} failed",
       "teamProfile.archivedTitle": "Archived teams",
       "teamProfile.archivedEmpty": "No archived teams yet.",
       "teamProfile.archivedTasks": "{n} tasks"
@@ -402,12 +404,14 @@
       "teamProfile.loadFailed": "加载团队画像失败",
       "teamProfile.confirmArchive": "当前团队的 {n} 个任务将归档为只读历史，此操作不可撤销。",
       "teamProfile.confirmWorkers": "所有 worker 将停止并按新团队重新预热；切换期间提交的任务会被拒绝。",
+      "teamProfile.capabilityRestartHint": "能力 {list} 将随本次切换变化：关闭会立即停用，重新开启需重启网关才会生效。",
       "teamProfile.confirmButton": "切换团队",
       "teamProfile.cancel": "返回",
       "teamProfile.switching": "切换中…",
       "teamProfile.switchStarted": "切换已开始 - 等待新团队预热完成…",
       "teamProfile.transitionPending": "到 {name} 的切换正在进行中（阶段：{phase}）。",
       "teamProfile.switchCompleted": "团队画像已切换到 {name}",
+      "teamProfile.switchFailed": "切换到 {name} 的团队画像失败",
       "teamProfile.archivedTitle": "已归档团队",
       "teamProfile.archivedEmpty": "暂无已归档团队。",
       "teamProfile.archivedTasks": "{n} 个任务"
@@ -2360,6 +2364,24 @@
         );
         break;
       }
+      case "team.switch_failed": {
+        // Server-side switch failure: release the loading/confirm state with
+        // an explicit failure toast instead of waiting for the reconcile
+        // fallback to silently re-enable the button. The reason may state
+        // that the archive was preserved and the team is partially switched;
+        // the state may have moved partway, so re-pull everything.
+        const failedData = event.data || {};
+        const failedTargetId = failedData.targetProfileId || pendingSwitchProfileId || "";
+        refreshAll();
+        releaseTeamProfileSwitchUi();
+        showNotice(
+          "team:switch_failed",
+          "attention",
+          t("teamProfile.switchFailed", { name: teamProfileDisplayNameById(failedTargetId) }),
+          String(failedData.reason || ""),
+        );
+        break;
+      }
     }
   }
 
@@ -4019,6 +4041,24 @@
     }
   }
 
+  // Capability off->on restart semantics (#193): runtime teardown during a
+  // switch is one-directional - switching a capability OFF stops its
+  // subsystem immediately, but switching it back ON does not (re)start it
+  // (TeamAuto scheduling / preview restoration are wired at controller
+  // startup only). Any capability that DIFFERS between the active profile
+  // and the selected target therefore deserves a heads-up in the confirm
+  // step. Data: the active profile's capabilities from /team/profile, the
+  // target's from the /profiles listing. Older controllers without the
+  // capabilities field simply skip the hint.
+  function teamProfileCapabilitiesChanging(targetProfile) {
+    var activeCaps = activeTeamProfile && activeTeamProfile.profile && activeTeamProfile.profile.capabilities;
+    var targetCaps = targetProfile && targetProfile.capabilities;
+    if (!activeCaps || !targetCaps) return [];
+    return Object.keys(targetCaps).filter(function (key) {
+      return Boolean(activeCaps[key]) !== Boolean(targetCaps[key]);
+    });
+  }
+
   function showTeamProfileConfirmStep(profile) {
     if (!profile) return;
     var listEl = $("#team-profile-list");
@@ -4031,11 +4071,17 @@
     if (confirmEl) confirmEl.hidden = false;
     if (statusEl) statusEl.hidden = true;
     var taskCount = (teamState.tasks || []).length;
+    var changingCaps = teamProfileCapabilitiesChanging(profile);
     if (bodyEl) {
       bodyEl.innerHTML = (
         "<h3>" + escapeHtml((profile.icon ? profile.icon + " " : "") + profileDisplayLabel(profile)) + "</h3>" +
         '<p class="team-profile-confirm-warning">' + escapeHtml(t("teamProfile.confirmArchive", { n: taskCount })) + "</p>" +
-        '<p class="workspace-prompt-note">' + escapeHtml(t("teamProfile.confirmWorkers")) + "</p>"
+        '<p class="workspace-prompt-note">' + escapeHtml(t("teamProfile.confirmWorkers")) + "</p>" +
+        (changingCaps.length
+          ? '<p class="team-profile-confirm-warning">' +
+            escapeHtml(t("teamProfile.capabilityRestartHint", { list: changingCaps.join(", ") })) +
+            "</p>"
+          : "")
       );
     }
     resetTeamProfileConfirmButton();
