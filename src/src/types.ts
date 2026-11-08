@@ -565,6 +565,12 @@ export type PluginConfig = {
    */
   githubClientSecret: string;
   agentIsolationMode: AgentIsolationMode;
+  /**
+   * Issue #23: controller device-pairing security options. Parsed with
+   * safe defaults (autoPair: true) so hand-built configs without the key
+   * keep the L1 zero-input LAN pairing behavior.
+   */
+  security?: SecurityConfig;
   workerProvisioningType: WorkerProvisioningType;
   workerProvisioningDisabled: boolean;
   workerProvisioningControllerUrl: string;
@@ -595,6 +601,68 @@ export type WorkerIdentity = {
   role: RoleId;
   controllerUrl: string;
   registeredAt: number;
+};
+
+// ===========================================================================
+// Device pairing security (issue #23, backend wave).
+//
+// Zero-friction ladder (product semantics, FIXED):
+//   L0 local   - no devices persisted => no authentication at all (the
+//                historical behavior; a state without `security` is L0)
+//   L1 LAN     - LAN peers (loopback / RFC1918 / ULA / link-local) may
+//                self-pair via POST /api/v1/security/pair-auto while
+//                config.security.autoPair is true (default)
+//   L2 exposed - one-shot 60s pairing codes minted by an authenticated
+//                device or the loopback console
+// The user never configures a token and the UI never shows a login page.
+// Tokens are 32-byte hex secrets returned to the pairing caller EXACTLY
+// ONCE; only their sha256 hex digest is persisted.
+// ===========================================================================
+
+export type SecurityDeviceKind = "web" | "worker" | "desktop" | "cli";
+
+export type SecurityDevice = {
+  id: string;
+  name: string;
+  kind: SecurityDeviceKind;
+  /** sha256 hex of the device token. The plaintext token is never persisted. */
+  tokenHash: string;
+  createdAt: number;
+  /** Epoch ms of the last authenticated request (throttled persistence). */
+  lastSeenAt?: number;
+  /** Where the device paired from (peer IP, or "loopback" for the console). */
+  origin?: string;
+};
+
+export type SecurityPairingCode = {
+  /** 8-character uppercase base32 (RFC 4648) code, displayed once to a human. */
+  code: string;
+  /** Absolute expiry (epoch ms); pairing codes live 60 seconds. */
+  expiresAt: number;
+  purpose: string;
+  /** Set when consumed; a used code can never pair a second device. */
+  usedAt?: number;
+};
+
+export type NonLanPeerObservation = {
+  ip: string;
+  at: number;
+  path: string;
+};
+
+export type TeamSecurityState = {
+  /** Set when protection was first enabled (first device minted); the suggestion signal below may exist without it while still L0. */
+  enabledAt?: number;
+  /** Protection is ON iff this array is non-empty (the L0/L1/L2 ladder switch). */
+  devices: SecurityDevice[];
+  pairingCode?: SecurityPairingCode;
+  /** Suggestion signal: latest non-LAN peer observed while protection is off. */
+  lastNonLanPeer?: NonLanPeerObservation;
+};
+
+export type SecurityConfig = {
+  /** Allow zero-input pairing from LAN peers (POST /api/v1/security/pair-auto). */
+  autoPair: boolean;
 };
 
 /**
@@ -638,6 +706,13 @@ export type TeamState = {
   provisioning?: TeamProvisioningState;
   previews?: Record<string, DynamicPreviewRecord>;
   reports?: Record<string, DeliveryReportRecord>;
+  /**
+   * Issue #23: device-pairing security state. ABSENT or carrying an empty
+   * devices array = protection off (L0 zero-friction default, the exact
+   * pre-issue behavior); a non-empty devices array turns the auth
+   * middleware on (see controller/security.ts).
+   */
+  security?: TeamSecurityState;
   createdAt: number;
   updatedAt: number;
 };
@@ -807,6 +882,16 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
       ? raw.agentIsolationMode
       : "independent";
 
+  // Issue #23: security.autoPair defaults to true (L1 zero-input LAN
+  // pairing); only an explicit boolean false disables pair-auto.
+  const rawSecurity = raw.security;
+  const rawAutoPair = rawSecurity && typeof rawSecurity === "object" && !Array.isArray(rawSecurity)
+    ? (rawSecurity as { autoPair?: unknown }).autoPair
+    : undefined;
+  const security: SecurityConfig = {
+    autoPair: typeof rawAutoPair === "boolean" ? rawAutoPair : true,
+  };
+
   const rawWorkerProvisioningType = parseProvisioningType(raw.workerProvisioningType);
   const workerProvisioningDisabled = raw.workerProvisioningDisabled === true;
   // Legacy local installs often persisted workerProvisioningType="none" without
@@ -914,6 +999,7 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
     githubClientId,
     githubClientSecret,
     agentIsolationMode,
+    security,
     workerProvisioningType,
     workerProvisioningDisabled,
     workerProvisioningControllerUrl,

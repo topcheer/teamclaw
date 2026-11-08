@@ -1,5 +1,5 @@
 import { WebSocketServer, WebSocket } from "ws";
-import type { Server } from "node:http";
+import type { IncomingMessage, Server } from "node:http";
 import type { PluginLogger } from "../../api.js";
 
 export type WsEvent =
@@ -34,6 +34,18 @@ export type WsEvent =
   // switched and a restart is the reliable way back to a known-good team.
   | { type: "team.switch_failed"; data: { previousProfileId: string; targetProfileId: string; reason: string } };
 
+/**
+ * Issue #23: optional upgrade guard. While device protection is on, the
+ * composition root passes a `verifyUpgrade` predicate that validates the
+ * upgrade request's device token (query ?token= / cookie / Bearer header,
+ * see controller/security.ts createWebSocketUpgradeGuard); returning false
+ * makes ws answer the upgrade with 401. Without the option the server is
+ * wide open - the pre-issue L0 behavior.
+ */
+export type TeamWebSocketAttachOptions = {
+  verifyUpgrade?: (req: IncomingMessage) => boolean;
+};
+
 export class TeamWebSocketServer {
   private wss: WebSocketServer | null = null;
   private logger: PluginLogger;
@@ -42,8 +54,12 @@ export class TeamWebSocketServer {
     this.logger = logger;
   }
 
-  attach(server: Server): void {
-    this.wss = new WebSocketServer({ server, path: "/ws" });
+  attach(server: Server, options?: TeamWebSocketAttachOptions): void {
+    this.wss = new WebSocketServer({
+      server,
+      path: "/ws",
+      ...(options?.verifyUpgrade ? { verifyClient: (info: { req: IncomingMessage }) => options.verifyUpgrade!(info.req) } : {}),
+    });
 
     this.wss.on("connection", (ws) => {
       this.logger.info("WebSocket: client connected");

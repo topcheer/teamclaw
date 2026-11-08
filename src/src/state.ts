@@ -93,7 +93,65 @@ function migrateState(raw: unknown): TeamState | null {
     }
   }
 
+  // Issue #23: device-pairing security state (additive optional field). No
+  // `security` key = protection off (L0 zero-friction default). A malformed
+  // persisted shape is sanitized in place, mirroring the transition policy
+  // above: devices without a usable identity/tokenHash are dropped (such a
+  // device could never authenticate again anyway), and malformed pairing
+  // codes / observation records are discarded.
+  if (state.security !== undefined) {
+    const security = state.security as Record<string, unknown>;
+    if (!security || typeof security !== "object" || Array.isArray(security)) {
+      delete state.security;
+    } else {
+      if (security.enabledAt !== undefined && typeof security.enabledAt !== "number") {
+        delete security.enabledAt;
+      }
+      security.devices = Array.isArray(security.devices)
+        ? security.devices.filter(isValidPersistedSecurityDevice)
+        : [];
+      if (security.pairingCode !== undefined) {
+        const pairingCode = security.pairingCode as Record<string, unknown>;
+        const codeOk = typeof pairingCode?.code === "string" && /^[A-Z2-7]{8}$/.test(pairingCode.code);
+        const expiresOk = typeof pairingCode?.expiresAt === "number";
+        const purposeOk = typeof pairingCode?.purpose === "string" && Boolean(pairingCode.purpose.trim());
+        const usedOk = pairingCode?.usedAt === undefined || typeof pairingCode.usedAt === "number";
+        if (!codeOk || !expiresOk || !purposeOk || !usedOk) {
+          delete security.pairingCode;
+        }
+      }
+      if (security.lastNonLanPeer !== undefined) {
+        const observation = security.lastNonLanPeer as Record<string, unknown>;
+        if (
+          typeof observation?.ip !== "string" ||
+          typeof observation?.at !== "number" ||
+          typeof observation?.path !== "string"
+        ) {
+          delete security.lastNonLanPeer;
+        }
+      }
+    }
+  }
+
   return state as unknown as TeamState;
+}
+
+/**
+ * Issue #23: persisted-device structural guard for the migration above. A
+ * device needs a non-empty id, a sha256-hex tokenHash (64 lowercase hex
+ * chars) and a creation timestamp; anything else is corrupt state and is
+ * dropped rather than half-loaded.
+ */
+function isValidPersistedSecurityDevice(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return false;
+  }
+  const device = entry as Record<string, unknown>;
+  return (
+    typeof device.id === "string" && Boolean(device.id.trim()) &&
+    typeof device.tokenHash === "string" && /^[0-9a-f]{64}$/.test(device.tokenHash) &&
+    typeof device.createdAt === "number"
+  );
 }
 
 function resolvePluginStateDir(): string {

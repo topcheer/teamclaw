@@ -10,7 +10,7 @@
 import type { ServerResponse } from "node:http";
 import type { PluginLogger } from "../../api.js";
 import type { GitRepoState, PluginConfig, TeamState } from "../types.js";
-import { sendJson, sendError } from "../protocol.js";
+import { sendJson, sendError, pinnedCorsAllowOrigin } from "../protocol.js";
 import { getActiveProfile } from "../profile-loader.js";
 import { ensureControllerGitRepo, exportControllerGitBundle } from "../git-collaboration.js";
 
@@ -80,7 +80,12 @@ export async function handleRepoBundleRequest(deps: RepoRouteDeps, res: ServerRe
       "Content-Type": "application/octet-stream",
       "Content-Length": exported.data.byteLength,
       "Content-Disposition": `attachment; filename="${exported.filename}"`,
-      "Access-Control-Allow-Origin": "*",
+      // Issue #23 security review follow-up: this response used to hardcode
+      // the L0 wildcard, which silently WIDENED a CORS origin the security
+      // gate had pinned while device protection is on. Honor the pinned
+      // header via the shared protocol helper; unpinned (protection off /
+      // non-browser) keeps the historical "*" byte for byte.
+      "Access-Control-Allow-Origin": pinnedCorsAllowOrigin(res),
       "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
       "Access-Control-Allow-Headers": "Content-Type",
     });
