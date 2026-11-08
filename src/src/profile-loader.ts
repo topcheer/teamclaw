@@ -72,6 +72,17 @@ export type TeamProfile = {
   defaultRole: RoleId;
 };
 
+/**
+ * Phase 4 static knowledge pack (zero-cost exception, design 2.1/2.2/3):
+ * a stable reference file shipped in the profile's knowledge/ directory.
+ * `name` is the referenced .md file name; `content` is the file text read
+ * and cached once at load-validation time so prompt injection does no IO.
+ */
+export type KnowledgePack = {
+  name: string;
+  content: string;
+};
+
 // ---------------------------------------------------------------------------
 // JSON Schema (subset) validation.
 //
@@ -282,6 +293,7 @@ function validateProfilePackage(profile: unknown, schema: unknown, profileFile: 
     );
   }
   crossValidateProfile(record, profileFile);
+  loadKnowledgePackReferences(record, profileFile);
   return record;
 }
 
@@ -292,6 +304,46 @@ function validateProfilePackage(profile: unknown, schema: unknown, profileFile: 
 const SUPPORTED_PROFILE_SCHEMA_VERSION = 1;
 const SOFTWARE_RD_PROFILE_ID = "software-rd";
 const PROFILES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "profiles");
+
+// ---------------------------------------------------------------------------
+// Phase 4 static knowledge packs (zero-cost exception, design 2.1/2.2 + 3
+// Phase 4): stable reference files under profiles/knowledge/ that ship with
+// the package and are injected into worker prompts to ground common domain
+// concepts. References resolve ONLY against this built-in knowledge
+// directory (extra-profile fixtures included - they reuse the shipped pack
+// set), the schema pattern already forbids path separators, and a missing or
+// empty referenced file is a FATAL load error, mirroring the role-reference
+// red line. Contents are read once here and cached, so the prompt injector
+// never does IO at render time.
+// ---------------------------------------------------------------------------
+
+const KNOWLEDGE_PACK_DIR = path.join(PROFILES_DIR, "knowledge");
+const KNOWLEDGE_PACK_CONTENTS = new Map<string, string>();
+
+function loadKnowledgePackReferences(profile: TeamProfile, profileFile: string): void {
+  for (const packName of profile.knowledgePacks ?? []) {
+    if (KNOWLEDGE_PACK_CONTENTS.has(packName)) {
+      continue;
+    }
+    let content: string;
+    try {
+      content = fs.readFileSync(path.join(KNOWLEDGE_PACK_DIR, packName), "utf8");
+    } catch {
+      throw new Error(
+        `TeamClaw profile ${profileFile} ("${profile.id}") references knowledge pack "${packName}" `
+          + `that does not exist in the built-in knowledge directory (design 2.2 - refusing to start; `
+          + `run \`npm --prefix src run build\` in a dev checkout, or fix the knowledgePacks reference)`,
+      );
+    }
+    if (content.trim().length === 0) {
+      throw new Error(
+        `TeamClaw profile ${profileFile} ("${profile.id}") references knowledge pack "${packName}" `
+          + "that is empty (design 2.2 - refusing to start)",
+      );
+    }
+    KNOWLEDGE_PACK_CONTENTS.set(packName, content);
+  }
+}
 
 function readJsonFile(filePath: string): unknown {
   let raw: string;
@@ -485,6 +537,29 @@ function getActiveDomainInstructions(): string[] | undefined {
   return instructions && instructions.length > 0 ? instructions : undefined;
 }
 
+/**
+ * Phase 4 (design 2.1 knowledgePacks + 3 Phase 4 exception): the active
+ * profile's static reference packs, in declaration order, or an empty array
+ * when the profile declares none (software-rd baseline) - the worker prompt
+ * injector appends a Reference Packs section only for non-empty results, so
+ * profiles without packs keep their prompt bytes unchanged (Phase 1.7
+ * golden). Contents were validated + cached at load time; a hit that misses
+ * the cache is impossible by construction and stays a hard throw.
+ */
+function getActiveKnowledgePacks(): KnowledgePack[] {
+  const names = getActiveProfile().knowledgePacks ?? [];
+  return names.map((name) => {
+    const content = KNOWLEDGE_PACK_CONTENTS.get(name);
+    if (content === undefined) {
+      throw new Error(
+        `TeamClaw knowledge pack "${name}" (active profile "${getActiveProfileId()}") passed load validation `
+          + "but its cached content is missing - this is a loader invariant violation",
+      );
+    }
+    return { name, content };
+  });
+}
+
 /** Active-profile counterpart of roles.ts getRole. */
 function getActiveRole(id: RoleId): ProfileRoleDefinition | undefined {
   return getActiveRoles().find((role) => role.id === id);
@@ -566,6 +641,7 @@ export {
   getActiveRoleIds,
   getActiveDefaultRole,
   getActiveDomainInstructions,
+  getActiveKnowledgePacks,
   getActiveRole,
   validateActiveRoleId,
   normalizeRecommendedSkills,

@@ -232,6 +232,10 @@
     "If a decision requires information the team does not have, raise a clarification instead of guessing; if a step would touch real funds, store accounts, or external submissions, escalate to a human operator first.",
     "Deliverables are documents: respect the requested artifact shape (brief, table, checklist, template, reply draft); this team ships analysis and operating documents, not runnable code."
   ],
+  "knowledgePacks": [
+    "vat-principles.md",
+    "incoterms-2020.md"
+  ],
   "capabilities": {
     "git": false,
     "teamauto": false,
