@@ -183,8 +183,9 @@
     },
     "knowledgePacks": {
       "type": "array",
-      "items": { "type": "string" },
-      "description": "Reserved (Phase 4): static knowledge pack files shipped with the profile."
+      "items": { "type": "string", "minLength": 1, "pattern": "^[a-z0-9][a-z0-9-]*\\.md$" },
+      "uniqueItems": true,
+      "description": "Phase 4 static knowledge packs (zero-cost exception, design 3 Phase 4): stable reference files shipped in the profile's knowledge/ directory and injected into worker prompts after the operating contract to ground common domain concepts. Items are bare .md file names from src/src/profiles/knowledge/ (the pattern forbids path separators, so references cannot escape the pack directory); the loader cross-validation makes a missing or empty referenced file a FATAL load error, mirroring the role-reference red line. Packs carry stable reference material only - time-sensitive figures (rates, thresholds) stay out by design and remain TBD-driven."
     },
     "deliverableHints": {
       "type": "object",
