@@ -20,6 +20,8 @@ TeamClaw 采用经典的 **Controller/Worker 分布式架构**，作为 OpenClaw
 
 **架构问题：**
 
+> **[RESOLVED 2026-11-08]** http-server 巨石已消除：7,767 → 360 行组合根（−95.4%），18 个域模块 + 声明式路由表，见 PR #210–#213 与 issue #204。本文件以下描述保留为历史快照。
+
 - **Controller 作为 God Object**：`http-server.ts` (6430 行, 230KB) 承担了过多职责——API 路由、intake 编排、任务管理、状态清理、Preview 代理、报告生成、WebSocket 广播等。它实际上同时充当了 HTTP router、业务逻辑层和数据访问层。
 - **缺少明确的领域模型层**：核心业务逻辑（任务生命周期、clarification 流转、项目清理级联）散布在 HTTP handler 内部，没有独立的 domain service 层。
 - **状态管理原始**：`TeamState` 是一个纯 JSON 对象，通过 `updateTeamState(updater)` 的 mutable 回调修改，没有事件溯源、快照隔离或变更通知机制。

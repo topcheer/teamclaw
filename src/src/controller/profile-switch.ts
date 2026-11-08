@@ -268,6 +268,10 @@ export async function executeTeamProfileSwitch(
  * scratch (drain is idempotent - a completed drain simply finds no in-flight
  * tasks). Returns true when a transition was resumed.
  */
+// No team.switch_failed broadcast on this path: startup resume runs before
+// the HTTP/WS listeners exist, so there are no clients to receive it - a
+// failed resume surfaces through the fatal startup path instead (#201 review
+// note, recorded for external reviewers).
 export async function resumeTeamProfileSwitch(deps: TeamProfileSwitchDeps): Promise<boolean> {
   const state = deps.getTeamState();
   const transition = state?.transition;
