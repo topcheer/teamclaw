@@ -571,6 +571,13 @@ export type PluginConfig = {
    * keep the L1 zero-input LAN pairing behavior.
    */
   security?: SecurityConfig;
+  /**
+   * Issue #23 (client wave): device token this instance presents to a
+   * protected controller (X-TeamClaw-Token on every API call). Written by
+   * `teamclaw pair` / the desktop pairing flow; empty string = unpaired L0
+   * behavior. NEVER logged or echoed back through config UIs.
+   */
+  securityToken: string;
   workerProvisioningType: WorkerProvisioningType;
   workerProvisioningDisabled: boolean;
   workerProvisioningControllerUrl: string;
@@ -892,6 +899,10 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
     autoPair: typeof rawAutoPair === "boolean" ? rawAutoPair : true,
   };
 
+  // Issue #23 (client wave): the paired device token, if this instance
+  // paired with a protected controller. Empty/absent keeps L0 behavior.
+  const securityToken = typeof raw.securityToken === "string" ? raw.securityToken.trim() : "";
+
   const rawWorkerProvisioningType = parseProvisioningType(raw.workerProvisioningType);
   const workerProvisioningDisabled = raw.workerProvisioningDisabled === true;
   // Legacy local installs often persisted workerProvisioningType="none" without
@@ -1000,6 +1011,7 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
     githubClientSecret,
     agentIsolationMode,
     security,
+    securityToken,
     workerProvisioningType,
     workerProvisioningDisabled,
     workerProvisioningControllerUrl,

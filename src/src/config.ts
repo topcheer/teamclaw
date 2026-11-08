@@ -117,6 +117,14 @@ function buildConfigSchema() {
             },
           },
         },
+        securityToken: {
+          type: "string" as const,
+          default: "",
+          // Deliberately NO uiHints entry: the token is a secret written by
+          // `teamclaw pair` / the desktop pairing flow and must never be
+          // echoed back through config surfaces or logs.
+          description: "Device pairing token for a protected controller (issue #23); written by `teamclaw pair`, sent as X-TeamClaw-Token on API calls. Leave empty for unpaired local mode",
+        },
         agentIsolationMode: {
           type: "string" as const,
           enum: ["independent", "main"],

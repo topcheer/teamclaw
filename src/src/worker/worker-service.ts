@@ -43,6 +43,17 @@ function isLoopbackHost(host: string): boolean {
   return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "[::1]";
 }
 
+/**
+ * Issue #23 (client wave): worker -> controller requests carry the paired
+ * device token (config.securityToken) as X-TeamClaw-Token when one is
+ * configured; without a token the headers are unchanged (L0 behavior). The
+ * token value is never logged.
+ */
+function withDeviceToken(config: PluginConfig, headers: Record<string, string>): Record<string, string> {
+  const token = config.securityToken?.trim();
+  return token ? { ...headers, "X-TeamClaw-Token": token } : headers;
+}
+
 export type WorkerServiceDeps = {
   config: PluginConfig;
   logger: PluginLogger;
@@ -149,7 +160,7 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
     }
     fetch(`${controllerUrl}/api/v1/tasks/${taskId}/result`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: withDeviceToken(config, { "Content-Type": "application/json" }),
       body: JSON.stringify(body),
     }).catch((err) => {
       logger.error(`Worker: failed to report task result: ${String(err)}`);
@@ -299,7 +310,7 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
           );
           const res = await fetch(`${controllerUrl}/api/v1/workers/${id.workerId}/heartbeat`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: withDeviceToken(config, { "Content-Type": "application/json" }),
             body: JSON.stringify(heartbeat),
           });
 

@@ -44,6 +44,16 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
     return getIdentity() ?? await loadWorkerIdentity();
   }
 
+  /**
+   * Issue #23 (client wave): worker-tool calls into the controller carry the
+   * paired device token (config.securityToken) as X-TeamClaw-Token when one
+   * is configured; without it the headers are unchanged (L0). Never logged.
+   */
+  function withDeviceToken(headers: Record<string, string>): Record<string, string> {
+    const token = config.securityToken?.trim();
+    return token ? { ...headers, "X-TeamClaw-Token": token } : headers;
+  }
+
   return [
     {
       name: "teamclaw_ask_peer",
@@ -87,7 +97,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
           });
           const res = await fetch(`${identity.controllerUrl}/api/v1/messages/direct`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: withDeviceToken({ "Content-Type": "application/json" }),
             body: JSON.stringify({
               from: identity.workerId,
               fromRole: identity.role,
@@ -146,7 +156,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
           });
           const res = await fetch(`${identity.controllerUrl}/api/v1/messages/broadcast`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: withDeviceToken({ "Content-Type": "application/json" }),
             body: JSON.stringify({
               from: identity.workerId,
               fromRole: identity.role,
@@ -206,7 +216,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
           });
           const res = await fetch(`${identity.controllerUrl}/api/v1/messages/review-request`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: withDeviceToken({ "Content-Type": "application/json" }),
             body: JSON.stringify({
               from: identity.workerId,
               fromRole: identity.role,
@@ -263,7 +273,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
           });
           const res = await fetch(`${identity.controllerUrl}/api/v1/tasks/${taskId}/handoff`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: withDeviceToken({ "Content-Type": "application/json" }),
             body: JSON.stringify({
               fromWorkerId: identity.workerId,
               targetRole,
@@ -348,7 +358,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
         try {
           const res = await fetch(`${identity.controllerUrl}/api/v1/tasks/${taskId}/result-contract`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: withDeviceToken({ "Content-Type": "application/json" }),
             body: JSON.stringify({ contract, workerId: identity.workerId }),
           });
           if (!res.ok) {
@@ -402,7 +412,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
         try {
           const res = await fetch(`${identity.controllerUrl}/api/v1/tasks/${taskId}/parallel-help`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: withDeviceToken({ "Content-Type": "application/json" }),
             body: JSON.stringify({
               requestedBy: identity.workerId,
               requestedByRole: identity.role,
@@ -475,7 +485,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
         try {
           const res = await fetch(`${identity.controllerUrl}/api/v1/clarifications`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: withDeviceToken({ "Content-Type": "application/json" }),
             body: JSON.stringify({
               taskId,
               requestedBy: identity.workerId,
@@ -510,7 +520,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
         }
 
         try {
-          const res = await fetch(`${identity.controllerUrl}/api/v1/team/status`);
+          const res = await fetch(`${identity.controllerUrl}/api/v1/team/status`, { headers: withDeviceToken({}) });
           if (!res.ok) {
             return { details: {}, content: [{ type: "text" as const, text: `Failed to get status: ${res.status}` }] };
           }
@@ -582,7 +592,7 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
 
           const res = await fetch(`${identity.controllerUrl}/api/v1/tasks/${taskId}`, {
             method: "PATCH",
-            headers: { "Content-Type": "application/json" },
+            headers: withDeviceToken({ "Content-Type": "application/json" }),
             body: JSON.stringify(patch),
           });
 
