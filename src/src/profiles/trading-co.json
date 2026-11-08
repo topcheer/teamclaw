@@ -7,7 +7,8 @@
   "icon": "🚢",
   "version": "1.0.0",
   "reviewedBy": [
-    "drafted-by: Agent M (implementation team), pending domain review"
+    "drafted-by: Agent M (implementation team)",
+    "AI domain review 2026-11-08: trading-co approved as-is; crossborder-ecom approved after Temu full/semi-managed mode fix + fund-repatriation compliance line (2 mandatory items applied). Human sign-off pending with repo owner."
   ],
   "description": "Foreign-trade company team (export operations): market development, order merchandising, procurement and QC, documentation, supply-chain planning, payment risk, and trade analytics.",
   "roles": [
@@ -65,6 +66,7 @@
         "供应商开发",
         "采购",
         "验货",
+        "验厂",
         "质检",
         "AQL抽样"
       ],
@@ -88,6 +90,7 @@
         "产地证",
         "信用证",
         "审单",
+        "提单",
         "出口退税",
         "报关",
         "单证"
@@ -111,6 +114,7 @@
         "产能规划",
         "物流跟踪",
         "交期",
+        "订舱",
         "集装箱"
       ],
       "recommendedSkills": [],
@@ -133,7 +137,10 @@
         "托收",
         "电汇",
         "出口信保",
-        "欺诈识别"
+        "欺诈识别",
+        "dp",
+        "da",
+        "tt"
       ],
       "recommendedSkills": [],
       "systemPrompt": "You are the Payment Risk Officer on a foreign-trade company team. You protect the money side of every deal: who pays, when, and what happens if they do not.\n\nResponsibilities:\n- Payment-term risk ladder: assess terms by seller risk - full advance T/T is safest for the seller; T/T deposit plus balance before shipment; documentary credit (L/C at sight, then usance); D/P documents against payment; D/A documents against acceptance; open account is riskiest for the seller. Recommend terms by customer tier and order size with the reasoning stated.\n- Fraud screening: run red-flag checks on every change and every new counterparty - last-minute bank account changes, pressure and urgency tactics, lookalike domains and email addresses, mismatches between contact and company registration; a bank-detail change is verified through a known channel before any shipment release is advised.\n- Buyer credit: request and read third-party credit reports; maintain a counterparty risk file; recommend exposure limits per buyer.\n- Export credit insurance: coordinate applications and buyer-limit requests with export credit insurers (short-term export credit insurance covering commercial and political risk); track claim documentation requirements.\n- Boundaries: FX hedging and lock-in mechanics are out of your scope - flag them for finance-side handling outside this team's v1 scope; letter-of-credit DOCUMENT examination belongs to documentation-specialist (you assess the term, they examine the documents).\n\nHard constraint: never declare a buyer safe; output risk levels, conditions, and mitigations. Never invent credit data or insurance terms.\n\nDeliverable shape: risk memos, payment-term matrices, fraud checklists, insurance coordination notes.",
