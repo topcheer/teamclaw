@@ -7,8 +7,8 @@
 //
 //   A. each side's en/zh dictionaries are complete pairs (same key sets);
 //   B. inventory counts are pinned (reproducible audit numbers):
-//        web 178 keys, desktop 290 keys, 60 shared,
-//        118 web-only, 230 desktop-only;
+//        web 197 keys, desktop 294 keys, 60 shared,
+//        137 web-only, 234 desktop-only;
 //   C. shared keys carry identical en AND zh values, except the explicit
 //      VALUE_ALLOWED allowlist below (one reason per entry);
 //   D. single-side keys match the explicit WEB_ONLY/DESKTOP_ONLY groups
@@ -92,8 +92,8 @@ for (const dict of [web, desktop]) {
 // ---------------------------------------------------------------------------
 // B. Pinned inventory counts (audit numbers from the chore-i18n-parity pass).
 // ---------------------------------------------------------------------------
-assert.equal(web.en.size, 178, "web dictionary must carry exactly 178 keys (update alongside deliberate additions)");
-assert.equal(desktop.en.size, 290, "desktop dictionary must carry exactly 290 keys (update alongside deliberate additions)");
+assert.equal(web.en.size, 197, "web dictionary must carry exactly 197 keys (update alongside deliberate additions)");
+assert.equal(desktop.en.size, 294, "desktop dictionary must carry exactly 294 keys (update alongside deliberate additions)");
 
 const webKeys = new Set(web.en.keys());
 const desktopKeys = new Set(desktop.en.keys());
@@ -102,8 +102,8 @@ const webOnlyKeys = [...webKeys].filter((k) => !desktopKeys.has(k)).sort();
 const desktopOnlyKeys = [...desktopKeys].filter((k) => !webKeys.has(k)).sort();
 
 assert.equal(sharedKeys.length, 60, "exactly 60 keys are shared between web and desktop");
-assert.equal(webOnlyKeys.length, 118, "exactly 118 keys are web-only");
-assert.equal(desktopOnlyKeys.length, 230, "exactly 230 keys are desktop-only");
+assert.equal(webOnlyKeys.length, 137, "exactly 137 keys are web-only");
+assert.equal(desktopOnlyKeys.length, 234, "exactly 234 keys are desktop-only");
 
 // ---------------------------------------------------------------------------
 // C. Shared keys must carry identical values on both sides (en and zh
@@ -218,6 +218,27 @@ const WEB_ONLY_GROUPS = [
     "planning.plannedTasks",
     "planning.sessions",
     "planning.title"
+  ] },
+  { prefix: "security", reason: "web device-pairing security surfaces (issue #23 client wave): suggestion banner, one-shot pairing-code modal, device management section; desktop pairs via its own wizard keys (bootstrap.pairingCode*) and has no banner/device manager", keys: [
+    "security.bannerTitle",
+    "security.bannerHint",
+    "security.enableAction",
+    "security.pairTitle",
+    "security.pairHint",
+    "security.pairExpiresIn",
+    "security.pairExpired",
+    "security.pairNewCode",
+    "security.devicesTitle",
+    "security.statusOn",
+    "security.statusOff",
+    "security.revoke",
+    "security.selfRevokeWarn",
+    "security.selfRevoked",
+    "security.resetAll",
+    "security.resetConfirm",
+    "security.resetDone",
+    "security.devicesUnavailable",
+    "security.noDevices"
   ] },
   { prefix: "priority", reason: "web manual-task priority select (desktop has no manual task form)", keys: [
     "priority.critical",
@@ -339,6 +360,10 @@ const DESKTOP_ONLY_GROUPS = [
     "bootstrap.openclawQuickstartLabel",
     "bootstrap.processMode",
     "bootstrap.processModeHint",
+    "bootstrap.pairedNote",
+    "bootstrap.pairingCodeLabel",
+    "bootstrap.pairingCodePlaceholder",
+    "bootstrap.pairingFailed",
     "bootstrap.remoteHint",
     "bootstrap.remoteTitle",
     "bootstrap.remoteUrl",
@@ -604,4 +629,4 @@ assert.deepEqual(
     `missing keys [${allowedDesktopOnly.filter((k) => !desktopOnlyKeys.includes(k)).join(", ")}]`,
 );
 
-console.log("i18n parity passed: web 178 / desktop 290 keys, 60 shared aligned, 118+230 single-side keys allowlisted.");
+console.log("i18n parity passed: web 197 / desktop 294 keys, 60 shared aligned, 137+234 single-side keys allowlisted.");
