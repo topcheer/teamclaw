@@ -1,0 +1,88 @@
+name: TeamClaw Profile Smoke
+
+# Phase 5.4 (vertical-team-profiles-design.md Phase 5 table row 5.4): per-PR
+# smoke over the team profile packs - per-profile Chinese-task routing, the
+# finance disclaimer tailnote, the switch -> archive -> re-warm roundtrip, and
+# the capability-disabled 404s. Minimal by design: build src once, run the
+# three profile-related smoke tests, touch nothing else (first per-PR test
+# workflow in this repo; the release/image workflows are untouched).
+# The desktop wizard pack snapshot (PR #202) rides along: pack changes must
+# not silently drift the wizard's six-card snapshot.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/src/profiles/**"
+      - "src/src/profile-loader.ts"
+      - "src/src/roles.ts"
+      - "src/src/types.ts"
+      - "src/src/state.ts"
+      - "src/src/controller/role-inference.ts"
+      - "src/src/controller/kickoff-orchestrator.ts"
+      - "src/src/controller/http-server.ts"
+      - "src/src/controller/worker-provisioning.ts"
+      - "src/src/controller/task-router.ts"
+      - "src/src/controller/message-router.ts"
+      - "src/src/controller/websocket.ts"
+      - "src/src/worker/prompt-injector.ts"
+      - "src/src/worker/message-queue.ts"
+      - "src/package.json"
+      - "src/package-lock.json"
+      - "src/tsconfig.json"
+      - "src/tsconfig.build.json"
+      - "tests/test-per-profile-smoke.mjs"
+      - "tests/test-profile-packs.mjs"
+      - "tests/test-role-inference-cjk.mjs"
+      - "tests/test-desktop-wizard.mjs"
+      - ".github/workflows/teamclaw-profile-smoke.yml"
+  pull_request:
+    paths:
+      - "src/src/profiles/**"
+      - "src/src/profile-loader.ts"
+      - "src/src/roles.ts"
+      - "src/src/types.ts"
+      - "src/src/state.ts"
+      - "src/src/controller/role-inference.ts"
+      - "src/src/controller/kickoff-orchestrator.ts"
+      - "src/src/controller/http-server.ts"
+      - "src/src/controller/worker-provisioning.ts"
+      - "src/src/controller/task-router.ts"
+      - "src/src/controller/message-router.ts"
+      - "src/src/controller/websocket.ts"
+      - "src/src/worker/prompt-injector.ts"
+      - "src/src/worker/message-queue.ts"
+      - "src/package.json"
+      - "src/package-lock.json"
+      - "src/tsconfig.json"
+      - "src/tsconfig.build.json"
+      - "tests/test-per-profile-smoke.mjs"
+      - "tests/test-profile-packs.mjs"
+      - "tests/test-role-inference-cjk.mjs"
+      - "tests/test-desktop-wizard.mjs"
+      - ".github/workflows/teamclaw-profile-smoke.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: teamclaw-profile-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  profile-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Install dependencies
+        run: npm --prefix src ci --no-audit --no-fund
+      - name: Build
+        run: npm --prefix src run build
+      - name: Per-profile smoke (design Phase 5.4)
+        run: node tests/test-per-profile-smoke.mjs
+      - name: Profile pack contracts
+        run: node tests/test-profile-packs.mjs
+      - name: Role inference CJK routing
+        run: node tests/test-role-inference-cjk.mjs
+      - name: Desktop wizard pack snapshot
+        run: node tests/test-desktop-wizard.mjs
