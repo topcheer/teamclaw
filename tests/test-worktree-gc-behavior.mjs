@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// Behavioral test for the worktree GC safety contract (PR #167).
+// Behavioral test for the worktree GC safety contract (PR #167 + #173 follow-ups).
 // Builds a synthetic git fixture (local bare origin + base checkout + 4 task
 // worktrees in the real naming scheme) under an isolated OPENCLAW_STATE_DIR,
 // then drives the ACTUAL dist build of repo-sync.gcTaskWorktrees /
 // safeRemoveTaskWorktree and asserts the removal/retention outcomes.
 
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -94,5 +94,128 @@ assert.equal(r2.removed.length, 0, "non-terminal tasks keep their worktrees (res
 const single = await sync.safeRemoveTaskWorktree(REPO, "cccc-ahead");
 assert.equal(single.removed, false, "ahead task stays via single-task path too");
 
+// ===========================================================================
+// #173 follow-ups: dirty-guard hoist, in-use sentinel, squash-merge oracle,
+// stale-branch observability. Each fixture is fully dropped after its block so
+// the disk state returns to {cccc-ahead, dddd-dirty} for the final pass.
+// ===========================================================================
+const wtOf = (taskId) => path.join(path.dirname(base), path.basename(sync.taskWorktreeRelDir(REPO, taskId)));
+const mkWt = (taskId) => {
+  const wt = wtOf(taskId);
+  git(["worktree", "add", "-b", `teamclaw/task-${taskId}`, wt, "HEAD"], base);
+  return wt;
+};
+const commitFile = (wt, name, content = "x\n") => {
+  fs.writeFileSync(path.join(wt, name), content);
+  git(["add", "-A"], wt); git(["config", "user.email", "t@t"], wt); git(["config", "user.name", "t"], wt);
+  git(["commit", "-m", `c:${name}`], wt);
+};
+const pushTask = (wt, taskId) => git(["push", "origin", `HEAD:refs/heads/teamclaw/task-${taskId}`], wt);
+const dropTask = (taskId, wt) => {
+  fs.rmSync(wt, { recursive: true, force: true });
+  git(["worktree", "prune"], base);
+  try { git(["branch", "-D", `teamclaw/task-${taskId}`], base); } catch { /* already gone */ }
+  try { git(["push", "origin", "--delete", `refs/heads/teamclaw/task-${taskId}`], base); } catch { /* never pushed */ }
+};
+
+// --- #173 item 1: the tip-match removal path must also refuse a dirty tree ---
+{
+  const taskId = "eeee-dirtytip";
+  const wt = mkWt(taskId);
+  commitFile(wt, "d1.txt");
+  pushTask(wt, taskId); // branch tip on remote - previously removed WITHOUT a dirty check
+  fs.writeFileSync(path.join(wt, "post-delivery.txt"), "late worker edit\n");
+  const r = await sync.safeRemoveTaskWorktree(REPO, taskId);
+  assert.equal(r.removed, false, "tip-match removal is blocked by a dirty tree (#173 item 1)");
+  assert.match(r.reason, /dirty worktree/, "dirty-delivered reason is reported");
+  assert.ok(fs.existsSync(wt), "dirty-delivered worktree survives");
+  dropTask(taskId, wt);
+}
+
+// --- #173 item 5: squash-merge + branch deletion must not retain forever ---
+{
+  const taskId = "ffff-squash";
+  const wt = mkWt(taskId);
+  commitFile(wt, "sq.txt", "sq\n");
+  pushTask(wt, taskId);
+  // Squash-merge on the origin side + branch auto-delete: the exact re-leak
+  // shape from the issue (shas unreachable from main, content merged).
+  git(["merge", "--squash", `teamclaw/task-${taskId}`], base);
+  git(["commit", "-m", `squash(${taskId})`], base);
+  git(["push", "origin", "main"], base);
+  git(["push", "origin", "--delete", `refs/heads/teamclaw/task-${taskId}`], base);
+  git(["fetch", "origin"], base);
+  const headTip = git(["rev-parse", "HEAD"], wt).trim();
+  // Without an oracle: retained forever (the pre-fix leak, fails toward keep).
+  const rNo = await sync.safeRemoveTaskWorktree(REPO, taskId);
+  assert.equal(rNo.removed, false, "no oracle -> squash-leaked worktree is retained (fail toward keep)");
+  assert.match(rNo.reason, /unpushed own commit/, "retention reason names the unreachability");
+  // Oracle without positive proof (e.g. closed-unmerged PR, or head-tip
+  // mismatch because the worker committed after the push): still retained.
+  const rUnproven = await sync.safeRemoveTaskWorktree(REPO, taskId, async () => false);
+  assert.equal(rUnproven.removed, false, "unproven oracle retains the worktree");
+  // Positive proof - a merged PR whose head tip is EXACTLY this HEAD - reclaims.
+  const oracleYes = async (rid, tid, tip) => rid === REPO && tid === taskId && tip === headTip;
+  const rYes = await sync.safeRemoveTaskWorktree(REPO, taskId, oracleYes);
+  assert.equal(rYes.removed, true, "merged-PR oracle reclaims the squash-leaked worktree (#173 item 5)");
+  assert.match(rYes.reason, /merged PR/, "removal reason credits the squash delivery");
+  assert.ok(!fs.existsSync(wt), "squash-delivered worktree dir is gone");
+  dropTask(taskId, wt);
+}
+
+// --- #173 item 2: in-use sentinel (pid lock in the git admin dir) ---
+{
+  const taskId = "gggg-busy";
+  const wt = mkWt(taskId);
+  commitFile(wt, "busy.txt");
+  pushTask(wt, taskId); // delivered tip: ONLY the sentinel can hold removal here
+  const sleeper = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], { stdio: "ignore" });
+  try {
+    const gitDir = path.resolve(wt, git(["rev-parse", "--git-dir"], wt).trim());
+    fs.writeFileSync(path.join(gitDir, "teamclaw-task-lock.json"), JSON.stringify({ pid: sleeper.pid, at: Date.now() }));
+    const r = await sync.safeRemoveTaskWorktree(REPO, taskId);
+    assert.equal(r.removed, false, "live foreign pid in the task lock blocks removal (#173 item 2)");
+    assert.match(r.reason, /in use by live process/, "retention reason names the live pid");
+    assert.ok(fs.existsSync(wt), "in-use worktree survives");
+  } finally {
+    sleeper.kill("SIGKILL");
+    await new Promise((res) => sleeper.on("exit", res));
+  }
+  // The controller crashed (pid dead): the sentinel no longer blocks GC.
+  const r2 = await sync.safeRemoveTaskWorktree(REPO, taskId);
+  assert.equal(r2.removed, true, "dead pid in the task lock does not block the delivered-tip removal");
+  assert.match(r2.reason, /branch tip on remote/);
+  dropTask(taskId, wt);
+}
+
+// --- #173 item 2 (writer side): ensureTaskWorktree maintains the sentinel ---
+{
+  const taskId = "hhhh-ensure";
+  const wt = await sync.ensureTaskWorktree(REPO, taskId);
+  assert.ok(fs.existsSync(wt), "ensureTaskWorktree creates the worktree");
+  const gitDir = path.resolve(wt, git(["rev-parse", "--git-dir"], wt).trim());
+  const lockPath = path.join(gitDir, "teamclaw-task-lock.json");
+  const lock = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+  assert.equal(lock.pid, process.pid, "ensureTaskWorktree writes its own pid as the in-use sentinel");
+  // The lock lives OUTSIDE the worktree tree: the tree stays clean and the
+  // own-pid sentinel must not block our own GC (empty never-pushed -> removed).
+  const r = await sync.safeRemoveTaskWorktree(REPO, taskId);
+  assert.equal(r.removed, true, "own-pid lock + clean tree -> empty worktree reclaimed");
+  assert.match(r.reason, /no own commits/);
+}
+
+// --- #173 QA finding: dir-gone entries are counted as stale, not invisible ---
+{
+  const taskId = "iiii-stale";
+  const wt = mkWt(taskId); // no commits, never pushed
+  fs.rmSync(wt, { recursive: true, force: true }); // dir gone, local branch survives
+  git(["worktree", "prune"], base);
+  const r = await sync.gcTaskWorktrees(REPO, () => true);
+  assert.equal(r.stale, 1, "dir-gone entry is surfaced as stale (previously invisible)");
+  assert.equal(r.removed.length, 0, "nothing new is reclaimed in this pass");
+  assert.deepEqual(r.retained.map((x) => x.taskId).sort(), ["cccc-ahead", "dddd-dirty"], "only the two standing retains remain");
+  git(["branch", "-D", `teamclaw/task-${taskId}`], base);
+}
+
 fs.rmSync(tmp, { recursive: true, force: true });
-console.log("test-worktree-gc-behavior: ok (4-case safety contract enforced end-to-end)");
+console.log("test-worktree-gc-behavior: ok (4-case safety contract + #173 follow-ups enforced end-to-end)");

@@ -146,6 +146,22 @@ async function sourceContracts() {
   assert.match(sync, /worktree", "prune"/, "cleanup must survive unregistered (stale) worktree dirs");
   assert.match(taskAssignment, /activeWriteRoots/, "auto-assign must serialize write tasks per repo checkout");
   assert.match(taskAssignment, /ensureWriteWorktree/, "dispatch must place write tasks in a task-scoped worktree");
+
+  // Worktree GC follow-ups (#173): 4 MINORs from the #167 cross-review plus
+  // the squash-merge retention re-leak. Behavioral coverage lives in
+  // tests/test-worktree-gc-behavior.mjs; these anchors pin the contracts.
+  assert.match(sync, /retained: dirty worktree \(uncommitted changes\)/, "the dirty guard must cover BOTH removal paths incl. tip-match (#173 item 1)");
+  assert.match(sync, /in use by live process/, "an in-use pid sentinel must block removal (#173 item 2)");
+  assert.match(sync, /teamclaw-task-lock\.json/, "the task lock must live in the git admin dir (never dirties the tree)");
+  assert.match(sync, /writeTaskLock\(wtPath\)/, "ensureTaskWorktree must (re)write the sentinel on create AND resume");
+  assert.match(scheduler, /worktree GC skipped \(team state unavailable\)/, "boot GC must early-return on null team state instead of treating everything as terminal (#173 item 3)");
+  assert.match(scheduler, /retainedDetails/, "per-task retain reasons must reach the GC activity line, not just the log (#173 item 4)");
+  assert.match(scheduler, /worktree removed \(\$\{r\.reason\}\)/, "terminal cleanup must log positive removals too (#173 item 4)");
+  assert.match(scheduler, /squashDeliveryOracle/, "the scheduler must wire the squash-merge delivery oracle into all GC paths (#173 item 5)");
+  assert.match(client, /prHeadDelivered/, "github client exposes the merged-PR-with-exact-head-tip oracle (#173 item 5)");
+  assert.match(sync, /delivered via merged PR \(squash-merge, head tip matches\)/, "squash-merged + branch-deleted worktrees are reclaimable with positive proof (#173 item 5)");
+  assert.match(sync, /TaskDeliveryOracle/, "repo-sync types the optional GC delivery oracle (fail-toward-keep when absent)");
+  assert.match(sync, /for-each-ref/, "GC must also enumerate branch-only leaks (dir gone, stale branch survives)");
   assert.match(scheduler, /cycleKey/, "write-backs must carry the joint review cycle key");
   assert.match(scheduler, /Joint full review/, "same-cycle sections must converge into one umbrella issue");
   assert.ok(

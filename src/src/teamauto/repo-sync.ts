@@ -10,6 +10,21 @@ const exec = promisify(execFile);
 
 export const TEAMCLAW_BRANCH_PREFIX = "teamclaw/";
 
+/**
+ * Delivery oracle for worktree GC (#173 follow-up 5): after a squash merge +
+ * branch deletion the task branch's commits never become reachable from
+ * origin/<default> (different shas, same content), so ls-remote is empty and
+ * the local rev-list own-count never drains. The scheduler supplies an oracle
+ * that asks GitHub whether a PR carrying EXACTLY this head tip was merged.
+ * Returns true only on positive proof; any error must resolve false (fail
+ * toward keep).
+ */
+export type TaskDeliveryOracle = (
+  repoId: string,
+  taskId: string,
+  headTip: string,
+) => Promise<boolean>;
+
 /** TaskInfo.projectDir slug for a bound repo (relative to the projects dir). */
 export function teamAutoProjectDir(repoId: string): string {
   return `teamauto/${repoSlugToDirName(repoId)}`;
@@ -158,6 +173,65 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     return `teamclaw/task-${taskId.replace(/[^\w-]/g, "")}`;
   }
 
+  // ---------- in-use sentinel (#173 follow-up 2) ----------
+
+  // The lock lives in the per-worktree git ADMIN dir, never inside the worktree
+  // tree: a file in the tree would dirty `git status --porcelain` and wedge the
+  // GC dirty guard. The admin dir is removed together with the worktree.
+  const TASK_LOCK_NAME = "teamclaw-task-lock.json";
+
+  async function taskLockPath(wtPath: string): Promise<string | null> {
+    try {
+      const out = (await run(["rev-parse", "--git-dir"], wtPath)).trim();
+      return path.join(path.resolve(wtPath, out), TASK_LOCK_NAME);
+    } catch {
+      return null;
+    }
+  }
+
+  function processAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err) {
+      // EPERM: alive but owned by another user - treat as in use.
+      return (err as NodeJS.ErrnoException).code === "EPERM";
+    }
+  }
+
+  async function writeTaskLock(wtPath: string): Promise<void> {
+    const lockPath = await taskLockPath(wtPath);
+    if (!lockPath) {
+      return;
+    }
+    await fs.writeFile(lockPath, JSON.stringify({ pid: process.pid, at: Date.now() })).catch(() => undefined);
+  }
+
+  /**
+   * Live foreign controller holding this worktree, or null. Covers two
+   * controllers sharing one projects/ tree: whoever created/resumed the
+   * worktree last recorded its pid; GC (a different live pid) must not rip the
+   * tree out from under it. Our OWN pid never blocks (we are the GC). An
+   * orphaned worker process is not visible from the controller - the dirty
+   * guard remains that case's backstop (fails toward keep).
+   */
+  async function worktreeInUseBy(wtPath: string): Promise<number | null> {
+    const lockPath = await taskLockPath(wtPath);
+    if (!lockPath) {
+      return null;
+    }
+    try {
+      const lock = JSON.parse(await fs.readFile(lockPath, "utf8")) as { pid?: number };
+      const pid = Number(lock.pid);
+      if (Number.isInteger(pid) && pid > 0 && pid !== process.pid && processAlive(pid)) {
+        return pid;
+      }
+    } catch {
+      // missing/corrupt lock - cannot prove in-use; proceed.
+    }
+    return null;
+  }
+
   /**
    * Collaboration contract: write tasks execute in a dedicated git worktree
    * branched from HEAD. Reuses an existing worktree (resume-safe) so the
@@ -169,11 +243,12 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     // wtName carries the teamauto/ level for the REL path; the physical dir is
     // a SIBLING of the base checkout (path.join would nest teamauto/ twice).
     const wtPath = path.join(path.dirname(base), path.basename(wtName));
-    if (await fs.access(path.join(wtPath, ".git")).then(() => true, () => false)) {
-      return wtPath; // resume case
+    if (!(await fs.access(path.join(wtPath, ".git")).then(() => true, () => false))) {
+      await run(["worktree", "add", "-b", taskBranchName(taskId), wtPath, "HEAD"], base);
+      logger.warn(`TeamAuto: worktree ${wtName} (branch ${taskBranchName(taskId)}) for ${taskId}`);
     }
-    await run(["worktree", "add", "-b", taskBranchName(taskId), wtPath, "HEAD"], base);
-    logger.warn(`TeamAuto: worktree ${wtName} (branch ${taskBranchName(taskId)}) for ${taskId}`);
+    // Refresh the in-use sentinel on create AND resume (#173 follow-up 2).
+    await writeTaskLock(wtPath);
     return wtPath;
   }
 
@@ -203,7 +278,11 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
    * matches) or nonexistent (no commits of its own). Undelivered local work
    * is retained and reported - never silently destroyed.
    */
-  async function safeRemoveTaskWorktree(repoId: string, taskId: string): Promise<{ removed: boolean; reason: string }> {
+  async function safeRemoveTaskWorktree(
+    repoId: string,
+    taskId: string,
+    deliveryOracle?: TaskDeliveryOracle,
+  ): Promise<{ removed: boolean; reason: string }> {
     const base = await repoDir(repoId);
     const wtName = taskWorktreeDirName(repoId, taskId);
     const wtPath = path.join(path.dirname(base), path.basename(wtName));
@@ -224,6 +303,19 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
       return { removed: false, reason: "already gone" };
     }
     try {
+      // #173 follow-up 2: in-use sentinel - a live foreign controller recorded
+      // in the task lock owns this tree; never remove under it.
+      const inUsePid = await worktreeInUseBy(wtPath);
+      if (inUsePid !== null) {
+        return { removed: false, reason: `retained: in use by live process (pid ${inUsePid})` };
+      }
+      // #173 follow-up 1: the dirty guard must cover BOTH removal paths. The
+      // tip-match branch used to remove without any dirty check, silently
+      // destroying post-delivery worker edits (small window, but real).
+      const dirty = await run(["status", "--porcelain"], wtPath).catch(() => "x");
+      if (dirty.trim()) {
+        return { removed: false, reason: "retained: dirty worktree (uncommitted changes)" };
+      }
       const remoteRefs = await run(["ls-remote", "origin", `refs/heads/${branch}`], base);
       const remoteTip = remoteRefs.split("\t")[0]?.trim() ?? "";
       if (remoteTip) {
@@ -234,13 +326,9 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
         }
         return { removed: false, reason: "retained: local branch ahead of pushed tip (unpushed work)" };
       }
-      // Branch never pushed: the worktree is the only copy. Keep it when it
-      // carries its own commits or any uncommitted files; drop it when the
-      // worker never committed anything at all.
-      const dirty = await run(["status", "--porcelain"], wtPath).catch(() => "x");
-      if (dirty.trim()) {
-        return { removed: false, reason: "retained: dirty worktree, branch never pushed" };
-      }
+      // Branch never pushed (or deleted post-merge): the worktree is the only
+      // copy. Keep it when it carries its own commits; drop it when the worker
+      // never committed anything at all.
       const info = await run(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], base).catch(() => "");
       const defaultBranch = info.trim().replace(/^origin\//, "") || "main";
       const own = await run(["rev-list", "--count", `HEAD`, "--not", `origin/${defaultBranch}`], wtPath).catch(() => null);
@@ -251,6 +339,18 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
       if (Number(own.trim()) === 0) {
         await removeTaskWorktree(repoId, taskId);
         return { removed: true, reason: "no own commits, branch never pushed" };
+      }
+      // #173 follow-up 5: squash-merge + branch deletion re-leak. own > 0 with
+      // an empty ls-remote is ALSO the shape of a delivered-via-squash PR whose
+      // branch was auto-deleted (shas unreachable, content merged). Ask the
+      // oracle for positive proof (merged PR with exactly this head tip);
+      // anything less retains the worktree.
+      if (deliveryOracle) {
+        const headTip = (await run(["rev-parse", "HEAD"], wtPath).catch(() => "")).trim();
+        if (headTip && (await deliveryOracle(repoId, taskId, headTip).catch(() => false))) {
+          await removeTaskWorktree(repoId, taskId);
+          return { removed: true, reason: "delivered via merged PR (squash-merge, head tip matches)" };
+        }
       }
       return { removed: false, reason: `retained: ${own.trim()} unpushed own commit(s)` };
     } catch (err) {
@@ -263,7 +363,11 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
    * sibling whose task is terminal (or unknown), apply the delivery-safety
    * removal. Heals the historical backlog that pre-dates terminal cleanup.
    */
-  async function gcTaskWorktrees(repoId: string, isTerminal: (taskId: string) => boolean): Promise<{ removed: string[]; retained: { taskId: string; reason: string }[] }> {
+  async function gcTaskWorktrees(
+    repoId: string,
+    isTerminal: (taskId: string) => boolean,
+    deliveryOracle?: TaskDeliveryOracle,
+  ): Promise<{ removed: string[]; retained: { taskId: string; reason: string }[]; stale: number }> {
     const base = await repoDir(repoId);
     const siblings = path.dirname(base);
     // taskWorktreeDirName(repoId, "x") = "teamauto/<slug>__task-x"; the
@@ -272,26 +376,60 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     const prefix = withSentinel.slice(0, withSentinel.length - 1);
     const removed: string[] = [];
     const retained: { taskId: string; reason: string }[] = [];
+    let stale = 0;
+    const apply = async (taskId: string): Promise<void> => {
+      const r = await safeRemoveTaskWorktree(repoId, taskId, deliveryOracle);
+      if (r.removed) {
+        removed.push(taskId);
+        logger.warn(`TeamAuto: worktree GC removed ${taskId} (${r.reason})`);
+      } else if (r.reason.includes("already gone")) {
+        // #173 QA finding: dir already gone but a stale local branch survives
+        // (squash-merge leak face) - previously invisible in both the log and
+        // the activity line. Counted + logged now.
+        stale += 1;
+        logger.warn(`TeamAuto: worktree GC ${taskId}: worktree already gone (stale branch may remain)`);
+      } else {
+        retained.push({ taskId, reason: r.reason });
+        logger.warn(`TeamAuto: worktree GC kept ${taskId}: ${r.reason}`);
+      }
+    };
     let entries: string[] = [];
     try {
       entries = (await fs.readdir(siblings)).filter((e) => e.startsWith(prefix));
     } catch {
-      return { removed, retained };
+      entries = [];
     }
+    const dirTaskIds: string[] = [];
     for (const entry of entries) {
       const taskId = entry.slice(prefix.length);
       if (!taskId) continue;
+      dirTaskIds.push(taskId);
       if (!isTerminal(taskId)) continue; // active/resumable task - worktree is resume state
-      const r = await safeRemoveTaskWorktree(repoId, taskId);
-      if (r.removed) {
-        removed.push(taskId);
-        logger.warn(`TeamAuto: worktree GC removed ${taskId} (${r.reason})`);
-      } else if (!r.reason.includes("already gone")) {
-        retained.push({ taskId, reason: r.reason });
-        logger.warn(`TeamAuto: worktree GC kept ${taskId}: ${r.reason}`);
-      }
+      await apply(taskId);
     }
-    return { removed, retained };
+    // #173 QA finding: BRANCH-ONLY leaks - the worktree dir is already gone
+    // but the local teamclaw/task-* branch survives (e.g. an earlier removal
+    // whose branch -D failed, or the squash-merge stale-branch face). The
+    // directory enumeration above never sees them; enumerate the branches too
+    // so safeRemoveTaskWorktree can reap (tip on remote) or at least surface
+    // them in the stale count instead of leaking silently forever.
+    const branchPrefix = `${TEAMCLAW_BRANCH_PREFIX}task-`;
+    let branchRefs: string[] = [];
+    try {
+      branchRefs = (await run(["for-each-ref", "--format=%(refname:short)", `refs/heads/${branchPrefix}*`], base))
+        .split("\n")
+        .filter(Boolean);
+    } catch {
+      branchRefs = [];
+    }
+    const seen = new Set(dirTaskIds);
+    for (const ref of branchRefs) {
+      const taskId = ref.slice(branchPrefix.length);
+      if (!taskId || seen.has(taskId)) continue;
+      if (!isTerminal(taskId)) continue;
+      await apply(taskId);
+    }
+    return { removed, retained, stale };
   }
 
   function taskWorktreeRelDir(repoId: string, taskId: string): string {

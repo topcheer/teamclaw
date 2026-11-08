@@ -9,7 +9,7 @@ import { getActiveDefaultRole, validateActiveRoleId } from "../profile-loader.js
 import type { TaskInfo, TeamState } from "../types.js";
 import { createGithubClient } from "./github-client.js";
 import { learnNorms, renderNormsBlock } from "./norms.js";
-import { createRepoSync, teamAutoProjectDir } from "./repo-sync.js";
+import { createRepoSync, teamAutoProjectDir, type TaskDeliveryOracle } from "./repo-sync.js";
 import { nextFireMs } from "./schedule.js";
 import { advanceCursors, sweepRepo, type Candidate } from "./scanner.js";
 import {
@@ -222,6 +222,22 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
   }
   const client = createGithubClient(auth);
   const sync = createRepoSync(auth, logger);
+  // #173 follow-up 5: squash-merge delivery oracle for worktree GC. After a
+  // squash merge + branch deletion the task commits are unreachable from
+  // origin/<default>, so the rev-list own-count never drains and the worktree
+  // is retained forever. Positive proof = a merged PR whose head tip is exactly
+  // the worktree's HEAD. Every failure path resolves false (fail toward keep).
+  const squashDeliveryOracle: TaskDeliveryOracle = async (repoId, taskId, headTip) => {
+    try {
+      const [owner, name] = repoId.split("/");
+      if (!owner || !name) {
+        return false;
+      }
+      return await client.prHeadDelivered(owner, name, sync.taskBranchName(taskId), headTip);
+    } catch {
+      return false;
+    }
+  };
   const timers = new Map<string, NodeJS.Timeout>();
   const sweeping = new Set<string>();
   let running = false;
@@ -624,8 +640,12 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       for (const w of deadOnes) {
         const t = state0.tasks[w.taskId];
         if (t && t.writeMode === "write" && t.projectDir?.includes("__task-")) {
-          const r = await sync.safeRemoveTaskWorktree(w.repoId, w.taskId);
-          if (!r.removed && !r.reason.includes("already gone")) {
+          const r = await sync.safeRemoveTaskWorktree(w.repoId, w.taskId, squashDeliveryOracle);
+          if (r.removed) {
+            // #173 follow-up 4: positive removal line - without it a successful
+            // terminal cleanup is invisible in logs (only kept/failed logged).
+            logger.warn(`TeamAuto: terminal task ${w.taskId} worktree removed (${r.reason})`);
+          } else if (!r.reason.includes("already gone")) {
             logger.warn(`TeamAuto: terminal task ${w.taskId} worktree kept: ${r.reason}`);
           }
         }
@@ -680,8 +700,12 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           // path left - remove it when the worker never produced deliverable
           // commits (safety-checked, undelivered work is retained + logged).
           if (task.writeMode === "write" && task.projectDir?.includes("__task-")) {
-            const r = await sync.safeRemoveTaskWorktree(entry.repoId, task.id);
-            if (!r.removed && !r.reason.includes("already gone")) {
+            const r = await sync.safeRemoveTaskWorktree(entry.repoId, task.id, squashDeliveryOracle);
+            if (r.removed) {
+              // #173 follow-up 4: positive removal line - symmetric with the
+              // boot-GC path which logs both directions.
+              logger.warn(`TeamAuto: terminal task ${task.id} worktree removed (${r.reason})`);
+            } else if (!r.reason.includes("already gone")) {
               logger.warn(`TeamAuto: terminal task ${task.id} worktree kept: ${r.reason}`);
             }
           }
@@ -871,8 +895,17 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     // on its own. Safety-checked: undelivered work is kept and logged.
     void (async () => {
       try {
+        // #173 follow-up 3: with getTeamState() === null the isTerminal
+        // predicate below classifies EVERY task as terminal - boot GC must
+        // not run blind over an unloaded team state (fails toward skip).
+        if (!deps.getTeamState()) {
+          logger.warn("TeamAuto: worktree GC skipped (team state unavailable)");
+          return;
+        }
         let removed = 0;
         let retained = 0;
+        let stale = 0;
+        const retainedDetails: string[] = [];
         for (const repo of s.repos) {
           if (!repo.enabled) continue;
           const isTerminal = (taskId: string): boolean => {
@@ -886,14 +919,23 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
             // too - safeRemoveTaskWorktree still retains unpushed work.
             return !s.writebacks.some((w) => w.taskId === taskId && !w.doneAt && !w.failedAt);
           };
-          const r = await sync.gcTaskWorktrees(repo.id, isTerminal);
+          const r = await sync.gcTaskWorktrees(repo.id, isTerminal, squashDeliveryOracle);
           removed += r.removed.length;
           retained += r.retained.length;
+          stale += r.stale;
+          retainedDetails.push(...r.retained.map((x) => `${x.taskId}: ${x.reason}`));
         }
-        if (removed || retained) {
-          recordActivity(s, { at: Date.now(), repoId: "*", kind: "task", text: `worktree GC: removed ${removed}, retained ${retained} (undelivered)` });
+        if (removed || retained || stale) {
+          // #173 follow-up 4: per-task retain reasons recorded as activity
+          // (PR #167 promised "outcome logged + recorded as activity"); the
+          // stale count surfaces dir-gone-but-branch-kept leaks too.
+          const detail = retainedDetails.length
+            ? `; ${retainedDetails.slice(0, 10).join("; ")}${retainedDetails.length > 10 ? `; +${retainedDetails.length - 10} more` : ""}`
+            : "";
+          const stalePart = stale ? `, stale ${stale}` : "";
+          recordActivity(s, { at: Date.now(), repoId: "*", kind: "task", text: `worktree GC: removed ${removed}, retained ${retained} (undelivered${detail})${stalePart}` });
           await saveTeamAutoStore(s);
-          logger.warn(`TeamAuto: worktree GC removed ${removed}, retained ${retained}`);
+          logger.warn(`TeamAuto: worktree GC removed ${removed}, retained ${retained}${stalePart}`);
         }
       } catch (err) {
         logger.warn(`TeamAuto: worktree GC failed: ${err instanceof Error ? err.message : String(err)}`);

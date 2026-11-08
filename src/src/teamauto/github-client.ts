@@ -232,6 +232,27 @@ export function createGithubClient(auth: GithubAuthManager) {
       return { number: Number(item.number ?? 0), url: String(item.html_url ?? "") };
     },
 
+    /**
+     * Worktree-GC delivery oracle (#173 follow-up 5): after a squash merge +
+     * branch deletion, ls-remote for the task branch is empty and the local
+     * rev-list own-count never drains (squash shas differ from the branch
+     * commits). True only on positive proof: a PR from this exact branch whose
+     * head tip is EXACTLY the given sha was merged. A closed-unmerged PR, a
+     * head-tip mismatch (worker committed after the push), or any API failure
+     * resolves false - the GC then retains the worktree (fails toward keep).
+     */
+    async prHeadDelivered(owner: string, repo: string, branch: string, headTip: string): Promise<boolean> {
+      const data = await getJson<unknown[]>(
+        `/repos/${owner}/${repo}/pulls?state=all&head=${encodeURIComponent(`${owner}:${branch}`)}`,
+      );
+      if (!Array.isArray(data) || data.length === 0) {
+        return false;
+      }
+      const pr = data[0] as Record<string, unknown>;
+      const headSha = String((pr.head as { sha?: string } | undefined)?.sha ?? "");
+      return Boolean(pr.merged) && headSha === headTip;
+    },
+
     /** Repos the logged-in user can select in the TeamAuto bind picker. */
     async listUserRepos(): Promise<{ id: string; fullName: string; private: boolean; pushedAt: string | null }[]> {
       const data = await getJson<unknown[]>("/user/repos?affiliation=owner,collaborator,organization_member&sort=pushed&per_page=100");
