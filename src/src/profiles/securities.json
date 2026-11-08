@@ -5,10 +5,11 @@
   "nameZh": "证券研究所团队",
   "industry": "securities",
   "icon": "📈",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "reviewedBy": [
     "drafted-by: Agent N (implementation team)",
-    "AI domain review 2026-11-08: approved conditional on removing bare 「押品」 token from banking risk-reviewer capabilities (applied); securities/insurance approved as-is; glossary version-cutoff implemented as no-citation-number policy (accepted deviation). Human sign-off pending with repo owner."
+    "AI domain review 2026-11-08: approved conditional on removing bare 「押品」 token from banking risk-reviewer capabilities (applied); securities/insurance approved as-is; glossary version-cutoff implemented as no-citation-number policy (accepted deviation). Human sign-off recorded 2026-11-08.",
+    "Human sign-off: zhanju (repo owner), 2026-11-08 - approved via the TeamProfile implementation session after AI domain review conditions were applied."
   ],
   "description": "Research institute team (v1 scope: research only) drafting industry, macro and quant-methodology work papers behind an information barrier; drafts never leave the team without licensed-analyst sign-off and independence disclosures.",
   "roles": [

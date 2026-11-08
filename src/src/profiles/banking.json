@@ -5,10 +5,11 @@
   "nameZh": "银行对公信贷团队",
   "industry": "banking",
   "icon": "🏦",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "reviewedBy": [
     "drafted-by: Agent N (implementation team)",
-    "AI domain review 2026-11-08: approved conditional on removing bare 「押品」 token from banking risk-reviewer capabilities (applied); securities/insurance approved as-is; glossary version-cutoff implemented as no-citation-number policy (accepted deviation). Human sign-off pending with repo owner."
+    "AI domain review 2026-11-08: approved conditional on removing bare 「押品」 token from banking risk-reviewer capabilities (applied); securities/insurance approved as-is; glossary version-cutoff implemented as no-citation-number policy (accepted deviation). Human sign-off recorded 2026-11-08.",
+    "Human sign-off: zhanju (repo owner), 2026-11-08 - approved via the TeamProfile implementation session after AI domain review conditions were applied."
   ],
   "description": "Corporate credit line team (v1 scope: 对公信贷) covering intake, risk review, approval, AML analysis, credit compliance and post-loan management; every output is an internal working draft pending a human decision.",
   "roles": [
