@@ -209,6 +209,14 @@ const SECURITY_ROUTES = [
   ["POST", "exact", "/api/v1/security/reset"],
 ];
 
+// Design 2.4 workflows backend wave: the workflow start route, appended
+// after the security suffix on the same append-only precedent (no path
+// overlap with any earlier route; handler lives in ./workflow-routes.ts and
+// enforces the transition-matrix 503 itself).
+const WORKFLOW_ROUTES = [
+  ["POST", "regex", "^\\/api\\/v1\\/workflows\\/[^/]+\\/start$"],
+];
+
 /** Normalizes a live RouteDef into {method, kind, value} for comparison. */
 function routeToSpec(route, index) {
   assert.equal(typeof route.handler, "function", `route #${index} must bind a handler function`);
@@ -225,9 +233,9 @@ function routeToSpec(route, index) {
 }
 
 const tableSpecs = routeTableMod.controllerRouteTable.map(routeToSpec);
-assert.equal(tableSpecs.length, EXPECTED_ROUTES.length + SECURITY_ROUTES.length,
-  `controllerRouteTable must have exactly ${EXPECTED_ROUTES.length} historical + ${SECURITY_ROUTES.length} security entries in order (got ${tableSpecs.length})`);
-const FULL_EXPECTED_ROUTES = [...EXPECTED_ROUTES, ...SECURITY_ROUTES];
+assert.equal(tableSpecs.length, EXPECTED_ROUTES.length + SECURITY_ROUTES.length + WORKFLOW_ROUTES.length,
+  `controllerRouteTable must have exactly ${EXPECTED_ROUTES.length} historical + ${SECURITY_ROUTES.length} security + ${WORKFLOW_ROUTES.length} workflow entries in order (got ${tableSpecs.length})`);
+const FULL_EXPECTED_ROUTES = [...EXPECTED_ROUTES, ...SECURITY_ROUTES, ...WORKFLOW_ROUTES];
 FULL_EXPECTED_ROUTES.forEach(([method, kind, value], i) => {
   const actual = tableSpecs[i];
   const methodMatches = Array.isArray(method)
