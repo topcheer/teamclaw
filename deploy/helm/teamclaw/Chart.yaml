@@ -2,5 +2,7 @@ apiVersion: v2
 name: teamclaw
 description: Helm chart for deploying a TeamClaw controller on Kubernetes
 type: application
-version: 0.1.1
-appVersion: "2026.3.25-1"
+version: 0.1.2
+# Keep in sync with src/package.json and the runtime image tags published by
+# teamclaw-runtime-image.yml (#225 W3); this is the default image tag.
+appVersion: "2026.11.0"

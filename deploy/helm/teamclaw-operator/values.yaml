@@ -2,8 +2,15 @@
 
 image:
   repository: ghcr.io/topcheer/teamclaw-operator
-  tag: latest  # pin a digest for reproducible installs
-  pullPolicy: Always  # :latest must roll
+  # Empty default falls back to the chart appVersion (see Chart.yaml), which is
+  # a released v-tag published by teamclaw-operator-image.yml (#225 C2/W3) -
+  # NOT the mutable :latest channel that CI re-pushes on every main push.
+  # For strict reproducibility pin a digest instead, e.g.:
+  #   tag: "v2026.11.0@sha256:<digest>"
+  tag: ""
+  # Immutable version tags: IfNotPresent is enough and makes helm rollback
+  # meaningful (image content can no longer change under a fixed tag).
+  pullPolicy: IfNotPresent
 
 replicaCount: 1
 
@@ -41,7 +48,33 @@ token:
 leaderElection:
   enabled: true
 
-resources: {}
+# Pod-level hardening (#225 W2). The image runs as distroless nonroot
+# (uid/gid 65532); the explicit runAsUser/runAsGroup matter because the image
+# USER is non-numeric - runAsNonRoot alone could not be verified by kubelet.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+
+# Container-level hardening (#225 W2): no privilege escalation, no capabilities.
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+# Default QoS floor (#225 W1) - requests mirror the kustomize base
+# (operator/config/manager/deployment.yaml); set resources: null to omit.
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
 nodeSelector: {}
 tolerations: []
 affinity: {}

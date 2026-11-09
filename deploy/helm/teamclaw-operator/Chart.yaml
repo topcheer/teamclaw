@@ -2,8 +2,10 @@ apiVersion: v2
 name: teamclaw-operator
 description: TeamClaw Kubernetes operator - deploys TeamClaw controller/worker teams from TeamClaw CRs, with a built-in management UI.
 type: application
-version: 0.1.0
-appVersion: "2026.10.10"
+version: 0.1.1
+# Must match a tag actually published by teamclaw-operator-image.yml
+# (v-tags on git releases, e.g. v2026.11.0); it is the default image tag (#225 W3).
+appVersion: "v2026.11.0"
 home: https://github.com/topcheer/teamclaw
 sources:
   - https://github.com/topcheer/teamclaw

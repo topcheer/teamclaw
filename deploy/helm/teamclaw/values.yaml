@@ -3,7 +3,12 @@ replicaCount: 1
 image:
   repository: ghcr.io/topcheer/teamclaw-openclaw
   pullPolicy: IfNotPresent
-  tag: latest
+  # Empty default falls back to the chart appVersion (see Chart.yaml), which is
+  # kept in sync with src/package.json releases (#225 C2/W3) - the chart does
+  # NOT track the mutable :latest channel that CI re-pushes on every main push.
+  # For strict reproducibility pin a digest instead, e.g.:
+  #   tag: "2026.11.0@sha256:<digest>"
+  tag: ""
 
 imagePullSecrets: []
 nameOverride: ""
@@ -115,7 +120,17 @@ controller:
       ln -sfn /app/extensions/teamclaw /home/node/.openclaw/extensions/teamclaw
       exec node /app/openclaw.mjs gateway --allow-unconfigured
 
-resources: {}
+# Default QoS floor (#225 W1): the controller is a Node.js OpenClaw gateway
+# (jiti-compiles the teamclaw extension at startup, then orchestrates agents),
+# so the request keeps it out of BestEffort while the limits absorb startup
+# and agent-orchestration bursts. Set resources: null to omit entirely.
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
 
 nodeSelector: {}
 tolerations: []
