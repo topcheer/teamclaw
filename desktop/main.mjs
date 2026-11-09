@@ -63,6 +63,12 @@ function getSettingsPath() {
   return path.join(app.getPath("userData"), "settings.json");
 }
 
+// #223 W3: cached instance record. `before-quit` used to await loadSettings();
+// async quit listeners let the app exit mid-read and orphan the gateway. The
+// cache is refreshed on every settings read/write and read SYNCHRONOUSLY at
+// quit time.
+let cachedInstanceRecord = null;
+
 async function loadSettings() {
   // sandbox flag is derived, never persisted: a TC_USER_DATA launch must
   // behave like a fresh machine (wizard defaults to PRIVATE, no probing of
@@ -70,7 +76,9 @@ async function loadSettings() {
   const derived = { ...DEFAULT_SETTINGS, sandbox: Boolean(process.env.TC_USER_DATA) };
   try {
     const raw = await fs.readFile(getSettingsPath(), "utf8");
-    return { ...derived, ...JSON.parse(raw), sandbox: derived.sandbox };
+    const merged = { ...derived, ...JSON.parse(raw), sandbox: derived.sandbox };
+    cachedInstanceRecord = merged.instance ?? null;
+    return merged;
   } catch {
     return { ...derived };
   }
@@ -80,6 +88,7 @@ async function saveSettings(nextSettings) {
   const settings = { ...DEFAULT_SETTINGS, ...(nextSettings || {}) };
   await fs.mkdir(path.dirname(getSettingsPath()), { recursive: true });
   await fs.writeFile(getSettingsPath(), JSON.stringify(settings, null, 2), "utf8");
+  cachedInstanceRecord = settings.instance ?? null;
   return settings;
 }
 
@@ -98,31 +107,130 @@ function buildLocalInstallCommand(mode) {
 //   { installed: false, warning: null }        - binary does not resolve (spawn ENOENT):
 //       genuinely not installed; no retry is spent on this case.
 const OPENCLAW_PROBE_RETRY_DELAY_MS = 250;
+// #220: a hung `openclaw --help` used to block the wizard forever - the probe
+// now hard-kills after this timeout and reports via the warning path.
+const OPENCLAW_PROBE_TIMEOUT_MS = 10000;
+
+// #220: resolve `openclaw` to an ABSOLUTE executable path before spawning.
+// A bare name relies on the ambient PATH at spawn time; an explicit path
+// removes that dependency and makes the timeout kill the right process (no
+// shell wrapper to lose track of). Returns null when nothing executable sits
+// on PATH - the same signal the old ENOENT outcome carried (not installed).
+function resolveExecutableOnPath(name) {
+  const pathDirs = String(process.env.PATH || "").split(path.delimiter).filter(Boolean);
+  const exts = process.platform === "win32"
+    ? String(process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+    : [""];
+  for (const dir of pathDirs) {
+    for (const ext of exts) {
+      const candidate = path.join(dir, process.platform === "win32" ? name + ext : name);
+      try {
+        const st = fsSync.statSync(candidate);
+        if (!st.isFile()) continue;
+        fsSync.accessSync(candidate, fsSync.constants.X_OK);
+        return candidate;
+      } catch { /* keep scanning */ }
+    }
+  }
+  return null;
+}
+
+// Cached PATH resolution (PATH does not change while the app runs).
+let OPENCLAW_PATH_CACHE;
+function resolvedOpenClawBinary() {
+  if (OPENCLAW_PATH_CACHE === undefined) {
+    OPENCLAW_PATH_CACHE = resolveExecutableOnPath("openclaw");
+  }
+  return OPENCLAW_PATH_CACHE;
+}
+
+// Map an openclaw bin reference to a spawnable { command, args, env } plan
+// WITHOUT a shell (#223 W3 - see the gateway lifecycle block below for why
+// every gateway spawn goes through this).
+function openClawSpawnPlan(bin, args) {
+  if (!bin) return null;
+  // Node-script entries run under Electron's embedded node - the launcher
+  // shim's trick without the wrapper script (and without needing system Node,
+  // the shim shebang does `#!/usr/bin/env node`).
+  if (/\.(mjs|cjs|js)$/i.test(bin)) {
+    return { command: process.execPath, args: [bin, ...args], env: { ELECTRON_RUN_AS_NODE: "1" } };
+  }
+  // Bin shims (npm .bin/<name>, the extracted-runtime launcher shim, global
+  // <prefix> layouts) all sit next to the real package entry at a
+  // deterministic path - prefer the entry over the shim.
+  const entryCandidates = [];
+  if (bin === EXTRACTED_OPENCLAW_SHIM && EXTRACTED_RUNTIME_DIR) {
+    entryCandidates.push(path.join(EXTRACTED_RUNTIME_DIR, "node_modules", "openclaw", "openclaw.mjs"));
+  }
+  const binDir = path.dirname(bin);
+  entryCandidates.push(path.join(binDir, "..", "openclaw", "openclaw.mjs")); // <tree>/node_modules/.bin/<name>
+  entryCandidates.push(path.join(binDir, "..", "lib", "node_modules", "openclaw", "openclaw.mjs")); // <prefix>/bin + posix npm global
+  entryCandidates.push(path.join(binDir, "node_modules", "openclaw", "openclaw.mjs")); // windows npm global <prefix>/<name>.cmd
+  for (const entry of entryCandidates) {
+    if (entry && fsSync.existsSync(entry)) {
+      return { command: process.execPath, args: [entry, ...args], env: { ELECTRON_RUN_AS_NODE: "1" } };
+    }
+  }
+  // Real executables / shebang scripts (POSIX): direct spawn.
+  if (process.platform !== "win32") {
+    return { command: bin, args, env: {} };
+  }
+  // Windows: ANY bin form with no discoverable package entry (.cmd, .bat,
+  // bare .exe wrappers, ...): shell fallback. Lifecycle is still contained -
+  // stop paths escalate to `taskkill /T` which reaps the whole tree (see
+  // killGatewayTree).
+  return null;
+}
 
 async function probeOpenClawInstall() {
+  const resolved = resolvedOpenClawBinary();
+  if (!resolved) {
+    return { installed: false, warning: null };
+  }
   let lastFailure = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt > 0) {
       await new Promise((resolveDelay) => setTimeout(resolveDelay, OPENCLAW_PROBE_RETRY_DELAY_MS));
     }
     const outcome = await new Promise((resolve) => {
-      const child = spawn("openclaw", ["--help"], { stdio: "ignore", windowsHide: true });
-      child.on("error", (error) => resolve({ kind: "error", error }));
-      child.on("exit", (code, signal) => resolve({ kind: "exit", code, signal }));
+      // #220: spawn the RESOLVED absolute path (no PATH lookup, no shell
+      // wrapper) and bound the probe - a wedged --help gets SIGKILLed.
+      const plan = openClawSpawnPlan(resolved, ["--help"]);
+      const child = plan
+        ? spawn(plan.command, plan.args, { stdio: "ignore", windowsHide: true, env: { ...process.env, ...plan.env } })
+        : spawn(`"${resolved}" --help`, { stdio: "ignore", windowsHide: true, shell: true });
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        try { child.kill("SIGKILL"); } catch { /* already gone */ }
+      }, OPENCLAW_PROBE_TIMEOUT_MS);
+      child.on("error", (error) => { clearTimeout(timer); resolve({ kind: "error", error }); });
+      child.on("exit", (code, signal) => {
+        clearTimeout(timer);
+        resolve(timedOut ? { kind: "exit", code: null, signal: "SIGKILL", timeout: true } : { kind: "exit", code, signal });
+      });
     });
     if (outcome.kind === "exit" && outcome.code === 0) {
       return { installed: true, warning: null };
     }
+    // The resolved binary vanished between resolve and spawn: genuinely gone.
     if (outcome.kind === "error" && outcome.error && outcome.error.code === "ENOENT") {
+      OPENCLAW_PATH_CACHE = null;
       return { installed: false, warning: null };
     }
     lastFailure = outcome;
   }
   if (lastFailure.kind === "exit") {
+    // Cross-review fix: a timeout kill has code=null and writing "exited
+    // with 1" was misleading - surface the real signal/timeout instead.
+    const codeText = lastFailure.code !== null && lastFailure.code !== undefined
+      ? String(lastFailure.code)
+      : "no exit code";
     return {
       installed: true,
-      warning: `openclaw --help exited with ${lastFailure.code ?? 1}` +
+      warning: `openclaw --help exited with ${codeText}` +
         (lastFailure.signal ? ` (signal ${lastFailure.signal})` : "") +
+        (lastFailure.timeout ? " (probe timeout)" : "") +
         " after retry",
     };
   }
@@ -191,6 +299,179 @@ async function runShellCommand(command, options = {}) {
       reject(failure);
     });
   });
+}
+
+/* ---------------- Artifact download (#223 C1) ----------------
+ * The renderer-supplied artifactUrl used to be interpolated into a shell
+ * curl command - a quote in the URL was arbitrary command execution in the
+ * main process. The download now runs through Node fetch with a validated
+ * URL: no shell anywhere in the path, and the SAME validated URL feeds the
+ * "<url>.sha256" companion fetch (shared, bounded SSRF surface).
+ */
+function validateArtifactUrl(raw) {
+  const rawUrl = String(raw || "");
+  // Reject dangerous characters on the RAW input first: the URL parser
+  // percent-encodes quotes/spaces into the pathname (%22/%20), so checking
+  // only the parsed form would let the original metachars through.
+  if (/[\u0000-\u0020"'`$()<>\\]/.test(rawUrl)) {
+    throw new Error("Runtime artifact URL contains disallowed characters.");
+  }
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error("Invalid runtime artifact URL.");
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error(`Runtime artifact URL must be https (got ${parsed.protocol || "none"}).`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error("Runtime artifact URL must not embed credentials.");
+  }
+  // The URL originates in the renderer: refuse obvious intranet / cloud
+  // metadata / loopback targets (plain-http metadata endpoints are already
+  // unreachable via the https-only rule above).
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  // Unwrap IPv4-mapped / IPv4-compatible IPv6 BEFORE the blocklist: the URL
+  // parser normalizes [::ffff:127.0.0.1] to the hex form [::ffff:7f00:1],
+  // which slips past every textual rule below (cross-review finding).
+  let effectiveHost = host;
+  const mappedDotted = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(host);
+  const mappedHex = /^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(host);
+  if (mappedDotted) {
+    effectiveHost = mappedDotted[1];
+  } else if (mappedHex) {
+    // ::ffff:7f00:1 (mapped) or ::7f00:1 (compatible) -> dotted quad
+    const hi = parseInt(mappedHex[1], 16);
+    const lo = parseInt(mappedHex[2], 16);
+    effectiveHost = `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
+  }
+  const blocked = effectiveHost === "localhost" ||
+    effectiveHost === "metadata.google.internal" ||
+    effectiveHost === "::1" ||
+    /^127\.|^10\.|^192\.168\.|^169\.254\.|^0\./.test(effectiveHost) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(effectiveHost) ||
+    /^(f[cd]|fe[89ab])/i.test(effectiveHost); // fc00::/7 (private v6), fe80::/10 (link-local v6)
+  if (blocked) {
+    throw new Error(`Runtime artifact host not allowed: ${parsed.hostname}`);
+  }
+  if (/%22|%27|%60|%5[cC]|%3[cC]|%3[eE]/i.test(parsed.pathname + parsed.search)) {
+    throw new Error("Runtime artifact URL contains disallowed characters.");
+  }
+  return parsed;
+}
+
+// The derived file name lands on disk inside userData/downloads: charset-
+// whitelist it so it can never escape the dir or surprise the filesystem.
+function artifactFileNameFromUrl(parsedUrl) {
+  const rawName = path.posix.basename(parsedUrl.pathname);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(rawName) || rawName === "." || rawName === "..") {
+    return `teamclaw-runtime-${process.platform}-${process.arch}.tar.gz`;
+  }
+  return rawName;
+}
+
+// curl-equivalent download semantics: follow redirects, fail on HTTP error,
+// retry transient failures (--retry 3), stream progress lines to the wizard
+// log (curl's stderr meter used to provide those). No shell, no injection.
+//
+// Proxy/CA note (cross-review declaration): unlike curl, this fetch path
+// does NOT read HTTP(S)_PROXY env by default (Node fetch needs
+// NODE_USE_ENV_PROXY=1) and custom CAs need NODE_EXTRA_CA_CERTS instead of
+// CURL_CA_BUNDLE - a behavior change for corporate-proxy environments.
+const ARTIFACT_DOWNLOAD_ATTEMPTS = 3;
+const ARTIFACT_MAX_REDIRECTS = 5;
+
+// Follow redirects MANUALLY, re-validating EVERY hop through
+// validateArtifactUrl: with redirect:"follow" a public https URL could 302
+// to http://127.0.0.1 and fetch would happily read the intranet response
+// body (cross-review finding - verified with a live 302 server).
+async function validatedArtifactFetch(parsedUrl) {
+  let current = parsedUrl;
+  for (let hop = 0; hop <= ARTIFACT_MAX_REDIRECTS; hop++) {
+    const res = await fetch(current.href, { redirect: "manual" });
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get("location");
+      if (!location) {
+        throw new Error(`redirect without Location header from ${current.host}`);
+      }
+      // Same validator, same rules - scheme/host/metachars, every hop.
+      current = validateArtifactUrl(new URL(location, current.href).href);
+      continue;
+    }
+    return res;
+  }
+  throw new Error(`too many redirects (more than ${ARTIFACT_MAX_REDIRECTS})`);
+}
+async function downloadArtifact(parsedUrl, dest, onLine) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= ARTIFACT_DOWNLOAD_ATTEMPTS; attempt++) {
+    try {
+      return await downloadArtifactOnce(parsedUrl, dest, onLine, attempt);
+    } catch (e) {
+      lastError = e;
+      await fs.rm(dest, { force: true }).catch(() => {});
+      if (attempt < ARTIFACT_DOWNLOAD_ATTEMPTS) {
+        onLine(`Download failed (${e instanceof Error ? e.message : String(e)}) - retrying (${attempt}/${ARTIFACT_DOWNLOAD_ATTEMPTS - 1})...`);
+        await new Promise((r) => setTimeout(r, 1000 * attempt));
+      }
+    }
+  }
+  throw lastError;
+}
+
+async function downloadArtifactOnce(parsedUrl, dest, onLine, attempt) {
+  const res = await validatedArtifactFetch(parsedUrl);
+  if (!res.ok || !res.body) {
+    throw new Error(`HTTP ${res.status}${res.statusText ? " " + res.statusText : ""} from ${parsedUrl.host}`);
+  }
+  const total = Number(res.headers.get("content-length")) || null;
+  onLine(`Downloading runtime artifact from ${parsedUrl.host} (attempt ${attempt}/${ARTIFACT_DOWNLOAD_ATTEMPTS})${total ? ` - ${(total / 1048576).toFixed(1)} MB` : ""}...`);
+  const handle = await fs.open(dest, "w");
+  let received = 0;
+  let lastReport = 0;
+  try {
+    for await (const chunk of res.body) {
+      await handle.write(chunk);
+      received += chunk.length;
+      if (received - lastReport >= 4 * 1048576 || (total && received >= total)) {
+        lastReport = received;
+        onLine(`Downloaded ${(received / 1048576).toFixed(1)} MB${total ? ` of ${(total / 1048576).toFixed(1)} MB` : ""}`);
+      }
+    }
+  } finally {
+    await handle.close();
+  }
+  return { bytes: received };
+}
+
+// sha256 of a local file via node:crypto - replaces the `shasum` shell call
+// (which does not exist on Windows either; same for the removed curl).
+async function sha256File(file) {
+  const { createHash } = await import("node:crypto");
+  const hash = createHash("sha256");
+  const handle = await fs.open(file, "r");
+  try {
+    const buf = Buffer.alloc(512 * 1024);
+    for (;;) {
+      const { bytesRead } = await handle.read(buf, 0, buf.length, null);
+      if (!bytesRead) break;
+      hash.update(buf.subarray(0, bytesRead));
+    }
+  } finally {
+    await handle.close();
+  }
+  return hash.digest("hex");
+}
+
+// tar as a real binary with an argv array: no shell, no quoting. Windows
+// ships bsdtar in System32 (Win10+); runtime-extract.mjs uses the same rule.
+function tarBinary() {
+  if (process.platform === "win32") {
+    const sysTar = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe");
+    if (fsSync.existsSync(sysTar)) return sysTar;
+  }
+  return "tar";
 }
 
 /* ---------------- Bootstrap installer (streamed) ---------------- */
@@ -296,21 +577,24 @@ async function ensureOpenClawRuntime({ source, artifactUrl }, onEvent) {
   if (src === "artifact") {
     // Fixed-URL rolling release (user design): tag never moves, CI replaces
     // assets. Default URL, user-overridable; sha256 verified when available.
+    // #223 C1: validated Node fetch download (no shell curl - a crafted URL
+    // was command injection), node:crypto checksum, argv-array tar.
     const plat = `${process.platform}-${process.arch}`;
-    const url = artifactUrl || `https://github.com/topcheer/teamclaw/releases/download/runtime-latest/teamclaw-runtime-${plat}.tar.gz`;
+    const parsedUrl = validateArtifactUrl(artifactUrl || `https://github.com/topcheer/teamclaw/releases/download/runtime-latest/teamclaw-runtime-${plat}.tar.gz`);
     const workDir = path.join(app.getPath("userData"), "downloads");
     await fs.mkdir(workDir, { recursive: true });
-    const fileName = url.split("/").pop() || "artifact.tar.gz";
+    const fileName = artifactFileNameFromUrl(parsedUrl);
     const dest = path.join(workDir, fileName);
     onEvent({ phase: "openclaw", line: `Downloading runtime artifact ${fileName}...` });
-    await runShellStream(`curl -fSL --retry 3 -o "${dest}" "${url}"`, workDir, (line) =>
-      onEvent({ phase: "openclaw", line }),
-    );
+    await downloadArtifact(parsedUrl, dest, (line) => onEvent({ phase: "openclaw", line }));
     onEvent({ phase: "openclaw", line: "Verifying sha256..." });
-    const sum = await runShellCommand(`shasum -a 256 "${dest}"`, { cwd: workDir });
-    const digest = (sum.stdout || "").split(" ")[0];
+    const digest = await sha256File(dest);
     try {
-      const expect = (await (await fetch(url + ".sha256")).text()).split(" ")[0];
+      // Same validated URL (SSRF surface is shared with the artifact fetch),
+      // and the checksum fetch re-validates every redirect hop too.
+      const checksumUrl = new URL(parsedUrl.href + ".sha256");
+      const checksumRes = await validatedArtifactFetch(checksumUrl);
+      const expect = ((await checksumRes.text()) || "").split(" ")[0].trim();
       if (expect && digest !== expect) throw new Error(`sha256 mismatch: ${digest} != ${expect}`);
       onEvent({ phase: "openclaw", line: "sha256 OK: " + digest.slice(0, 12) });
     } catch (e) {
@@ -319,7 +603,9 @@ async function ensureOpenClawRuntime({ source, artifactUrl }, onEvent) {
     }
     const extractDir = path.join(workDir, "runtime-extracted");
     await fs.mkdir(extractDir, { recursive: true });
-    await runShellStream(`tar xzf "${dest}" -C "${extractDir}"`, workDir, (line) => onEvent({ phase: "openclaw", line }));
+    await runSpawnStream(tarBinary(), ["xzf", dest, "-C", extractDir], extractDir, (line) =>
+      onEvent({ phase: "openclaw", line }),
+    );
     const bin = path.join(extractDir, "runtime", "node_modules", ".bin", "openclaw");
     if (!fsSync.existsSync(bin)) throw new Error("Runtime tree malformed (no openclaw bin).");
     onEvent({ phase: "openclaw", line: "Artifact runtime ready: " + bin });
@@ -531,6 +817,26 @@ async function runShellStream(command, cwd, onLine, envOverride) {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
+  return await streamChildOutput(child, command, onLine);
+}
+
+// Argv-array variant (#223): no shell, no string splicing - for steps where
+// the binary and args are fully app-owned (tar extraction, ...).
+async function runSpawnStream(command, args, cwd, onLine, envOverride) {
+  const child = spawn(command, args, {
+    cwd,
+    env: envOverride || process.env,
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsHide: true,
+  });
+  return await streamChildOutput(child, `${command} ${args.join(" ")}`, onLine);
+}
+
+// Shared line pump for the streamed runners. #223 W4: every chunk is appended
+// to its accumulator EXACTLY once and the line splitter keeps its own buffer
+// (the old pump never wrote stdout - always empty in failure messages - and
+// double-counted stderr partial lines across chunks).
+async function streamChildOutput(child, command, onLine) {
   // Watchdog: grandchildren can inherit and hold the stdio pipes, so the
   // child's 'exit' may fire but 'close' never does and callers hang. If the
   // stream goes silent for 20s AFTER the child exits, force-settle.
@@ -545,24 +851,22 @@ async function runShellStream(command, cwd, onLine, envOverride) {
   const bump = () => { lastActivity = Date.now(); };
   let stdout = "";
   let stderr = "";
-  const makePump = (isErr) => {
+  const pump = (stream, append) => {
     let pending = "";
-    return (stream) => {
-      stream?.on("data", (chunk) => {
-        pending += String(chunk || "");
-        const captured = isErr ? (stderr += pending) : null;
-        void captured;
-        let idx;
-        while ((idx = pending.indexOf("\n")) >= 0) {
-          const line = pending.slice(0, idx).trim();
-          if (line) { onLine(line); bump(); }
-          pending = pending.slice(idx + 1);
-        }
-      });
-    };
+    stream?.on("data", (chunk) => {
+      const text = String(chunk || "");
+      append(text);
+      pending += text;
+      let idx;
+      while ((idx = pending.indexOf("\n")) >= 0) {
+        const line = pending.slice(0, idx).trim();
+        pending = pending.slice(idx + 1);
+        if (line) { onLine(line); bump(); }
+      }
+    });
   };
-  makePump(false)(child.stdout);
-  makePump(true)(child.stderr);
+  pump(child.stdout, (text) => { stdout += text; });
+  pump(child.stderr, (text) => { stderr += text; });
   return await new Promise((resolve, reject) => {
     child.on("error", reject);
     child.on("exit", (code, signal) => {
@@ -574,23 +878,6 @@ async function runShellStream(command, cwd, onLine, envOverride) {
       reject(failure);
     });
   });
-}
-
-async function installLocalTeamClaw(options) {
-  const mode = String(options?.mode || "controller-manual").trim();
-  const command = buildLocalInstallCommand(mode);
-  return await runShellCommand(command, { cwd: String(options?.cwd || "").trim() || process.cwd() });
-}
-
-async function installOpenClawLocally(options) {
-  let command = String(options?.command || "").trim();
-  if (!command) {
-    throw new Error("OpenClaw install command is required (sandboxed installs use bootstrap:install)");
-  }
-  if (/(^|\s)npm\s+install\s+-g\b/.test(command)) {
-    throw new Error("Global installs are disabled: use the sandboxed bootstrap installer.");
-  }
-  return await runShellCommand(command, { cwd: String(options?.cwd || "").trim() || process.cwd() });
 }
 
 // Window chrome colors per theme (kept in sync with renderer/style.css).
@@ -633,6 +920,12 @@ async function createMainWindow() {
       preload: path.join(__dirname, "preload.mjs"),
       contextIsolation: true,
       nodeIntegration: false,
+      // #223 W6 (kept false, deliberate): sandboxed preloads must be
+      // CommonJS - Electron does not load ESM preload scripts under
+      // sandbox:true, and preload.mjs is an ES module (contextBridge +
+      // ipcRenderer only, no Node APIs). Converting it to preload.cjs is the
+      // prerequisite for sandbox:true and is left as a follow-up (it changes
+      // the packaged entry, outside this fix's file scope).
       sandbox: false,
     },
   });
@@ -685,6 +978,37 @@ app.on("window-all-closed", async () => {
   }
 });
 
+// #223 W5: navigation guards. This app is a local-file UI; any in-page
+// navigation away from this renderer's OWN directory is a bug or an injected
+// link - block it (cross-review tightening: plain file:// prefix would still
+// allow navigating to any local file). Genuine http(s) popups go to the
+// system browser instead of a child window.
+const RENDERER_ROOT = path.join(__dirname, "renderer") + path.sep;
+app.on("web-contents-created", (_event, contents) => {
+  contents.on("will-navigate", (event, navigationUrl) => {
+    try {
+      if (new URL(contents.getURL()).protocol === "devtools:") return;
+    } catch { /* current URL unparseable - apply the guard */ }
+    let inRendererDir = false;
+    try {
+      const target = new URL(String(navigationUrl || ""));
+      // fileURLToPath yields the platform-native path (a raw pathname would
+      // keep a leading slash before the drive letter on Windows).
+      inRendererDir = target.protocol === "file:" &&
+        path.normalize(fileURLToPath(target)).startsWith(RENDERER_ROOT);
+    } catch { /* unparseable target - keep blocked */ }
+    if (!inRendererDir) {
+      event.preventDefault();
+    }
+  });
+  contents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(String(url || ""))) {
+      shell.openExternal(url).catch(() => { /* best effort */ });
+    }
+    return { action: "deny" };
+  });
+});
+
 ipcMain.handle("window:apply-theme", async (_event, theme) => {
   const chrome = THEME_CHROME[theme === "night" ? "night" : "day"];
   if (mainWindow) {
@@ -725,6 +1049,75 @@ ipcMain.handle("settings:save", async (_event, settings) => {
  *   - started/stopped with the desktop app; killed on quit, pid-guarded
  */
 const STANDALONE = { child: null, port: null, pid: null, controllerUrl: null };
+
+/* Gateway process lifecycle (#223 W3). Gateways used to spawn through a
+ * shell ('sh -c "<bin> gateway ..."'): SIGTERM killed the /bin/sh wrapper and
+ * orphaned the node grandchild holding the port. Every gateway now spawns
+ * WITHOUT a shell (openClawSpawnPlan above resolves any bin shape into an
+ * execPath/ELECTRON_RUN_AS_NODE recipe), detached on POSIX so the gateway
+ * leads its own process group (its workers spawn inside the group), and the
+ * log fd is closed when the child exits (one fd used to leak per start).
+ */
+function spawnGatewayProcess(bin, gatewayArgs, { cwd, env, logPath }) {
+  const logFd = fsSync.openSync(logPath, "a");
+  let logClosed = false;
+  const closeLog = () => {
+    if (logClosed) return;
+    logClosed = true;
+    try { fsSync.closeSync(logFd); } catch { /* already closed */ }
+  };
+  const args = [String(gatewayArgs[0]), ...gatewayArgs.slice(1).map(String)];
+  // A bare name never reaches a PATH lookup at spawn time (#220 discipline):
+  // resolve it first, then plan the shell-free spawn.
+  const resolvedBin = typeof bin === "string" && !path.isAbsolute(bin)
+    ? (resolvedOpenClawBinary() || bin)
+    : bin;
+  const plan = openClawSpawnPlan(resolvedBin, args);
+  let child;
+  if (plan) {
+    child = spawn(plan.command, plan.args, {
+      cwd,
+      env: { ...(env || process.env), ...(plan.env || {}) },
+      stdio: ["ignore", logFd, logFd],
+      detached: process.platform !== "win32", // group leader -> kill(-pid)
+    });
+  } else {
+    // Windows .cmd fallback: the ONLY remaining shell spawn; stop paths
+    // escalate to `taskkill /T` so the wrapper never strands the grandchild.
+    child = spawn(`"${resolvedBin}" ${args.join(" ")}`, {
+      cwd,
+      env: env || process.env,
+      shell: true,
+      stdio: ["ignore", logFd, logFd],
+    });
+    child.wasShellSpawned = true;
+  }
+  child.on("exit", closeLog);
+  child.on("error", closeLog);
+  return child;
+}
+
+// Kill a gateway's whole tree. POSIX: -pid signals the process group (node +
+// spawned workers) at once, falling back to a direct kill once the group is
+// gone. Windows shell-wrapped children need `taskkill /T /F`.
+function killGatewayTree(child, pid = null, signal = "SIGTERM") {
+  const target = pid ?? (child && child.pid) ?? null;
+  if (!target) return;
+  if (process.platform === "win32" || (child && child.wasShellSpawned)) {
+    if (child && !child.wasShellSpawned) {
+      try { child.kill(signal); } catch { /* gone */ }
+    }
+    try {
+      spawn("taskkill", ["/PID", String(target), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    } catch { /* taskkill unavailable - best effort */ }
+    return;
+  }
+  try { process.kill(-target, signal); return; } catch { /* group gone */ }
+  if (child) {
+    try { child.kill(signal); return; } catch { /* gone */ }
+  }
+  try { process.kill(target, signal); } catch { /* gone */ }
+}
 
 function standaloneStateDir() {
   // The private instance RUNS on the bootstrap sandbox state - one sandbox
@@ -880,13 +1273,10 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
   }
   STANDALONE.port = gwPort;
   const logPath = path.join(standaloneStateDir(), "gateway.log");
-  const logFd = fsSync.openSync(logPath, "a");
-  const child = spawn(`"${bin}" gateway --port ${STANDALONE.port}`, {
+  const child = spawnGatewayProcess(bin, ["gateway", "--port", String(STANDALONE.port)], {
     cwd: standaloneStateDir(),
     env: { ...process.env, OPENCLAW_STATE_DIR: standaloneStateDir() },
-    shell: true,
-    stdio: ["ignore", logFd, logFd],
-    detached: false,
+    logPath,
   });
   STANDALONE.child = child;
   STANDALONE.pid = child.pid ?? null;
@@ -919,14 +1309,12 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
     const announceCount = (t) => (t.match(/Controller: Web UI available at/g) || []).length;
     const respawn = async () => {
       const before = announceCount(await logText());
-      try { child.kill("SIGTERM"); } catch { /* gone */ }
+      killGatewayTree(child);
       await new Promise((r) => { child.once("exit", r); setTimeout(r, 4000); });
-      const child2 = spawn(`"${bin}" gateway --port ${STANDALONE.port}`, {
+      const child2 = spawnGatewayProcess(bin, ["gateway", "--port", String(STANDALONE.port)], {
         cwd: standaloneStateDir(),
         env: { ...process.env, OPENCLAW_STATE_DIR: standaloneStateDir() },
-        shell: true,
-        stdio: ["ignore", logFd, logFd],
-        detached: false,
+        logPath,
       });
       STANDALONE.child = child2;
       STANDALONE.pid = child2.pid ?? null;
@@ -982,17 +1370,36 @@ async function standaloneStop() {
     // Stale pid from a previous run (crashed desktop): reap if alive.
     try {
       const pid = Number((await fs.readFile(standalonePidFile(), "utf8")).trim());
-      if (pid) process.kill(pid, 0); // throws if dead
-      process.kill(pid, "SIGTERM");
+      if (pid) {
+        process.kill(pid, 0); // throws if dead
+        killGatewayTree(null, pid, "SIGTERM");
+        // #223 W3: bounded escalation - a stuck gateway must not survive a
+        // stop request just because SIGTERM was ignored.
+        for (let i = 0; i < 12; i++) {
+          await new Promise((r) => setTimeout(r, 400));
+          let alive = false;
+          try { process.kill(pid, 0); alive = true; } catch { /* down */ }
+          if (!alive) break;
+          if (i === 10) killGatewayTree(null, pid, "SIGKILL");
+        }
+      }
     } catch { /* not running */ }
     try { fsSync.rmSync(standalonePidFile(), { force: true }); } catch { /* gone */ }
     return { ok: true, alreadyRunning: false };
   }
   const child = STANDALONE.child;
   await new Promise((resolve) => {
-    child.once("exit", resolve);
-    child.kill("SIGTERM");
-    setTimeout(resolve, 4000);
+    let settled = false;
+    const done = () => { if (!settled) { settled = true; resolve(); } };
+    child.once("exit", done);
+    killGatewayTree(child);
+    // #223 W3: this used to resolve blindly after 4s while a hung gateway
+    // kept holding the port. Escalate to SIGKILL, then settle regardless.
+    setTimeout(() => {
+      if (settled) return;
+      killGatewayTree(child, null, "SIGKILL");
+      setTimeout(done, 800);
+    }, 4000);
   });
   return { ok: true };
 }
@@ -1016,12 +1423,36 @@ ipcMain.handle("standalone:status", () => standaloneStatus());
 // App lifecycle: the private instance dies with the app UNLESS the user
 // chose "persistent" (keep it running in the background so the next app
 // start reconnects instantly). Global gateways are always left running.
-app.on("before-quit", async () => {
-  const settings = await loadSettings().catch(() => null);
-  const lifecycle = settings?.instance?.lifecycle || "app";
-  if (lifecycle === "app") {
-    try { STANDALONE.child?.kill("SIGTERM"); } catch { /* gone */ }
-  }
+// #223 W3: quit handling is SYNCHRONOUS w.r.t. the cached instance record
+// (see cachedInstanceRecord) and holds the quit open until the process tree
+// is actually down - the old async listener could exit mid-read and orphan
+// the gateway.
+let gatewayTeardownStarted = false;
+app.on("before-quit", (event) => {
+  const lifecycle = cachedInstanceRecord?.lifecycle || "app";
+  if (lifecycle !== "app" || gatewayTeardownStarted) return;
+  gatewayTeardownStarted = true;
+  event.preventDefault();
+  void (async () => {
+    try {
+      const live = STANDALONE.child;
+      let target = live ? live.pid : null;
+      if (!target) {
+        try { target = Number(fsSync.readFileSync(standalonePidFile(), "utf8").trim()) || null; } catch { target = null; }
+      }
+      if (target) {
+        killGatewayTree(live, target, "SIGTERM");
+        for (let i = 0; i < 10; i++) {
+          await new Promise((r) => setTimeout(r, 250));
+          let alive = false;
+          try { process.kill(target, 0); alive = true; } catch { /* down */ }
+          if (!alive) break;
+          if (i === 7) killGatewayTree(live, target, "SIGKILL"); // ~1.75s grace
+        }
+      }
+    } catch { /* teardown must never block quit */ }
+    app.exit(0);
+  })();
 });
 
 // Readiness gate: fully-offline two probes against the DESKOP SANDBOX state.
@@ -1116,7 +1547,6 @@ ipcMain.handle("global:probe", async () => {
 // pre-existing state is reused untouched.
 async function globalGatewayStart(preferredPort, extraEnv, binOverride) {
   const port = Number(preferredPort) || (await findFreePort());
-  const logFd = fsSync.openSync(path.join(app.getPath("userData"), "global-gateway.log"), "a");
   const env = { ...(extraEnv || process.env) };
   delete env.OPENCLAW_STATE_DIR;
   delete env.OPENCLAW_PROFILE;
@@ -1124,11 +1554,10 @@ async function globalGatewayStart(preferredPort, extraEnv, binOverride) {
   // wizard's global install self-provisions a runtime and hands its absolute
   // binary here; PATH fallback keeps existing behavior.
   const bin = binOverride || bundledBinary("openclaw") || "openclaw";
-  const child = spawn(`"${bin}" gateway --port ${port}`, {
+  const child = spawnGatewayProcess(bin, ["gateway", "--port", String(port)], {
     cwd: env.HOME || process.env.HOME || process.cwd(),
     env,
-    shell: true,
-    stdio: ["ignore", logFd, logFd],
+    logPath: path.join(app.getPath("userData"), "global-gateway.log"),
   });
   GLOBAL_GATEWAY.child = child;
   GLOBAL_GATEWAY.port = port;
@@ -1295,15 +1724,24 @@ ipcMain.handle("bootstrap:install", async (event, options) => {
       try {
         const settlePort = await findFreePort();
         const stateDir = path.join(app.getPath("userData"), "openclaw-state");
-        const settle = spawn(`"${openclawBin}" gateway --port ${settlePort}`, {
-          cwd: stateDir,
-          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-          shell: true,
-          stdio: ["ignore", "ignore", "ignore"],
-          detached: false,
-        });
+        const settleEnv = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+        const settlePlan = openClawSpawnPlan(openclawBin, ["gateway", "--port", String(settlePort)]);
+        const settle = settlePlan
+          ? spawn(settlePlan.command, settlePlan.args, {
+              cwd: stateDir,
+              env: { ...settleEnv, ...settlePlan.env },
+              stdio: "ignore",
+              detached: false,
+            })
+          : spawn(`"${openclawBin}" gateway --port ${settlePort}`, {
+              cwd: stateDir,
+              env: settleEnv,
+              shell: true,
+              stdio: "ignore",
+              detached: false,
+            });
         await new Promise((r) => setTimeout(r, 9000));
-        try { settle.kill("SIGTERM"); } catch { /* gone */ }
+        killGatewayTree(settle, null, "SIGTERM");
         await new Promise((r) => { settle.once("exit", r); setTimeout(r, 4000); });
         onEvent({ phase: "llm", line: "Config settled." });
       } catch (e) {
@@ -1319,11 +1757,48 @@ ipcMain.handle("bootstrap:install", async (event, options) => {
 });
 
 ipcMain.handle("controller:get-setup-info", async () => getLocalSetupInfo());
+// #223 W1: both handlers used to pass arbitrary renderer strings straight to
+// the OS (file:// and custom-protocol handlers included). openExternal now
+// only ever opens http(s) URLs; openPath only absolute local paths.
 ipcMain.handle("shell:openExternal", async (_event, url) => {
-  await shell.openExternal(String(url || ""));
+  let parsed;
+  try {
+    parsed = new URL(String(url || ""));
+  } catch {
+    throw new Error("openExternal refused a non-URL target");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error(`openExternal refused non-http(s) target: ${parsed.protocol}`);
+  }
+  await shell.openExternal(parsed.href);
 });
+
+// openPath input gate (pure function, extracted for tests). Windows
+// drive-letter forms (C:\x, D:/x) and UNC paths (\\server\share) ARE absolute
+// local paths: the original scheme regex /^[a-z][a-z0-9+.-]*:/i misread the
+// single-letter drive as a URL scheme and broke "open project in Explorer"
+// on Windows (cross-review finding). Returns null when acceptable, else the
+// rejection message.
+function openPathRejection(raw) {
+  if (path.win32.isAbsolute(raw)) {
+    return null; // C:\x, C:/x, \\server\share ("C:relative" is drive-relative, not absolute)
+  }
+  if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) {
+    return "openPath expects a local path, not a URL";
+  }
+  if (!path.isAbsolute(raw)) {
+    return "openPath expects an absolute path";
+  }
+  return null;
+}
+
 ipcMain.handle("shell:openPath", async (_event, targetPath) => {
-  const result = await shell.openPath(String(targetPath || ""));
+  const raw = String(targetPath || "");
+  const rejection = openPathRejection(raw);
+  if (rejection) {
+    throw new Error(rejection);
+  }
+  const result = await shell.openPath(raw);
   if (result) {
     throw new Error(result);
   }

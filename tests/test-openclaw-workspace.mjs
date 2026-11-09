@@ -351,8 +351,8 @@ assert.match(
 
 assert.match(
   desktopMainSource,
-  /ipcMain\.handle\("shell:openPath", async \(_event, targetPath\) => \{[\s\S]*shell\.openPath\(String\(targetPath \|\| ""\)\)/,
-  "desktop main process should expose a shell.openPath bridge for opening local project folders",
+  /ipcMain\.handle\("shell:openPath", async \(_event, targetPath\) => \{[\s\S]*shell\.openPath\(raw\)/,
+  "desktop main process should expose a shell.openPath bridge for opening local project folders (absolute-path-validated since #223 W1)",
 );
 
 assert.match(
@@ -1076,8 +1076,8 @@ assert.match(
 
   assert.match(
     desktopMainSource,
-    /warning: `openclaw --help exited with \$\{(?:lastFailure\.code \?\? 1)\}`[\s\S]*after retry/,
-    "desktop openclaw probe should treat a resolvable-but-failing --help as installed-with-warning after the retry",
+    /warning: `openclaw --help exited with \$\{codeText\}`[\s\S]*after retry/,
+    "desktop openclaw probe should treat a resolvable-but-failing --help as installed-with-warning after the retry (cross-review: a timeout kill reports 'no exit code', never a fabricated 1)",
   );
 
   assert.match(

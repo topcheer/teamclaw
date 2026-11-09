@@ -1,0 +1,391 @@
+#!/usr/bin/env node
+// Issue #223 (desktop P0) security-regression tests: renderer->main command
+// injection chain + gateway process lifecycle. Source-level assertions in the
+// test-ui-contracts.mjs style (no Electron), PLUS behavioral checks that
+// extract the REAL functions from desktop/main.mjs and run them (the
+// test-bundled-dep-seal.mjs pattern): a URL validator is only trusted once a
+// crafted injection payload has actually bounced off it.
+//
+//   C1  artifactUrl command injection - shell curl is gone; validated Node
+//       fetch download + node:crypto sha256; the ".sha256" companion fetch
+//       goes through the SAME validated URL (SSRF surface is shared).
+//   C2  dead RCE IPC (installOpenClawLocally / installLocalTeamClaw) removed.
+//   W1  openExternal/openPath refuse non-http(s) URLs / non-absolute paths.
+//   W2  CSP meta in renderer/index.html (script hash pinned to the real
+//       inline bootstrap, no unsafe-inline for scripts).
+//   W3  gateway spawns are shell-free (execPath + ELECTRON_RUN_AS_NODE),
+//       killed by process group with SIGKILL escalation, before-quit is
+//       synchronous w.r.t. the cached instance record, log fds closed.
+//   W4  runShellStream stdout accounting (stdout accumulated, stderr not
+//       double-counted) - verified behaviorally on a real child process.
+//   W5  will-navigate / setWindowOpenHandler guards exist.
+//   #220 openclaw probe pre-resolves the executable (no PATH-dependent spawn,
+//       no bare "openclaw") and hard-kills a hung --help after a timeout.
+
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const projectRoot = path.resolve(scriptDir, "..");
+const desktopDir = path.join(projectRoot, "desktop");
+const mainPath = path.join(desktopDir, "main.mjs");
+const preloadPath = path.join(desktopDir, "preload.mjs");
+const htmlPath = path.join(desktopDir, "renderer", "index.html");
+const appJsPath = path.join(desktopDir, "renderer", "app.js");
+
+const [mainSource, preloadSource, htmlSource, appJsSource] = await Promise.all([
+  fs.readFile(mainPath, "utf8"),
+  fs.readFile(preloadPath, "utf8"),
+  fs.readFile(htmlPath, "utf8"),
+  fs.readFile(appJsPath, "utf8"),
+]);
+
+// ---------------------------------------------------------------------------
+// Helpers: extract a whole function from main.mjs and evaluate it with the
+// stdlib globals it uses (string/comment-aware brace scan).
+// ---------------------------------------------------------------------------
+function extractFunction(source, name) {
+  let start = source.indexOf(`function ${name}(`);
+  assert.notEqual(start, -1, `main.mjs must define ${name}()`);
+  // keep a preceding `async` modifier when present
+  if (start >= 6 && source.slice(start - 6, start) === "async ") start -= 6;
+  // Skip the balanced parameter list first: a destructured parameter like
+  // `{ cwd, env }` would otherwise truncate the extraction at its brace.
+  const parenOpen = source.indexOf("(", start);
+  let i = parenOpen;
+  let parenDepth = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === "(") parenDepth += 1;
+    else if (ch === ")") {
+      parenDepth -= 1;
+      if (parenDepth === 0) { i += 1; break; }
+    }
+    i += 1;
+  }
+  const open = source.indexOf("{", i);
+  let depth = 0;
+  i = open;
+  let quote = null;
+  let prevSignificant = "";
+  const REGEX_PRECEDERS = new Set(["(", "=", ",", ":", "[", "!", "&", "|", "?", ";", "{", "}", "+", "-", "*", "%", "~", "^", "<", ">", "\n"]);
+  while (i < source.length) {
+    const ch = source[i];
+    if (quote) {
+      if (ch === "\\") { i += 2; continue; }
+      if (ch === quote) quote = null;
+      i += 1;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") { quote = ch; prevSignificant = ch; i += 1; continue; }
+    // comments
+    if (ch === "/" && source[i + 1] === "/") {
+      i = source.indexOf("\n", i);
+      if (i < 0) break;
+      continue;
+    }
+    if (ch === "/" && source[i + 1] === "*") {
+      i = source.indexOf("*/", i + 2) + 2;
+      continue;
+    }
+    // regex literal (quote chars inside a character class would otherwise
+    // knock the scanner into string mode)
+    if (ch === "/" && REGEX_PRECEDERS.has(prevSignificant)) {
+      let j = i + 1;
+      let inClass = false;
+      while (j < source.length) {
+        const rch = source[j];
+        if (rch === "\\") { j += 2; continue; }
+        if (rch === "[") inClass = true;
+        else if (rch === "]") inClass = false;
+        else if (rch === "/" && !inClass) break;
+        j += 1;
+      }
+      i = j + 1;
+      prevSignificant = "/";
+      continue;
+    }
+    if (ch === "{") depth += 1;
+    else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, i + 1);
+    }
+    if (!/\s/.test(ch)) prevSignificant = ch;
+    i += 1;
+  }
+  throw new Error(`${name}() body is not balanced`);
+}
+
+function evalWithDeps(decl, deps) {
+  const names = Object.keys(deps);
+  const factory = new Function(...names, `return (${decl});`);
+  return factory(...names.map((n) => deps[n]));
+}
+
+// ---------------------------------------------------------------------------
+// C1: no shell curl/shasum anywhere in the download path; fetch + node:crypto.
+// ---------------------------------------------------------------------------
+assert.ok(!mainSource.includes("curl -fSL"), "the shell curl download must be gone (C1)");
+assert.ok(!mainSource.includes("shasum -a"), "the shell shasum call must be gone (C1)");
+// The only remaining shell:true spawns are the npm/CLI stream commands with
+// app-owned strings - never a renderer-supplied URL.
+for (const m of mainSource.matchAll(/runShellStream\((`[^`]*)/g)) {
+  assert.ok(!m[1].includes("${url"), `runShellStream must not interpolate a URL: ${m[1].slice(0, 60)}`);
+}
+assert.match(mainSource, /async function downloadArtifact\(/, "fetch-based download must exist (C1)");
+// Cross-review SSRF fix: fetch must NEVER follow redirects on its own - every
+// hop goes through validatedArtifactFetch and is re-validated.
+assert.match(mainSource, /async function validatedArtifactFetch\(/, "manual-redirect fetch wrapper must exist");
+assert.match(mainSource, /redirect: "manual"/, "redirects must be followed manually (hop-by-hop re-validation)");
+assert.ok(!mainSource.includes('redirect: "follow"'), "no fetch may follow redirects itself (302 -> intranet bypass)");
+assert.match(mainSource, /const \{ createHash \} = await import\("node:crypto"\)/, "sha256 must be computed with node:crypto (C1)");
+assert.match(mainSource, /await runSpawnStream\(tarBinary\(\), \["xzf", dest, "-C", extractDir\]/, "tar extraction must use an argv array, not a shell string (C1)");
+
+// C1 behavioral: run the REAL validator against injection payloads.
+const validateArtifactUrl = evalWithDeps(extractFunction(mainSource, "validateArtifactUrl"), {});
+const artifactFileNameFromUrl = evalWithDeps(
+  extractFunction(mainSource, "artifactFileNameFromUrl"),
+  { path },
+);
+const GOOD_URL = "https://github.com/topcheer/teamclaw/releases/download/runtime-latest/teamclaw-runtime-darwin-arm64.tar.gz";
+assert.equal(validateArtifactUrl(GOOD_URL).href, GOOD_URL, "the default release URL must validate");
+assert.equal(
+  artifactFileNameFromUrl(validateArtifactUrl(GOOD_URL)),
+  "teamclaw-runtime-darwin-arm64.tar.gz",
+  "filename derives from the validated URL path",
+);
+for (const [label, payload] of [
+  ["quote injection", 'https://github.com/x/a.tar.gz"; touch /tmp/pwned #'],
+  ["command substitution", "https://github.com/x/$(id).tar.gz"],
+  ["plain http", "http://github.com/topcheer/teamclaw/releases/download/runtime-latest/x.tar.gz"],
+  ["loopback host", "https://127.0.0.1/x.tar.gz"],
+  ["localhost", "https://localhost/x.tar.gz"],
+  ["private v4", "https://192.168.1.5/x.tar.gz"],
+  ["private v4 (172)", "https://172.16.0.1/x.tar.gz"],
+  ["cloud metadata", "https://169.254.169.254/latest/meta-data"],
+  ["gce metadata host", "https://metadata.google.internal/x"],
+  ["embedded credentials", "https://user:pass@github.com/x.tar.gz"],
+  ["v4-mapped loopback (dotted)", "https://[::ffff:127.0.0.1]/x.tar.gz"],
+  ["v4-mapped loopback (hex, URL-normalized)", "https://[::ffff:7f00:1]/x.tar.gz"],
+  ["v4-mapped metadata (hex)", "https://[::ffff:a9fe:a9fe]/x.tar.gz"],
+  ["v4-mapped private v4 (hex)", "https://[::ffff:c0a8:101]/x.tar.gz"],
+  ["v4-compatible loopback (hex)", "https://[::7f00:1]/x.tar.gz"],
+  ["not a url", "just-some-text"],
+  ["empty", ""],
+]) {
+  assert.throws(() => validateArtifactUrl(payload), /https|not allowed|credentials|characters|Invalid/i, `${label} payload must be rejected: ${payload}`);
+}
+// Cross-review SSRF fix (behavioral): every redirect hop goes through the
+// SAME validator - a public https URL that 302s to the intranet must bounce
+// at the next hop (with redirect:"follow" the loopback response body was
+// fully readable). Also proves undici's redirect:"manual" hands the 30x
+// back to us (status + Location readable), which the wrapper relies on.
+{
+  const base = validateArtifactUrl("https://github.com/topcheer/teamclaw/releases/download/runtime-latest/x.tar.gz");
+  assert.equal(
+    validateArtifactUrl(new URL("/other/y.tar.gz", base).href).href,
+    "https://github.com/other/y.tar.gz",
+    "relative redirects stay on the validated https origin",
+  );
+  for (const location of [
+    "http://127.0.0.1:8080/pwned",
+    "https://192.168.0.9/x",
+    "https://169.254.169.254/latest/meta-data",
+    "https://[::ffff:7f00:1]/x",
+    "file:///etc/passwd",
+  ]) {
+    assert.throws(
+      () => validateArtifactUrl(new URL(location, base).href),
+      /https|not allowed|Invalid/i,
+      `a redirect hop to ${location} must be re-validated and rejected`,
+    );
+  }
+  const { default: http } = await import("node:http");
+  const redirector = http.createServer((req, res) => {
+    res.writeHead(302, { location: "http://127.0.0.1:9/inner" });
+    res.end();
+  });
+  await new Promise((r) => redirector.listen(0, "127.0.0.1", r));
+  try {
+    const hop = await fetch(`http://127.0.0.1:${redirector.address().port}/`, { redirect: "manual" });
+    assert.equal(hop.status, 302, "undici redirect:manual returns the 30x itself");
+    assert.equal(hop.headers.get("location"), "http://127.0.0.1:9/inner", "the Location header is readable for hop re-validation");
+  } finally {
+    redirector.close();
+  }
+}
+// Non-injecting but odd names fall back to a safe generated filename.
+assert.equal(
+  artifactFileNameFromUrl({ pathname: "/a/../.." }),
+  `teamclaw-runtime-${process.platform}-${process.arch}.tar.gz`,
+  "path-traversal file names fall back to a safe generated name",
+);
+// The .sha256 companion fetch reuses the SAME validated URL object.
+assert.match(
+  mainSource,
+  /const checksumUrl = new URL\(parsedUrl\.href \+ "\.sha256"\)/,
+  "the checksum fetch must be built from the validated URL (shared SSRF surface)",
+);
+
+// ---------------------------------------------------------------------------
+// C2: dead RCE handlers deleted everywhere (main, preload, renderer).
+// ---------------------------------------------------------------------------
+for (const [label, src] of [["main", mainSource], ["preload", preloadSource], ["renderer", appJsSource]]) {
+  assert.ok(!src.includes("installOpenClawLocally"), `installOpenClawLocally must be gone from ${label} (C2)`);
+  assert.ok(!src.includes("installLocalTeamClaw"), `installLocalTeamClaw must be gone from ${label} (C2)`);
+}
+assert.ok(!preloadSource.includes("install-open-claw-locally"), "no leftover IPC channel name (C2)");
+
+// ---------------------------------------------------------------------------
+// W2: CSP meta - strict for scripts (self + pinned hash, no unsafe-inline),
+// open for connect (external-controller URLs are a product feature).
+// ---------------------------------------------------------------------------
+const cspMeta = htmlSource.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)">/);
+assert.ok(cspMeta, "renderer/index.html must carry a CSP meta (W2)");
+const directives = {};
+for (const part of cspMeta[1].split(";")) {
+  const [k, ...v] = part.trim().split(/\s+/);
+  directives[k] = v.join(" ");
+}
+assert.match(directives["default-src"], /^'self'$/, "default-src 'self'");
+assert.ok(directives["script-src"].includes("'self'"), "script-src allows local scripts");
+assert.ok(!directives["script-src"].includes("'unsafe-inline'"), "script-src must NOT be unsafe-inline (W2)");
+// The pinned hash must match the ACTUAL inline theme bootstrap byte-for-byte.
+const inlineScript = htmlSource.match(/<script>([\s\S]*?)<\/script>/);
+assert.ok(inlineScript, "the inline theme bootstrap must exist");
+const inlineHash = "sha256-" + crypto.createHash("sha256").update(inlineScript[1], "utf8").digest("base64");
+assert.ok(
+  directives["script-src"].includes(`'${inlineHash}'`),
+  `script-src must pin the real inline script hash (${inlineHash})`,
+);
+// External-controller connect + WebSocket are product features; images include
+// remote provider avatars (https).
+for (const token of ["http:", "https:", "ws:", "wss:"]) {
+  assert.ok(directives["connect-src"].includes(token), `connect-src must keep ${token} (external controller feature)`);
+}
+assert.ok(directives["img-src"].includes("https:"), "img-src must allow remote https avatars");
+assert.equal(directives["object-src"], "'none'", "object-src 'none'");
+
+// ---------------------------------------------------------------------------
+// W1: openExternal/openPath input guards.
+// ---------------------------------------------------------------------------
+assert.match(mainSource, /openExternal refused non-http\(s\) target/, "openExternal must whitelist http/https (W1)");
+assert.match(mainSource, /openPath expects an absolute path/, "openPath must require absolute local paths (W1)");
+assert.match(mainSource, /openPath expects a local path, not a URL/, "openPath must refuse URLs (W1)");
+// Cross-review fix (behavioral): Windows drive-letter and UNC paths ARE
+// absolute local paths - the old scheme regex misread "C:" as a URL scheme
+// and broke "open project in Explorer" on Windows.
+{
+  const openPathRejection = evalWithDeps(extractFunction(mainSource, "openPathRejection"), { path });
+  assert.equal(openPathRejection("C:\\Users\\teamclaw\\projects\\demo"), null, "drive-letter path with backslashes must open (Windows flow)");
+  assert.equal(openPathRejection("D:/data/projects/demo"), null, "drive-letter path with forward slashes must open");
+  assert.equal(openPathRejection("\\\\fileserver\\share\\project"), null, "UNC path must open");
+  assert.equal(openPathRejection("/tmp/teamclaw/project"), null, "posix absolute path must open");
+  assert.match(openPathRejection("file:///etc/passwd"), /not a URL/, "file:// URLs stay refused");
+  assert.match(openPathRejection("https://evil.example/pwn"), /not a URL/, "https URLs stay refused");
+  assert.match(openPathRejection("smb://server/share"), /not a URL/, "custom protocol URLs stay refused");
+  assert.match(openPathRejection("projects/demo"), /absolute path/, "relative paths stay refused");
+  assert.match(openPathRejection("C:relative\\path"), /not a URL/, "drive-RELATIVE (no root slash) stays refused as ambiguous");
+}
+
+// ---------------------------------------------------------------------------
+// W3: gateway lifecycle.
+// ---------------------------------------------------------------------------
+assert.match(mainSource, /function openClawSpawnPlan\(/, "shell-free spawn plan must exist (W3)");
+assert.match(mainSource, /ELECTRON_RUN_AS_NODE/, "binaries must run under Electron's embedded node");
+assert.match(mainSource, /function spawnGatewayProcess\(/, "gateway spawns must funnel through one helper (W3)");
+assert.match(mainSource, /function killGatewayTree\(/, "process-tree kill helper must exist (W3)");
+assert.match(mainSource, /process\.kill\(-target, signal\)/, "POSIX kill must signal the process GROUP (W3)");
+assert.match(mainSource, /process\.kill\(-target, "SIGKILL"\)|killGatewayTree\((?:live, target|null, pid), "SIGKILL"\)/, "SIGKILL escalation must exist (W3)");
+assert.match(mainSource, /taskkill", \["\/PID", String\(target\), "\/T", "\/F"\]/, "Windows tree-kill fallback must exist (W3)");
+// No gateway is spawned through a shell template string anymore.
+assert.ok(!/spawn\(`"\$\{bin\}" gateway/.test(mainSource), "no shell-spawned gateway may remain (W3)");
+// The ONLY remaining shell+logfd spawn shape must live INSIDE the gateway
+// helper (its documented Windows .cmd fallback), not in call sites.
+{
+  const helperBody = extractFunction(mainSource, "spawnGatewayProcess");
+  const shape = /shell: true,\n\s*stdio: \["ignore", logFd, logFd\]/;
+  const outside = mainSource.split(shape).length - 1;
+  const inside = helperBody.match(shape) ? 1 : 0;
+  assert.ok(
+    !outside || outside === inside,
+    "direct log-fd shell spawns must be gone from call sites - only the gateway helper's Windows fallback may keep one (W3)",
+  );
+}
+// before-quit is synchronous w.r.t. cached state (no settings I/O on quit).
+const beforeQuitBlock = mainSource.slice(mainSource.indexOf('app.on("before-quit"'));
+assert.ok(beforeQuitBlock.includes("cachedInstanceRecord"), "before-quit must read the cached instance record (W3)");
+assert.ok(!/app\.on\("before-quit"[\s\S]{0,600}await loadSettings/.test(mainSource), "before-quit must not await settings I/O (W3)");
+// standaloneStop escalates instead of resolving blind.
+assert.match(mainSource, /killGatewayTree\(child, null, "SIGKILL"\)/, "standaloneStop must escalate to SIGKILL (W3)");
+// Leaked log fd: the gateway helper closes its fd on exit.
+assert.match(mainSource, /const closeLog = \(\) => \{/, "gateway log fd must be closed on child exit (Info)");
+
+// ---------------------------------------------------------------------------
+// W4: stream accounting - behavioral check on the REAL pump.
+// ---------------------------------------------------------------------------
+const { spawn: realSpawn } = await import("node:child_process");
+const streamChildOutput = evalWithDeps(extractFunction(mainSource, "streamChildOutput"), { spawn: realSpawn });
+{
+  const lines = [];
+  // Two writes that each carry a PARTIAL line ("split-" then "me\n"): the old
+  // pump appended the pending buffer to stderr on every chunk, counting the
+  // partial text twice. The fixed pump appends each chunk exactly once.
+  const child = realSpawn(process.execPath, ["-e", 'console.log("out-1"); console.error("err-partial"); process.stdout.write("no-newline-tail"); console.log("out-2"); process.stderr.write("split-"); setTimeout(() => { process.stderr.write("me\\n"); console.error("err-2"); }, 60);']);
+  const result = await streamChildOutput(child, "probe", (l) => lines.push(l));
+  assert.equal(result.code, 0, "probe child must exit 0");
+  assert.ok(result.stdout.includes("out-1") && result.stdout.includes("out-2"), `stdout must be captured (got: ${JSON.stringify(result.stdout)})`);
+  assert.ok(result.stdout.includes("no-newline-tail"), "partial stdout lines must be captured too");
+  assert.equal((result.stderr.match(/split-/g) || []).length, 1, `cross-chunk partial lines must be counted exactly once (got: ${JSON.stringify(result.stderr)})`);
+  assert.equal(result.stderr.match(/err-partial/g).length, 1);
+  assert.ok(result.stderr.includes("split-me"), "the split line must be reassembled");
+  assert.ok(result.stderr.includes("err-2"), "stderr must be captured");
+  assert.ok(lines.some((l) => l === "out-1") && lines.some((l) => l === "err-2"), "onLine must receive both streams");
+}
+
+// ---------------------------------------------------------------------------
+// W5: navigation guards.
+// ---------------------------------------------------------------------------
+assert.match(mainSource, /app\.on\("web-contents-created"/, "web-contents-created guard must exist (W5)");
+assert.match(mainSource, /contents\.on\("will-navigate"/, "will-navigate guard must exist (W5)");
+assert.match(mainSource, /setWindowOpenHandler/, "setWindowOpenHandler must exist (W5)");
+// Cross-review tightening: a bare file:// prefix would still allow navigating
+// to any local file - only this renderer's OWN directory may be navigated.
+assert.match(mainSource, /const RENDERER_ROOT = path\.join\(__dirname, "renderer"\) \+ path\.sep/, "will-navigate must whitelist only the renderer directory");
+assert.match(mainSource, /fileURLToPath\(target\)/, "the file:// target must be compared as a platform-native path");
+
+// ---------------------------------------------------------------------------
+// #220: probe pre-resolution + explicit timeout.
+// ---------------------------------------------------------------------------
+assert.match(mainSource, /function resolveExecutableOnPath\(/, "PATH pre-resolution must exist (#220)");
+assert.match(mainSource, /OPENCLAW_PROBE_TIMEOUT_MS = \d+/, "probe timeout constant must exist (#220)");
+assert.match(mainSource, /child\.kill\("SIGKILL"\);\s*\} catch \{ \/\* already gone \*\/ \}/, "a hung probe must be hard-killed (#220)");
+// Cross-review fix: a timeout kill has code null - reporting it as
+// "exited with 1" was misleading; the warning must say so honestly.
+assert.match(mainSource, /"no exit code"/, "a killed probe (code null) must not be reported as exit code 1 (#220)");
+assert.ok(!mainSource.includes('spawn("openclaw"'), "the probe must never spawn a bare PATH-dependent name (#220)");
+assert.match(mainSource, /openClawSpawnPlan\(resolved, \["--help"\]\)/, "the probe must spawn the pre-resolved absolute path (#220)");
+// Behavioral: resolveExecutableOnPath actually resolves node and rejects junk.
+const resolveExecutableOnPath = evalWithDeps(
+  extractFunction(mainSource, "resolveExecutableOnPath"),
+  { path, fsSync: await import("node:fs") },
+);
+{
+  const nodePath = resolveExecutableOnPath("node");
+  assert.ok(nodePath && path.isAbsolute(nodePath), "node must resolve to an absolute executable path");
+  assert.equal(resolveExecutableOnPath("definitely-not-a-real-binary-xyz"), null, "missing executables must resolve to null (old ENOENT signal)");
+}
+
+// ---------------------------------------------------------------------------
+// Smoke: every desktop JS entry parses (node --check parity via spawn).
+// ---------------------------------------------------------------------------
+for (const file of ["main.mjs", "preload.mjs", "runtime-extract.mjs", "renderer/app.js", "renderer/i18n.js"]) {
+  const check = spawnSync(process.execPath, ["--check", path.join(desktopDir, file)], { encoding: "utf8" });
+  assert.equal(check.status, 0, `node --check must pass for ${file}: ${check.stderr}`);
+}
+
+console.log("test-desktop-p0: all assertions passed (C1 fetch+validation incl. live injection payloads, C2 dead RCE gone, CSP hash pinned, W1/W3/W4/W5 lifecycle+guards, #220 probe resolve+timeout)");
