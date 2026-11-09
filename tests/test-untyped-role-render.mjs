@@ -57,11 +57,14 @@ const roleOptionLiteralPattern = new RegExp(
 );
 
 async function runUntypedRoleRenderSmoke() {
-  const [uiIndex, uiApp, desktopApp, routeTableSource, cliSource] = await Promise.all([
+  const [uiIndex, uiApp, desktopApp, routeTableSource, statusRoutesSource, cliSource] = await Promise.all([
     fs.readFile(uiIndexPath, "utf8"),
     fs.readFile(uiAppPath, "utf8"),
     fs.readFile(desktopAppPath, "utf8"),
     fs.readFile(routeTablePath, "utf8"),
+    // W2 of issue #226: buildExternalWorkerInstallInfo moved from
+    // route-table.ts into controller/status-routes.ts - pin the new home.
+    fs.readFile(path.join(projectRoot, "src", "src", "controller", "status-routes.ts"), "utf8"),
     fs.readFile(cliPath, "utf8"),
   ]);
 
@@ -134,9 +137,10 @@ async function runUntypedRoleRenderSmoke() {
   );
 
   // --- Backend: install payload advertises the active profile default role --
-  // PR-D of issue #204: buildExternalWorkerInstallInfo moved to route-table.ts.
+  // PR-D of issue #204: buildExternalWorkerInstallInfo moved to route-table.ts;
+  // W2 of issue #226 moved it on into controller/status-routes.ts.
   assert.match(
-    routeTableSource,
+    statusRoutesSource,
     /defaultRole: getActiveDefaultRole\(\),/,
     "buildExternalWorkerInstallInfo must expose the active profile defaultRole so UIs restore the developer default (Phase 1.3)",
   );

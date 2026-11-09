@@ -12,7 +12,10 @@ const githubLoginPagePath = path.join(projectRoot, "src", "src", "ui", "github-l
 const httpServerPath = path.join(projectRoot, "src", "src", "controller", "http-server.ts");
 // PR-D of issue #204: the declarative route table (and with it the auth
 // route shells) moved from http-server.ts into controller/route-table.ts.
+// W2 of issue #226: the auth handler bodies moved on into
+// controller/auth-routes.ts - the body pin follows the new home.
 const routeTablePath = path.join(projectRoot, "src", "src", "controller", "route-table.ts");
+const authRoutesPath = path.join(projectRoot, "src", "src", "controller", "auth-routes.ts");
 const typesPath = path.join(projectRoot, "src", "src", "types.ts");
 const configPath = path.join(projectRoot, "src", "src", "config.ts");
 const uiAppPath = path.join(projectRoot, "src", "src", "ui", "app.js");
@@ -20,10 +23,11 @@ const uiHtmlPath = path.join(projectRoot, "src", "src", "ui", "index.html");
 const desktopAppPath = path.join(projectRoot, "desktop", "renderer", "app.js");
 
 async function runGithubAuthSmoke() {
-  const [githubAuthSource, httpServerSource, routeTableSource, typesSource, configSource, uiAppSource, desktopAppSource, githubLoginPageSource] = await Promise.all([
+  const [githubAuthSource, httpServerSource, routeTableSource, authRoutesSource, typesSource, configSource, uiAppSource, desktopAppSource, githubLoginPageSource] = await Promise.all([
     fs.readFile(githubAuthPath, "utf8"),
     fs.readFile(httpServerPath, "utf8"),
     fs.readFile(routeTablePath, "utf8"),
+    fs.readFile(authRoutesPath, "utf8"),
     fs.readFile(typesPath, "utf8"),
     fs.readFile(configPath, "utf8"),
     fs.readFile(uiAppPath, "utf8"),
@@ -76,7 +80,7 @@ async function runGithubAuthSmoke() {
   // PR-D of issue #204: the auth route shells moved from http-server.ts's
   // if chain into controller/route-table.ts - pin the new home (same
   // method+path content, table-entry form).
-  assert.match(routeTableSource, /beginDeviceLogin\(\)/, "login endpoint must default to the device flow");
+  assert.match(authRoutesSource, /beginDeviceLogin\(\)/, "login endpoint must default to the device flow");
   assert.match(
     routeTableSource,
     /path: "\/ui\/auth\/github"/,

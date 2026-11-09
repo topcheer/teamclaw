@@ -255,10 +255,11 @@ loader.validateProfilePackage(legalPackage, schema, "software-rd.json");
 
 // 3d. /roles advertises the profile defaultRole (Phase 1.4 UI hook waits on it).
 // PR-D of issue #204: the roles route shell moved from http-server.ts into
-// controller/route-table.ts - pin the new home (body unchanged).
-const routeTableSource = await readSource(path.join("src", "src", "controller", "route-table.ts"));
+// controller/route-table.ts; W2 of issue #226 moved the handler body on into
+// controller/status-routes.ts - pin the new home (body unchanged).
+const statusRoutesSource = await readSource(path.join("src", "src", "controller", "status-routes.ts"));
 assert.match(
-  routeTableSource,
+  statusRoutesSource,
   /sendJson\(res, 200, \{ roles: getActiveRoles\(\), defaultRole: getActiveDefaultRole\(\) \}\);/,
   "GET /api/v1/roles must return { roles: <profile roles>, defaultRole } (the UI reads res.defaultRole)",
 );

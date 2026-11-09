@@ -168,7 +168,11 @@ async function bootScenario(options = {}) {
   // construction: the next updateTeamState that observes (phase "archiving"
   // + an archive file on disk) is exactly step 4's rebuild - throw there.
   let failNextUpdateAfterArchive = Boolean(options.failUpdateAfterArchive);
-  const updateTeamState = (updater) => {
+  // Issue #226 W4: the mock mirrors the real single-write-entry contract
+  // (controller-service.ts updateState): sync updater on the shared object,
+  // fire-and-forget save by default, awaited-durability handle + post-persist
+  // broadcast replay when options.persist === "awaited".
+  const updateTeamState = (updater, updateOptions) => {
     if (
       failNextUpdateAfterArchive
       && teamState?.transition?.phase === "archiving"
@@ -178,7 +182,20 @@ async function bootScenario(options = {}) {
       throw new Error("simulated post-archive failure (state rebuild)");
     }
     updater(teamState);
+    const replayBroadcast = () => {
+      for (const event of updateOptions?.broadcast ?? []) {
+        wsServer.broadcastUpdate(event);
+      }
+    };
+    if (updateOptions?.persist === "awaited") {
+      let persisted = stateMod.saveTeamState(teamState);
+      if ((updateOptions.broadcast ?? []).length > 0) {
+        persisted = persisted.then(replayBroadcast);
+      }
+      return { state: teamState, persisted };
+    }
     void stateMod.saveTeamState(teamState);
+    replayBroadcast();
     return teamState;
   };
 

@@ -45,8 +45,12 @@ async function runControllerIntakePromptSmoke() {
   // handler body) moved from http-server.ts into controller/route-table.ts
   // - pin the new home.
   const routeTablePath = path.join(projectRoot, "src", "src", "controller", "route-table.ts");
-  const [routeTableSource, promptInjectorSource, promptPolicySource, controllerToolsSource, controllerCapacitySource, orchestrationManifestSource, workerProvisioningSource, taskExecutionSource, taskAssignmentSource, taskRoutesSource, taskResultsSource, controllerPlanningSource, controllerIntakeSource] = await Promise.all([
+  // W2 of issue #226: the manifest handler body moved from route-table.ts
+  // into controller/controller-routes.ts - the body pin follows the new home.
+  const controllerRoutesPath = path.join(projectRoot, "src", "src", "controller", "controller-routes.ts");
+  const [routeTableSource, controllerRoutesSource, promptInjectorSource, promptPolicySource, controllerToolsSource, controllerCapacitySource, orchestrationManifestSource, workerProvisioningSource, taskExecutionSource, taskAssignmentSource, taskRoutesSource, taskResultsSource, controllerPlanningSource, controllerIntakeSource] = await Promise.all([
     fs.readFile(routeTablePath, "utf8"),
+    fs.readFile(controllerRoutesPath, "utf8"),
     fs.readFile(promptInjectorPath, "utf8"),
     fs.readFile(promptPolicyPath, "utf8"),
     fs.readFile(controllerToolsPath, "utf8"),
@@ -259,7 +263,7 @@ async function runControllerIntakePromptSmoke() {
     "controller intake should still honor the configured TeamClaw task timeout even when it polls the run in shorter slices",
   );
   assert.match(
-    routeTableSource,
+    controllerRoutesSource,
     /findLatestControllerRunIdForSession\(sessionKey,\s*deps\.getTeamState\(\),\s*\{\s*preferActive:\s*true/,
     "controller manifest recording should prefer the currently active run for the session",
   );

@@ -16,7 +16,7 @@ import { withWorkerDispatchToken } from "./task-execution.js";
 import { resumeTeamProfileSwitch } from "./profile-switch.js";
 import { TaskRouter } from "./task-router.js";
 import { MessageRouter } from "./message-router.js";
-import { TeamWebSocketServer } from "./websocket.js";
+import { TeamWebSocketServer, type WsEvent } from "./websocket.js";
 import { ensureOpenClawWorkspaceMemoryDir, buildTeamClawAgentSessionKey } from "../openclaw-workspace.js";
 import { ensureControllerGitRepo } from "../git-collaboration.js";
 import { WorkerProvisioningManager } from "./worker-provisioning.js";
@@ -36,6 +36,66 @@ export type KickoffHandler = (
   complexity: "simple" | "medium" | "complex",
   requirement: string,
 ) => Promise<{ assessments: KickoffAssessment[]; summary: string }>;
+
+// ===========================================================================
+// Issue #226 W4: the single TeamState write-entry contract.
+//
+// `updateState` below is the ONLY sanctioned way to mutate the shared
+// TeamState and persist it: the updater closure runs synchronously on the
+// shared object, then the entry owns persistence (and, when asked, the WS
+// broadcast). Before W4 there were three parallel write tracks - this
+// controlled channel, direct mutation + saveTeamState in route-table's
+// inline handlers, and profile-switch's independent saves - with
+// lost-update / missed-broadcast risk across await interleavings. The
+// route-handler and profile-switch tracks were migrated onto this entry;
+// the remaining direct saveTeamState call sites are startup-early writes
+// registered as explicit exemptions (search "W4 write-face exemption") and
+// machine-pinned by tests/test-teamstate-writes.mjs, so a new unregistered
+// direct save turns the suite red.
+// ===========================================================================
+
+/** A WS event the entry broadcasts on the caller's behalf (see below). */
+export type TeamStateUpdateEvent = WsEvent;
+
+export type TeamStateUpdateOptions = {
+  /**
+   * WS events to broadcast after the updater returned. With the default
+   * background persistence they fire synchronously right after the save was
+   * enqueued (the historical shape of callers broadcasting manually right
+   * after updateTeamState); with `persist: "awaited"` they fire only once
+   * the state-file write has fulfilled - the durability-before-broadcast
+   * contract the profile switch steps 1/6 rely on - and never fire when the
+   * write fails.
+   */
+  broadcast?: ReadonlyArray<TeamStateUpdateEvent>;
+  /**
+   * "background" (default): fire-and-forget save, the exact semantics every
+   * pre-W4 caller of updateTeamState relies on (an un-caught promise, same
+   * as the historical `void saveTeamState(...)`).
+   * "awaited": durability barrier - the update returns a handle carrying
+   * the save promise so the caller can enforce persisted-before-broadcast
+   * (profile switch transition step 1) and roll the in-memory mutation back
+   * when the write fails.
+   */
+  persist?: "background" | "awaited";
+};
+
+/** Return shape of the `persist: "awaited"` variant (see UpdateTeamStateFn). */
+export type TeamStateUpdateHandle = {
+  state: TeamState;
+  /** Resolves when the state-file write settled; rejects on write failure. */
+  persisted: Promise<void>;
+};
+
+/**
+ * The deps-facing signature of the single write entry. Callers that pass no
+ * options keep the historical `(updater) => TeamState` behavior; the second
+ * overload is the awaited-durability variant used by the profile switch.
+ */
+export type UpdateTeamStateFn = {
+  (updater: (state: TeamState) => void, options?: TeamStateUpdateOptions & { persist?: "background" }): TeamState;
+  (updater: (state: TeamState) => void, options: TeamStateUpdateOptions & { persist: "awaited" }): TeamStateUpdateHandle;
+};
 
 export type ControllerServiceDeps = {
   config: PluginConfig;
@@ -137,6 +197,10 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
           createdAt: Date.now(),
           updatedAt: Date.now(),
         };
+        // W4 write-face exemption (#226): first-boot TeamState creation.
+        // This is initialization, not an update - the updateState entry is
+        // only defined below and presupposes an existing shared object. No
+        // WS server exists yet, so there is nothing to broadcast to.
         await saveTeamState(teamState);
         logger.info(`Controller: created new team "${config.teamName}" (profile: ${seededProfileId})`);
       } else {
@@ -147,11 +211,38 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
       }
       deps.onTeamStateAvailable?.(() => teamState);
 
-      const updateState = (updater: (state: TeamState) => void): TeamState => {
-        updater(teamState!);
-        void saveTeamState(teamState!);
-        return teamState!;
-      };
+      // Issue #226 W4: the single TeamState write entry (see the contract
+      // block above). The updater stays a synchronous closure over the
+      // shared object; persistence - and, when requested, the WS broadcast -
+      // happen strictly after the updater returned. Existing one-argument
+      // callers keep the exact pre-W4 fire-and-forget semantics.
+      const updateState = ((updater: (state: TeamState) => void, options: TeamStateUpdateOptions = {}) => {
+        const state = teamState!;
+        updater(state);
+        if (options.persist === "awaited") {
+          // Durability variant (profile switch): the caller owns the save
+          // promise - broadcast events ride its fulfillment and never fire
+          // on failure; rejections surface to the caller's rollback. A
+          // dropped handle rejects unhandled, exactly like the historical
+          // floating void save.
+          let persisted = saveTeamState(state);
+          if (options.broadcast?.length) {
+            persisted = persisted.then(() => {
+              for (const event of options.broadcast!) {
+                wsServer.broadcastUpdate(event);
+              }
+            });
+          }
+          return { state, persisted };
+        }
+        void saveTeamState(state);
+        if (options.broadcast?.length) {
+          for (const event of options.broadcast) {
+            wsServer.broadcastUpdate(event);
+          }
+        }
+        return state;
+      }) as UpdateTeamStateFn;
 
       // Provisioned workers die with the previous gateway process. Their
       // persisted entries flip to offline once heartbeats stop but were
@@ -193,6 +284,11 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
       // Run ALL syncState calls (avoid || short-circuit skipping some).
       const syncC = workerProvisioningManager.syncState(teamState);
       if (repoStateChanged || syncC) {
+        // W4 write-face exemption (#226): startup durability barrier for the
+        // startup state assembly above (repo stamp + provisioning syncState's
+        // in-place mutations, which belong to the provisioning module). Runs
+        // before the WS server exists; there is no updater closure to run
+        // here - the mutations already happened on the shared object.
         await saveTeamState(teamState);
       }
 
@@ -232,6 +328,12 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
           }
         }
         if (orphanCleaned) {
+          // W4 write-face exemption (#226): startup orphan-task sweep. The
+          // loop above mutates in place interleaved with per-task startup
+          // logging; this awaited save is the pre-HTTP durability barrier -
+          // folding the sweep into an updater closure would reshuffle the
+          // startup crash-window ordering for zero convergence gain (the WS
+          // server does not exist yet, nothing to broadcast).
           await saveTeamState(teamState);
         }
       }
@@ -467,6 +569,12 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
         }
 
         if (changed) {
+          // W4 write-face exemption (#226): heartbeat-timeout sweep. The
+          // mutations interleave with per-worker WS broadcasts inside the
+          // synchronous loop above; this floating save is byte-for-byte the
+          // entry's own background semantics (void saveTeamState), so
+          // routing it through updateState with a no-op updater would add
+          // ceremony without moving any save or broadcast.
           saveTeamState(teamState);
         }
 
@@ -507,6 +615,9 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
             }
           }
           if (orphaned) {
+            // W4 write-face exemption (#226): runtime orphan-task
+            // reconciliation, same sweep-interleaved-broadcast shape as the
+            // worker loop above (see that exemption note).
             saveTeamState(teamState);
             changed = true;
           }

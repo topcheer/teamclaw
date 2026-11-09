@@ -341,9 +341,27 @@ async function runSwitchRoundtrip(targetId) {
     logger,
     runtime: {},
     getTeamState: () => teamState,
-    updateTeamState: (updater) => {
+    // Issue #226 W4: mock mirrors the real single-write-entry contract
+    // (controller-service.ts updateState) - awaited-durability handle when
+    // options.persist === "awaited", fire-and-forget otherwise (incl. the
+    // post-persist broadcast replay).
+    updateTeamState: (updater, options) => {
       updater(teamState);
+      if (options?.persist === "awaited") {
+        let persisted = stateMod.saveTeamState(teamState);
+        if ((options.broadcast ?? []).length > 0) {
+          persisted = persisted.then(() => {
+            for (const event of options.broadcast) {
+              wsServer.broadcastUpdate(event);
+            }
+          });
+        }
+        return { state: teamState, persisted };
+      }
       void stateMod.saveTeamState(teamState);
+      for (const event of options?.broadcast ?? []) {
+        wsServer.broadcastUpdate(event);
+      }
       return teamState;
     },
     taskRouter: new TaskRouter(logger),
