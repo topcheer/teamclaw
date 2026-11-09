@@ -54,7 +54,7 @@ import { MessageRouter } from "./message-router.js";
 import { TeamWebSocketServer } from "./websocket.js";
 import type { WorkerProvisioningManager } from "./worker-provisioning.js";
 import type { PreviewManager } from "./preview-manager.js";
-import type { KickoffHandler } from "./controller-service.js";
+import type { KickoffHandler, UpdateTeamStateFn } from "./controller-service.js";
 import type { TeamAutoScheduler } from "../teamauto/scheduler.js";
 import { autoAssignPendingTasks } from "./task-assignment.js";
 import { createTunnelManager, gatePageHtml, type TunnelManager } from "./tunnel-manager.js";
@@ -92,7 +92,10 @@ export type ControllerHttpDeps = {
   logger: PluginLogger;
   runtime: OpenClawPluginApi["runtime"];
   getTeamState: () => TeamState | null;
-  updateTeamState: (updater: (state: TeamState) => void) => TeamState;
+  // Issue #226 W4: widened to the single-write-entry contract (the optional
+  // second argument + awaited-durability overload live in controller-service
+  // next to the implementation; one-argument callers are unaffected).
+  updateTeamState: UpdateTeamStateFn;
   taskRouter: TaskRouter;
   messageRouter: MessageRouter;
   wsServer: TeamWebSocketServer;
