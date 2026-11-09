@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import type { GithubAuthManager } from "../controller/github-auth.js";
+// Issue #226 W5: cross-subsystem contract lives in the shared layer now.
+import type { GithubAuthManager } from "../shared/github-auth.js";
 import { repoSlugToDirName, resolveTeamAutoPaths } from "./store.js";
 
 const exec = promisify(execFile);
