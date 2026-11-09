@@ -12,9 +12,15 @@ plus continuous reconcile and CR status.
   Recreate until team-state storage is externalized — see D4 in the
   design thread), Service, optional Ingress (with `ingressClassName`).
 - `status`: Ready/ConfigReady conditions, controller endpoint, worker pod
-  counts (from `teamclaw.managed=true` labels).
+  counts. Worker pods are provisioned by the in-image TS KubernetesProvisioner
+  and selected by their `teamclaw.managed=true` + `teamclaw.team` labels; the
+  operator forces `plugins.entries.teamclaw.config.teamName` to
+  `spec.teamName` (inline-config path) and replicates the TS `sanitizeName`
+  so both sides derive the same label value.
 - Operator HTTP face on :9090 — `healthz` + token-guarded `/api/v1/teams`
-  (NodePort service in `config/manager/`, ingress example alongside).
+  (NodePort service in `config/manager/`, ingress example alongside). The API
+  operates on the operator namespace plus `TEAMCLAW_ALLOWED_NAMESPACES`
+  (comma-separated); `?namespace=` beyond that is rejected.
 - Config injection: `spec.controller.modelConfigSecretRef` references a
   Secret with an `openclaw.json` key (same contract as the chart).
 

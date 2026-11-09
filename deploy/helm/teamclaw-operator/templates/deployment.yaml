@@ -35,6 +35,12 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            {{- if .Values.ui.allowedNamespaces }}
+            # Extra namespaces the UI API may operate on beyond the release
+            # namespace (operator RBAC is cluster-scoped; this bounds it).
+            - name: TEAMCLAW_ALLOWED_NAMESPACES
+              value: {{ join "," .Values.ui.allowedNamespaces | quote }}
+            {{- end }}
             {{- if .Values.token.existingSecret }}
             - name: TEAMCLAW_OPERATOR_UI_TOKEN
               valueFrom:
