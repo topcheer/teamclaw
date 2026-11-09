@@ -11,7 +11,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { sendJson, sendError } from "../protocol.js";
 import { getGithubAuthManager } from "./github-auth.js";
 import { gatePageHtml, computeGateCookie, GATE_COOKIE_NAME, selfHostedTokenFromEnv, type TunnelManager } from "./tunnel-manager.js";
-import { isLanIp, isProtectionOn } from "./security.js";
+import { isLanIp, isProtectionOn, secretsEqual } from "./security.js";
 import type { ControllerHttpDeps } from "./http-server.js";
 import type { RouteDef } from "./route-table.js";
 
@@ -35,6 +35,28 @@ async function readFormBody(request: IncomingMessage): Promise<Record<string, un
 //   - direct (non-tunnel): the tunnel management API answers, everything
 //     else continues to the controller route table.
 // ===========================================================================
+
+// Issue #237 W3: online-guessing throttle for POST /__tunnel_gate/verify.
+// The endpoint answers on the PUBLIC tunnel URL, so repeated failures cool
+// the gate down. Deliberately GLOBAL (not per-IP): every via-tunnel request
+// arrives from the local cloudflared socket, so a per-IP key would collapse
+// to one bucket for the whole internet anyway - this mirrors the pairing
+// code throttle in security.ts (timestamps pruned against a sliding window).
+const GATE_VERIFY_FAILURE_MAX = 10;
+const GATE_VERIFY_COOLDOWN_MS = 60_000;
+const gateVerifyFailures: number[] = [];
+
+function gateVerifyThrottled(): boolean {
+  const now = Date.now();
+  while (gateVerifyFailures.length > 0 && now - gateVerifyFailures[0]! >= GATE_VERIFY_COOLDOWN_MS) {
+    gateVerifyFailures.shift();
+  }
+  return gateVerifyFailures.length >= GATE_VERIFY_FAILURE_MAX;
+}
+
+function recordGateVerifyFailure(): void {
+  gateVerifyFailures.push(Date.now());
+}
 
 /** GET /__tunnel_gate + GET / + POST /__tunnel_gate/verify (via tunnel only). */
 export function createTunnelGateRoutes(tunnelManager: TunnelManager): readonly RouteDef[] {
@@ -66,15 +88,29 @@ export function createTunnelGateRoutes(tunnelManager: TunnelManager): readonly R
       method: "POST",
       path: "/__tunnel_gate/verify",
       handler: async ({ res, req }) => {
+        // Issue #237 W3: check the throttle BEFORE touching the token - a
+        // cooled-down gate answers 429 without comparing anything, so
+        // brute-force attempts cannot outrun the cooldown.
+        if (gateVerifyThrottled()) {
+          res.setHeader("Retry-After", "60");
+          sendJson(res, 429, { error: "Too many gate verification attempts. Wait a minute and try again." });
+          return;
+        }
         const form = await readFormBody(req);
-        const submitted = String((form as { token?: unknown }).token ?? "").trim().toUpperCase();
+        // Issue #237 W3: gate tokens are 128-bit base64url and therefore
+        // case-sensitive - only surrounding whitespace is normalized (the
+        // old .toUpperCase() fold belonged to the retired 8-char token).
+        const submitted = String((form as { token?: unknown }).token ?? "").trim();
         const st = tunnelManager.status();
-        if (st.active && st.gateToken && submitted === st.gateToken) {
+        // Issue #237 W3: constant-time comparison (plain === was
+        // timing-leaky on this internet-reachable endpoint).
+        if (st.active && st.gateToken && secretsEqual(submitted, st.gateToken)) {
           const cookie = `${GATE_COOKIE_NAME}=${computeGateCookie(st.gateToken, st.tunnelId ?? "")}; Path=/; Max-Age=43200; HttpOnly; SameSite=Lax`;
           res.writeHead(302, { "Set-Cookie": cookie, Location: "/" });
           res.end();
           return;
         }
+        recordGateVerifyFailure();
         res.writeHead(403, { "Content-Type": "text/html; charset=utf-8" });
         res.end(gatePageHtml(String(req.headers.host), true));
       },

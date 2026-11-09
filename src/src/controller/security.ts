@@ -99,8 +99,10 @@ export function hashToken(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
 }
 
-/** Constant-time string equality for secrets of the same expected length. */
-function secretsEqual(a: string, b: string): boolean {
+/** Constant-time string equality for secrets of the same expected length.
+ * Exported since issue #237 W3: the tunnel-gate verify endpoint reuses this
+ * instead of a timing-leaky plain === on an internet-reachable route. */
+export function secretsEqual(a: string, b: string): boolean {
   const left = Buffer.from(a, "utf8");
   const right = Buffer.from(b, "utf8");
   return left.length === right.length && timingSafeEqual(left, right);

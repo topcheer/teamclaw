@@ -234,7 +234,13 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
     if (handle && child) return handle;
     const bin = findCloudflared();
     if (!bin) throw new Error("cloudflared not found (brew install cloudflared)");
-    const gateToken = randomBytes(6).toString("base64url").replace(/[-_]/g, "").slice(0, 8).toUpperCase();
+    // Issue #237 W3: the gate token guards an internet-reachable verify
+    // endpoint, so it must carry real entropy - 16 random bytes kept as
+    // base64url (22 case-sensitive chars = the full 128 bits). The retired
+    // 8-char form collapsed to ~41 effective bits and was online-guessable;
+    // the gate cookie stays a sha256 derivation of the token, so a longer
+    // token does not weaken the cookie.
+    const gateToken = randomBytes(16).toString("base64url");
     const res = await tunnelFetch("/tunnels", "POST", { github_user: githubUser, local_port: deps.localPort });
     const body = res.json as { tunnel_id?: string; connector_token?: string; hostname?: string; delete_token?: string; error?: string };
     if (res.status !== 201 || !body.tunnel_id || !body.connector_token || !body.hostname) {
