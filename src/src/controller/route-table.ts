@@ -9,7 +9,7 @@ import {
   sendError,
   pinnedCorsAllowOrigin,
 } from "../protocol.js";
-import { saveTeamState, listArchivedTeams } from "../state.js";
+import { listArchivedTeams } from "../state.js";
 import { listWorkspaceTree, listWorkspaceSubtree, readWorkspaceFile, readWorkspaceRawFile } from "../workspace-browser.js";
 import {
   BUILTIN_PROFILES,
@@ -1238,7 +1238,7 @@ function teamProfileGetRoute(ctx: RouteContext): void {
 // team.switch_started / team.switch_completed WS events.
 async function teamProfileSwitchRoute(ctx: RouteContext): Promise<void> {
   const { req, res, deps } = ctx;
-  const { config, logger, getTeamState, updateTeamState, wsServer } = deps;
+  const { config, logger, getTeamState, updateTeamState } = deps;
   const body = await parseJsonBody(req);
   const profileId = typeof body.profileId === "string" ? body.profileId.trim() : "";
   if (!profileId || !hasProfile(profileId)) {
@@ -1265,12 +1265,19 @@ async function teamProfileSwitchRoute(ctx: RouteContext): Promise<void> {
   // Step 1: persist the transition (the crash-resume truth) and announce.
   // The check-and-set above plus this mutation run without an await in
   // between, so a concurrent second POST observes the transition (409).
+  // W4 (#226): mutation, awaited persistence and the switch_started
+  // broadcast all ride the single write entry - the broadcast fires from
+  // the save's fulfillment, so nothing is announced before the transition
+  // is durable, and it never fires when the write fails.
   const previousProfileId = state.profileId;
-  updateTeamState((s) => {
+  const { persisted } = updateTeamState((s) => {
     s.transition = { phase: "draining", targetProfileId: profileId, startedAt: Date.now() };
+  }, {
+    persist: "awaited",
+    broadcast: [{ type: "team.switch_started", data: { profileId, previousProfileId } }],
   });
   try {
-    await saveTeamState(state);
+    await persisted;
   } catch (err) {
     // Durability failed: roll the in-memory transition back so the team is
     // never wedged behind a transition the crash-resume path cannot see.
@@ -1282,7 +1289,6 @@ async function teamProfileSwitchRoute(ctx: RouteContext): Promise<void> {
     sendError(res, 500, `failed to persist the team profile switch transition: ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
-  wsServer.broadcastUpdate({ type: "team.switch_started", data: { profileId, previousProfileId } });
   logger.info(`Controller: team profile switch started - "${previousProfileId}" -> "${profileId}"`);
 
   // Steps 2-6 plus the failure broadcast path live in ./profile-switch.ts

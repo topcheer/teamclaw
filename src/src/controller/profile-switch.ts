@@ -5,13 +5,23 @@
 // the same deps object as before. This module must NEVER import http-server
 // (the reverse edge exists: http-server -> profile-switch); ws broadcasts,
 // state persistence and provisioning all arrive through the deps slice below.
+// Issue #226 W4: persistence rides the single write entry (deps.
+// updateTeamState) - including the awaited durability barriers this state
+// machine needs - instead of independent saveTeamState calls; the update
+// contract types are type-only imports from controller-service.js (the
+// runtime edge points the other way, so the module graph stays acyclic).
 import type { PluginLogger } from "../../api.js";
 import type {
   PluginConfig,
   TaskInfo,
   TeamState,
 } from "../types.js";
-import { saveTeamState, archiveTeamState, findTeamSwitchArchive } from "../state.js";
+import type {
+  TeamStateUpdateHandle,
+  TeamStateUpdateOptions,
+  UpdateTeamStateFn,
+} from "./controller-service.js";
+import { archiveTeamState, findTeamSwitchArchive } from "../state.js";
 import {
   BUILTIN_PROFILES,
   getActiveProfile,
@@ -34,7 +44,7 @@ export type TeamProfileSwitchDeps = {
   config: PluginConfig;
   logger: PluginLogger;
   getTeamState: () => TeamState | null;
-  updateTeamState: (updater: (state: TeamState) => void) => TeamState;
+  updateTeamState: UpdateTeamStateFn;
   wsServer: TeamWebSocketServer;
   workerProvisioningManager?: WorkerProvisioningManager | null;
   previewManager?: PreviewManager;
@@ -129,22 +139,28 @@ export async function executeTeamProfileSwitch(
   targetProfileId: string,
   options: TeamProfileSwitchOptions = {},
 ): Promise<void> {
-  const { config, logger, getTeamState, updateTeamState, wsServer, workerProvisioningManager } = deps;
+  const { config, logger, getTeamState, updateTeamState, workerProvisioningManager } = deps;
   const target = BUILTIN_PROFILES.get(targetProfileId);
   if (!target) {
     throw new Error(`TeamClaw team profile "${targetProfileId}" is not available in this installation`);
   }
-  const setPhase = (phase: "draining" | "archiving" | "warming"): void => {
-    updateTeamState((state) => {
+  // W4 (#226): phase flips persist through the single write entry. The
+  // awaited-durability variant is used everywhere so callers that need the
+  // crash-window barrier (step 3's archiving flip, step 5's warming flip)
+  // can await it; callers that historically fire-and-forget the save simply
+  // drop the handle (an un-awaited rejection behaves exactly like the old
+  // floating void save).
+  const setPhase = (phase: "draining" | "archiving" | "warming", options: TeamStateUpdateOptions = {}): TeamStateUpdateHandle => {
+    return updateTeamState((state) => {
       if (state.transition?.targetProfileId === targetProfileId) {
         state.transition.phase = phase;
       }
-    });
+    }, { ...options, persist: "awaited" });
   };
 
   if (!options.skipArchive) {
     // Step 2: drain in-flight work, then stop every worker.
-    setPhase("draining");
+    void setPhase("draining").persisted;
     workerProvisioningManager?.setReconcileSuspended(true);
     const drain = await drainTeamForProfileSwitch(deps);
     for (const workerId of Object.keys(getTeamState()?.provisioning?.workers ?? {})) {
@@ -178,11 +194,13 @@ export async function executeTeamProfileSwitch(
     // Step 3: archive the whole previous TeamState with a roles snapshot.
     // The phase flip is persisted BEFORE the archive write so a crash between
     // the two leaves an unambiguous "archive may exist" state for the resume
-    // path (file existence check).
-    setPhase("archiving");
+    // path (file existence check). W4 (#226): the awaited durability barrier
+    // is the single entry's persisted handle (one save enqueued at the same
+    // point the old fire-and-forget + awaited second save pair wrote).
+    const archiving = setPhase("archiving");
     const sourceState = getTeamState();
     if (sourceState) {
-      await saveTeamState(sourceState);
+      await archiving.persisted;
       const sourceProfile = getActiveProfile();
       await archiveTeamState(sourceState, {
         id: sourceProfile.id,
@@ -210,7 +228,7 @@ export async function executeTeamProfileSwitch(
     : null;
   setActiveProfileId(target.id);
   const newCreatedAt = Date.now();
-  updateTeamState((state) => {
+  const step4 = updateTeamState((state) => {
     state.profileId = target.id;
     state.teamName = target.name;
     state.workers = {};
@@ -236,14 +254,13 @@ export async function executeTeamProfileSwitch(
       delete state.reports;
     }
     state.createdAt = newCreatedAt;
-  });
-  await saveTeamState(getTeamState()!);
+  }, { persist: "awaited" });
+  await step4.persisted;
 
   // Step 5: warm the new profile's warmupRoles through the provisioning
   // pipeline (launch dispatch; registration/readiness tracking continues in
   // the background exactly like a cold start).
-  setPhase("warming");
-  await saveTeamState(getTeamState()!);
+  await setPhase("warming").persisted;
   workerProvisioningManager?.setReconcileSuspended(false);
   if (workerProvisioningManager?.isEnabled() && target.warmupRoles.length > 0) {
     await workerProvisioningManager
@@ -251,12 +268,16 @@ export async function executeTeamProfileSwitch(
       .catch((err) => logger.warn(`Controller: profile switch warmup failed: ${err instanceof Error ? err.message : String(err)}`));
   }
 
-  // Step 6: settle - clear the transition, persist, announce.
-  updateTeamState((state) => {
+  // Step 6: settle - clear the transition, persist, announce. W4 (#226):
+  // the switch_completed broadcast rides the single entry's awaited
+  // persistence, preserving the event order (persisted, then announced).
+  const settled = updateTeamState((state) => {
     delete state.transition;
+  }, {
+    persist: "awaited",
+    broadcast: [{ type: "team.switch_completed", data: { profileId: target.id } }],
   });
-  await saveTeamState(getTeamState()!);
-  wsServer.broadcastUpdate({ type: "team.switch_completed", data: { profileId: target.id } });
+  await settled.persisted;
   logger.info(`Controller: team profile switch to "${target.id}" completed`);
 }
 
@@ -325,7 +346,7 @@ export function startTeamProfileSwitch(
   profileId: string,
   previousProfileId: string,
 ): void {
-  const { logger, wsServer, updateTeamState, getTeamState } = deps;
+  const { logger, wsServer, updateTeamState } = deps;
   void executeTeamProfileSwitch(deps, profileId).catch(async (err) => {
     const detail = err instanceof Error ? err.message : String(err);
     logger.error(`Controller: team profile switch to "${profileId}" failed: ${detail}`);
@@ -356,11 +377,14 @@ export function startTeamProfileSwitch(
       type: "team.switch_failed",
       data: { previousProfileId, targetProfileId: profileId, reason },
     });
-    updateTeamState((s) => {
+    // W4 (#226): best-effort persist of the unwedging through the single
+    // entry - one enqueued save with the failure path's swallow (the old
+    // shape fired an un-caught floating save plus this caught one).
+    const cleared = updateTeamState((s) => {
       if (s.transition?.targetProfileId === profileId) {
         delete s.transition;
       }
-    });
-    void saveTeamState(getTeamState()!).catch(() => undefined);
+    }, { persist: "awaited" });
+    void cleared.persisted.catch(() => undefined);
   });
 }
