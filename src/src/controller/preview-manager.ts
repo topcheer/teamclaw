@@ -13,6 +13,44 @@ const PREVIEW_STOP_TIMEOUT_MS = 5_000;
 
 const GENERIC_SERVE_COMMAND = "npx -y serve -l {PORT}";
 
+// Issue #237 W1: preview commands are LLM-authored (result contracts) and
+// run through a shell - they must NOT inherit the controller's environment,
+// or a prompt-injected previewCommand could exfiltrate every controller
+// credential (GH_TOKEN, provider API keys, tunnel tokens). Policy: minimal
+// allowlist of toolchain basics, matched case-insensitively so Windows
+// (Path/SystemRoot/...) survives, plus the explicit preview vars set at the
+// spawn site. Repos that genuinely need more can pass names through
+// TEAMCLAW_PREVIEW_EXTRA_ENV (comma-separated list of env var names whose
+// controller values are forwarded verbatim); anything else is absent.
+const PREVIEW_ENV_ALLOWLIST = new Set([
+  "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TZ", "TERM", "SHELL",
+  // Windows toolchain basics (no-ops elsewhere, harmless to match).
+  "SYSTEMROOT", "SYSTEMDRIVE", "COMSPEC", "PATHEXT", "WINDIR", "USERPROFILE",
+  "APPDATA", "LOCALAPPDATA", "PROGRAMFILES", "PROGRAMDATA", "NUMBER_OF_PROCESSORS", "OS",
+]);
+const PREVIEW_EXTRA_ENV_VAR = "TEAMCLAW_PREVIEW_EXTRA_ENV";
+
+/** Builds the restricted environment for preview subprocesses (#237 W1):
+ * allowlisted controller vars + extraEnv (venv PATH/VIRTUAL_ENV) + whatever
+ * the operator declared via TEAMCLAW_PREVIEW_EXTRA_ENV. Never returns the
+ * full process.env. Exported for the #237 regression test. */
+export function buildPreviewEnv(extraEnv: Record<string, string>): NodeJS.ProcessEnv {
+  const allow = new Set(PREVIEW_ENV_ALLOWLIST);
+  for (const name of (process.env[PREVIEW_EXTRA_ENV_VAR] ?? "").split(",")) {
+    const normalized = name.trim().toUpperCase();
+    if (normalized) {
+      allow.add(normalized);
+    }
+  }
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined && allow.has(key.toUpperCase())) {
+      env[key] = value;
+    }
+  }
+  return { ...env, ...extraEnv };
+}
+
 /**
  * Detect the tech stack from files in `cwd` and return a suitable preview command.
  * Only overrides `existingCommand` when it is the generic static file server
@@ -456,7 +494,10 @@ export class PreviewManager {
         const pipInstall = spawnManagedCommandProcess({
           command: `${pipBin} install -q -r requirements.txt`,
           cwd,
-          env: { ...process.env, ...extraEnv },
+          // #237 W1: requirements.txt is worker-influenced and pip executes
+          // setup.py at install time, so this subprocess gets the same
+          // restricted env as the preview command itself.
+          env: buildPreviewEnv(extraEnv),
         });
         await new Promise<void>((resolve) => {
           pipInstall.on("exit", () => resolve());
@@ -470,10 +511,15 @@ export class PreviewManager {
 
     const child = spawnManagedCommandProcess({
       command: resolvedCommand,
+      // cwd is already forced inside the workspace (resolveWorkspaceDirectory
+      // confinement above), so the shell cannot escape the deliverable dir.
       cwd,
+      // #237 W1: restricted allowlist env - never the controller's full
+      // process.env (credential exfiltration via prompt-injected
+      // previewCommand). HOST/PORT/TEAMCLAW_PREVIEW_* are the explicit
+      // preview contract vars.
       env: {
-        ...process.env,
-        ...extraEnv,
+        ...buildPreviewEnv(extraEnv),
         HOST: "0.0.0.0",
         PORT: String(record.targetPort),
         TEAMCLAW_PREVIEW_BASE_PATH: record.liveUrl.replace(/\/$/u, ""),
