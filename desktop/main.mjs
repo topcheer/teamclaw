@@ -98,22 +98,114 @@ function buildLocalInstallCommand(mode) {
 //   { installed: false, warning: null }        - binary does not resolve (spawn ENOENT):
 //       genuinely not installed; no retry is spent on this case.
 const OPENCLAW_PROBE_RETRY_DELAY_MS = 250;
+// #220: a hung `openclaw --help` used to block the wizard forever - the probe
+// now hard-kills after this timeout and reports via the warning path.
+const OPENCLAW_PROBE_TIMEOUT_MS = 10000;
+
+// #220: resolve `openclaw` to an ABSOLUTE executable path before spawning.
+// A bare name relies on the ambient PATH at spawn time; an explicit path
+// removes that dependency and makes the timeout kill the right process (no
+// shell wrapper to lose track of). Returns null when nothing executable sits
+// on PATH - the same signal the old ENOENT outcome carried (not installed).
+function resolveExecutableOnPath(name) {
+  const pathDirs = String(process.env.PATH || "").split(path.delimiter).filter(Boolean);
+  const exts = process.platform === "win32"
+    ? String(process.env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean)
+    : [""];
+  for (const dir of pathDirs) {
+    for (const ext of exts) {
+      const candidate = path.join(dir, process.platform === "win32" ? name + ext : name);
+      try {
+        const st = fsSync.statSync(candidate);
+        if (!st.isFile()) continue;
+        fsSync.accessSync(candidate, fsSync.constants.X_OK);
+        return candidate;
+      } catch { /* keep scanning */ }
+    }
+  }
+  return null;
+}
+
+// Cached PATH resolution (PATH does not change while the app runs).
+let OPENCLAW_PATH_CACHE;
+function resolvedOpenClawBinary() {
+  if (OPENCLAW_PATH_CACHE === undefined) {
+    OPENCLAW_PATH_CACHE = resolveExecutableOnPath("openclaw");
+  }
+  return OPENCLAW_PATH_CACHE;
+}
+
+// Map an openclaw bin reference to a spawnable { command, args, env } plan
+// WITHOUT a shell (#223 W3 - see the gateway lifecycle block below for why
+// every gateway spawn goes through this).
+function openClawSpawnPlan(bin, args) {
+  if (!bin) return null;
+  // Node-script entries run under Electron's embedded node - the launcher
+  // shim's trick without the wrapper script (and without needing system Node,
+  // the shim shebang does `#!/usr/bin/env node`).
+  if (/\.(mjs|cjs|js)$/i.test(bin)) {
+    return { command: process.execPath, args: [bin, ...args], env: { ELECTRON_RUN_AS_NODE: "1" } };
+  }
+  // Bin shims (npm .bin/<name>, the extracted-runtime launcher shim, global
+  // <prefix> layouts) all sit next to the real package entry at a
+  // deterministic path - prefer the entry over the shim.
+  const entryCandidates = [];
+  if (bin === EXTRACTED_OPENCLAW_SHIM && EXTRACTED_RUNTIME_DIR) {
+    entryCandidates.push(path.join(EXTRACTED_RUNTIME_DIR, "node_modules", "openclaw", "openclaw.mjs"));
+  }
+  const binDir = path.dirname(bin);
+  entryCandidates.push(path.join(binDir, "..", "openclaw", "openclaw.mjs")); // <tree>/node_modules/.bin/<name>
+  entryCandidates.push(path.join(binDir, "..", "lib", "node_modules", "openclaw", "openclaw.mjs")); // <prefix>/bin + posix npm global
+  entryCandidates.push(path.join(binDir, "node_modules", "openclaw", "openclaw.mjs")); // windows npm global <prefix>/<name>.cmd
+  for (const entry of entryCandidates) {
+    if (entry && fsSync.existsSync(entry)) {
+      return { command: process.execPath, args: [entry, ...args], env: { ELECTRON_RUN_AS_NODE: "1" } };
+    }
+  }
+  // Real executables / shebang scripts (POSIX): direct spawn.
+  if (process.platform !== "win32") {
+    return { command: bin, args, env: {} };
+  }
+  // Windows .cmd with no discoverable entry: shell fallback. Lifecycle is
+  // still contained - stop paths escalate to `taskkill /T` which reaps the
+  // whole tree (see killGatewayTree).
+  return null;
+}
 
 async function probeOpenClawInstall() {
+  const resolved = resolvedOpenClawBinary();
+  if (!resolved) {
+    return { installed: false, warning: null };
+  }
   let lastFailure = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     if (attempt > 0) {
       await new Promise((resolveDelay) => setTimeout(resolveDelay, OPENCLAW_PROBE_RETRY_DELAY_MS));
     }
     const outcome = await new Promise((resolve) => {
-      const child = spawn("openclaw", ["--help"], { stdio: "ignore", windowsHide: true });
-      child.on("error", (error) => resolve({ kind: "error", error }));
-      child.on("exit", (code, signal) => resolve({ kind: "exit", code, signal }));
+      // #220: spawn the RESOLVED absolute path (no PATH lookup, no shell
+      // wrapper) and bound the probe - a wedged --help gets SIGKILLed.
+      const plan = openClawSpawnPlan(resolved, ["--help"]);
+      const child = plan
+        ? spawn(plan.command, plan.args, { stdio: "ignore", windowsHide: true, env: { ...process.env, ...plan.env } })
+        : spawn(`"${resolved}" --help`, { stdio: "ignore", windowsHide: true, shell: true });
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        try { child.kill("SIGKILL"); } catch { /* already gone */ }
+      }, OPENCLAW_PROBE_TIMEOUT_MS);
+      child.on("error", (error) => { clearTimeout(timer); resolve({ kind: "error", error }); });
+      child.on("exit", (code, signal) => {
+        clearTimeout(timer);
+        resolve(timedOut ? { kind: "exit", code: null, signal: "SIGKILL", timeout: true } : { kind: "exit", code, signal });
+      });
     });
     if (outcome.kind === "exit" && outcome.code === 0) {
       return { installed: true, warning: null };
     }
+    // The resolved binary vanished between resolve and spawn: genuinely gone.
     if (outcome.kind === "error" && outcome.error && outcome.error.code === "ENOENT") {
+      OPENCLAW_PATH_CACHE = null;
       return { installed: false, warning: null };
     }
     lastFailure = outcome;
@@ -123,6 +215,7 @@ async function probeOpenClawInstall() {
       installed: true,
       warning: `openclaw --help exited with ${lastFailure.code ?? 1}` +
         (lastFailure.signal ? ` (signal ${lastFailure.signal})` : "") +
+        (lastFailure.timeout ? " (probe timeout)" : "") +
         " after retry",
     };
   }
