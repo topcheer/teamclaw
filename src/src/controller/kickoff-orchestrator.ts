@@ -254,9 +254,6 @@ function buildKickoffSummary(plan: KickoffPlan, _requirement: string): string {
   return parts.join("\n");
 }
 
-
-}
-
 // ── Phase 2.5: LLM fallback for unconfident role inference (design 2.3) ─────
 //
 // The tiered token scoring in role-inference.ts is the FAST PATH only. When

@@ -87,3 +87,6 @@ export type GithubAuthManager = {
   forceRefresh: () => Promise<GithubAuthStore>;
   logout: () => Promise<void>;
 };
+
+/** Default GitHub OAuth client id (moved from controller/github-auth, W3 residual edge). */
+export const DEFAULT_GITHUB_CLIENT_ID = "Iv23liqWmzrS3swGiIvK";

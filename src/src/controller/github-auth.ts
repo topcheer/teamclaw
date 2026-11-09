@@ -39,7 +39,8 @@ export type {
  * (`auth/github.json`, mode 0600, atomic tmp+rename writes).
  */
 
-export const DEFAULT_GITHUB_CLIENT_ID = "Iv23liqWmzrS3swGiIvK";
+import { DEFAULT_GITHUB_CLIENT_ID } from "../shared/github-auth.js";
+export { DEFAULT_GITHUB_CLIENT_ID };
 export const GITHUB_AUTH_CALLBACK_PATH = "/api/v1/auth/github/callback";
 export const GITHUB_CLIENT_SECRET_ENV = "TEAMCLAW_GITHUB_CLIENT_SECRET";
 

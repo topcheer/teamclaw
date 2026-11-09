@@ -34,7 +34,10 @@ async function runGithubAuthSmoke() {
   // Client ID + callback path constants ship with the plugin.
   assert.match(
     githubAuthSource,
-    /export const DEFAULT_GITHUB_CLIENT_ID = "Iv23liqWmzrS3swGiIvK"/,
+    // W3 residual-edge fix (#226): the constant now lives in shared/github-auth.ts;
+    // controller/github-auth.ts imports it for internal use and re-exports it.
+    /export \{ DEFAULT_GITHUB_CLIENT_ID \};/,
+    /import \{ DEFAULT_GITHUB_CLIENT_ID \} from "\.\.\/shared\/github-auth\.js";/,
     "GitHub OAuth client ID must default to the registered TeamClaw GitHub App",
   );
   assert.match(

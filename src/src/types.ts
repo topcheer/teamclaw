@@ -1,5 +1,5 @@
 import { TEAMCLAW_PUBLISHED_RUNTIME_IMAGE } from "./install-defaults.js";
-import { DEFAULT_GITHUB_CLIENT_ID } from "./controller/github-auth.js";
+import { DEFAULT_GITHUB_CLIENT_ID } from "./shared/github-auth.js";
 // Safe value import: roles.js only pulls prompt-policy.js -> openclaw-workspace.js
 // at runtime (its types.js import is type-only), so no module cycle is formed.
 import { DEFAULT_ROLE } from "./roles.js";
