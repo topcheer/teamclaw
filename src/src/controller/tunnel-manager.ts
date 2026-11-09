@@ -5,9 +5,10 @@ import type { PluginLogger } from "../../api.js";
 import https from "node:https";
 import os from "node:os";
 import path from "node:path";
+import { getGithubAuthManager } from "./github-auth.js";
 
 const TUNNEL_API_HOST = "apps.teamclaw.dev";
-async function tunnelFetch(pathq: string, method: "POST" | "DELETE", body?: unknown): Promise<{ status: number; json: any }> {
+async function tunnelFetch(pathq: string, method: "POST" | "DELETE", body?: unknown, headers?: Record<string, string>): Promise<{ status: number; json: any }> {
   const ip = await new Promise<string>((resolve, reject) => {
     const r = https.request({ host: "1.1.1.1", path: `/dns-query?name=${TUNNEL_API_HOST}&type=A`, method: "GET", headers: { accept: "application/dns-json" }, servername: "cloudflare-dns.com" } as never, (res: import("node:http").IncomingMessage) => {
       let d = ""; res.on("data", (c: Buffer) => (d += c)); res.on("end", () => {
@@ -18,7 +19,7 @@ async function tunnelFetch(pathq: string, method: "POST" | "DELETE", body?: unkn
   });
   return new Promise((resolve, reject) => {
     const payload = body === undefined ? null : JSON.stringify(body);
-    const req = https.request({ host: ip, servername: TUNNEL_API_HOST, path: `/api${pathq}`, method, headers: { host: TUNNEL_API_HOST, "Content-Type": "application/json", ...(payload ? { "Content-Length": Buffer.byteLength(payload) } : {}) } } as never, (res: import("node:http").IncomingMessage) => {
+    const req = https.request({ host: ip, servername: TUNNEL_API_HOST, path: `/api${pathq}`, method, headers: { host: TUNNEL_API_HOST, "Content-Type": "application/json", ...(headers ?? {}), ...(payload ? { "Content-Length": Buffer.byteLength(payload) } : {}) } } as never, (res: import("node:http").IncomingMessage) => {
       let d = ""; res.on("data", (c: Buffer) => (d += c)); res.on("end", () => { try { resolve({ status: res.statusCode ?? 0, json: d ? JSON.parse(d) : {} }); } catch { resolve({ status: res.statusCode ?? 0, json: {} }); } });
     });
     req.on("error", reject);
@@ -241,7 +242,28 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
     // the gate cookie stays a sha256 derivation of the token, so a longer
     // token does not weaken the cookie.
     const gateToken = randomBytes(16).toString("base64url");
-    const res = await tunnelFetch("/tunnels", "POST", { github_user: githubUser, local_port: deps.localPort });
+    // Issue #231: prove github_user ownership to the relay. The managed-start
+    // route already refuses anonymous starts ("GitHub login required"), so the
+    // OAuth token behind that login is obtainable here via the shared auth
+    // manager — the empty config resolves to the same default clientId (and
+    // therefore the same cached manager instance) the routes use, and the
+    // token store lives in the state dir regardless of config. If no token
+    // can be resolved (signed out between the route's check and here), the
+    // header is omitted: legal while the relay's ACCEPT_LEGACY_CREATE grey
+    // window is open; once the relay tightens, its 401 surfaces as the
+    // create error instead of a silent squat.
+    let githubToken: string | null = null;
+    try {
+      githubToken = await getGithubAuthManager({}, logger).getAccessToken();
+    } catch {
+      githubToken = null; // not signed in / token unavailable -> legacy headerless create
+    }
+    const res = await tunnelFetch(
+      "/tunnels",
+      "POST",
+      { github_user: githubUser, local_port: deps.localPort },
+      githubToken ? { Authorization: `Bearer ${githubToken}` } : undefined,
+    );
     const body = res.json as { tunnel_id?: string; connector_token?: string; hostname?: string; delete_token?: string; error?: string };
     if (res.status !== 201 || !body.tunnel_id || !body.connector_token || !body.hostname) {
       throw new Error(body.error ?? `tunnel server responded ${res.status}`);

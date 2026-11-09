@@ -5,3 +5,11 @@ compatibility_date = "2026-10-01"
 routes = [
   { pattern = "apps.teamclaw.dev/api/*", zone_name = "teamclaw.dev" }
 ]
+
+[vars]
+# Issue #231 grey window: the relay ships before controllers send
+# Authorization on create. "true" (deploy default) still passes headerless
+# creates — each logs a console.warn so convergence is observable in
+# `wrangler tail`; flip to "false" once legacy traffic has stopped to
+# require the github_user ownership proof (401 without the header).
+ACCEPT_LEGACY_CREATE = "true"
