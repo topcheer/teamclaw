@@ -29,6 +29,7 @@ env:
 jobs:
   preflight-needles:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout teamclaw (submodules included)
         uses: actions/checkout@v4

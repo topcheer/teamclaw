@@ -24,6 +24,9 @@ concurrency:
 jobs:
   build-desktop:
     runs-on: ${{ matrix.os }}
+    # macOS signing/notarization has a history of hung runs (see the keychain
+    # notes above); do not let a stuck codesign burn the 360-min default (#225 W4).
+    timeout-minutes: 120
     strategy:
       # One platform failing must not cancel the others (fail-fast cancelled
       # win+arm64 when the x64 CSC_NAME tripped - run 42139296590).
