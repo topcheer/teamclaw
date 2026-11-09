@@ -251,6 +251,24 @@ func (a namespaceAllowlist) resolve(req *http.Request) (string, bool) {
 	return ns, false
 }
 
+// namespaces returns the deduplicated set the API may read/write: the
+// operator namespace first, then the explicit allowlist.
+func (a namespaceAllowlist) namespaces() []string {
+	seen := map[string]bool{}
+	var out []string
+	if a.own != "" {
+		out = append(out, a.own)
+		seen[a.own] = true
+	}
+	for ns := range a.allowed {
+		if !seen[ns] {
+			out = append(out, ns)
+			seen[ns] = true
+		}
+	}
+	return out
+}
+
 // uiServer serves the operator HTTP face: static UI + token-guarded JSON API.
 func uiServer(token string, k8s client.Client, namespaces namespaceAllowlist) *http.ServeMux {
 	mux := http.NewServeMux()
@@ -293,14 +311,19 @@ func uiServer(token string, k8s client.Client, namespaces namespaceAllowlist) *h
 		ctx := req.Context()
 		switch req.Method {
 		case http.MethodGet:
-			var list teav1.TeamClawList
-			if err := k8s.List(ctx, &list); err != nil {
-				writeK8sErr(w, err)
-				return
-			}
-			teams := make([]teamSummary, 0, len(list.Items))
-			for i := range list.Items {
-				teams = append(teams, summarize(&list.Items[i]))
+			// Read side follows the same allowlist as writes: a UI token
+			// must not enumerate teams outside the operator's scope
+			// (#224 cross-review).
+			teams := make([]teamSummary, 0, 4)
+			for _, ns := range namespaces.namespaces() {
+				var list teav1.TeamClawList
+				if err := k8s.List(ctx, &list, client.InNamespace(ns)); err != nil {
+					writeK8sErr(w, err)
+					return
+				}
+				for i := range list.Items {
+					teams = append(teams, summarize(&list.Items[i]))
+				}
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]any{"teams": teams})
@@ -435,11 +458,49 @@ func uiServer(token string, k8s client.Client, namespaces namespaceAllowlist) *h
 	return mux
 }
 
+// enforceTeamName forces plugins.entries.teamclaw.config.teamName to the CR's
+// spec.teamName (TS effective semantics) in an inline openclaw.json. The TS
+// KubernetesProvisioner stamps worker pods with
+// teamclaw.team = sanitizeName(config.teamName); by pinning the config value
+// to spec.teamName the operator's status selector (same sanitizeName replica)
+// is guaranteed to match (#224 cross-review rework). Missing levels of the
+// plugins.entries.teamclaw.config path are created.
+func enforceTeamName(configJson, specTeamName string) (string, error) {
+	var cfg map[string]any
+	if err := json.Unmarshal([]byte(configJson), &cfg); err != nil {
+		return "", &badRequestError{msg: "configJson is not valid JSON: " + err.Error()}
+	}
+	// NOTE: values round-trip through float64 (encoding/json); integers up to
+	// 2^53 are exact, which covers every realistic config value.
+	obj := cfg
+	path := ""
+	for _, key := range []string{"plugins", "entries", "teamclaw", "config"} {
+		path += key + "."
+		next, ok := obj[key].(map[string]any)
+		if !ok {
+			if obj[key] != nil {
+				return "", &badRequestError{msg: "configJson field " + path + "must be an object to set teamName"}
+			}
+			next = map[string]any{}
+			obj[key] = next
+		}
+		obj = next
+	}
+	obj["teamName"] = controller.EffectiveTeamName(specTeamName)
+	out, err := json.Marshal(cfg)
+	if err != nil {
+		return "", fmt.Errorf("rewrite config teamName: %w", err)
+	}
+	return string(out), nil
+}
+
 // ensureInlineConfig creates/updates the backing Secret when an inline
 // openclaw.json is supplied and points spec.controller.modelConfigSecretRef
 // at it. With no inline payload it only validates that a ref exists. The
 // Secret is owned by the TeamClaw CR, so model credentials are
-// garbage-collected with the team instead of outliving it (#224 W2).
+// garbage-collected with the team instead of outliving it (#224 W2). The
+// inline payload also gets teamName pinned to spec.teamName so worker pod
+// labels stay in lockstep with the operator's status selector.
 func ensureInlineConfig(ctx context.Context, k8s client.Client, tc *teav1.TeamClaw, configJson string) error {
 	if configJson == "" {
 		if tc.Spec.Controller.ModelConfigSecretRef == "" {
@@ -447,14 +508,15 @@ func ensureInlineConfig(ctx context.Context, k8s client.Client, tc *teav1.TeamCl
 		}
 		return nil
 	}
-	var check map[string]any
-	if err := json.Unmarshal([]byte(configJson), &check); err != nil {
-		return &badRequestError{msg: "configJson is not valid JSON: " + err.Error()}
+	enforced, err := enforceTeamName(configJson, tc.Spec.TeamName)
+	if err != nil {
+		return err
 	}
+	configJson = enforced
 	secretName := tc.Name + "-config"
 	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: tc.Namespace}}
 	existing := &corev1.Secret{}
-	err := k8s.Get(ctx, types.NamespacedName{Namespace: tc.Namespace, Name: secretName}, existing)
+	err = k8s.Get(ctx, types.NamespacedName{Namespace: tc.Namespace, Name: secretName}, existing)
 	switch {
 	case apierrors.IsNotFound(err):
 		secret.Data = map[string][]byte{"openclaw.json": []byte(configJson)}
@@ -577,6 +639,14 @@ type uiRunnable struct {
 	k8s        client.Client
 	namespaces namespaceAllowlist
 }
+
+// NeedLeaderElection decouples the UI from leader election. The UI is a
+// stateless API + static file face: it never writes shared local state, so
+// standby replicas must serve it too - otherwise, with replicaCount > 1,
+// readiness probes against the unbound UI port push every non-leader pod
+// into a restart loop. Only the reconcile loop needs the single-writer
+// guarantee. (Cross-review follow-up to the mgr.Add change.)
+func (u *uiRunnable) NeedLeaderElection() bool { return false }
 
 // Start implements manager.Runnable.
 func (u *uiRunnable) Start(ctx context.Context) error {
