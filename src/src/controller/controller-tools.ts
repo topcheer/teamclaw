@@ -9,14 +9,17 @@ import type {
 } from "../types.js";
 import { buildControllerNoWorkersMessage, hasOnDemandWorkerProvisioning, shouldBlockControllerWithoutWorkers } from "./controller-capacity.js";
 import {
-  normalizeClarificationQuestionSchemas,
   normalizeManifestCompletionOpportunities,
   normalizeManifestCreatedTasks,
   normalizeManifestDeferredTasks,
   normalizeManifestRoleList,
   normalizeManifestStringList,
-  normalizeOptionalManifestText,
 } from "./orchestration-manifest.js";
+// Issue #226 W3: the clarification-schema family lives in the shared layer now.
+import {
+  normalizeClarificationQuestionSchemas,
+  normalizeOptionalManifestText,
+} from "../shared/clarification-schema.js";
 import {
   ensureTeamMessageContract,
   normalizeContractRole,

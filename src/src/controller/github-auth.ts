@@ -2,6 +2,31 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Issue #226 W5: the GithubAuthManager contract (and the pure types it
+// references) moved to the shared layer — teamauto consumes the type and must
+// not import the controller tree. The factory below is annotated with the
+// shared return type, so TypeScript keeps the structural contract in lockstep
+// with the returned closures; the re-export keeps this module's historical
+// public surface stable for existing importers.
+import type {
+  GithubAccountInfo,
+  GithubAuthManager,
+  GithubAuthStatus,
+  GithubAuthStore,
+  GithubDeviceFlowInfo,
+  GithubLoginCallbackParams,
+  GithubLoginStart,
+} from "../shared/github-auth.js";
+
+export type {
+  GithubAccountInfo,
+  GithubAuthManager,
+  GithubAuthStatus,
+  GithubAuthStore,
+  GithubDeviceFlowInfo,
+  GithubLoginCallbackParams,
+  GithubLoginStart,
+} from "../shared/github-auth.js";
 
 /**
  * GitHub (GitHub App) user login for the TeamClaw controller.
@@ -14,7 +39,8 @@ import path from "node:path";
  * (`auth/github.json`, mode 0600, atomic tmp+rename writes).
  */
 
-export const DEFAULT_GITHUB_CLIENT_ID = "Iv23liqWmzrS3swGiIvK";
+import { DEFAULT_GITHUB_CLIENT_ID } from "../shared/github-auth.js";
+export { DEFAULT_GITHUB_CLIENT_ID };
 export const GITHUB_AUTH_CALLBACK_PATH = "/api/v1/auth/github/callback";
 export const GITHUB_CLIENT_SECRET_ENV = "TEAMCLAW_GITHUB_CLIENT_SECRET";
 
@@ -42,65 +68,6 @@ export class GithubAuthError extends Error {
     this.code = code;
   }
 }
-
-export type GithubAccountInfo = {
-  id: number;
-  login: string;
-  name: string | null;
-  avatarUrl: string | null;
-  htmlUrl: string | null;
-};
-
-export type GithubAuthStore = {
-  version: number;
-  clientId: string;
-  /** Which OAuth flow produced this token; device-flow tokens refresh without a client secret. */
-  flowOrigin: "device" | "web";
-  account: GithubAccountInfo | null;
-  accessToken: string;
-  refreshToken: string | null;
-  obtainedAt: number;
-  /** Epoch ms when the access token expires; null when it does not expire. */
-  expiresAt: number | null;
-  /** Epoch ms when the refresh token expires; null when unknown. */
-  refreshExpiresAt: number | null;
-  updatedAt: number;
-};
-
-export type GithubAuthStatus = {
-  authenticated: boolean;
-  account: GithubAccountInfo | null;
-  clientId: string;
-  clientSecretConfigured: boolean;
-  expiresAt: number | null;
-  refreshExpiresAt: number | null;
-  callbackPath: string;
-  callbackUrl: string | null;
-  /** Absolute URL of the standalone device-login page, when origin is known. */
-  loginPageUrl: string | null;
-  /** Active device-flow login (user code to enter at github.com/login/device), if any. */
-  device: GithubDeviceFlowInfo | null;
-};
-
-export type GithubDeviceFlowInfo = {
-  userCode: string;
-  verificationUri: string;
-  expiresAt: number;
-  intervalMs: number;
-};
-
-export type GithubLoginStart = {
-  authorizeUrl: string;
-  state: string;
-  callbackUrl: string;
-};
-
-export type GithubLoginCallbackParams = {
-  code?: string;
-  state?: string;
-  error?: string;
-  errorDescription?: string;
-};
 
 export type GithubAuthLogger = {
   info: (message: string) => void;
@@ -203,7 +170,7 @@ export function createGithubAuthManager(options: {
   logger?: GithubAuthLogger;
   fetchImpl?: GithubFetch;
   now?: () => number;
-} = {}) {
+} = {}): GithubAuthManager {
   const clientId = options.clientId?.trim() || DEFAULT_GITHUB_CLIENT_ID;
   // The environment variable wins so operators can keep the secret out of the
   // plugin config file.
@@ -669,8 +636,6 @@ export function createGithubAuthManager(options: {
     logout,
   };
 }
-
-export type GithubAuthManager = ReturnType<typeof createGithubAuthManager>;
 
 const managerCache = new Map<string, GithubAuthManager>();
 

@@ -12,7 +12,8 @@ import {
 } from "../interaction-contracts.js";
 import { loadWorkerIdentity } from "../state.js";
 import type { PluginConfig, WorkerIdentity } from "../types.js";
-import { normalizeClarificationQuestionSchema } from "../controller/orchestration-manifest.js";
+// Issue #226 W3: shared contract — the worker must not import the controller tree.
+import { normalizeClarificationQuestionSchema } from "../shared/clarification-schema.js";
 
 const ALLOWED_PROGRESS_STATUSES = new Set(["in_progress", "review"]);
 

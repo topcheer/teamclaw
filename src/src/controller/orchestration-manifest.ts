@@ -1,6 +1,4 @@
 import type {
-  ClarificationQuestionOption,
-  ClarificationQuestionSchema,
   ControllerManifestCompletionOpportunity,
   ControllerManifestCreatedTask,
   ControllerManifestDeferredTask,
@@ -9,6 +7,14 @@ import type {
 } from "../types.js";
 import { validateRoleIdList } from "../roles.js";
 import { deriveStableProjectKey } from "../openclaw-workspace.js";
+// Issue #226 W3: the clarification-schema normalization family moved to the
+// shared layer (worker/tools.ts consumes it; the worker must not import the
+// controller tree). This module keeps the manifest-specific normalizers and
+// imports the shared contract — controller -> shared direction only.
+import {
+  normalizeClarificationQuestionSchemas,
+  normalizeOptionalManifestText,
+} from "../shared/clarification-schema.js";
 
 export function normalizeManifestRoleList(raw: unknown): RoleId[] {
   // Phase 0.3: delegates to the shared validateRoleIdList guard in roles.ts.
@@ -25,75 +31,6 @@ export function normalizeManifestStringList(raw: unknown): string[] {
   return raw
     .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
     .filter(Boolean);
-}
-
-export function normalizeOptionalManifestText(raw: unknown): string | undefined {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const normalized = raw.trim();
-  return normalized || undefined;
-}
-
-export function normalizeClarificationOptions(raw: unknown): ClarificationQuestionOption[] {
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  return raw
-    .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object")
-    .map((entry) => ({
-      value: typeof entry.value === "string" ? entry.value.trim() : "",
-      label: typeof entry.label === "string" ? entry.label.trim() : "",
-      hint: typeof entry.hint === "string" && entry.hint.trim() ? entry.hint.trim() : undefined,
-    }))
-    .filter((entry) => entry.value && entry.label);
-}
-
-export function normalizeClarificationQuestionSchema(raw: unknown): ClarificationQuestionSchema | undefined {
-  if (!raw || typeof raw !== "object") {
-    return undefined;
-  }
-  const input = raw as Record<string, unknown>;
-  const kind = typeof input.kind === "string" ? input.kind.trim() : "";
-  const title = typeof input.title === "string" ? input.title.trim() : "";
-  if (!title || !["single-select", "multi-select", "number", "text"].includes(kind)) {
-    return undefined;
-  }
-  const options = normalizeClarificationOptions(input.options);
-  const schema: ClarificationQuestionSchema = {
-    kind: kind as ClarificationQuestionSchema["kind"],
-    title,
-    description: normalizeOptionalManifestText(input.description),
-    required: input.required == null ? true : Boolean(input.required),
-    allowOther: Boolean(input.allowOther),
-    placeholder: normalizeOptionalManifestText(input.placeholder),
-    unit: normalizeOptionalManifestText(input.unit),
-  };
-  if (options.length > 0) {
-    schema.options = options;
-  }
-  if (typeof input.min === "number" && Number.isFinite(input.min)) {
-    schema.min = input.min;
-  }
-  if (typeof input.max === "number" && Number.isFinite(input.max)) {
-    schema.max = input.max;
-  }
-  if (typeof input.step === "number" && Number.isFinite(input.step)) {
-    schema.step = input.step;
-  }
-  if ((schema.kind === "single-select" || schema.kind === "multi-select") && (!schema.options || schema.options.length === 0)) {
-    return undefined;
-  }
-  return schema;
-}
-
-export function normalizeClarificationQuestionSchemas(raw: unknown): ClarificationQuestionSchema[] {
-  if (!Array.isArray(raw)) {
-    return [];
-  }
-  return raw
-    .map((entry) => normalizeClarificationQuestionSchema(entry))
-    .filter((entry): entry is ClarificationQuestionSchema => Boolean(entry));
 }
 
 export function normalizeManifestCreatedTasks(raw: unknown): ControllerManifestCreatedTask[] {

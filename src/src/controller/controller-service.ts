@@ -21,7 +21,9 @@ import { ensureOpenClawWorkspaceMemoryDir, buildTeamClawAgentSessionKey } from "
 import { ensureControllerGitRepo } from "../git-collaboration.js";
 import { WorkerProvisioningManager } from "./worker-provisioning.js";
 import { PreviewManager } from "./preview-manager.js";
-import { runKickoffMeeting, buildKickoffAssessmentPrompt, ASSESSMENT_TIMEOUT_MS, type TaskRoleResolutionDeps } from "./kickoff-orchestrator.js";
+import { runKickoffMeeting, ASSESSMENT_TIMEOUT_MS, type TaskRoleResolutionDeps } from "./kickoff-orchestrator.js";
+// Issue #226 W3: the kickoff prompt contract lives in the shared layer now.
+import { buildKickoffAssessmentPrompt } from "../shared/kickoff-prompt.js";
 import { resolvePreferredLanAddress } from "../networking.js";
 import { createTeamAutoScheduler, type TeamAutoScheduler } from "../teamauto/scheduler.js";
 import { getGithubAuthManager } from "./github-auth.js";

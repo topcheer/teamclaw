@@ -46,6 +46,12 @@ async function transpileManifestModuleSubset(outDir) {
       output: path.join(outDir, "src", "openclaw-workspace.js"),
     },
     {
+      // Issue #226 W3: orchestration-manifest.ts now imports the
+      // clarification-schema family from the shared layer at runtime.
+      source: path.join(packageRoot, "src", "shared", "clarification-schema.ts"),
+      output: path.join(outDir, "src", "shared", "clarification-schema.js"),
+    },
+    {
       source: path.join(packageRoot, "src", "controller", "orchestration-manifest.ts"),
       output: path.join(outDir, "src", "controller", "orchestration-manifest.js"),
     },

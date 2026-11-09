@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
 
 import type { PluginLogger } from "../../api.js";
-import type { GithubAuthManager } from "../controller/github-auth.js";
+// Issue #226 W5: cross-subsystem contract lives in the shared layer now.
+import type { GithubAuthManager } from "../shared/github-auth.js";
 // Phase 2.3/2.5 (cross-review adopted suggestion): manual-proposal roles
 // validate against the ACTIVE profile and default to its defaultRole instead
 // of hardcoded software role literals.

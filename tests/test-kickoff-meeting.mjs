@@ -33,17 +33,21 @@ console.log("✅ Types validation passed");
 // ── 2. Kickoff orchestrator ────────────────────────────────────────────────
 
 const orchestratorContent = readFileSync(path.join(SRC_ROOT, "controller", "kickoff-orchestrator.ts"), "utf-8");
+// Issue #226 W3: buildKickoffAssessmentPrompt moved to the shared layer
+// (worker/worker-service.ts consumes it; the worker must not import the
+// controller tree). Pin its new home.
+const kickoffPromptContent = readFileSync(path.join(SRC_ROOT, "shared", "kickoff-prompt.ts"), "utf-8");
 
 // Check that buildKickoffAssessmentPrompt is exported
-assert.match(orchestratorContent, /export function buildKickoffAssessmentPrompt/, "buildKickoffAssessmentPrompt should be exported");
+assert.match(kickoffPromptContent, /export function buildKickoffAssessmentPrompt/, "buildKickoffAssessmentPrompt should be exported");
 
 // Check that runKickoffMeeting is exported
 assert.match(orchestratorContent, /export async function runKickoffMeeting/, "runKickoffMeeting should be exported");
 
 // Check that the assessment prompt contains key instructions
-assert.match(orchestratorContent, /Respond with a JSON object/, "Assessment prompt should ask for JSON response");
-assert.match(orchestratorContent, /"needed":\s*boolean/, "Assessment prompt should document 'needed' field");
-assert.match(orchestratorContent, /"suggestedTasks"/, "Assessment prompt should document 'suggestedTasks' field");
+assert.match(kickoffPromptContent, /Respond with a JSON object/, "Assessment prompt should ask for JSON response");
+assert.match(kickoffPromptContent, /"needed":\s*boolean/, "Assessment prompt should document 'needed' field");
+assert.match(kickoffPromptContent, /"suggestedTasks"/, "Assessment prompt should document 'suggestedTasks' field");
 
 console.log("✅ Kickoff orchestrator validation passed");
 

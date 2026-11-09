@@ -16,7 +16,7 @@ import type {
 import { generateId, parseJsonBody, sendError, sendJson } from "../protocol.js";
 import { ensureTeamMessageContract } from "../interaction-contracts.js";
 import { validateActiveRoleId } from "../profile-loader.js";
-import { normalizeClarificationQuestionSchema } from "./orchestration-manifest.js";
+import { normalizeClarificationQuestionSchema } from "../shared/clarification-schema.js";
 import {
   cancelTaskExecution,
   recordTaskExecutionEvent,
