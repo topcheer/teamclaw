@@ -25,8 +25,12 @@ const GENERIC_SERVE_COMMAND = "npx -y serve -l {PORT}";
 const PREVIEW_ENV_ALLOWLIST = new Set([
   "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TZ", "TERM", "SHELL",
   // Windows toolchain basics (no-ops elsewhere, harmless to match).
+  // PROCESSOR_ARCHITECTURE/PROCESSOR_IDENTIFIER are read by node-gyp-style
+  // native builds (review follow-up to #237 W1) - plain toolchain
+  // descriptors, no credential material.
   "SYSTEMROOT", "SYSTEMDRIVE", "COMSPEC", "PATHEXT", "WINDIR", "USERPROFILE",
   "APPDATA", "LOCALAPPDATA", "PROGRAMFILES", "PROGRAMDATA", "NUMBER_OF_PROCESSORS", "OS",
+  "PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER",
 ]);
 const PREVIEW_EXTRA_ENV_VAR = "TEAMCLAW_PREVIEW_EXTRA_ENV";
 

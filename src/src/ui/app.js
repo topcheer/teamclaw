@@ -70,6 +70,7 @@
       "action.dismiss": "Dismiss",
       "action.copyCommand": "Copy command",
       "action.copied": "Copied",
+      "action.copyToken": "Copy token",
       "sidebar.workers": "Workers",
       "sidebar.roles": "Roles",
       "tab.planning": "Planning",
@@ -269,6 +270,7 @@
       "action.dismiss": "稍后处理",
       "action.copyCommand": "复制命令",
       "action.copied": "已复制",
+      "action.copyToken": "复制令牌",
       "sidebar.workers": "成员",
       "sidebar.roles": "角色",
       "tab.planning": "规划",
@@ -5125,7 +5127,7 @@ function closeModelSettings() {
       if (st.active) {
         wrap.querySelector(".tunnel-state").innerHTML =
           '<div class="tunnel-on">Live: <a href="https://' + st.hostname + '" target="_blank" rel="noopener">https://' + st.hostname + '</a></div>'
-          + '<div class="tunnel-token">Gate token: <b>' + st.gateToken + '</b></div>'
+          + '<div class="tunnel-token">Gate token: <b>' + st.gateToken + '</b> <button class="btn btn-small" data-act="copy-token">' + escapeHtml(t("action.copyToken")) + '</button></div>'
           + '<button class="btn btn-small" data-act="stop">Stop sharing</button>';
         return;
       }
@@ -5159,6 +5161,18 @@ function closeModelSettings() {
     wrap.addEventListener("click", (e) => {
       const act = e.target.getAttribute && e.target.getAttribute("data-act");
       if (!act) return;
+      // Gate token copy (#237 review follow-up): handled before the generic
+      // action dispatch below, which disables the button and expects an API
+      // call. Reuses the copyText + action.copied feedback pattern of the
+      // security pairing command copy.
+      if (act === "copy-token") {
+        const tokenEl = wrap.querySelector(".tunnel-token b");
+        copyText(tokenEl ? tokenEl.textContent : "").then(() => {
+          e.target.textContent = t("action.copied");
+          setTimeout(() => { e.target.textContent = t("action.copyToken"); }, 1500);
+        }).catch(() => {});
+        return;
+      }
       e.target.disabled = true;
       var call;
       if (act === "start-quick") {
