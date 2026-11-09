@@ -24,7 +24,9 @@ jobs:
       matrix:
         include:
           - { os: macos-latest, plat: darwin-arm64 }
-          - { os: macos-13, plat: darwin-x64 }
+          # build-runtime-tar.mjs derives the tar name from process.arch, so
+          # darwin-x64 genuinely needs an Intel runner (macos-13 is retired).
+          - { os: macos-15-intel, plat: darwin-x64 }
           - { os: ubuntu-latest, plat: linux-x64 }
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +37,17 @@ jobs:
         run: node scripts/build-runtime-tar.mjs dist-runtime
       - name: Replace asset on runtime-latest release
         run: |
-          gh release delete runtime-latest --cleanup-tag --yes 2>/dev/null || true
-          gh release create runtime-latest dist-runtime/teamclaw-runtime-${{ matrix.plat }}.tar.gz*              --title "Runtime bundle (rolling)" --notes "Auto-replaced on every main push. Fixed URL by design."              --prerelease
+          set -euo pipefail
+          # Create the rolling release once; then swap OUR platform's assets
+          # (delete-asset per file, same pattern as desktop-release.yml). The
+          # old whole-release delete raced the 3-way concurrent matrix - each
+          # job recreated the release with only its own platform, leaving the
+          # live release darwin-arm64-only while desktop/main.mjs hardcodes
+          # these URLs for all platforms (#225 E1).
+          gh release view runtime-latest >/dev/null 2>&1 || gh release create runtime-latest --title "Runtime bundle (rolling)" --notes "Auto-replaced on every main push. Fixed URL by design." --prerelease
+          for f in dist-runtime/teamclaw-runtime-${{ matrix.plat }}.tar.gz*; do
+            gh release delete-asset runtime-latest "$f" --yes 2>/dev/null || true
+          done
+          gh release upload runtime-latest dist-runtime/teamclaw-runtime-${{ matrix.plat }}.tar.gz*
         env:
           GH_TOKEN: ${{ github.token }}
