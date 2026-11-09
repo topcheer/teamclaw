@@ -51,6 +51,14 @@ export class ProcessProvisioner implements WorkerProvisionerBackend {
     // Container backends have the same exposure via the
     // TEAMCLAW_BOOTSTRAP_CONFIG_B64 env (docker inspect / pod env); see the
     // migration note on buildContainerBootstrapScript().
+    // Review follow-up (#237): { mode } is creation-only, so an upgrade
+    // deployment rewriting a pre-existing 0644 file would keep the loose
+    // mode. Explicit chmod of the existing file first (ENOENT tolerated -
+    // first write then creates it 0600 via { mode }). Chosen over
+    // unlink-then-write to avoid the no-config window mid-rewrite.
+    await fs.chmod(configPath, 0o600).catch((err: NodeJS.ErrnoException) => {
+      if (err.code !== "ENOENT") throw err;
+    });
     await fs.writeFile(configPath, spec.configJson, { encoding: "utf8", mode: 0o600 });
 
     const gatewayEntrypoint = resolveGatewayEntrypoint();

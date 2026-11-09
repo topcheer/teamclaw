@@ -72,7 +72,13 @@ export function buildContainerBootstrapScript(): string {
     // and pod-env readers); migrating the docker/kubernetes backends to
     // mounted Secrets needs a coordinated chart/image change (cf. #230's
     // image-skew caveat) and is tracked by #237 W4.
-    "node -e 'const fs=require(\"fs\"); const configPath=process.env.OPENCLAW_CONFIG_PATH; const raw=Buffer.from(process.env.TEAMCLAW_BOOTSTRAP_CONFIG_B64||\"\", \"base64\").toString(\"utf8\"); fs.mkdirSync(require(\"path\").dirname(configPath), { recursive: true }); fs.writeFileSync(configPath, raw, { mode: 0o600 });'",
+    // Review follow-up (#237): { mode } is creation-only, so rewriting a
+    // pre-existing 0644 config (baked into an older image or surviving on
+    // a mounted volume) would keep the loose mode - chmodSync the existing
+    // file first, tolerating ENOENT for first writes (then { mode: 0o600 }
+    // creates it owner-only). Chosen over unlink-then-write to avoid the
+    // no-config window mid-rewrite.
+    "node -e 'const fs=require(\"fs\"); const configPath=process.env.OPENCLAW_CONFIG_PATH; const raw=Buffer.from(process.env.TEAMCLAW_BOOTSTRAP_CONFIG_B64||\"\", \"base64\").toString(\"utf8\"); fs.mkdirSync(require(\"path\").dirname(configPath), { recursive: true }); try { fs.chmodSync(configPath, 0o600); } catch (err) { if (err.code !== \"ENOENT\") throw err; } fs.writeFileSync(configPath, raw, { mode: 0o600 });'",
     "exec node dist/index.js gateway --allow-unconfigured",
   ].join("\n");
 }

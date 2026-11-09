@@ -16,15 +16,24 @@
 //       - source pin: the process provisioner writes openclaw.json (which
 //         carries provider API keys) with mode 0o600, and the container
 //         bootstrap script does the same inside docker/k8s workers;
+//       - source pin: both write paths chmod an existing config to 0o600
+//         BEFORE rewriting it ({ mode } is creation-only, so an upgrade
+//         rewrite of an old 0644 file must tighten explicitly), tolerating
+//         ENOENT for first writes (#237 review follow-up);
 //       - POSIX behavior check: Node's fs.writeFile honors { mode: 0o600 }
-//         on this platform (documents why the pin is load-bearing).
+//         on this platform (documents why the pin is load-bearing), and
+//         the pinned chmod-then-write sequence tightens a pre-existing
+//         0644 file to 0600.
 //   W1  previewCommand env policy:
 //       - source pin: preview spawns never spread ...process.env; both the
 //         preview command and the pip pre-install go through
 //         buildPreviewEnv (allowlist + TEAMCLAW_PREVIEW_EXTRA_ENV hatch);
 //       - dist-level behavior: buildPreviewEnv drops credential-bearing
 //         sentinel vars, keeps toolchain basics, forwards declared extras
-//         (case-insensitively) and merges extraEnv last.
+//         (case-insensitively) and merges extraEnv last. The Windows arch
+//         descriptors PROCESSOR_ARCHITECTURE / PROCESSOR_IDENTIFIER stay
+//         allowlisted (node-gyp-style native builds read them; plain
+//         toolchain descriptors, no credential material).
 //
 // Requires the dist build first: npm --prefix src run build
 
@@ -190,6 +199,27 @@ const dist = (rel) => import(path.join(projectRoot, "src", "dist", "src", rel));
     "container bootstrap script must write the config 0600 inside the worker (#237 W4)",
   );
 
+  // chmod-on-rewrite pins (#237 review follow-up): { mode } is
+  // creation-only, so rewriting a pre-existing 0644 file (upgrade
+  // deployment / older baked image) would keep the loose mode. Both write
+  // paths must explicitly chmod an existing file first, tolerating ENOENT
+  // (a first write then creates the file owner-only via { mode }).
+  assert.match(
+    supervisorSource,
+    /fs\.chmod\(configPath, 0o600\)/,
+    "process provisioner must chmod an existing config to 0600 before the rewrite (upgrade path, #237 W4 follow-up)",
+  );
+  assert.match(
+    supervisorSource,
+    /err\.code !== "ENOENT"/,
+    "the pre-write chmod must tolerate ENOENT (first writes create the file via { mode: 0o600 })",
+  );
+  assert.match(
+    containerSource,
+    /fs\.chmodSync\(configPath, 0o600\)/,
+    "container bootstrap script must chmod an existing config before the rewrite (upgrade path, #237 W4 follow-up)",
+  );
+
   // POSIX semantics check (skipped loudly on Windows): the { mode } option
   // is what separates 0600 from the umask default 0644 - pin it so the
   // source pin above stays load-bearing on this platform.
@@ -205,6 +235,29 @@ const dist = (rel) => import(path.join(projectRoot, "src", "dist", "src", rel));
     const restrictedMode = fs.statSync(restricted).mode & 0o777;
     assert.equal(restrictedMode, 0o600, "fs.writeFile honors { mode: 0o600 } on POSIX (#237 W4)");
     assert.notEqual(permissiveMode, 0o600, "the old permissionless write stays group/other-readable - the fix is not a no-op");
+
+    // Upgrade-path behavior (#237 W4 follow-up): rewriting a pre-existing
+    // 0644 config through the pinned chmod-then-write sequence tightens it
+    // to 0600 - { mode } alone would leave 0644 in place. Mirrors
+    // container-shared.ts exactly (chmodSync/writeFileSync); the process
+    // provisioner runs the same sequence via the promises API.
+    const writeConfigOwnerOnly = (configPath, contents) => {
+      try {
+        fs.chmodSync(configPath, 0o600);
+      } catch (err) {
+        if (err.code !== "ENOENT") throw err;
+      }
+      fs.writeFileSync(configPath, contents, { encoding: "utf8", mode: 0o600 });
+    };
+    const upgraded = path.join(dir, "upgraded.json");
+    const fresh = path.join(dir, "fresh.json");
+    fs.writeFileSync(upgraded, '{"old":true}', { encoding: "utf8", mode: 0o644 });
+    assert.equal(fs.statSync(upgraded).mode & 0o777, 0o644, "precondition: the upgrade-path fixture really starts 0644");
+    writeConfigOwnerOnly(upgraded, '{"new":true}');
+    writeConfigOwnerOnly(fresh, '{"new":true}');
+    assert.equal(fs.statSync(upgraded).mode & 0o777, 0o600, "rewriting an old 0644 config tightens it to 0600 (chmod-on-rewrite, #237 W4 follow-up)");
+    assert.equal(fs.statSync(fresh).mode & 0o777, 0o600, "the ENOENT path (first write) still creates the config 0600");
+    assert.equal(fs.readFileSync(upgraded, "utf8"), '{"new":true}', "the rewrite lands the new content");
     fs.rmSync(dir, { recursive: true, force: true });
   }
 }
@@ -234,10 +287,27 @@ const dist = (rel) => import(path.join(projectRoot, "src", "dist", "src", rel));
   assert.match(previewSource, /PREVIEW_EXTRA_ENV_VAR = "TEAMCLAW_PREVIEW_EXTRA_ENV"/,
     "the operator escape hatch TEAMCLAW_PREVIEW_EXTRA_ENV is declared (#237 W1)");
 
+  // Arch descriptors (#237 W1 review follow-up): node-gyp-style native
+  // builds read PROCESSOR_ARCHITECTURE / PROCESSOR_IDENTIFIER on Windows -
+  // plain toolchain descriptors, no credential material, so they belong on
+  // the allowlist rather than behind the operator hatch.
+  const allowlistBlock = previewSource.match(/PREVIEW_ENV_ALLOWLIST = new Set\(\[([\s\S]*?)\]\)/);
+  assert.ok(allowlistBlock, "the PREVIEW_ENV_ALLOWLIST literal must be found in preview-manager.ts");
+  for (const name of ["PROCESSOR_ARCHITECTURE", "PROCESSOR_IDENTIFIER"]) {
+    assert.ok(
+      allowlistBlock[1].includes(`"${name}"`),
+      `${name} must stay allowlisted - node-gyp native builds read it (#237 W1 follow-up)`,
+    );
+  }
+
   // Dist-level behavior of the exported builder.
   const { buildPreviewEnv } = await dist("controller/preview-manager.js");
   const SENTINEL = "TEAMCLAW_237_SENTINEL_SECRET";
   const extrasBefore = process.env.TEAMCLAW_PREVIEW_EXTRA_ENV;
+  const archBefore = {
+    PROCESSOR_ARCHITECTURE: process.env.PROCESSOR_ARCHITECTURE,
+    PROCESSOR_IDENTIFIER: process.env.PROCESSOR_IDENTIFIER,
+  };
   try {
     process.env[SENTINEL] = "credential-material-237";
     delete process.env.TEAMCLAW_PREVIEW_EXTRA_ENV;
@@ -246,6 +316,18 @@ const dist = (rel) => import(path.join(projectRoot, "src", "dist", "src", rel));
     assert.equal(env[SENTINEL], undefined, "credential-bearing env vars are dropped (#237 W1)");
     assert.ok(env.PATH ?? env.Path, "PATH survives the allowlist (commands must still resolve)");
     assert.ok(env.HOME ?? env.USERPROFILE, "HOME/USERPROFILE survives the allowlist");
+
+    // Arch descriptors survive the allowlist (node-gyp native builds read
+    // them on Windows; #237 W1 follow-up). Set explicitly so the check is
+    // platform-independent - the case-insensitive match itself is already
+    // covered by the escape-hatch assertions below.
+    process.env.PROCESSOR_ARCHITECTURE = "AMD64";
+    process.env.PROCESSOR_IDENTIFIER = "Intel64 Family 6 Model 126";
+    const archEnv = buildPreviewEnv({});
+    assert.equal(archEnv.PROCESSOR_ARCHITECTURE, "AMD64",
+      "PROCESSOR_ARCHITECTURE survives the allowlist (node-gyp native builds, #237 W1 follow-up)");
+    assert.equal(archEnv.PROCESSOR_IDENTIFIER, "Intel64 Family 6 Model 126",
+      "PROCESSOR_IDENTIFIER survives the allowlist (node-gyp native builds, #237 W1 follow-up)");
 
     const withExtraEnv = buildPreviewEnv({ VIRTUAL_ENV: "/ws/venv" });
     assert.equal(withExtraEnv.VIRTUAL_ENV, "/ws/venv", "extraEnv (venv vars) merges through");
@@ -258,6 +340,13 @@ const dist = (rel) => import(path.join(projectRoot, "src", "dist", "src", rel));
       "TEAMCLAW_PREVIEW_EXTRA_ENV forwards declared names (case-insensitive) - the deliberate operator opt-in");
   } finally {
     delete process.env[SENTINEL];
+    for (const [name, value] of Object.entries(archBefore)) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
     if (extrasBefore === undefined) {
       delete process.env.TEAMCLAW_PREVIEW_EXTRA_ENV;
     } else {
@@ -266,4 +355,4 @@ const dist = (rel) => import(path.join(projectRoot, "src", "dist", "src", rel));
   }
 }
 
-console.log("test-security-residuals-237: all assertions passed (#237 W3 gate token/verify/throttle, W4 config perms, W1 preview env policy).");
+console.log("test-security-residuals-237: all assertions passed (#237 W3 gate token/verify/throttle, W4 config perms incl. chmod-on-rewrite, W1 preview env policy incl. arch descriptors).");
