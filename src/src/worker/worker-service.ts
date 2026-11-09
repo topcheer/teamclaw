@@ -190,7 +190,10 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
     // Kickoff assessor — uses the worker's subagent runtime for lightweight assessment
     const kickoffAssessor = externalTaskExecutor
       ? async (requirement: string, role: string): Promise<Record<string, unknown>> => {
-          const { buildKickoffAssessmentPrompt } = await import("../controller/kickoff-orchestrator.js");
+          // Issue #226 W3: the kickoff prompt contract lives in the shared
+          // layer now — this dynamic import must never point back at the
+          // controller tree (worker-mode deployments would drag it in).
+          const { buildKickoffAssessmentPrompt } = await import("../shared/kickoff-prompt.js");
           const prompt = buildKickoffAssessmentPrompt(role as import("../types.js").RoleId, requirement);
           const sessionKey = buildTeamClawAgentSessionKey(`teamclaw-kickoff-${role}-${Date.now()}`);
           const raw = await externalTaskExecutor(prompt, {
