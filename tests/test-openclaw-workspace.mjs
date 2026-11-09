@@ -1076,8 +1076,8 @@ assert.match(
 
   assert.match(
     desktopMainSource,
-    /warning: `openclaw --help exited with \$\{(?:lastFailure\.code \?\? 1)\}`[\s\S]*after retry/,
-    "desktop openclaw probe should treat a resolvable-but-failing --help as installed-with-warning after the retry",
+    /warning: `openclaw --help exited with \$\{codeText\}`[\s\S]*after retry/,
+    "desktop openclaw probe should treat a resolvable-but-failing --help as installed-with-warning after the retry (cross-review: a timeout kill reports 'no exit code', never a fabricated 1)",
   );
 
   assert.match(

@@ -137,7 +137,11 @@ for (const m of mainSource.matchAll(/runShellStream\((`[^`]*)/g)) {
   assert.ok(!m[1].includes("${url"), `runShellStream must not interpolate a URL: ${m[1].slice(0, 60)}`);
 }
 assert.match(mainSource, /async function downloadArtifact\(/, "fetch-based download must exist (C1)");
-assert.match(mainSource, /await fetch\(parsedUrl\.href, \{ redirect: "follow" \}\)/, "download must stream via fetch with redirects (curl -fSL parity)");
+// Cross-review SSRF fix: fetch must NEVER follow redirects on its own - every
+// hop goes through validatedArtifactFetch and is re-validated.
+assert.match(mainSource, /async function validatedArtifactFetch\(/, "manual-redirect fetch wrapper must exist");
+assert.match(mainSource, /redirect: "manual"/, "redirects must be followed manually (hop-by-hop re-validation)");
+assert.ok(!mainSource.includes('redirect: "follow"'), "no fetch may follow redirects itself (302 -> intranet bypass)");
 assert.match(mainSource, /const \{ createHash \} = await import\("node:crypto"\)/, "sha256 must be computed with node:crypto (C1)");
 assert.match(mainSource, /await runSpawnStream\(tarBinary\(\), \["xzf", dest, "-C", extractDir\]/, "tar extraction must use an argv array, not a shell string (C1)");
 
@@ -165,10 +169,54 @@ for (const [label, payload] of [
   ["cloud metadata", "https://169.254.169.254/latest/meta-data"],
   ["gce metadata host", "https://metadata.google.internal/x"],
   ["embedded credentials", "https://user:pass@github.com/x.tar.gz"],
+  ["v4-mapped loopback (dotted)", "https://[::ffff:127.0.0.1]/x.tar.gz"],
+  ["v4-mapped loopback (hex, URL-normalized)", "https://[::ffff:7f00:1]/x.tar.gz"],
+  ["v4-mapped metadata (hex)", "https://[::ffff:a9fe:a9fe]/x.tar.gz"],
+  ["v4-mapped private v4 (hex)", "https://[::ffff:c0a8:101]/x.tar.gz"],
+  ["v4-compatible loopback (hex)", "https://[::7f00:1]/x.tar.gz"],
   ["not a url", "just-some-text"],
   ["empty", ""],
 ]) {
   assert.throws(() => validateArtifactUrl(payload), /https|not allowed|credentials|characters|Invalid/i, `${label} payload must be rejected: ${payload}`);
+}
+// Cross-review SSRF fix (behavioral): every redirect hop goes through the
+// SAME validator - a public https URL that 302s to the intranet must bounce
+// at the next hop (with redirect:"follow" the loopback response body was
+// fully readable). Also proves undici's redirect:"manual" hands the 30x
+// back to us (status + Location readable), which the wrapper relies on.
+{
+  const base = validateArtifactUrl("https://github.com/topcheer/teamclaw/releases/download/runtime-latest/x.tar.gz");
+  assert.equal(
+    validateArtifactUrl(new URL("/other/y.tar.gz", base).href).href,
+    "https://github.com/other/y.tar.gz",
+    "relative redirects stay on the validated https origin",
+  );
+  for (const location of [
+    "http://127.0.0.1:8080/pwned",
+    "https://192.168.0.9/x",
+    "https://169.254.169.254/latest/meta-data",
+    "https://[::ffff:7f00:1]/x",
+    "file:///etc/passwd",
+  ]) {
+    assert.throws(
+      () => validateArtifactUrl(new URL(location, base).href),
+      /https|not allowed|Invalid/i,
+      `a redirect hop to ${location} must be re-validated and rejected`,
+    );
+  }
+  const { default: http } = await import("node:http");
+  const redirector = http.createServer((req, res) => {
+    res.writeHead(302, { location: "http://127.0.0.1:9/inner" });
+    res.end();
+  });
+  await new Promise((r) => redirector.listen(0, "127.0.0.1", r));
+  try {
+    const hop = await fetch(`http://127.0.0.1:${redirector.address().port}/`, { redirect: "manual" });
+    assert.equal(hop.status, 302, "undici redirect:manual returns the 30x itself");
+    assert.equal(hop.headers.get("location"), "http://127.0.0.1:9/inner", "the Location header is readable for hop re-validation");
+  } finally {
+    redirector.close();
+  }
 }
 // Non-injecting but odd names fall back to a safe generated filename.
 assert.equal(
@@ -228,6 +276,21 @@ assert.equal(directives["object-src"], "'none'", "object-src 'none'");
 assert.match(mainSource, /openExternal refused non-http\(s\) target/, "openExternal must whitelist http/https (W1)");
 assert.match(mainSource, /openPath expects an absolute path/, "openPath must require absolute local paths (W1)");
 assert.match(mainSource, /openPath expects a local path, not a URL/, "openPath must refuse URLs (W1)");
+// Cross-review fix (behavioral): Windows drive-letter and UNC paths ARE
+// absolute local paths - the old scheme regex misread "C:" as a URL scheme
+// and broke "open project in Explorer" on Windows.
+{
+  const openPathRejection = evalWithDeps(extractFunction(mainSource, "openPathRejection"), { path });
+  assert.equal(openPathRejection("C:\\Users\\teamclaw\\projects\\demo"), null, "drive-letter path with backslashes must open (Windows flow)");
+  assert.equal(openPathRejection("D:/data/projects/demo"), null, "drive-letter path with forward slashes must open");
+  assert.equal(openPathRejection("\\\\fileserver\\share\\project"), null, "UNC path must open");
+  assert.equal(openPathRejection("/tmp/teamclaw/project"), null, "posix absolute path must open");
+  assert.match(openPathRejection("file:///etc/passwd"), /not a URL/, "file:// URLs stay refused");
+  assert.match(openPathRejection("https://evil.example/pwn"), /not a URL/, "https URLs stay refused");
+  assert.match(openPathRejection("smb://server/share"), /not a URL/, "custom protocol URLs stay refused");
+  assert.match(openPathRejection("projects/demo"), /absolute path/, "relative paths stay refused");
+  assert.match(openPathRejection("C:relative\\path"), /not a URL/, "drive-RELATIVE (no root slash) stays refused as ambiguous");
+}
 
 // ---------------------------------------------------------------------------
 // W3: gateway lifecycle.
@@ -290,6 +353,10 @@ const streamChildOutput = evalWithDeps(extractFunction(mainSource, "streamChildO
 assert.match(mainSource, /app\.on\("web-contents-created"/, "web-contents-created guard must exist (W5)");
 assert.match(mainSource, /contents\.on\("will-navigate"/, "will-navigate guard must exist (W5)");
 assert.match(mainSource, /setWindowOpenHandler/, "setWindowOpenHandler must exist (W5)");
+// Cross-review tightening: a bare file:// prefix would still allow navigating
+// to any local file - only this renderer's OWN directory may be navigated.
+assert.match(mainSource, /const RENDERER_ROOT = path\.join\(__dirname, "renderer"\) \+ path\.sep/, "will-navigate must whitelist only the renderer directory");
+assert.match(mainSource, /fileURLToPath\(target\)/, "the file:// target must be compared as a platform-native path");
 
 // ---------------------------------------------------------------------------
 // #220: probe pre-resolution + explicit timeout.
@@ -297,6 +364,9 @@ assert.match(mainSource, /setWindowOpenHandler/, "setWindowOpenHandler must exis
 assert.match(mainSource, /function resolveExecutableOnPath\(/, "PATH pre-resolution must exist (#220)");
 assert.match(mainSource, /OPENCLAW_PROBE_TIMEOUT_MS = \d+/, "probe timeout constant must exist (#220)");
 assert.match(mainSource, /child\.kill\("SIGKILL"\);\s*\} catch \{ \/\* already gone \*\/ \}/, "a hung probe must be hard-killed (#220)");
+// Cross-review fix: a timeout kill has code null - reporting it as
+// "exited with 1" was misleading; the warning must say so honestly.
+assert.match(mainSource, /"no exit code"/, "a killed probe (code null) must not be reported as exit code 1 (#220)");
 assert.ok(!mainSource.includes('spawn("openclaw"'), "the probe must never spawn a bare PATH-dependent name (#220)");
 assert.match(mainSource, /openClawSpawnPlan\(resolved, \["--help"\]\)/, "the probe must spawn the pre-resolved absolute path (#220)");
 // Behavioral: resolveExecutableOnPath actually resolves node and rejects junk.

@@ -175,9 +175,10 @@ function openClawSpawnPlan(bin, args) {
   if (process.platform !== "win32") {
     return { command: bin, args, env: {} };
   }
-  // Windows .cmd with no discoverable entry: shell fallback. Lifecycle is
-  // still contained - stop paths escalate to `taskkill /T` which reaps the
-  // whole tree (see killGatewayTree).
+  // Windows: ANY bin form with no discoverable package entry (.cmd, .bat,
+  // bare .exe wrappers, ...): shell fallback. Lifecycle is still contained -
+  // stop paths escalate to `taskkill /T` which reaps the whole tree (see
+  // killGatewayTree).
   return null;
 }
 
@@ -220,9 +221,14 @@ async function probeOpenClawInstall() {
     lastFailure = outcome;
   }
   if (lastFailure.kind === "exit") {
+    // Cross-review fix: a timeout kill has code=null and writing "exited
+    // with 1" was misleading - surface the real signal/timeout instead.
+    const codeText = lastFailure.code !== null && lastFailure.code !== undefined
+      ? String(lastFailure.code)
+      : "no exit code";
     return {
       installed: true,
-      warning: `openclaw --help exited with ${lastFailure.code ?? 1}` +
+      warning: `openclaw --help exited with ${codeText}` +
         (lastFailure.signal ? ` (signal ${lastFailure.signal})` : "") +
         (lastFailure.timeout ? " (probe timeout)" : "") +
         " after retry",
@@ -326,12 +332,26 @@ function validateArtifactUrl(raw) {
   // metadata / loopback targets (plain-http metadata endpoints are already
   // unreachable via the https-only rule above).
   const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  const blocked = host === "localhost" ||
-    host === "metadata.google.internal" ||
-    host === "::1" ||
-    /^127\.|^10\.|^192\.168\.|^169\.254\.|^0\./.test(host) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
-    /^(f[cd]|fe[89ab])/i.test(host); // fc00::/7 (private v6), fe80::/10 (link-local v6)
+  // Unwrap IPv4-mapped / IPv4-compatible IPv6 BEFORE the blocklist: the URL
+  // parser normalizes [::ffff:127.0.0.1] to the hex form [::ffff:7f00:1],
+  // which slips past every textual rule below (cross-review finding).
+  let effectiveHost = host;
+  const mappedDotted = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(host);
+  const mappedHex = /^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(host);
+  if (mappedDotted) {
+    effectiveHost = mappedDotted[1];
+  } else if (mappedHex) {
+    // ::ffff:7f00:1 (mapped) or ::7f00:1 (compatible) -> dotted quad
+    const hi = parseInt(mappedHex[1], 16);
+    const lo = parseInt(mappedHex[2], 16);
+    effectiveHost = `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
+  }
+  const blocked = effectiveHost === "localhost" ||
+    effectiveHost === "metadata.google.internal" ||
+    effectiveHost === "::1" ||
+    /^127\.|^10\.|^192\.168\.|^169\.254\.|^0\./.test(effectiveHost) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(effectiveHost) ||
+    /^(f[cd]|fe[89ab])/i.test(effectiveHost); // fc00::/7 (private v6), fe80::/10 (link-local v6)
   if (blocked) {
     throw new Error(`Runtime artifact host not allowed: ${parsed.hostname}`);
   }
@@ -354,7 +374,35 @@ function artifactFileNameFromUrl(parsedUrl) {
 // curl-equivalent download semantics: follow redirects, fail on HTTP error,
 // retry transient failures (--retry 3), stream progress lines to the wizard
 // log (curl's stderr meter used to provide those). No shell, no injection.
+//
+// Proxy/CA note (cross-review declaration): unlike curl, this fetch path
+// does NOT read HTTP(S)_PROXY env by default (Node fetch needs
+// NODE_USE_ENV_PROXY=1) and custom CAs need NODE_EXTRA_CA_CERTS instead of
+// CURL_CA_BUNDLE - a behavior change for corporate-proxy environments.
 const ARTIFACT_DOWNLOAD_ATTEMPTS = 3;
+const ARTIFACT_MAX_REDIRECTS = 5;
+
+// Follow redirects MANUALLY, re-validating EVERY hop through
+// validateArtifactUrl: with redirect:"follow" a public https URL could 302
+// to http://127.0.0.1 and fetch would happily read the intranet response
+// body (cross-review finding - verified with a live 302 server).
+async function validatedArtifactFetch(parsedUrl) {
+  let current = parsedUrl;
+  for (let hop = 0; hop <= ARTIFACT_MAX_REDIRECTS; hop++) {
+    const res = await fetch(current.href, { redirect: "manual" });
+    if (res.status >= 300 && res.status < 400) {
+      const location = res.headers.get("location");
+      if (!location) {
+        throw new Error(`redirect without Location header from ${current.host}`);
+      }
+      // Same validator, same rules - scheme/host/metachars, every hop.
+      current = validateArtifactUrl(new URL(location, current.href).href);
+      continue;
+    }
+    return res;
+  }
+  throw new Error(`too many redirects (more than ${ARTIFACT_MAX_REDIRECTS})`);
+}
 async function downloadArtifact(parsedUrl, dest, onLine) {
   let lastError = null;
   for (let attempt = 1; attempt <= ARTIFACT_DOWNLOAD_ATTEMPTS; attempt++) {
@@ -373,7 +421,7 @@ async function downloadArtifact(parsedUrl, dest, onLine) {
 }
 
 async function downloadArtifactOnce(parsedUrl, dest, onLine, attempt) {
-  const res = await fetch(parsedUrl.href, { redirect: "follow" });
+  const res = await validatedArtifactFetch(parsedUrl);
   if (!res.ok || !res.body) {
     throw new Error(`HTTP ${res.status}${res.statusText ? " " + res.statusText : ""} from ${parsedUrl.host}`);
   }
@@ -542,9 +590,11 @@ async function ensureOpenClawRuntime({ source, artifactUrl }, onEvent) {
     onEvent({ phase: "openclaw", line: "Verifying sha256..." });
     const digest = await sha256File(dest);
     try {
-      // Same validated URL (SSRF surface is shared with the artifact fetch).
+      // Same validated URL (SSRF surface is shared with the artifact fetch),
+      // and the checksum fetch re-validates every redirect hop too.
       const checksumUrl = new URL(parsedUrl.href + ".sha256");
-      const expect = ((await (await fetch(checksumUrl.href)).text()) || "").split(" ")[0].trim();
+      const checksumRes = await validatedArtifactFetch(checksumUrl);
+      const expect = ((await checksumRes.text()) || "").split(" ")[0].trim();
       if (expect && digest !== expect) throw new Error(`sha256 mismatch: ${digest} != ${expect}`);
       onEvent({ phase: "openclaw", line: "sha256 OK: " + digest.slice(0, 12) });
     } catch (e) {
@@ -929,14 +979,25 @@ app.on("window-all-closed", async () => {
 });
 
 // #223 W5: navigation guards. This app is a local-file UI; any in-page
-// navigation away from file:// is a bug or an injected link - block it.
-// Genuine http(s) popups go to the system browser instead of a child window.
+// navigation away from this renderer's OWN directory is a bug or an injected
+// link - block it (cross-review tightening: plain file:// prefix would still
+// allow navigating to any local file). Genuine http(s) popups go to the
+// system browser instead of a child window.
+const RENDERER_ROOT = path.join(__dirname, "renderer") + path.sep;
 app.on("web-contents-created", (_event, contents) => {
   contents.on("will-navigate", (event, navigationUrl) => {
     try {
       if (new URL(contents.getURL()).protocol === "devtools:") return;
     } catch { /* current URL unparseable - apply the guard */ }
-    if (!String(navigationUrl || "").startsWith("file://")) {
+    let inRendererDir = false;
+    try {
+      const target = new URL(String(navigationUrl || ""));
+      // fileURLToPath yields the platform-native path (a raw pathname would
+      // keep a leading slash before the drive letter on Windows).
+      inRendererDir = target.protocol === "file:" &&
+        path.normalize(fileURLToPath(target)).startsWith(RENDERER_ROOT);
+    } catch { /* unparseable target - keep blocked */ }
+    if (!inRendererDir) {
       event.preventDefault();
     }
   });
@@ -1711,13 +1772,31 @@ ipcMain.handle("shell:openExternal", async (_event, url) => {
   }
   await shell.openExternal(parsed.href);
 });
-ipcMain.handle("shell:openPath", async (_event, targetPath) => {
-  const raw = String(targetPath || "");
+
+// openPath input gate (pure function, extracted for tests). Windows
+// drive-letter forms (C:\x, D:/x) and UNC paths (\\server\share) ARE absolute
+// local paths: the original scheme regex /^[a-z][a-z0-9+.-]*:/i misread the
+// single-letter drive as a URL scheme and broke "open project in Explorer"
+// on Windows (cross-review finding). Returns null when acceptable, else the
+// rejection message.
+function openPathRejection(raw) {
+  if (path.win32.isAbsolute(raw)) {
+    return null; // C:\x, C:/x, \\server\share ("C:relative" is drive-relative, not absolute)
+  }
   if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) {
-    throw new Error("openPath expects a local path, not a URL");
+    return "openPath expects a local path, not a URL";
   }
   if (!path.isAbsolute(raw)) {
-    throw new Error("openPath expects an absolute path");
+    return "openPath expects an absolute path";
+  }
+  return null;
+}
+
+ipcMain.handle("shell:openPath", async (_event, targetPath) => {
+  const raw = String(targetPath || "");
+  const rejection = openPathRejection(raw);
+  if (rejection) {
+    throw new Error(rejection);
   }
   const result = await shell.openPath(raw);
   if (result) {
