@@ -35,6 +35,7 @@ import {
   recordTaskExecutionEvent,
   resetTaskForFreshAttempt,
   serializeTask,
+  withWorkerDispatchToken,
 } from "./task-execution.js";
 import type { TaskRouter } from "./task-router.js";
 import type { ControllerTaskDomainDeps } from "./task-execution.js";
@@ -378,9 +379,12 @@ export async function dispatchTaskToWorker(
     teamContext: buildTaskContextSnapshot(task, state ?? null),
   };
 
+  // Issue #222: carry the worker's dispatch token (provisioning-record
+  // launchToken, else the synced securityToken) so a token-paired worker
+  // accepts the assignment; L0 sends the historical header set unchanged.
   const res = await fetch(`${worker.url}/api/v1/tasks/assign`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: withWorkerDispatchToken({ "Content-Type": "application/json" }, worker.id, deps.config, state ?? null),
     body: JSON.stringify(assignment),
   });
 
