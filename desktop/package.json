@@ -38,6 +38,7 @@
     "directories": {
       "buildResources": "build"
     },
+    "afterPack": "scripts/strip-gendered-locales.mjs",
     "mac": {
       "icon": "build/icon.icns",
       "category": "public.app-category.developer-tools",
@@ -46,7 +47,10 @@
         "zip"
       ],
       "hardenedRuntime": true,
-      "notarize": true
+      "notarize": true,
+      "signIgnore": [
+        "\\.lproj/locale\\.pak$"
+      ]
     },
     "win": {
       "icon": "build/icon.ico",
@@ -74,7 +78,10 @@
       "hardenedRuntime": false,
       "gatekeeperAssess": false,
       "provisioningProfile": "build/embedded.provisionprofile",
-      "notarize": false
+      "notarize": false,
+      "signIgnore": [
+        "\\.lproj/locale\\.pak$"
+      ]
     }
   },
   "devDependencies": {
