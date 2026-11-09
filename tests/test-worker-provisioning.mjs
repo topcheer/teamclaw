@@ -11,10 +11,13 @@ import { fileURLToPath } from "node:url";
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, "..");
 
+// W1 of issue #226: buildProvisionedWorkerConfig moved VERBATIM from
+// controller/worker-provisioning.ts into controller/provisioning-config.ts
+// (the facade re-exports it, so both paths expose the same function).
 const mod = await import(
-  path.join(projectRoot, "src", "dist", "src", "controller", "worker-provisioning.js")
+  path.join(projectRoot, "src", "dist", "src", "controller", "provisioning-config.js")
 ).catch(() => null);
-assert.ok(mod, "worker-provisioning module must be built (run npm --prefix src run build first)");
+assert.ok(mod, "provisioning-config module must be built (run npm --prefix src run build first)");
 const { buildProvisionedWorkerConfig } = mod;
 assert.equal(typeof buildProvisionedWorkerConfig, "function", "buildProvisionedWorkerConfig must be exported for testing");
 

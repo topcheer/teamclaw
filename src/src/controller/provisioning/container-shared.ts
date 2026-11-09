@@ -1,0 +1,71 @@
+// W1 of issue #226 (worker-provisioning god-file split): managed-name
+// construction and the container bootstrap script shared by the docker and
+// kubernetes backends, extracted VERBATIM from controller/worker-provisioning.ts.
+// The generic string sanitizers now live in shared/utils.ts.
+import { createHash } from "node:crypto";
+import type { RoleId } from "../../types.js";
+import { sanitizePathSegment, sanitizeName } from "../../shared/utils.js";
+
+export function buildManagedInstanceName(teamName: string, role: RoleId, workerId: string): string {
+  return buildManagedName("teamclaw", teamName, role, workerId, {
+    teamBudget: 18,
+    roleBudget: 12,
+    workerBudget: 12,
+    hashLength: 8,
+    maxLength: 63,
+  });
+}
+
+export function buildManagedHostname(teamName: string, role: RoleId, workerId: string): string {
+  return buildManagedName("tc", teamName, role, workerId, {
+    teamBudget: 10,
+    roleBudget: 8,
+    workerBudget: 6,
+    hashLength: 6,
+    maxLength: 40,
+  });
+}
+
+function buildManagedName(
+  prefix: string,
+  teamName: string,
+  role: RoleId,
+  workerId: string,
+  options: {
+    teamBudget: number;
+    roleBudget: number;
+    workerBudget: number;
+    hashLength: number;
+    maxLength: number;
+  },
+): string {
+  const teamPart = sanitizeLeadingSegment(teamName, options.teamBudget, "team");
+  const rolePart = sanitizeLeadingSegment(role, options.roleBudget, "worker");
+  const workerPart = sanitizeTrailingSegment(workerId, options.workerBudget, "worker");
+  const hash = shortStableHash(`${teamName}:${role}:${workerId}`).slice(0, options.hashLength);
+  return sanitizeName(`${prefix}-${teamPart}-${rolePart}-${workerPart}-${hash}`, options.maxLength);
+}
+
+function shortStableHash(value: string): string {
+  return createHash("sha1").update(value).digest("hex");
+}
+
+function sanitizeLeadingSegment(value: string, maxLength: number, fallback: string): string {
+  const normalized = sanitizePathSegment(value).slice(0, maxLength).replace(/^-+|-+$/g, "");
+  return normalized || fallback;
+}
+
+function sanitizeTrailingSegment(value: string, maxLength: number, fallback: string): string {
+  const normalized = sanitizePathSegment(value).slice(-maxLength).replace(/^-+|-+$/g, "");
+  return normalized || fallback;
+}
+
+export function buildContainerBootstrapScript(): string {
+  return [
+    "set -eu",
+    "mkdir -p \"$OPENCLAW_STATE_DIR\"",
+    "if [ -n \"${TEAMCLAW_WORKSPACE_DIR:-}\" ]; then mkdir -p \"$TEAMCLAW_WORKSPACE_DIR\"; fi",
+    "node -e 'const fs=require(\"fs\"); const configPath=process.env.OPENCLAW_CONFIG_PATH; const raw=Buffer.from(process.env.TEAMCLAW_BOOTSTRAP_CONFIG_B64||\"\", \"base64\").toString(\"utf8\"); fs.mkdirSync(require(\"path\").dirname(configPath), { recursive: true }); fs.writeFileSync(configPath, raw);'",
+    "exec node dist/index.js gateway --allow-unconfigured",
+  ].join("\n");
+}

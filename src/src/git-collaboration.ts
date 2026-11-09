@@ -5,6 +5,10 @@ import { spawn } from "node:child_process";
 import type { PluginLogger } from "../api.js";
 import type { GitRepoState, PluginConfig, RepoSyncInfo } from "./types.js";
 import { resolveTeamClawWorkspaceDir } from "./openclaw-workspace.js";
+// W6 of issue #226: the local swallowing pathExists copy was removed; the
+// alias keeps every call site byte-identical while the shared copy pins the
+// exact original semantics (any fs.access error resolves false).
+import { pathExistsTolerant as pathExists } from "./shared/utils.js";
 
 const TEAMCLAW_IMPORT_REF_PREFIX = "refs/teamclaw/imports";
 const BUNDLE_IMPORT_MAX_RETRIES = 3;
@@ -780,15 +784,6 @@ async function tryRebaseWorkerOntoController(
     }
   } catch (err) {
     logger.warn(`Worker: rebase onto controller failed: ${err instanceof Error ? err.message : String(err)}; will retry bundle as-is.`);
-  }
-}
-
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
   }
 }
 

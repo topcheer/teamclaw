@@ -9,6 +9,21 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, "..");
 const workspaceSourcePath = path.join(projectRoot, "src", "src", "openclaw-workspace.ts");
 const workerProvisioningPath = path.join(projectRoot, "src", "src", "controller", "worker-provisioning.ts");
+// W1 of issue #226: the worker-provisioning god file was split - source pins
+// target the whole provisioning surface (facade + the modules the moved code
+// now lives in; all VERBATIM moves).
+const provisioningSplitPaths = [
+  workerProvisioningPath,
+  path.join(projectRoot, "src", "src", "controller", "provisioning-config.ts"),
+  path.join(projectRoot, "src", "src", "controller", "provisioning", "backend-contract.ts"),
+  path.join(projectRoot, "src", "src", "controller", "provisioning", "plugin-root.ts"),
+  path.join(projectRoot, "src", "src", "controller", "provisioning", "container-shared.ts"),
+  path.join(projectRoot, "src", "src", "controller", "provisioning", "process-supervisor.ts"),
+  path.join(projectRoot, "src", "src", "controller", "provisioning", "docker.ts"),
+  path.join(projectRoot, "src", "src", "controller", "provisioning", "kubernetes.ts"),
+];
+const readProvisioningSplitSource = async () =>
+  (await Promise.all(provisioningSplitPaths.map((p) => fs.readFile(p, "utf8")))).join("\n\n");
 const controllerHttpServerPath = path.join(projectRoot, "src", "src", "controller", "http-server.ts");
 const taskExecutorPath = path.join(projectRoot, "src", "src", "task-executor.ts");
 const networkingPath = path.join(projectRoot, "src", "src", "networking.ts");
@@ -68,7 +83,7 @@ const [
   gitCollaborationSource,
 ] = await Promise.all([
   fs.readFile(workspaceSourcePath, "utf8"),
-  fs.readFile(workerProvisioningPath, "utf8"),
+  readProvisioningSplitSource(),
   fs.readFile(controllerHttpServerPath, "utf8"),
   fs.readFile(path.join(projectRoot, "src", "src", "controller", "route-table.ts"), "utf8"),
   // PR-C of issue #204: the software-requirement heuristics moved from
@@ -1047,7 +1062,7 @@ assert.match(
 // key: entries". The provisioner folds the teamclaw entry model back into
 // agents.defaults.model and strips the entries map.
 {
-  const provisioningSource = await fs.readFile(workerProvisioningPath, "utf8");
+  const provisioningSource = await readProvisioningSplitSource();
   assert.match(
     provisioningSource,
     /agentsRecord\.entries\[TEAMCLAW_AGENT_ID\]\?\.model[\s\S]*agentDefaults\.model = entryModel[\s\S]*delete agentsRecord\.entries/,

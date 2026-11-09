@@ -7,6 +7,9 @@ import type { PluginLogger } from "../../api.js";
 import { normalizeRecommendedSkills } from "../profile-loader.js";
 import { resolveTeamClawWorkspaceDir } from "../openclaw-workspace.js";
 import type { TaskAssignmentPayload, TaskExecutionEventInput } from "../types.js";
+// W6 of issue #226: local swallowing pathExists copy replaced by the shared
+// one (identical semantics; alias keeps the call sites byte-identical).
+import { pathExistsTolerant as pathExists } from "../shared/utils.js";
 
 type SkillCli = "openclaw" | "clawhub";
 const ON_DEMAND_DISCOVERY_SKILLS = new Set(["find-skills"]);
@@ -42,15 +45,6 @@ function normalizeKey(value: string): string {
 
 function isSkillSlug(value: string): boolean {
   return /^[a-z0-9][a-z0-9._/-]*$/i.test(value) && !/\s/.test(value);
-}
-
-async function pathExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function runCommand(

@@ -15,6 +15,22 @@ const controllerToolsPath = path.join(projectRoot, "src", "src", "controller", "
 const controllerCapacityPath = path.join(projectRoot, "src", "src", "controller", "controller-capacity.ts");
 const orchestrationManifestPath = path.join(projectRoot, "src", "src", "controller", "orchestration-manifest.ts");
 const workerProvisioningPath = path.join(projectRoot, "src", "src", "controller", "worker-provisioning.ts");
+// W1 of issue #226: the worker-provisioning god file was split - the source
+// pins below target the whole provisioning surface, i.e. the facade plus the
+// modules the moved code now lives in (all VERBATIM moves).
+const provisioningSplitPaths = [
+  workerProvisioningPath,
+  path.join(projectRoot, "src", "src", "controller", "provisioning-config.ts"),
+  path.join(projectRoot, "src", "src", "controller", "provisioning", "backend-contract.ts"),
+  path.join(projectRoot, "src", "src", "controller", "provisioning", "plugin-root.ts"),
+  path.join(projectRoot, "src", "src", "controller", "provisioning", "container-shared.ts"),
+  path.join(projectRoot, "src", "src", "controller", "provisioning", "process-supervisor.ts"),
+  path.join(projectRoot, "src", "src", "controller", "provisioning", "docker.ts"),
+  path.join(projectRoot, "src", "src", "controller", "provisioning", "kubernetes.ts"),
+  path.join(projectRoot, "src", "src", "shared", "utils.ts"),
+];
+const readProvisioningSplitSource = async () =>
+  (await Promise.all(provisioningSplitPaths.map((p) => fs.readFile(p, "utf8")))).join("\n\n");
 // PR-C of issue #204: the task/team lifecycle domain (cut line b) moved out
 // of http-server.ts into dedicated modules - pin the new homes.
 const taskExecutionPath = path.join(projectRoot, "src", "src", "controller", "task-execution.ts");
@@ -36,7 +52,7 @@ async function runControllerIntakePromptSmoke() {
     fs.readFile(controllerToolsPath, "utf8"),
     fs.readFile(controllerCapacityPath, "utf8"),
     fs.readFile(orchestrationManifestPath, "utf8"),
-    fs.readFile(workerProvisioningPath, "utf8"),
+    readProvisioningSplitSource(),
     fs.readFile(taskExecutionPath, "utf8"),
     fs.readFile(taskAssignmentPath, "utf8"),
     fs.readFile(taskRoutesPath, "utf8"),

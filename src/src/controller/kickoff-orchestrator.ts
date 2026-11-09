@@ -19,6 +19,9 @@ import type { PluginLogger } from "../../api.js";
 import type { KickoffAssessment, KickoffPlan, RoleId, TaskInfo, TeamState, WorkerInfo } from "../types.js";
 // Phase 1.3: role data comes from the active TeamProfile loader.
 import { getActiveDefaultRole, getActiveRole, getActiveRoleIds, validateActiveRoleId } from "../profile-loader.js";
+// W6 of issue #226: the local sleep copy (byte-identical to the shared one)
+// was removed in favor of shared/utils.js.
+import { sleep } from "../shared/utils.js";
 import { inferTaskRoleWithConfidence } from "./role-inference.js";
 import type { RoleInferenceVerdict } from "./role-inference.js";
 
@@ -287,10 +290,6 @@ export function buildKickoffAssessmentPrompt(role: RoleId, requirement: string):
     `- Only list dependencies on roles that are actually relevant.`,
     `- Return ONLY the JSON object, no markdown fencing, no explanation.`,
   ].join("\n");
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // ── Phase 2.5: LLM fallback for unconfident role inference (design 2.3) ─────
