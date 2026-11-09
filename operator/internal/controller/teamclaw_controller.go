@@ -30,14 +30,34 @@ const (
 	controllerSecretKey     = "openclaw.json"
 )
 
+// Label keys stamped on every object the operator manages. The pod list
+// selector must stay in sync with these (see workerPodSelector) - a mismatch
+// here previously made status.workerPods permanently 0 (#224).
+const (
+	LabelName           = "app.kubernetes.io/name"
+	LabelManagedBy      = "app.kubernetes.io/managed-by"
+	LabelTeam           = "teamclaw.dev/team"
+	LabelInstance       = "teamclaw.dev/instance"
+	labelNameValue      = "teamclaw-controller"
+	labelManagedByValue = "teamclaw-operator"
+)
+
 // labelsFor returns the operator-managed labels for a TeamClaw instance.
 func labelsFor(tc *teav1.TeamClaw) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/name":       "teamclaw-controller",
-		"app.kubernetes.io/managed-by": "teamclaw-operator",
-		"teamclaw.dev/team":            sanitize(tc.Spec.TeamName, 40),
-		"teamclaw.dev/instance":        tc.Name,
+		LabelName:      labelNameValue,
+		LabelManagedBy: labelManagedByValue,
+		LabelTeam:      sanitize(tc.Spec.TeamName, 40),
+		LabelInstance:  tc.Name,
 	}
+}
+
+// workerPodSelector returns the label selector reconcileStatus uses to find
+// the pods belonging to tc. It selects on the instance label alone: it is
+// unique per TeamClaw within a namespace, and team-name label values are
+// sanitized (collisions possible) - instance is the precise key.
+func workerPodSelector(tc *teav1.TeamClaw) map[string]string {
+	return map[string]string{LabelInstance: tc.Name}
 }
 
 func sanitize(value string, max int) string {
@@ -86,15 +106,19 @@ func (r *TeamClawReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	// Prerequisite: the referenced openclaw config secret must exist.
 	if err := r.validateConfigSecret(ctx, &tc); err != nil {
-		_ = r.patchStatus(ctx, &tc, func(s *teav1.TeamClawStatus) {
+		if perr := r.patchStatus(ctx, &tc, func(s *teav1.TeamClawStatus) {
 			setCondition(s, "ConfigReady", metav1.ConditionFalse, err.Error())
 			setCondition(s, "Ready", metav1.ConditionFalse, "config secret not ready")
-		})
+		}); perr != nil {
+			logger.Error(perr, "failed to update status conditions")
+		}
 		return ctrl.Result{}, err
 	}
-	_ = r.patchStatus(ctx, &tc, func(s *teav1.TeamClawStatus) {
+	if perr := r.patchStatus(ctx, &tc, func(s *teav1.TeamClawStatus) {
 		setCondition(s, "ConfigReady", metav1.ConditionTrue, "config secret present")
-	})
+	}); perr != nil {
+		logger.Error(perr, "failed to update status conditions")
+	}
 
 	if err := r.reconcileRBAC(ctx, &tc); err != nil {
 		return ctrl.Result{}, fmt.Errorf("rbac: %w", err)
@@ -210,12 +234,16 @@ func (r *TeamClawReconciler) reconcileDeployment(ctx context.Context, tc *teav1.
 	dep := &appsv1.Deployment{ObjectMeta: r.objectMeta(tc, tc.Name+"-controller")}
 	_, err := controllerutil.CreateOrPatch(ctx, r.Client, dep, func() error {
 		labels := labelsFor(tc)
+		// Preserve third-party pod-template annotations (e.g. injected by
+		// vault/istio mutators) across reconciles; the operator stamps none
+		// of its own (#224).
+		thirdPartyAnns := dep.Spec.Template.Annotations
 		dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: labels}
 		// D4: single replica + Recreate until team-state storage is externalized.
 		dep.Spec.Replicas = ptr(int32(1))
 		dep.Spec.Strategy = appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType}
 		dep.Spec.Template = corev1.PodTemplateSpec{
-			ObjectMeta: metav1.ObjectMeta{Labels: labels},
+			ObjectMeta: metav1.ObjectMeta{Labels: labels, Annotations: thirdPartyAnns},
 			Spec: corev1.PodSpec{
 				ServiceAccountName: tc.Name + "-controller",
 				SecurityContext:    &corev1.PodSecurityContext{FSGroup: ptr(int64(1000))},
@@ -244,9 +272,10 @@ func (r *TeamClawReconciler) reconcileDeployment(ctx context.Context, tc *teav1.
 func (r *TeamClawReconciler) controllerContainer(tc *teav1.TeamClaw) corev1.Container {
 	bootstrap := strings.Join([]string{
 		"set -eu",
-		"mkdir -p " + openclawHome + "/.openclaw",
+		"mkdir -p " + openclawHome + "/.openclaw/extensions",
 		"cp /tmp/config/" + controllerSecretKey + " " + openclawHome + "/.openclaw/" + controllerSecretKey,
-		"set -eu\nmkdir -p /home/node/.openclaw/extensions\ncp /tmp/config/openclaw.json /home/node/.openclaw/openclaw.json\nln -sfn /app/extensions/teamclaw /home/node/.openclaw/extensions/teamclaw\nexec node /app/openclaw.mjs gateway --allow-unconfigured",
+		"ln -sfn /app/extensions/teamclaw " + openclawHome + "/.openclaw/extensions/teamclaw",
+		"exec node /app/openclaw.mjs gateway --allow-unconfigured",
 	}, "\n")
 	return corev1.Container{
 		Name:  "controller",
@@ -377,20 +406,24 @@ func (r *TeamClawReconciler) reconcileIngress(ctx context.Context, tc *teav1.Tea
 }
 
 func (r *TeamClawReconciler) reconcileStatus(ctx context.Context, tc *teav1.TeamClaw) error {
+	logger := log.FromContext(ctx)
 	var dep appsv1.Deployment
 	depErr := r.Get(ctx, types.NamespacedName{Namespace: tc.Namespace, Name: tc.Name + "-controller"}, &dep)
 	var pods corev1.PodList
-	_ = r.List(ctx, &pods, client.InNamespace(tc.Namespace), client.MatchingLabels{
-		"teamclaw.managed": "true",
-		"teamclaw.team":    sanitize(tc.Spec.TeamName, 40),
-	})
 	var running, pending int32
-	for _, pod := range pods.Items {
-		switch pod.Status.Phase {
-		case corev1.PodRunning:
-			running++
-		case corev1.PodPending:
-			pending++
+	if err := r.List(ctx, &pods, client.InNamespace(tc.Namespace), client.MatchingLabels(workerPodSelector(tc))); err != nil {
+		// Log and keep the previously observed counts: reporting 0 on a
+		// transient List error would misreport team health (#224).
+		logger.Error(err, "failed to list worker pods; keeping previous counts", "namespace", tc.Namespace, "teamclaw", tc.Name)
+		running, pending = tc.Status.WorkerPods.Running, tc.Status.WorkerPods.Pending
+	} else {
+		for _, pod := range pods.Items {
+			switch pod.Status.Phase {
+			case corev1.PodRunning:
+				running++
+			case corev1.PodPending:
+				pending++
+			}
 		}
 	}
 	return r.patchStatus(ctx, tc, func(s *teav1.TeamClawStatus) {
@@ -425,9 +458,13 @@ func equalStatus(a, b teav1.TeamClawStatus) bool {
 		return false
 	}
 	for i := range a.Conditions {
+		// Message is compared so error/state messages don't go stale (#224);
+		// LastTransitionTime is deliberately ignored (setCondition stamps
+		// Now() on every call) or every reconcile would patch.
 		if a.Conditions[i].Type != b.Conditions[i].Type ||
 			a.Conditions[i].Status != b.Conditions[i].Status ||
-			a.Conditions[i].Reason != b.Conditions[i].Reason {
+			a.Conditions[i].Reason != b.Conditions[i].Reason ||
+			a.Conditions[i].Message != b.Conditions[i].Message {
 			return false
 		}
 	}
@@ -488,7 +525,8 @@ func (r *TeamClawReconciler) volumeMounts(tc *teav1.TeamClaw) []corev1.VolumeMou
 
 func (r *TeamClawReconciler) volumes(tc *teav1.TeamClaw) []corev1.Volume {
 	volumes := []corev1.Volume{
-		{Name: "state", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		// No "state" EmptyDir: nothing mounts it and OPENCLAW_STATE_DIR lives
+		// under the image filesystem (#224).
 		{Name: "config", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
 			SecretName: tc.Spec.Controller.ModelConfigSecretRef,
 		}}},

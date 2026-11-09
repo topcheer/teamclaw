@@ -16,6 +16,8 @@ replicaCount: 1
 
 # Where the operator watches TeamClaw CRs (cluster-scoped watch, teams may
 # live in any namespace; default: the release namespace).
+# NOTE: the UI/API only *operates* on the release namespace plus
+# ui.allowedNamespaces below - watching is broader than writing by design.
 namespace: ""
 
 rbac:
@@ -31,6 +33,10 @@ ui:
   type: NodePort
   port: 9090
   nodePort: 30990
+  # Extra namespaces the UI API may operate on beyond the release namespace
+  # (the default). Operator RBAC is cluster-scoped; this allowlist bounds a
+  # leaked UI token's blast radius. Empty = release namespace only.
+  allowedNamespaces: []
   ingress:
     enabled: false
     host: ""
