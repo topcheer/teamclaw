@@ -1762,9 +1762,15 @@
     }
 
     if (!res.ok) {
-      const message = data && (data.error || data.message)
-        ? (data.error || data.message)
-        : ("Request failed: " + res.status);
+      // Issue #23 review follow-up: surface the backend's actionable `hint`
+      // alongside the error code (e.g. a remote browser clicking "Enable
+      // protection" gets the full loopback-only explanation, not a bare
+      // "forbidden"). Same error+hint join as the CLI's describeSecurityError.
+      const parts = [];
+      const code = data && typeof (data.error || data.message) === "string" ? (data.error || data.message) : "";
+      if (code) parts.push(code);
+      if (data && typeof data.hint === "string" && data.hint.trim()) parts.push(data.hint.trim());
+      const message = parts.length ? parts.join(" - ") : ("Request failed: " + res.status);
       throw new Error(message);
     }
 

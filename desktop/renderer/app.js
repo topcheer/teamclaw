@@ -1163,8 +1163,14 @@ import { createT as i18nCreateT } from "./i18n.js";
           // boot, killed process, no service manager on Windows). Probe
           // liveness; start the gateway ourselves when dead, then wait
           // bounded for the controller before connecting.
+          // Issue #23 review follow-up: probe the security-EXEMPT /health
+          // endpoint instead of /tunnel/status - a protected global
+          // controller 401s authenticated-less /api calls, but health stays
+          // reachable in every protection state. Any completed HTTP response
+          // (including a 503 "starting" readiness) proves the process is
+          // alive; only a connection failure/timeout means "not running".
           const probe = async () => {
-            try { const r = await fetch(url + "/api/v1/tunnel/status", { signal: AbortSignal.timeout(1500) }); return r.ok; } catch { return false; }
+            try { await fetch(url + "/api/v1/health", { signal: AbortSignal.timeout(1500) }); return true; } catch { return false; }
           };
           if (!(await probe())) {
             if (log) log.textContent += "[global] Global gateway not running - starting it...\n";

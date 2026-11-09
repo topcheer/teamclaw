@@ -28,10 +28,12 @@
 //      persistence in settings, and the X-TeamClaw-Token injection point
 //      (all api wrappers + the WS ?token= upgrade).
 //   4. Worker token injection (dist level): parsePluginConfig carries
-//      securityToken; the worker tools and identity registration send
-//      X-TeamClaw-Token to a stub controller when the token is configured
-//      (and the source keeps the heartbeat/result fetches on the same
-//      helper); config schema exposes the field but uiHints never echoes it.
+//      securityToken; the worker tools, identity registration and the
+//      index.ts execution/checkpoint reporters send X-TeamClaw-Token to a
+//      stub controller when the token is configured (and send nothing
+//      without one); the complete worker->controller injection inventory is
+//      pinned at 15 call sites across the four files; config schema exposes
+//      the field but uiHints never echoes it.
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -45,6 +47,8 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, "..");
 const cliPath = path.join(projectRoot, "src", "cli.mjs");
 const dist = (rel) => import(path.join(projectRoot, "src", "dist", "src", rel));
+// The plugin entry compiles to dist/index.js (top level, not dist/src/).
+const distEntry = () => import(path.join(projectRoot, "src", "dist", "index.js"));
 
 // --- env must be in place before the first dist import ----------------------
 process.env.TEAMCLAW_EXTRA_PROFILES_DIR = path.join(scriptDir, "fixtures", "profiles");
@@ -257,6 +261,11 @@ const STUB_TOKEN = "f".repeat(64);
   assert.match(appSource, /securityStatus\.suggested && !securityStatus\.protection/, "banner renders only when protection is off AND the backend suggests it");
   assert.match(appSource, /securityStatus = statusRes\.security \|\| null/, "refreshAll captures the /team/status security object");
   assert.match(appSource, /apiPost\("\/security\/enable"/, "the Enable button POSTs /api/v1/security/enable (same-origin cookie auth)");
+  assert.match(
+    appSource,
+    /typeof data\.hint === "string"[\s\S]{0,200}?parts\.join\(" - "\)/,
+    "apiRequest joins the backend error code with its actionable hint (a remote enable 403 explains the loopback-only rule instead of showing a bare \"forbidden\")",
+  );
 
   // Pairing modal: one-shot code, countdown, copyable CLI command, new code.
   assert.match(htmlSource, /id="security-pair-modal"/, "pairing modal markup exists");
@@ -313,6 +322,11 @@ const STUB_TOKEN = "f".repeat(64);
   const wrapperCount = (appSource.match(/controllerHeaders\(/g) ?? []).length;
   assert.ok(wrapperCount >= 8, `all api wrappers route through controllerHeaders (found ${wrapperCount} usages incl. WS/profile echo)`);
   assert.match(appSource, /url\.searchParams\.set\("token", state\.securityToken\)/, "the WS upgrade carries the token via ?token= (browsers cannot set headers)");
+  assert.match(
+    appSource,
+    /const probe = async \(\) => \{\s*try \{ await fetch\(url \+ "\/api\/v1\/health"/,
+    "the global liveness probe uses the security-exempt /api/v1/health (reachable in every protection state), not the authenticated /tunnel/status",
+  );
 
   // i18n keys in both desktop dictionaries.
   for (const key of ["bootstrap.pairingCodeLabel", "bootstrap.pairingCodePlaceholder", "bootstrap.pairingFailed", "bootstrap.pairedNote"]) {
@@ -398,9 +412,80 @@ const STUB_TOKEN = "f".repeat(64);
     assert.match(serviceSource, /withDeviceToken\(config, \{ "Content-Type": "application\/json" \}\)/, "heartbeat and result fetches merge the device token header");
     const heartbeatCalls = serviceSource.match(/fetch\(`\$\{controllerUrl\}\/api\/v1\/workers\/\$\{id\.workerId\}\/heartbeat[\s\S]{0,220}?withDeviceToken/g) ?? [];
     assert.ok(heartbeatCalls.length >= 1, "the heartbeat fetch itself routes through withDeviceToken");
+  }
+
+  // Full injection inventory (review follow-up): every worker -> controller
+  // fetch site routes through the token helper - exactly 15 call sites across
+  // the four files (tools 9, worker-service 2, identity 2, index 2). A new
+  // un-instrumented site must fail this count, not ship silently.
+  {
+    const identitySource = fs.readFileSync(path.join(projectRoot, "src", "src", "identity.ts"), "utf8");
     const toolsSource = fs.readFileSync(path.join(projectRoot, "src", "src", "worker", "tools.ts"), "utf8");
-    const toolCallSites = (toolsSource.match(/withDeviceToken\(/g) ?? []).length - (toolsSource.match(/function withDeviceToken\(/g) ?? []).length;
-    assert.equal(toolCallSites, 9, "all 9 worker-tool controller fetches carry the token helper (8 header merges + the headerless GET)");
+    const serviceSource = fs.readFileSync(path.join(projectRoot, "src", "src", "worker", "worker-service.ts"), "utf8");
+    const indexSource = fs.readFileSync(path.join(projectRoot, "src", "index.ts"), "utf8");
+    const callSites = (source) => (source.match(/withDeviceToken\(/g) ?? []).length - (source.match(/function withDeviceToken\(/g) ?? []).length;
+
+    const toolsCalls = callSites(toolsSource);
+    const serviceCalls = callSites(serviceSource);
+    const identityCalls = callSites(identitySource);
+    const indexCalls = callSites(indexSource);
+    assert.equal(toolsCalls, 9, "worker/tools.ts: all 9 controller fetches (8 JSON merges + the headerless team/status GET) route through withDeviceToken");
+    assert.equal(serviceCalls, 2, "worker/worker-service.ts: heartbeat + task-result fetches route through withDeviceToken");
+    assert.equal(identityCalls, 2, "identity.ts: registration + worker-record DELETE route through withDeviceToken");
+    assert.equal(indexCalls, 2, "index.ts: execution-event + checkpoint reporters route through withDeviceToken");
+    assert.equal(toolsCalls + serviceCalls + identityCalls + indexCalls, 15, "the complete worker->controller injection inventory is 15 call sites (review follow-up: 13 was missing index.ts)");
+
+    // Pin the two index.ts endpoints by path so the count cannot be satisfied
+    // by instrumenting the wrong fetch.
+    assert.match(indexSource, /\/api\/v1\/tasks\/\$\{taskId\}\/execution[\s\S]{0,160}?withDeviceToken/, "the execution-event POST carries the token header");
+    assert.match(indexSource, /\/api\/v1\/tasks\/\$\{taskId\}\/checkpoint[\s\S]{0,160}?withDeviceToken/, "the checkpoint POST carries the token header");
+  }
+
+  // index.ts reporters (dist level, review follow-up): execution events and
+  // resume checkpoints must reach a PROTECTED controller, so both POSTs carry
+  // X-TeamClaw-Token when a token is configured (and no header without one).
+  {
+    const stub = await startSecurityStub(() => ({ status: 201, body: { ok: true } }));
+    try {
+      const entry = await distEntry();
+      assert.equal(typeof entry.createWorkerEventReporters, "function", "index.js exports the reporter factory for dist-level verification");
+      const config = parsePluginConfig({ mode: "worker", controllerUrl: stub.baseUrl, teamName: "ClientWave", securityToken: STUB_TOKEN, role: "developer", port: 19556 });
+      const warns = [];
+      const { reportExecutionEvent, reportCheckpoint } = entry.createWorkerEventReporters(config, { warn: (e) => warns.push(e) }, {
+        getControllerUrl: () => stub.baseUrl,
+        getWorkerId: () => "w-idx-1",
+      });
+      await reportExecutionEvent("task-e2e", { type: "lifecycle", phase: "repo_sync_started", source: "worker", status: "running", message: "x" });
+      await reportCheckpoint("task-e2e", { lastAssistantMessage: "halfway", sessionKey: "teamclaw-task-task-e2e" });
+
+      const execution = stub.requests.find((r) => r.url === "/api/v1/tasks/task-e2e/execution");
+      assert.ok(execution, "execution event POST seen by the stub");
+      assert.equal(execution.headers["x-teamclaw-token"], STUB_TOKEN, "execution events carry X-TeamClaw-Token (execution stream survives protection)");
+      assert.equal(execution.body.workerId, "w-idx-1", "execution event body still carries the worker id");
+
+      const checkpoint = stub.requests.find((r) => r.url === "/api/v1/tasks/task-e2e/checkpoint");
+      assert.ok(checkpoint, "checkpoint POST seen by the stub");
+      assert.equal(checkpoint.headers["x-teamclaw-token"], STUB_TOKEN, "checkpoints carry X-TeamClaw-Token (resume survives protection)");
+      assert.equal(checkpoint.body.lastAssistantMessage, "halfway", "checkpoint body round-trips");
+
+      // No token configured => no header, no drift (same probe as the tools).
+      const bareConfig = parsePluginConfig({ mode: "worker", controllerUrl: stub.baseUrl, teamName: "ClientWave", role: "developer", port: 19556 });
+      const bare = entry.createWorkerEventReporters(bareConfig, { warn() {} }, { getControllerUrl: () => stub.baseUrl, getWorkerId: () => "w-bare" });
+      await bare.reportExecutionEvent("task-bare", { type: "lifecycle", phase: "p", source: "worker", status: "running", message: "x" });
+      await bare.reportCheckpoint("task-bare", { lastAssistantMessage: "m", sessionKey: "s" });
+      const bareExecution = stub.requests.find((r) => r.url === "/api/v1/tasks/task-bare/execution");
+      const bareCheckpoint = stub.requests.find((r) => r.url === "/api/v1/tasks/task-bare/checkpoint");
+      assert.equal(bareExecution.headers["x-teamclaw-token"], undefined, "no token => execution events send no X-TeamClaw-Token (L0 zero drift)");
+      assert.equal(bareCheckpoint.headers["x-teamclaw-token"], undefined, "no token => checkpoints send no X-TeamClaw-Token (L0 zero drift)");
+
+      // Sanity: a second reporter instance against the same controller keeps
+      // working (the factory holds no shared mutable state).
+      const second = entry.createWorkerEventReporters(config, { warn() {} }, { getControllerUrl: () => stub.baseUrl, getWorkerId: () => "w-x" });
+      await second.reportExecutionEvent("task-2nd", { type: "error", phase: "p", source: "worker", status: "failed", message: "x" });
+      assert.equal(stub.requests.some((r) => r.url === "/api/v1/tasks/task-2nd/execution"), true, "a second reporter instance reaches the controller too");
+    } finally {
+      await closeServer(stub.server);
+    }
   }
 }
 
