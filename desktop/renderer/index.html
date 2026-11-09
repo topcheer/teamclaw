@@ -3,6 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- #223 W2: content security policy. The renderer is a local-file UI, so
+       scripts lock to 'self' plus the exact hash of the inline theme
+       bootstrap below (no unsafe-inline for scripts - a future innerHTML
+       regression must not be able to execute injected script). connect-src
+       stays open to http/https/ws/wss ON PURPOSE: connecting to an external
+       controller URL (any host the user enters) and its WebSocket is a core
+       product feature ("external" instance mode). -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-jrXjuUd9SQ2wOjEVp/10ZWcjLsS+n2nSqkcVXi5b2dE='; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self' http: https: ws: wss:; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
   <title>TeamClaw Desktop</title>
   <link rel="icon" href="./assets/teamclaw-app-icon.png" type="image/png">
   <script>

@@ -351,8 +351,8 @@ assert.match(
 
 assert.match(
   desktopMainSource,
-  /ipcMain\.handle\("shell:openPath", async \(_event, targetPath\) => \{[\s\S]*shell\.openPath\(String\(targetPath \|\| ""\)\)/,
-  "desktop main process should expose a shell.openPath bridge for opening local project folders",
+  /ipcMain\.handle\("shell:openPath", async \(_event, targetPath\) => \{[\s\S]*shell\.openPath\(raw\)/,
+  "desktop main process should expose a shell.openPath bridge for opening local project folders (absolute-path-validated since #223 W1)",
 );
 
 assert.match(
