@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - ".github/workflows/teamclaw-runtime-image.yml"
+      - "Dockerfile.teamclaw"
       - "openclaw/**"
       - "src/**"
       - "scripts/prepare-teamclaw-runtime-context.mjs"
@@ -27,6 +28,7 @@ env:
 jobs:
   publish_runtime_image:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
