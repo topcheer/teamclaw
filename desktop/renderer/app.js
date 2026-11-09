@@ -947,7 +947,7 @@ import { createT as i18nCreateT } from "./i18n.js";
       "icon": "🏦",
       "industry": "banking",
       "description": "Corporate credit line team (v1 scope: 对公信贷) covering intake, risk review, approval, AML analysis, credit compliance and post-loan management; every output is an internal working draft pending a human decision.",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "roleCount": 6,
       "pendingSignoff": false
     },

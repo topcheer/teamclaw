@@ -39,6 +39,33 @@ export type TeamProfileOutputConstraints = {
 };
 
 /**
+ * Design 2.4 declarative workflow template: a conclusion-branched step chain.
+ * Integer step ids form the linear spine (default "next" routing advances to
+ * the smallest numeric id greater than the current one); string ids (e.g.
+ * "committee") are branch-only targets reachable exclusively through an
+ * explicit `on` jump. Structural + reference red lines are enforced by
+ * crossValidateProfile at load time (fatal), mirroring the role-reference
+ * red line.
+ */
+export type TeamProfileWorkflowStep = {
+  id: number | string;
+  role: RoleId;
+  title: string;
+  description?: string;
+  inputs?: string[];
+  conclusion?: string[];
+  on?: Record<string, number | string>;
+  outputs?: Array<{ key: string; name: string }>;
+};
+
+export type TeamProfileWorkflow = {
+  id: string;
+  name: string;
+  description?: string;
+  steps: TeamProfileWorkflowStep[];
+};
+
+/**
  * Profile role face (Phase 2.5, design 2.3): RoleDefinition plus the optional
  * Chinese display label the schema already allows. role-inference reads
  * labelZh as the highest-tier bilingual token source; the base
@@ -64,7 +91,7 @@ export type TeamProfile = {
   domainInstructions?: string[];
   outputConstraints?: TeamProfileOutputConstraints;
   glossary?: string[];
-  workflows?: Array<Record<string, unknown>>;
+  workflows?: TeamProfileWorkflow[];
   capabilities: TeamProfileCapabilities;
   warmupRoles: RoleId[];
   knowledgePacks?: string[];
@@ -397,6 +424,78 @@ function loadBuiltinProfiles(): Map<string, TeamProfile> {
   return profiles;
 }
 
+/**
+ * Design 2.4 workflow red lines that the JSON Schema subset cannot express:
+ * step-id uniqueness, step.role must be a role of this profile, `on` keys must
+ * come from the step's conclusion enum, `on` targets must resolve to an
+ * existing step id (or "next"), and every inputs[] key must be an outputs[]
+ * key declared by some step of the same workflow. All failures are FATAL load
+ * errors (design 2.2), same as the role-reference red line.
+ */
+function crossValidateWorkflows(
+  profile: TeamProfile,
+  roleIdSet: Set<string>,
+  referenceErrors: string[],
+): void {
+  const workflows = profile.workflows ?? [];
+  const workflowIds = new Set<string>();
+  for (const workflow of workflows) {
+    const workflowLabel = `workflow "${workflow.id}"`;
+    if (workflowIds.has(workflow.id)) {
+      referenceErrors.push(`${workflowLabel} id is declared more than once`);
+    }
+    workflowIds.add(workflow.id);
+
+    const stepKey = (stepId: number | string) => String(stepId);
+    const stepIds = new Set<string>(workflow.steps.map((step) => stepKey(step.id)));
+    if (stepIds.size !== workflow.steps.length) {
+      referenceErrors.push(`${workflowLabel} has duplicate step ids`);
+    }
+    const outputKeys = new Set<string>();
+    for (const step of workflow.steps) {
+      for (const output of step.outputs ?? []) {
+        if (outputKeys.has(output.key)) {
+          referenceErrors.push(`${workflowLabel} declares output key "${output.key}" more than once`);
+        }
+        outputKeys.add(output.key);
+      }
+    }
+    for (const step of workflow.steps) {
+      const stepLabel = `${workflowLabel} step ${JSON.stringify(step.id)}`;
+      const stepIdTypeOk = (typeof step.id === "number" && Number.isSafeInteger(step.id))
+        || (typeof step.id === "string" && step.id.trim().length > 0);
+      if (!stepIdTypeOk) {
+        referenceErrors.push(
+          `${stepLabel}: step id must be a safe integer (linear spine) or a non-empty string (branch-only target), got ${typeof step.id}`,
+        );
+      }
+      if (!roleIdSet.has(step.role)) {
+        referenceErrors.push(`${stepLabel} role "${step.role}" is not a role of this profile`);
+      }
+      const conclusion = step.conclusion ?? [];
+      for (const [jumpConclusion, target] of Object.entries(step.on ?? {})) {
+        if (!conclusion.includes(jumpConclusion)) {
+          referenceErrors.push(
+            `${stepLabel} on-jump key "${jumpConclusion}" is not in the step's conclusion enum (dead routing, design 2.4)`,
+          );
+        }
+        if (target !== "next" && !stepIds.has(stepKey(target))) {
+          referenceErrors.push(
+            `${stepLabel} on-jump "${jumpConclusion}" targets ${JSON.stringify(target)}, which is not a step id of this workflow`,
+          );
+        }
+      }
+      for (const inputKey of step.inputs ?? []) {
+        if (!outputKeys.has(inputKey)) {
+          referenceErrors.push(
+            `${stepLabel} inputs key "${inputKey}" is not declared as an output of any step of this workflow (dangling input, design 2.4)`,
+          );
+        }
+      }
+    }
+  }
+}
+
 /** Structural checks that sit outside what the JSON Schema subset can express. */
 function crossValidateProfile(profile: TeamProfile, profileFile: string): void {
   const roleIds = profile.roles.map((role) => role.id);
@@ -431,6 +530,7 @@ function crossValidateProfile(profile: TeamProfile, profileFile: string): void {
       }
     }
   }
+  crossValidateWorkflows(profile, roleIdSet, referenceErrors);
   if (referenceErrors.length > 0) {
     throw new Error(
       `TeamClaw profile ${profileFile} ("${profile.id}") has dangling role references (design 2.2 - refusing to start):\n`
@@ -566,6 +666,16 @@ function getActiveRole(id: RoleId): ProfileRoleDefinition | undefined {
 }
 
 /**
+ * Design 2.4: the active profile's validated workflow templates, or an empty
+ * array when the profile ships none (software-rd baseline). Consumers: the
+ * POST /api/v1/workflows/{id}/start route and the task-completion routing
+ * hook (controller/workflow-routes.ts).
+ */
+function getActiveWorkflows(): TeamProfileWorkflow[] {
+  return getActiveProfile().workflows ?? [];
+}
+
+/**
  * Phase 2.6 labelZh fallback rule (vertical-team-profiles-design.md 2.1/2.6):
  * the zh display name is labelZh when the role carries one, otherwise the
  * English label. Encoded here - the loading-validation layer - so UI
@@ -642,6 +752,7 @@ export {
   getActiveDefaultRole,
   getActiveDomainInstructions,
   getActiveKnowledgePacks,
+  getActiveWorkflows,
   getActiveRole,
   validateActiveRoleId,
   normalizeRecommendedSkills,

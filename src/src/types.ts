@@ -158,6 +158,37 @@ export type TaskInfo = {
   /** Surviving progress snapshot for interrupted executions (resume support). */
   checkpoint?: TaskCheckpoint;
   resumeAttempt?: number;
+  /**
+   * Design 2.4 workflow-chain membership: set ONLY by the workflow engine
+   * (controller/workflow-routes.ts) when it creates a step task, never by
+   * client task creation (the create route builds TaskInfo field-by-field
+   * and does not accept this field). The task-completion hook reads it to
+   * route the chain by the step's conclusion. The task chain itself is the
+   * workflow run state - there is no separate run registry by design.
+   */
+  workflow?: TaskWorkflowContext;
+};
+
+/**
+ * Workflow-chain context carried on each design-2.4 step task. `visitCounts`
+ * is the loop guard for return edges (e.g. 退回补充材料 -> step 0) and the
+ * routed* fields are the once-only routing latch: exactly one completion of
+ * a step task may spawn the follow-up task.
+ */
+export type TaskWorkflowContext = {
+  /** Profile workflow template id (e.g. "credit-approval"). */
+  workflowId: string;
+  /** Run nonce shared by every task of one started workflow instance. */
+  runId: string;
+  /** String form of the executed step's id (numeric spine or branch key). */
+  stepKey: string;
+  /** Visits per step key so return edges cannot loop forever. */
+  visitCounts?: Record<string, number>;
+  /** Routing latch: step key the completion hook routed to (chain end = ""). */
+  routedToStepKey?: string;
+  routedAt?: number;
+  /** Conclusion phrase that drove the routing (observability/audit). */
+  routedConclusion?: string;
 };
 
 export type TaskExecutionEvent = {

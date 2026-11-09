@@ -35,6 +35,11 @@ import {
 import { autoAssignPendingTasks, scheduleProvisioningReconcile } from "./task-assignment.js";
 import { checkAndGenerateReport } from "./controller-planning.js";
 import { continueControllerWorkflow } from "./controller-intake.js";
+// Design 2.4 workflow-chain routing: tasks carrying TaskInfo.workflow route
+// their follow-up step deterministically from the template's conclusion
+// branches (they are createdBy "workflow", so the generic controller LLM
+// follow-up below never fires for them - the two continuations are disjoint).
+import { continueWorkflowAfterTaskCompletion } from "./workflow-routes.js";
 import type { ControllerTaskDomainDeps } from "./task-execution.js";
 
 /**
@@ -404,6 +409,13 @@ export function applyTaskResult(
       });
     }
     scheduleProvisioningReconcile(deps, `task-result:${taskId}`);
+    if (!error && updatedTask.workflow) {
+      void continueWorkflowAfterTaskCompletion(updatedTask, deps).catch((err) => {
+        logger.warn(
+          `Controller: failed to continue workflow chain after ${taskId}: ${String(err)}`,
+        );
+      });
+    }
     if (!error && updatedTask.createdBy === "controller") {
       void continueControllerWorkflow(updatedTask, deps).catch((err) => {
         logger.warn(

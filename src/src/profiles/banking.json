@@ -5,11 +5,12 @@
   "nameZh": "银行对公信贷团队",
   "industry": "banking",
   "icon": "🏦",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "reviewedBy": [
     "drafted-by: Agent N (implementation team)",
     "AI domain review 2026-11-08: approved conditional on removing bare 「押品」 token from banking risk-reviewer capabilities (applied); securities/insurance approved as-is; glossary version-cutoff implemented as no-citation-number policy (accepted deviation). Human sign-off recorded 2026-11-08.",
-    "Human sign-off: zhanju (repo owner), 2026-11-08 - approved via the TeamProfile implementation session after AI domain review conditions were applied."
+    "Human sign-off: zhanju (repo owner), 2026-11-08 - approved via the TeamProfile implementation session after AI domain review conditions were applied.",
+    "0.1.2 workflows wave (2026-11-10): added the credit-approval declarative workflow template (design section 2.4, copied field-for-field; step 1 additionally declares its reviewOpinion output so every downstream inputs[] key resolves). Roles, prompts, guardrails and glossary are unchanged from the signed 0.1.1."
   ],
   "description": "Corporate credit line team (v1 scope: 对公信贷) covering intake, risk review, approval, AML analysis, credit compliance and post-loan management; every output is an internal working draft pending a human decision.",
   "roles": [
@@ -166,6 +167,29 @@
     "反洗钱 (AML): 名单筛查以用户提供的名单版本为准；可疑交易报告 (STR) 属监管报送，仅由人工合规岗完成，本团队只做分析与草稿。",
     "风险分类: 按行内金融资产风险分类框架输出「分类提示」（事实+考量+缺口清单），分类结果由人工认定。",
     "法规版本截止声明: 法规修订频繁，助手记忆中的生效日期与修订状态不可作为依据；一律要求用户提供现行有效的权威文本，本词条表不携带文号。"
+  ],
+  "workflows": [
+    {
+      "id": "credit-approval",
+      "name": "信贷审批流（对公）",
+      "steps": [
+        { "id": 0, "role": "credit-officer", "title": "受理与尽调",
+          "conclusion": ["材料齐全", "需补充材料"],
+          "on": { "需补充材料": 0 },
+          "outputs": [{ "key": "dueDiligenceReport", "name": "尽调报告" }] },
+        { "id": 1, "role": "risk-reviewer", "title": "风险审查",
+          "inputs": ["dueDiligenceReport"],
+          "conclusion": ["通过", "退回补充材料", "超权限上会"],
+          "on": { "退回补充材料": 0, "超权限上会": "committee", "通过": 2 },
+          "outputs": [{ "key": "reviewOpinion", "name": "风险审查意见" }] },
+        { "id": 2, "role": "approver", "title": "审批决策",
+          "inputs": ["dueDiligenceReport", "reviewOpinion"],
+          "outputs": [{ "key": "approvalDecision", "name": "审批结论" }] },
+        { "id": "committee", "role": "approver", "title": "贷审会（超权限）",
+          "inputs": ["dueDiligenceReport", "reviewOpinion"],
+          "outputs": [{ "key": "committeeMinutes", "name": "贷审会纪要式结论" }] }
+      ]
+    }
   ],
   "capabilities": {
     "git": false,

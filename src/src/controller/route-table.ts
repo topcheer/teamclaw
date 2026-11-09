@@ -122,6 +122,9 @@ import {
   handleSecurityResetRequest,
 } from "./security.js";
 import type { SecurityPeer } from "./security.js";
+// Design 2.4 workflows backend: POST /api/v1/workflows/{id}/start handler
+// (engine + route live in ./workflow-routes.ts).
+import { workflowStartRoute } from "./workflow-routes.js";
 
 // ===========================================================================
 // PR-D of issue #204: declarative route table + dispatcher.
@@ -581,4 +584,14 @@ export const controllerRouteTable: readonly RouteDef[] = [
   { method: "GET", path: "/api/v1/security", handler: handleSecurityGetRequest },
   { method: "DELETE", path: /^\/api\/v1\/security\/devices\/[^/]+$/, handler: handleSecurityDeviceDeleteRequest },
   { method: "POST", path: "/api/v1/security/reset", handler: handleSecurityResetRequest },
+
+  // ==================== Workflow templates (design 2.4) ====================
+  // Appended after the historical table + security suffix (no path overlap
+  // with any earlier route, so the append cannot reorder historical
+  // matching - same append-only precedent as the security entries above).
+  // POST /api/v1/workflows/{id}/start - kick off a declarative workflow run
+  // of the active profile (banking: credit-approval); body may carry
+  // { context } (initial business context). The handler enforces the
+  // transition-matrix 503 itself (see workflow-routes.ts).
+  { method: "POST", path: /^\/api\/v1\/workflows\/[^/]+\/start$/, handler: workflowStartRoute },
 ];

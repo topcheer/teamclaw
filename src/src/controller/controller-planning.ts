@@ -15,6 +15,7 @@ import type {
   RoleId,
   TaskInfo,
   TaskPriority,
+  TaskWorkflowContext,
   TeamMessage,
   TeamState,
   WorkerTaskResultContract,
@@ -576,6 +577,12 @@ export async function createControllerManagedTask(
     controllerSessionKey?: string;
     projectName?: string;
     recommendedSkills?: string[];
+    /**
+     * Design 2.4 workflow-chain context: when present the task is a workflow
+     * step task (createdBy "workflow") and the completion hook routes the
+     * chain from it. Untouched for controller/other creators.
+     */
+    workflow?: TaskWorkflowContext;
   },
   deps: ControllerTaskDomainDeps,
 ): Promise<TaskInfo | undefined> {
@@ -605,6 +612,7 @@ export async function createControllerManagedTask(
     recommendedSkills: normalizedRecommendedSkills.length > 0 ? normalizedRecommendedSkills : undefined,
     controllerRunId: input.createdBy === "controller" ? input.controllerRunId : undefined,
     controllerSessionKey: normalizedSessionKey,
+    workflow: input.workflow,
     projectId,
     projectDir,
     createdAt: now,
