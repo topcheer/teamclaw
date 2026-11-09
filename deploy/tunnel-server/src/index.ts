@@ -10,6 +10,11 @@
  *   CF_API_TOKEN  - least-privilege: Account.Cloudflare Tunnel:Edit + Zone.DNS:Edit (teamclaw.dev)
  *   CF_ACCOUNT_ID - account owning the tunnels
  *   CF_ZONE_ID    - zone id of teamclaw.dev (DNS records)
+ *
+ * Env vars:
+ *   ACCEPT_LEGACY_CREATE - issue #231 grey window: "true"/unset passes
+ *     headerless creates (pre-#231 controllers) with a console.warn;
+ *     "false" requires Authorization: Bearer proving github_user ownership.
  */
 
 const USER_RE = /^[a-z0-9](?:[a-z0-9]|-(?=[a-z0-9])){0,38}$/i;
@@ -18,17 +23,16 @@ const GLOBAL_WATERMARK = 800; // refuse new tunnels past this to protect the acc
 const TUNNEL_PREFIX = "teamclaw-tunnel-";
 const DOMAIN = "teamclaw.dev";
 
-const CORS: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET,POST,DELETE,OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-};
-
 interface Env {
   CF_API_TOKEN: string;
   CF_ACCOUNT_ID: string;
   CF_ZONE_ID: string;
   WORKER_SIGNING_KEY?: string; // HMAC secret: per-tunnel delete tokens
+  // Issue #231 grey window: relay deploys before controllers send
+  // Authorization on create. "true" (or unset) still passes headerless
+  // creates (with a console.warn each, so convergence is observable in the
+  // logs); "false" requires the github_user ownership proof.
+  ACCEPT_LEGACY_CREATE?: string;
 }
 
 interface CfTunnel {
@@ -40,9 +44,13 @@ interface CfTunnel {
 }
 
 function json(status: number, body: unknown): Response {
+  // Issue #231: no Access-Control-Allow-* headers anymore. This management
+  // API is called server-to-server by controllers (no Origin involved), and
+  // browsers must not read these responses cross-origin — omitting ACAO is
+  // the fail-closed default for exactly that.
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json", ...CORS },
+    headers: { "Content-Type": "application/json" },
   });
 }
 
@@ -80,6 +88,37 @@ function fixedEqual(a: string, b: string): boolean {
   let diff = 0;
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
+}
+
+// Issue #231: POST /api/tunnels must prove the caller owns github_user — a
+// squattable name would host phishing on team-<user>.teamclaw.dev and drain
+// the 800-slot watermark. The proof is one GET /user made with the caller's
+// OWN Bearer token: GitHub vouches the token belongs to that login. Cost is
+// one GitHub API call per create, bounded by the 10/h/IP create rate limit
+// that runs BEFORE this check (the verification must never be reachable
+// unthrottled, or it would itself be a DoS amplifier).
+const GITHUB_USER_TIMEOUT_MS = 10_000;
+async function githubLoginFor(
+  token: string,
+): Promise<{ ok: true; login: string } | { ok: false; reason: string }> {
+  try {
+    const res = await fetch("https://api.github.com/user", {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "User-Agent": "teamclaw-tunnel-api",
+      },
+      signal: AbortSignal.timeout(GITHUB_USER_TIMEOUT_MS),
+    });
+    if (!res.ok) return { ok: false, reason: `github /user http ${res.status}` };
+    const data = (await res.json().catch(() => null)) as { login?: string } | null;
+    if (!data || typeof data.login !== "string") {
+      return { ok: false, reason: "github /user returned no login" };
+    }
+    return { ok: true, login: data.login };
+  } catch (err) {
+    return { ok: false, reason: `github /user failed: ${String(err)}` };
+  }
 }
 
 // A tunnel is LIVE only while a connector is actually attached. The DNS CNAME
@@ -142,7 +181,11 @@ async function teardownUserTunnels(env: Env, user: string): Promise<void> {
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
-    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+    // Issue #231: preflights are still answered (a clean 204 rather than
+    // the 404 JSON), but with NO Access-Control-Allow-* headers — without
+    // ACAO a browser preflight fails, which is the intended denial: the
+    // wildcard CORS of the pre-#231 relay is gone and nothing replaces it.
+    if (req.method === "OPTIONS") return new Response(null, { status: 204 });
 
     if (url.pathname === "/api/health") {
       return json(200, {
@@ -162,6 +205,33 @@ export default {
       const user = String(body.github_user ?? "").trim().toLowerCase();
       if (!USER_RE.test(user)) return json(400, { error: "invalid github_user" });
       const port = Number(body.local_port) > 0 ? Math.floor(Number(body.local_port)) : 9527;
+
+      // Issue #231: github_user ownership proof. Ordered deliberately:
+      // AFTER the per-IP rate limit above (the upstream GitHub call stays
+      // inside the 10/h create budget) and BEFORE any Cloudflare API work
+      // below (unauthenticated probers learn nothing about existing
+      // tunnels — not even the 409 live-tunnel signal — and cost the relay
+      // zero CF calls).
+      const bearer = /^Bearer\s+(.+)$/i.exec(req.headers.get("authorization") ?? "");
+      if (!bearer) {
+        if (env.ACCEPT_LEGACY_CREATE === "false") {
+          return json(401, { error: "authorization required: send Authorization: Bearer <github oauth token> proving github_user ownership" });
+        }
+        // Grey window: pre-#231 controllers create without a token. Warn on
+        // each (no token material logged) so the console shows when legacy
+        // traffic has stopped and ACCEPT_LEGACY_CREATE can flip to "false".
+        console.warn("tunnel create without Authorization header (legacy controller); ACCEPT_LEGACY_CREATE defaults to true");
+      } else {
+        const gh = await githubLoginFor(bearer[1]!.trim());
+        // Fail-closed as 401: GitHub-side failure (bad token, timeout, 5xx)
+        // rejects the create, and probing callers cannot distinguish "relay
+        // degraded" from "token bad" — while the reason above lands in the
+        // logs for diagnosis.
+        if (!gh.ok) return json(401, { error: "github_user ownership verification failed", detail: gh.reason });
+        if (gh.login.toLowerCase() !== user) {
+          return json(403, { error: `github_user "${user}" does not belong to the authenticated GitHub account` });
+        }
+      }
 
       try {
         // Replace semantics, hardened: an unauthenticated create must never
