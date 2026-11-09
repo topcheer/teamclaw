@@ -159,8 +159,88 @@
     },
     "workflows": {
       "type": "array",
-      "items": { "type": "object" },
-      "description": "Reserved (Phase 3): declarative workflow templates with conclusion branches (design section 2.4)."
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "steps"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$",
+            "minLength": 1,
+            "description": "Workflow template slug (the start endpoint key), unique within the profile."
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Display name of the workflow (button label for the UI quick-actions group)."
+          },
+          "description": {
+            "type": "string",
+            "description": "Optional one-line summary of what the workflow covers."
+          },
+          "steps": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["id", "role", "title"],
+              "properties": {
+                "id": {
+                  "description": "Step identifier: an integer on the linear spine (0, 1, 2, ...) or a non-numeric string for branch-only steps (e.g. \"committee\"). Uniqueness and on-target resolution are enforced by loader cross-validation; the schema subset cannot express unions."
+                },
+                "role": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "RoleId of the step's executing role; must be a role of this profile (loader cross-validation red line)."
+                },
+                "title": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Step title; becomes the created task's title."
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Optional extra instructions folded into the step's task description."
+                },
+                "inputs": {
+                  "type": "array",
+                  "items": { "type": "string", "minLength": 1 },
+                  "uniqueItems": true,
+                  "description": "Output keys from upstream steps whose results are embedded into this step's task description (design 2.4 outputKey passing). Each key must be declared by some step's outputs (loader cross-validation)."
+                },
+                "conclusion": {
+                  "type": "array",
+                  "items": { "type": "string", "minLength": 1 },
+                  "uniqueItems": true,
+                  "description": "Conclusion phrases; the step's deliverable must end with exactly one of them, and the task-completion hook matches them against the result to route (design 2.4)."
+                },
+                "on": {
+                  "type": "object",
+                  "description": "Conclusion -> step id jumps. Every key must be in this step's conclusion enum; every value must be \"next\" or an existing step id (loader cross-validation). Conclusions without an explicit mapping default to the next numeric-spine step."
+                },
+                "outputs": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["key", "name"],
+                    "properties": {
+                      "key": { "type": "string", "pattern": "^[a-z][a-zA-Z0-9-]*$", "minLength": 1, "description": "Output key downstream steps reference via inputs." },
+                      "name": { "type": "string", "minLength": 1, "description": "Display name of the output artifact." }
+                    },
+                    "additionalProperties": false
+                  },
+                  "uniqueItems": true,
+                  "description": "Named outputs this step produces; keys must be unique across the whole workflow (loader cross-validation)."
+                }
+              },
+              "additionalProperties": false
+            },
+            "description": "Ordered steps; numeric ids form the linear spine, string ids are branch-only targets."
+          }
+        },
+        "additionalProperties": false
+      },
+      "description": "Industry workflow templates with conclusion branches (design section 2.4; consumed by POST /api/v1/workflows/{id}/start and the task-completion routing hook). Optional; software-rd ships none."
     },
     "capabilities": {
       "type": "object",

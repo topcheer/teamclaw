@@ -133,6 +133,69 @@ for (const file of packFiles) {
     `pack ${file} must carry a non-empty reviewedBy record (drafting or sign-off trail)`,
   );
 
+  // 8. Design 2.4 workflow templates: a pack that ships workflows must keep
+  // every step's role inside the pack (the loader makes violations FATAL -
+  // test-workflows.mjs exercises that pipeline directly) and every on-jump
+  // value must resolve to an existing step id or "next".
+  if (raw.workflows !== undefined) {
+    assert.ok(Array.isArray(raw.workflows), `pack ${file} workflows must be an array when present`);
+    const workflowIds = new Set();
+    for (const workflow of raw.workflows) {
+      assert.ok(
+        typeof workflow.id === "string" && ROLE_ID_PATTERN.test(workflow.id),
+        `pack ${file} workflow id "${workflow.id}" must be a slug`,
+      );
+      assert.equal(workflowIds.has(workflow.id), false, `pack ${file} workflow ids must be unique`);
+      workflowIds.add(workflow.id);
+      const stepIds = new Set(workflow.steps.map((step) => String(step.id)));
+      for (const step of workflow.steps) {
+        assert.ok(
+          roleIds.includes(step.role),
+          `pack ${file} workflow "${workflow.id}" step ${JSON.stringify(step.id)} role "${step.role}" must be a role of this pack`,
+        );
+        for (const [jumpConclusion, target] of Object.entries(step.on ?? {})) {
+          assert.ok(
+            (step.conclusion ?? []).includes(jumpConclusion),
+            `pack ${file} workflow "${workflow.id}" step ${JSON.stringify(step.id)} on-key "${jumpConclusion}" must come from the step's conclusion enum`,
+          );
+          assert.ok(
+            target === "next" || stepIds.has(String(target)),
+            `pack ${file} workflow "${workflow.id}" step ${JSON.stringify(step.id)} on-jump "${jumpConclusion}" must target a step id or "next"`,
+          );
+        }
+        for (const inputKey of step.inputs ?? []) {
+          assert.ok(
+            workflow.steps.some((s) => (s.outputs ?? []).some((output) => output.key === inputKey)),
+            `pack ${file} workflow "${workflow.id}" step ${JSON.stringify(step.id)} input "${inputKey}" must be a declared output key`,
+          );
+        }
+      }
+    }
+  }
+
+  // 8b. Banking workflow pin: the credit-approval template from design
+  // section 2.4, carried since 0.1.2 (steps 0/1/2 numeric spine + committee
+  // branch; step 1 additionally declares its reviewOpinion output so both
+  // downstream inputs[] keys resolve).
+  if (raw.id === "banking") {
+    assert.ok(Array.isArray(raw.workflows) && raw.workflows.length === 1,
+      "banking must carry exactly the credit-approval workflow template (design 2.4)");
+    const workflow = raw.workflows[0];
+    assert.equal(workflow.id, "credit-approval");
+    assert.equal(workflow.name, "信贷审批流（对公）");
+    assert.deepEqual(
+      workflow.steps.map((step) => step.id),
+      [0, 1, 2, "committee"],
+      "credit-approval must keep the design 2.4 step structure (0 尽调 / 1 风险审查 / 2 审批 / committee 贷审会)",
+    );
+    assert.deepEqual(workflow.steps[0].conclusion, ["材料齐全", "需补充材料"]);
+    assert.deepEqual(workflow.steps[1].conclusion, ["通过", "退回补充材料", "超权限上会"]);
+    assert.deepEqual(workflow.steps[1].on, { 退回补充材料: 0, 超权限上会: "committee", 通过: 2 });
+    assert.deepEqual(workflow.steps[0].outputs, [{ key: "dueDiligenceReport", name: "尽调报告" }]);
+    assert.deepEqual(workflow.steps[2].inputs, ["dueDiligenceReport", "reviewOpinion"]);
+    assert.equal(workflow.steps[3].role, "approver");
+  }
+
   // Phase 3 design-table pin for this workstream's own packs.
   const expectedRoleCount = PHASE3_ROLE_COUNTS[raw.id];
   if (expectedRoleCount !== undefined) {
