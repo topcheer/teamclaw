@@ -9,6 +9,8 @@ import { createControllerHttpServer, type ControllerHttpDeps } from "./http-serv
 // PR-C of issue #204: the assignment pipeline incl. the gated auto-assign
 // loop lives in ./task-assignment.js, not http-server.ts.
 import { autoAssignPendingTasks } from "./task-assignment.js";
+// Issue #222: worker dispatch-token header helper for controller -> worker calls.
+import { withWorkerDispatchToken } from "./task-execution.js";
 // PR-A of issue #204: the profile switch state machine (incl. crash resume)
 // lives in ./profile-switch.ts, not http-server.ts.
 import { resumeTeamProfileSwitch } from "./profile-switch.js";
@@ -389,7 +391,8 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
               }
             },
             requestWorkerAssessment: async (worker, req) => {
-              return await requestKickoffAssessment(worker, req);
+              // Issue #222: carry the worker's dispatch token on the assess call.
+              return await requestKickoffAssessment(worker, req, withWorkerDispatchToken({}, worker.id, config, teamState));
             },
           },
         );
@@ -554,11 +557,13 @@ function openBrowser(url: string, logger: PluginLogger): void {
 /**
  * Request a kickoff assessment from a worker.
  *
- * Request kickoff assessment from a worker over HTTP.
+ * Request kickoff assessment from a worker over HTTP. `authHeaders` carries
+ * the worker's dispatch token (issue #222) when the controller knows one.
  */
 async function requestKickoffAssessment(
   worker: import("../types.js").WorkerInfo,
   requirement: string,
+  authHeaders: Record<string, string> = {},
 ): Promise<import("../types.js").KickoffAssessment> {
   const role = worker.role;
   const prompt = buildKickoffAssessmentPrompt(role, requirement);
@@ -574,7 +579,7 @@ async function requestKickoffAssessment(
   try {
     const res = await fetch(`${worker.url}/api/v1/kickoff/assess`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders },
       body: JSON.stringify({ requirement, role }),
       signal: controller.signal,
     });

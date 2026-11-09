@@ -63,6 +63,47 @@ export type ControllerTaskDomainDeps = {
 
 export const MAX_TASK_EXECUTION_EVENTS = 250;
 
+// ---------------------------------------------------------------------------
+// Controller -> worker dispatch auth (issue #222, coordinated scope).
+//
+// Workers paired with a token (issue #222 worker wave) reject inbound /api
+// calls without X-TeamClaw-Token; these helpers attach the token the target
+// worker expects. Resolution order (minimal invasion, no new pairing
+// surface - see the worker/http-handler.ts counterpart for the full model):
+//   1. the worker's provisioning record launchToken (the provisioner
+//      already generates it per worker, delivers it via the
+//      TEAMCLAW_LAUNCH_TOKEN env, and persists it here) - provisioned
+//      fleets are covered with zero new plumbing;
+//   2. the controller's own securityToken config (manual/external workers:
+//      the operator syncs the same value on both ends - the documented
+//      stance for self-managed workers);
+//   3. neither => no header (L0: byte-identical historical requests).
+// ---------------------------------------------------------------------------
+
+export function resolveWorkerDispatchToken(
+  workerId: string,
+  config: Pick<PluginConfig, "securityToken">,
+  state: TeamState | null,
+): string | undefined {
+  const record = state?.provisioning?.workers?.[workerId];
+  if (record?.launchToken) {
+    return record.launchToken;
+  }
+  const shared = config.securityToken?.trim();
+  return shared ? shared : undefined;
+}
+
+/** Fetch headers for a controller -> worker call, carrying the worker's dispatch token when one is known. */
+export function withWorkerDispatchToken(
+  headers: Record<string, string>,
+  workerId: string,
+  config: Pick<PluginConfig, "securityToken">,
+  state: TeamState | null,
+): Record<string, string> {
+  const token = resolveWorkerDispatchToken(workerId, config, state);
+  return token ? { ...headers, "X-TeamClaw-Token": token } : headers;
+}
+
 const CONTROLLER_INTAKE_SESSION_PREFIX = "teamclaw-controller-web:";
 const CONTROLLER_INTAKE_AGENT_SESSION_RE = /^agent:[^:]+:(teamclaw-controller-web:[a-zA-Z0-9:_-]{1,120})$/;
 
@@ -331,8 +372,10 @@ export async function cancelTaskExecution(
 
   let cancelled = false;
   try {
+    // Issue #222: carry the worker's dispatch token so a token-paired worker accepts the cancel.
     const res = await fetch(`${worker.url}/api/v1/tasks/${taskId}/cancel`, {
       method: "POST",
+      headers: withWorkerDispatchToken({}, workerId, deps.config, deps.getTeamState()),
     });
     cancelled = res.ok;
     if (!res.ok) {

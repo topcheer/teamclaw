@@ -221,7 +221,7 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
       : undefined;
 
     const handler = createWorkerHttpHandler(
-        { role: config.role, port: config.port },
+        { role: config.role, port: config.port, securityToken: config.securityToken },
         logger,
         messageQueue,
         workerId ?? "",

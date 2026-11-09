@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { PluginLogger } from "../../api.js";
 import type { TaskAssignmentPayload, TeamMessage } from "../types.js";
@@ -10,8 +11,57 @@ export type TaskCanceller = (taskId: string) => Promise<boolean> | boolean;
 export type TaskCancelChecker = (taskId: string) => boolean;
 export type KickoffAssessor = (requirement: string, role: string) => Promise<Record<string, unknown>>;
 
+// ---------------------------------------------------------------------------
+// Inbound API auth (issue #222, coordinated scope after #23/#227).
+//
+// The controller's device gate (#23) protects controller->world traffic; the
+// REVERSE direction (controller dispatching tasks/messages INTO this worker)
+// had no check at all, so any pod/host that can reach the worker port could
+// submit tasks and poison results (review finding C2). Token model, chosen
+// for minimal invasion with no NEW pairing surface:
+//
+//   expected tokens = { config.securityToken, env TEAMCLAW_LAUNCH_TOKEN }
+//
+//   - Provisioned workers: the provisioner already generates a per-worker
+//     launch token, delivers it via the TEAMCLAW_LAUNCH_TOKEN env, and the
+//     controller keeps it in the provisioning record - reuse it (it is
+//     already decoupled from the #23 device registry, so option (a)'s shape
+//     without a second token).
+//   - Manual/external workers: the operator syncs `securityToken` to the
+//     same value on the controller and the worker (documentation stance for
+//     self-managed fleets); provisioning-record tokens take precedence on
+//     the controller side.
+//   - BOTH are accepted (either match passes): pairing a provisioned worker
+//     later (`teamclaw pair` overwrites config.securityToken) must never
+//     lock the controller out of its own dispatch path.
+//   - Neither set => L0: zero checks, byte-identical historical behavior.
+//
+// /api/v1/health stays exempt: kubelet/docker probes (helm charts probe
+// this path) cannot attach headers, mirroring the controller gate's health
+// exemption. Comparison is constant-time on the raw token (a single shared
+// secret per direction; hashing buys nothing here).
+// ---------------------------------------------------------------------------
+
+/** Constant-time string equality; length mismatch short-circuits (leaks only length, never content). */
+function constantTimeEqual(a: string, b: string): boolean {
+  const left = Buffer.from(a, "utf8");
+  const right = Buffer.from(b, "utf8");
+  return left.length === right.length && timingSafeEqual(left, right);
+}
+
+/**
+ * The non-empty token values this worker accepts on inbound /api requests
+ * (config.securityToken and/or the provisioner's TEAMCLAW_LAUNCH_TOKEN).
+ * Empty result = L0 (no inbound auth).
+ */
+export function resolveWorkerInboundTokens(config: { securityToken?: string }): string[] {
+  const configured = config.securityToken?.trim();
+  const launch = process.env.TEAMCLAW_LAUNCH_TOKEN?.trim();
+  return [configured, launch].filter((token): token is string => Boolean(token));
+}
+
 export function createWorkerHttpHandler(
-  config: { role: string; port: number },
+  config: { role: string; port: number; securityToken?: string },
   logger: PluginLogger,
   messageQueue: MessageQueue,
   workerId: string,
@@ -21,6 +71,7 @@ export function createWorkerHttpHandler(
   isTaskCancelled?: TaskCancelChecker,
   kickoffAssessor?: KickoffAssessor,
 ) {
+  const inboundTokens = resolveWorkerInboundTokens(config);
   return async (req: IncomingMessage, res: ServerResponse) => {
     // CORS preflight
     if (req.method === "OPTIONS") {
@@ -35,6 +86,18 @@ export function createWorkerHttpHandler(
 
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     const pathname = url.pathname;
+
+    // Inbound device gate (issue #222): every /api route except the health
+    // probe requires X-TeamClaw-Token while this worker holds an expected
+    // token. No expected token configured => proceed (L0, zero change).
+    if (inboundTokens.length > 0 && pathname.startsWith("/api/") && pathname !== "/api/v1/health") {
+      const presented = typeof req.headers["x-teamclaw-token"] === "string" ? req.headers["x-teamclaw-token"].trim() : "";
+      if (!presented || !inboundTokens.some((expected) => constantTimeEqual(expected, presented))) {
+        logger.warn(`Worker: rejected unauthenticated ${req.method ?? "?"} ${pathname} from ${req.socket.remoteAddress ?? "unknown"}`);
+        sendError(res, 401, "unauthorized: this worker requires the X-TeamClaw-Token header (the controller's dispatch token for this worker, or the value synced into securityToken)");
+        return;
+      }
+    }
 
     try {
       // GET /api/v1/health

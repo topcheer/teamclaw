@@ -6,6 +6,7 @@
 // message ROUTES because the controller-planning intake glue also delivers
 // messages and must stay below the route layer.
 import type { TeamMessage, WorkerInfo } from "../types.js";
+import { withWorkerDispatchToken } from "./task-execution.js";
 import type { ControllerTaskDomainDeps } from "./task-execution.js";
 
 export async function deliverMessageToWorker(
@@ -13,9 +14,11 @@ export async function deliverMessageToWorker(
   message: TeamMessage,
   deps: ControllerTaskDomainDeps,
 ): Promise<void> {
+  // Issue #222: carry the worker's dispatch token so a token-paired worker
+  // accepts the injection; L0 sends the historical header set unchanged.
   const res = await fetch(`${worker.url}/api/v1/messages`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: withWorkerDispatchToken({ "Content-Type": "application/json" }, worker.id, deps.config, deps.getTeamState()),
     body: JSON.stringify(message),
   });
 
