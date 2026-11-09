@@ -16,6 +16,9 @@ import { createControllerTools } from "./src/controller/controller-tools.js";
 import { publishWorkerRepo, syncWorkerRepo } from "./src/git-collaboration.js";
 import { resolveTeamClawProjectsDir } from "./src/openclaw-workspace.js";
 import { installRecommendedSkills } from "./src/worker/skill-installer.js";
+// W6 of issue #226: local swallowing pathExists copy replaced by the shared
+// one (identical semantics; alias keeps the call site byte-identical).
+import { pathExistsTolerant as pathExists } from "./src/shared/utils.js";
 
 export default definePluginEntry({
   id: "teamclaw",
@@ -204,15 +207,6 @@ function registerWorker(api: OpenClawPluginApi, config: ReturnType<typeof parseP
       return null;
     }
     return { sharedProjectDir, localProjectDir };
-  }
-
-  async function pathExists(targetPath: string): Promise<boolean> {
-    try {
-      await fs.access(targetPath);
-      return true;
-    } catch {
-      return false;
-    }
   }
 
   async function syncProjectDir(sourceDir: string, destinationDir: string): Promise<boolean> {
