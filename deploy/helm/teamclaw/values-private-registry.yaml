@@ -1,6 +1,7 @@
 image:
   repository: registry.example.com/teamclaw/teamclaw-openclaw
-  tag: latest
+  # Mirror a released version tag, not the mutable :latest channel (#225 C2).
+  tag: "2026.11.0"
 
 imagePullSecrets:
   - name: regcred

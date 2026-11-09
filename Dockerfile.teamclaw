@@ -1,5 +1,5 @@
 # TeamClaw custom OpenClaw image
-# Based on official ghcr.io/openclaw/openclaw:latest
+# Based on official ghcr.io/openclaw/openclaw, pinned by digest (#225 C1).
 # Adds the teamclaw extension and its runtime dependencies.
 #
 # Build: docker build -f Dockerfile.teamclaw -t registry.iot2.win/openclaw:teamclaw-test .
@@ -8,11 +8,20 @@
 # Multi-arch: docker buildx build --platform linux/amd64 -f Dockerfile.teamclaw \
 #             -t registry.iot2.win/openclaw:teamclaw-test --push .
 
-ARG BASE_IMAGE=ghcr.io/openclaw/openclaw:latest  # 2026.10.10 at time of switch; pin a digest for reproducibility
-# OCI image metadata (also the image-store description)
-LABEL org.opencontainers.image.title="teamclaw-openclaw" \       org.opencontainers.image.description="TeamClaw runtime on OpenClaw: virtual software team (controller + role workers) with a Web UI, internet tunnel sharing (managed / self-hosted Cloudflare / anonymous trycloudflare) and teamauto GitHub automation." \       org.opencontainers.image.source="https://github.com/topcheer/teamclaw"
+# Base image pinned by digest for reproducible releases (#225 C1).
+# Anchors: upstream 2026.10.10 at the official-image-base switch; digest
+# resolved from ghcr.io/openclaw/openclaw:latest (= upstream 2026.11.2) on
+# 2026-11-09; multi-arch index: linux/amd64 + linux/arm64.
+# Re-pin deliberately on upstream bumps:
+#   docker buildx imagetools inspect ghcr.io/openclaw/openclaw:latest
+ARG BASE_IMAGE=ghcr.io/openclaw/openclaw@sha256:55294524dac01370288fb4beb16714b60f75cec0e96e07e662054cf29900965a
 
 FROM ${BASE_IMAGE}
+
+# OCI image metadata (also the image-store description)
+LABEL org.opencontainers.image.title="teamclaw-openclaw" \
+      org.opencontainers.image.description="TeamClaw runtime on OpenClaw: virtual software team (controller + role workers) with a Web UI, internet tunnel sharing (managed / self-hosted Cloudflare / anonymous trycloudflare) and teamauto GitHub automation." \
+      org.opencontainers.image.source="https://github.com/topcheer/teamclaw"
 
 USER root
 

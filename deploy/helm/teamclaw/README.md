@@ -8,7 +8,7 @@ If your cluster cannot pull `ghcr.io/topcheer/teamclaw-openclaw`, push the runti
 
 ```bash
 bash scripts/teamclaw-runtime-image.sh \
-  registry.example.com/teamclaw/teamclaw-openclaw:latest
+  registry.example.com/teamclaw/teamclaw-openclaw:2026.11.0
 
 kubectl create secret docker-registry regcred \
   --namespace teamclaw \
