@@ -8,12 +8,17 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (rel) => fs.readFile(path.join(root, rel), "utf8");
 // PR-D of issue #204: the Web UI route shells (serveVersionedHtml callers)
 // and the tunnel-side route tables moved from http-server.ts into
-// controller/route-table.ts - both files are pinned below.
-const [worker, mgr, http, routeTable, uiHtml, uiApp] = await Promise.all([
+// controller/route-table.ts - both files are pinned below. W2 of issue #226
+// moved them on: the Web UI handler bodies into controller/webui-routes.ts
+// and the tunnel tables into controller/tunnel-routes.ts (route-table.ts
+// re-exports the factories) - pins follow the new homes.
+const [worker, mgr, http, routeTable, tunnelRoutes, webuiRoutes, uiHtml, uiApp] = await Promise.all([
   read("deploy/tunnel-server/src/index.ts"),
   read("src/src/controller/tunnel-manager.ts"),
   read("src/src/controller/http-server.ts"),
   read("src/src/controller/route-table.ts"),
+  read("src/src/controller/tunnel-routes.ts"),
+  read("src/src/controller/webui-routes.ts"),
   read("src/src/ui/index.html"),
   read("src/src/ui/app.js"),
 ]);
@@ -36,8 +41,8 @@ assert.match(mgr, /proc\.stdout\?\.on\("data"/, "install progress consumes spawn
 // API moved from http-server.ts's outer if chain into route-table.ts tables;
 // the arrival-host classification (viaTunnel) and the 403 gate stay in
 // http-server.ts.
-assert.match(routeTable, /__tunnel_gate\/verify/, "gate verify endpoint exists");
-assert.match(routeTable, /Set-Cookie/, "verify sets the gate cookie");
+assert.match(tunnelRoutes, /__tunnel_gate\/verify/, "gate verify endpoint exists");
+assert.match(tunnelRoutes, /Set-Cookie/, "verify sets the gate cookie");
 assert.match(http, /viaTunnel/, "requests are classified by arrival host");
 assert.match(worker, /rateLimited\(req, 10, 3600_000\)/, "create is per-IP rate limited");
 assert.match(worker, /rateLimited\(req, 20, 3600_000\)/, "delete is per-IP rate limited");
@@ -58,18 +63,19 @@ assert.match(mgr, /cloudflared-linux-" \+ arch/, "linux install downloads the RA
 assert.doesNotMatch(mgr, /cloudflared-linux-" \+ arch \+ "\.tgz"/, "linux has no .tgz release asset (404)");
 assert.match(mgr, /nativeDownload/, "curl-less https download fallback exists (distroless images)");
 assert.match(http, /tunnelManagerSingleton\.recover\(\)/, "controller reconnects a persisted share at boot");
-assert.match(routeTable, /\/api\/v1\/tunnel\/start/, "start endpoint present");
+assert.match(tunnelRoutes, /\/api\/v1\/tunnel\/start/, "start endpoint present");
 // PR-D of issue #204: the /ui shells moved from http-server.ts into
-// route-table.ts - the versioned-serving call site is pinned in its new home.
-assert.match(routeTable, /serveVersionedHtml/, "index.html is served with content-versioned asset URLs (?v=<hash>) so tunnel/CDN browser-cache freezes cannot pin a stale app.js");
+// route-table.ts; W2 of issue #226 moved the call site on into
+// controller/webui-routes.ts - pin the new home.
+assert.match(webuiRoutes, /serveVersionedHtml/, "index.html is served with content-versioned asset URLs (?v=<hash>) so tunnel/CDN browser-cache freezes cannot pin a stale app.js");
 // PR-A of issue #204: the versioned-serving implementation moved from
 // http-server.ts into controller/ui-assets.ts - pin the new home too so the
 // extraction cannot silently drop the versioning logic.
 const uiAssets = await read("src/src/controller/ui-assets.ts");
 assert.match(uiAssets, /serveVersionedHtml/, "content-versioned HTML serving lives in ui-assets.ts (extracted from http-server)");
 assert.match(uiAssets, /uiAssetVersion/, "the ?v=<hash> asset versioning cache lives in ui-assets.ts (extracted from http-server)");
-assert.match(routeTable, /\/api\/v1\/tunnel\/stop/, "stop endpoint present");
-assert.match(routeTable, /GitHub login required/, "sharing requires github login (server-derived username)");
+assert.match(tunnelRoutes, /\/api\/v1\/tunnel\/stop/, "stop endpoint present");
+assert.match(tunnelRoutes, /GitHub login required/, "sharing requires github login (server-derived username)");
 
 const tunnelManagerSrc = await read("src/src/controller/tunnel-manager.ts");
 
