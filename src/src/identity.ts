@@ -7,6 +7,17 @@ import { getActiveRole } from "./profile-loader.js";
 import { loadWorkerIdentity, saveWorkerIdentity, clearWorkerIdentity } from "./state.js";
 import { MDnsBrowser } from "./discovery.js";
 
+/**
+ * Issue #23 (client wave): headers for worker -> controller calls. While a
+ * paired device token is configured it rides the X-TeamClaw-Token header the
+ * controller's device gate accepts; without one the headers pass through
+ * unchanged (L0). The token value itself is never logged.
+ */
+function withDeviceToken(config: PluginConfig, headers: Record<string, string>): Record<string, string> {
+  const token = config.securityToken?.trim();
+  return token ? { ...headers, "X-TeamClaw-Token": token } : headers;
+}
+
 function getLocalIp(targetHost?: string): string {
   if (!targetHost || targetHost === "localhost" || targetHost === "127.0.0.1") {
     return "localhost";
@@ -115,7 +126,7 @@ export class IdentityManager {
     try {
       const res = await fetch(`${controllerUrl}/api/v1/workers/register`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: withDeviceToken(this.config, { "Content-Type": "application/json" }),
         body: JSON.stringify(registration),
       });
 
@@ -147,6 +158,7 @@ export class IdentityManager {
       try {
         await fetch(`${this.identity.controllerUrl}/api/v1/workers/${this.identity.workerId}`, {
           method: "DELETE",
+          headers: withDeviceToken(this.config, {}),
         });
       } catch {
         // ignore

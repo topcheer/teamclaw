@@ -316,8 +316,8 @@ assert.match(
 assert.ok(htmlSource.includes('id="team-name"'), "the legacy #team-name span must remain");
 assert.equal(
   (htmlSource.match(/class="workspace-prompt-modal"/g) || []).length,
-  3,
-  "the two pre-existing workspace-prompt modals stay plus the new switcher",
+  4,
+  "the two pre-existing workspace-prompt modals stay, plus the switcher and the issue #23 device-pairing modal",
 );
 
 console.log("Team profile switcher UI contract passed.");

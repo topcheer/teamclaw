@@ -84,6 +84,72 @@ function registerController(api: OpenClawPluginApi, config: ReturnType<typeof pa
   });
 }
 
+/**
+ * Issue #23 (client wave): headers for worker -> controller calls, same
+ * pattern as identity.ts / worker-service.ts / worker/tools.ts. A configured
+ * device token rides X-TeamClaw-Token; without one the headers are unchanged
+ * (L0). The token value is never logged.
+ */
+function withDeviceToken(config: ReturnType<typeof parsePluginConfig>, headers: Record<string, string>): Record<string, string> {
+  const token = config.securityToken?.trim();
+  return token ? { ...headers, "X-TeamClaw-Token": token } : headers;
+}
+
+/**
+ * Execution-event + checkpoint reporters (issue #23 review follow-up: the
+ * execution stream and resume checkpoints MUST survive device protection, so
+ * both POSTs carry the paired device token). Extracted from registerWorker
+ * as an exported factory so the dist-level client tests can exercise the
+ * real header behavior against a stub controller.
+ */
+export function createWorkerEventReporters(
+  config: ReturnType<typeof parsePluginConfig>,
+  logger: { warn(entry: string): void },
+  state: { getControllerUrl: () => string | null; getWorkerId: () => string | null },
+) {
+  async function reportExecutionEvent(taskId: string, event: TaskExecutionEventInput): Promise<void> {
+    const controllerUrl = state.getControllerUrl();
+    if (!controllerUrl) {
+      return;
+    }
+
+    try {
+      const res = await fetch(`${controllerUrl}/api/v1/tasks/${taskId}/execution`, {
+        method: "POST",
+        headers: withDeviceToken(config, { "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          ...event,
+          workerId: state.getWorkerId() ?? undefined,
+          role: config.role,
+        }),
+      });
+      if (!res.ok) {
+        logger.warn(`Worker: failed to record execution event for ${taskId} (${res.status})`);
+      }
+    } catch (err) {
+      logger.warn(`Worker: failed to POST execution event for ${taskId}: ${String(err)}`);
+    }
+  }
+
+  async function reportCheckpoint(taskId: string, checkpoint: { lastAssistantMessage: string; progressNote?: string; sessionKey: string }): Promise<void> {
+    const controllerUrl = state.getControllerUrl();
+    if (!controllerUrl) {
+      return;
+    }
+    try {
+      await fetch(`${controllerUrl}/api/v1/tasks/${taskId}/checkpoint`, {
+        method: "POST",
+        headers: withDeviceToken(config, { "Content-Type": "application/json" }),
+        body: JSON.stringify({ ...checkpoint, workerId: state.getWorkerId() ?? undefined }),
+      });
+    } catch {
+      // Checkpointing is best-effort; a lost heartbeat only costs resume freshness.
+    }
+  }
+
+  return { reportExecutionEvent, reportCheckpoint };
+}
+
 function registerWorker(api: OpenClawPluginApi, config: ReturnType<typeof parsePluginConfig>) {
   const logger = api.logger;
   const messageQueue = new MessageQueue();
@@ -100,43 +166,12 @@ function registerWorker(api: OpenClawPluginApi, config: ReturnType<typeof parseP
     };
   }
 
-  async function reportExecutionEvent(taskId: string, event: TaskExecutionEventInput): Promise<void> {
-    if (!currentControllerUrl) {
-      return;
-    }
-
-    try {
-      const res = await fetch(`${currentControllerUrl}/api/v1/tasks/${taskId}/execution`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          ...event,
-          workerId: currentWorkerId ?? undefined,
-          role: config.role,
-        }),
-      });
-      if (!res.ok) {
-        logger.warn(`Worker: failed to record execution event for ${taskId} (${res.status})`);
-      }
-    } catch (err) {
-      logger.warn(`Worker: failed to POST execution event for ${taskId}: ${String(err)}`);
-    }
-  }
-
-  async function reportCheckpoint(taskId: string, checkpoint: { lastAssistantMessage: string; progressNote?: string; sessionKey: string }): Promise<void> {
-    if (!currentControllerUrl) {
-      return;
-    }
-    try {
-      await fetch(`${currentControllerUrl}/api/v1/tasks/${taskId}/checkpoint`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...checkpoint, workerId: currentWorkerId ?? undefined }),
-      });
-    } catch {
-      // Checkpointing is best-effort; a lost heartbeat only costs resume freshness.
-    }
-  }
+  const { reportExecutionEvent, reportCheckpoint } = createWorkerEventReporters(config, logger, {
+    // Read through getters so the reporters always see the identity the
+    // worker service has established by the time an event fires.
+    getControllerUrl: () => currentControllerUrl,
+    getWorkerId: () => currentWorkerId,
+  });
 
   const getWorkerSessionKey = (assignment: TaskAssignmentPayload) =>
     assignment.executionSessionKey?.trim() || `teamclaw-task-${assignment.taskId}`;

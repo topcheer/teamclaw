@@ -417,6 +417,11 @@
           </div>
           <div id="bootstrap-remote-url-row" hidden>
             <input id="bootstrap-controller-url" class="compact-input" type="text" placeholder="http://127.0.0.1:9527">
+            <!-- Issue #23: optional pairing code - only needed when the target
+                 controller has device protection enabled. Empty = L0 direct
+                 connect (unchanged behavior). -->
+            <input id="bootstrap-pairing-code" class="compact-input" type="text" autocomplete="off" spellcheck="false"
+                   data-i18n-placeholder="bootstrap.pairingCodePlaceholder" placeholder="Pairing code (only if the controller has protection enabled)">
             <button class="btn" type="button" data-bootstrap-connect="true">连接这个 controller</button>
           </div>
           <div id="bootstrap-profile-follow-note" class="bootstrap-note" hidden data-i18n="wizard.followControllerNote">团队类型由所连接的 controller 决定（跟随 controller），此处无需选择。</div>

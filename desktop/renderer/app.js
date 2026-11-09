@@ -14,6 +14,9 @@ import { createT as i18nCreateT } from "./i18n.js";
   const state = {
     settings: null,
     controllerUrl: "",
+    // Issue #23: device-pairing token for a protected controller. Empty on
+    // L0 (unpaired) controllers - requests then go out exactly as before.
+    securityToken: "",
     ws: null,
     currentView: "mission",
     taskFilter: "all",
@@ -752,8 +755,19 @@ import { createT as i18nCreateT } from "./i18n.js";
     return `${state.controllerUrl}/api/v1${path}`;
   }
 
+  // Issue #23: single injection point for the device token - every
+  // controller request (and the WS upgrade, which cannot set headers) carries
+  // it while a pairing token is stored. Empty token = no header = L0 as before.
+  function controllerHeaders(extra) {
+    const headers = { ...(extra || {}) };
+    if (state.securityToken) {
+      headers["X-TeamClaw-Token"] = state.securityToken;
+    }
+    return headers;
+  }
+
   async function apiGet(path) {
-    const response = await fetch(controllerApi(path));
+    const response = await fetch(controllerApi(path), { headers: controllerHeaders() });
     if (!response.ok) {
       throw new Error(`GET ${path} failed (${response.status})`);
     }
@@ -761,7 +775,7 @@ import { createT as i18nCreateT } from "./i18n.js";
   }
 
   async function apiGetOptional(path, fallbackValue) {
-    const response = await fetch(controllerApi(path));
+    const response = await fetch(controllerApi(path), { headers: controllerHeaders() });
     if (response.status === 404) {
       return fallbackValue;
     }
@@ -774,7 +788,7 @@ import { createT as i18nCreateT } from "./i18n.js";
   async function apiPost(path, body) {
     const response = await fetch(controllerApi(path), {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: controllerHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body || {}),
     });
     if (!response.ok) {
@@ -793,6 +807,7 @@ import { createT as i18nCreateT } from "./i18n.js";
   async function apiDelete(path) {
     const response = await fetch(controllerApi(path), {
       method: "DELETE",
+      headers: controllerHeaders(),
     });
     if (!response.ok) {
       let message = `DELETE ${path} failed (${response.status})`;
@@ -810,7 +825,7 @@ import { createT as i18nCreateT } from "./i18n.js";
   async function apiPut(path, body) {
     const response = await fetch(controllerApi(path), {
       method: "PUT",
-      headers: { "Content-Type": "application/json" },
+      headers: controllerHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body || {}),
     });
     if (!response.ok) {
@@ -1052,7 +1067,7 @@ import { createT as i18nCreateT } from "./i18n.js";
     // The write itself still only matters on first initialization (2.3).
     if (!state.controllerUrl) return;
     try {
-      const res = await fetch(`${state.controllerUrl}/api/v1/team/profile`, { signal: AbortSignal.timeout(2500) });
+      const res = await fetch(`${state.controllerUrl}/api/v1/team/profile`, { signal: AbortSignal.timeout(2500), headers: controllerHeaders() });
       if (!res.ok) return;
       const data = await res.json();
       const id = data && typeof data.profileId === "string" ? data.profileId : "";
@@ -1148,8 +1163,14 @@ import { createT as i18nCreateT } from "./i18n.js";
           // boot, killed process, no service manager on Windows). Probe
           // liveness; start the gateway ourselves when dead, then wait
           // bounded for the controller before connecting.
+          // Issue #23 review follow-up: probe the security-EXEMPT /health
+          // endpoint instead of /tunnel/status - a protected global
+          // controller 401s authenticated-less /api calls, but health stays
+          // reachable in every protection state. Any completed HTTP response
+          // (including a 503 "starting" readiness) proves the process is
+          // alive; only a connection failure/timeout means "not running".
           const probe = async () => {
-            try { const r = await fetch(url + "/api/v1/tunnel/status", { signal: AbortSignal.timeout(1500) }); return r.ok; } catch { return false; }
+            try { await fetch(url + "/api/v1/health", { signal: AbortSignal.timeout(1500) }); return true; } catch { return false; }
           };
           if (!(await probe())) {
             if (log) log.textContent += "[global] Global gateway not running - starting it...\n";
@@ -1501,7 +1522,7 @@ import { createT as i18nCreateT } from "./i18n.js";
   async function apiPatch(path, body) {
     const response = await fetch(controllerApi(path), {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
+      headers: controllerHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body || {}),
     });
     if (!response.ok) {
@@ -3573,6 +3594,11 @@ import { createT as i18nCreateT } from "./i18n.js";
     const url = new URL(state.controllerUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     url.pathname = "/ws";
+    // Browser WebSocket clients cannot set headers, so the device token rides
+    // the ?token= query the backend upgrade guard accepts (issue #23).
+    if (state.securityToken) {
+      url.searchParams.set("token", state.securityToken);
+    }
     const ws = new WebSocket(url.toString());
     state.ws = ws;
     setConnectionPill("connecting", t("connection.connecting"));
@@ -3673,6 +3699,36 @@ import { createT as i18nCreateT } from "./i18n.js";
       state.isRefreshing = false;
       renderChrome();
     }
+  }
+
+  // Issue #23 (client wave): exchange a one-shot pairing code for a device
+  // token BEFORE the first controller call. Only invoked from the wizard's
+  // remote path when the user typed a code; without a code the flow is the
+  // unchanged L0 direct connect.
+  async function pairWithController(baseUrl, code) {
+    const url = normalizeBaseUrl(baseUrl);
+    if (!url) throw new Error("Controller URL is required");
+    const trimmedCode = String(code || "").trim().toUpperCase();
+    if (!trimmedCode) return false;
+    const response = await fetch(`${url}/api/v1/security/pair`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: trimmedCode, kind: "desktop" }),
+    });
+    let payload = {};
+    try { payload = await response.json(); } catch { /* error body below */ }
+    if (!response.ok || !payload || typeof payload.token !== "string") {
+      const reason = (payload && (payload.error || payload.hint)) || `HTTP ${response.status}`;
+      throw new Error(t("bootstrap.pairingFailed", { error: reason }));
+    }
+    state.securityToken = payload.token;
+    try {
+      // Persist alongside controllerUrl so the next launch reconnects
+      // without asking for a code again (settings.json, main-process file).
+      state.settings = await desktop.saveSettings({ ...(state.settings || {}), securityToken: payload.token });
+    } catch { /* token still applies to this session */ }
+    setStatusLine(t("bootstrap.pairedNote"));
+    return true;
   }
 
   async function connectController(url, opts) {
@@ -3848,6 +3904,9 @@ import { createT as i18nCreateT } from "./i18n.js";
   async function connectSavedController() {
     state.settings = await desktop.getSettings();
     state.localSetupInfo = await desktop.getLocalSetupInfo();
+    // Issue #23: restore the stored device token (saved by a successful
+    // pairing in the wizard) so reconnects authenticate transparently.
+    state.securityToken = typeof (state.settings || {}).securityToken === "string" ? state.settings.securityToken : "";
     // No implicit localhost fallback: connecting somewhere the user never
     // chose (a host production controller on 9527) is worse than showing the
     // setup screen. Only an explicitly saved URL is used here.
@@ -4107,13 +4166,26 @@ import { createT as i18nCreateT } from "./i18n.js";
     const bootstrapConnect = target.closest('[data-bootstrap-connect]');
     if (bootstrapConnect) {
       const urlInput = $('#bootstrap-controller-url');
+      const codeInput = $('#bootstrap-pairing-code');
       state.unavailableScreenVisible = false;
-      connectController(urlInput && urlInput.value ? urlInput.value : '').catch((error) => {
+      const rawUrl = urlInput && urlInput.value ? urlInput.value : '';
+      const failConnect = (error) => {
         state.unavailableScreenVisible = true;
         state.unavailableReason = error instanceof Error ? error.message : 'Failed to connect';
         renderUnavailableScreen();
         setStatusLine(state.unavailableReason);
-      });
+      };
+      // Issue #23: with a pairing code typed in, exchange it for a device
+      // token first; a failed pairing surfaces without touching the
+      // connection state.
+      if (codeInput && codeInput.value.trim()) {
+        pairWithController(rawUrl, codeInput.value).then((paired) => {
+          if (paired) codeInput.value = '';
+          return connectController(rawUrl);
+        }).catch(failConnect);
+        return;
+      }
+      connectController(rawUrl).catch(failConnect);
       return;
     }
 

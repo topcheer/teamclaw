@@ -318,6 +318,11 @@
           }
         }
       },
+      "securityToken": {
+        "type": "string",
+        "default": "",
+        "description": "Device pairing token for a protected controller (issue #23); written by `teamclaw pair`, sent as X-TeamClaw-Token on API calls. Leave empty for unpaired local mode"
+      },
       "agentIsolationMode": {
         "type": "string",
         "enum": [

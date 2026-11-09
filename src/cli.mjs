@@ -135,7 +135,20 @@ Usage:
 
 Commands:
   install                Install/configure TeamClaw for OpenClaw
-  help                    Show this help
+  pair <controller-url>  Pair this instance with a controller that has device
+                         protection enabled (issue #23). Without --code it
+                         first tries zero-input LAN auto-pairing.
+    --code <code>        One-shot pairing code from the controller owner
+                         (web UI: Device security -> New pairing code)
+    --name <name>        Device name shown in the controller device list
+    --kind <kind>        Device kind: worker, desktop or cli (default cli)
+    --config <path>      OpenClaw config path to store the token in
+  token reset <controller-url>
+                         Revoke ALL paired devices and return the controller
+                         to unpaired local mode (loopback host, or --token)
+    --token <token>      Device token (required from a non-loopback host)
+    --config <path>      OpenClaw config path to clear the stored token from
+  help                   Show this help
 
 Options:
   --config <path>         Override the OpenClaw config path
@@ -247,6 +260,242 @@ function parseArgs(argv) {
   }
 
   return { command: command || "help", options };
+}
+
+// ===========================================================================
+// Device pairing commands (issue #23, client wave).
+//
+//   pair <controller-url> [--code] [--name] [--kind]  - exchange a one-shot
+//     code (or a LAN auto-pair attempt) for a device token, then store it as
+//     plugins.entries.teamclaw.config.securityToken in the OpenClaw config so
+//     every later worker/controller API call from this instance carries the
+//     X-TeamClaw-Token header automatically.
+//   token reset <controller-url> [--token] - revoke all devices (loopback
+//     host needs no token) and clear any locally stored token.
+// ===========================================================================
+
+const PAIR_DEVICE_KINDS = new Set(["worker", "desktop", "cli"]);
+const SECURITY_REQUEST_TIMEOUT_MS = 15_000;
+
+function normalizeControllerUrlArg(raw) {
+  let value = String(raw || "").trim();
+  if (!value) {
+    throw new Error("A controller URL is required (e.g. http://192.168.1.10:9527).");
+  }
+  if (!value.startsWith("http://") && !value.startsWith("https://")) {
+    value = `http://${value}`;
+  }
+  try {
+    const parsed = new URL(value);
+    if (!parsed.hostname) {
+      throw new Error("empty host");
+    }
+    // Strip any trailing path/slash so endpoint joining stays predictable.
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch (error) {
+    throw new Error(`Invalid controller URL: ${raw}`);
+  }
+}
+
+function readFlagValue(argv, index, flag) {
+  const value = argv[index + 1];
+  if (!value) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return value;
+}
+
+function parsePairArgs(argv) {
+  const options = { controllerUrl: "", code: "", name: "", kind: "cli", configPath: "" };
+  const positional = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--help" || arg === "-h") {
+      return { help: true, options };
+    }
+    if (arg.startsWith("--")) {
+      if (arg === "--code") {
+        options.code = readFlagValue(argv, index, arg).trim();
+        index += 1;
+      } else if (arg === "--name") {
+        options.name = readFlagValue(argv, index, arg).trim();
+        index += 1;
+      } else if (arg === "--kind") {
+        const kind = readFlagValue(argv, index, arg).trim();
+        if (!PAIR_DEVICE_KINDS.has(kind)) {
+          throw new Error(`--kind requires one of: ${[...PAIR_DEVICE_KINDS].join(", ")}`);
+        }
+        options.kind = kind;
+        index += 1;
+      } else if (arg === "--config") {
+        options.configPath = readFlagValue(argv, index, arg);
+        index += 1;
+      } else {
+        throw new Error(`Unknown argument: ${arg}`);
+      }
+      continue;
+    }
+    positional.push(arg);
+  }
+  if (positional.length !== 1) {
+    throw new Error('Usage: teamclaw pair <controller-url> [--code <code>] [--name <name>] [--kind worker|desktop|cli]');
+  }
+  options.controllerUrl = positional[0];
+  return { help: false, options };
+}
+
+function parseTokenArgs(argv) {
+  const options = { controllerUrl: "", token: "", configPath: "" };
+  const positional = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--help" || arg === "-h") {
+      return { help: true, options };
+    }
+    if (arg.startsWith("--")) {
+      if (arg === "--token") {
+        options.token = readFlagValue(argv, index, arg).trim();
+        index += 1;
+      } else if (arg === "--config") {
+        options.configPath = readFlagValue(argv, index, arg);
+        index += 1;
+      } else {
+        throw new Error(`Unknown argument: ${arg}`);
+      }
+      continue;
+    }
+    positional.push(arg);
+  }
+  if (positional.length === 0 || positional[0] !== "reset") {
+    throw new Error('Usage: teamclaw token reset <controller-url> [--token <token>]');
+  }
+  if (positional.length !== 2) {
+    throw new Error('Usage: teamclaw token reset <controller-url> [--token <token>]');
+  }
+  options.controllerUrl = positional[1];
+  return { help: false, options };
+}
+
+async function securityFetch(controllerUrl, pathname, { method = "POST", body, token } = {}) {
+  const headers = {};
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+  }
+  if (token) {
+    headers["X-TeamClaw-Token"] = token;
+  }
+  let response;
+  try {
+    response = await fetch(`${controllerUrl}/api/v1${pathname}`, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(SECURITY_REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    throw new Error(`Could not reach the controller at ${controllerUrl}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = null;
+  }
+  return { status: response.status, ok: response.ok, payload };
+}
+
+function describeSecurityError(result, fallback) {
+  if (result.payload && typeof result.payload === "object") {
+    const parts = [result.payload.error, result.payload.hint].filter((part) => typeof part === "string" && part.trim());
+    if (parts.length > 0) {
+      return parts.join(" - ");
+    }
+  }
+  return `${fallback} (HTTP ${result.status})`;
+}
+
+async function upsertTeamClawConfig(configPath, update) {
+  const config = await readOpenClawConfig(configPath);
+  const plugins = ensureRecord(config, "plugins");
+  const entries = ensureRecord(plugins, "entries");
+  const teamclawEntry = ensureRecord(entries, PLUGIN_ID);
+  const teamclawConfig = ensureRecord(teamclawEntry, "config");
+  update(teamclawConfig);
+  await writeConfig(configPath, config);
+}
+
+async function runPair(options) {
+  const controllerUrl = normalizeControllerUrlArg(options.controllerUrl);
+  const kind = options.kind;
+  const name = options.name || `${os.hostname()} ${kind}`;
+  let result;
+  if (options.code) {
+    result = await securityFetch(controllerUrl, "/security/pair", {
+      body: { code: options.code.toUpperCase(), kind, name },
+    });
+  } else {
+    // Zero-input LAN path first (mDNS scenario): a LAN peer pairs without a
+    // code while the controller allows auto-pairing.
+    result = await securityFetch(controllerUrl, "/security/pair-auto", { body: { kind, name } });
+    if (result.status === 403) {
+      throw new Error(
+        "This controller did not accept zero-input pairing (not a LAN peer, or auto-pairing is disabled). " +
+        "Ask the controller owner for a one-shot pairing code (web UI: Device security -> New pairing code) and rerun with --code <code>.",
+      );
+    }
+  }
+  if (!result.ok || !result.payload || typeof result.payload.token !== "string") {
+    if (result.status === 409) {
+      throw new Error(describeSecurityError(result, "Device protection is not enabled on this controller; there is nothing to pair with yet"));
+    }
+    throw new Error(describeSecurityError(result, "Pairing failed"));
+  }
+  const configPath = expandUserPath(options.configPath || resolveDefaultOpenClawConfigPath());
+  await upsertTeamClawConfig(configPath, (teamclawConfig) => {
+    // Same layer as teamName: the worker/controller pipeline reads this and
+    // sends X-TeamClaw-Token on every API call automatically.
+    teamclawConfig.securityToken = result.payload.token;
+    if (!teamclawConfig.controllerUrl) {
+      teamclawConfig.controllerUrl = controllerUrl;
+    }
+  });
+  console.log(`Paired with ${controllerUrl}`);
+  console.log(`  Device: "${result.payload.device?.name || name}" (kind ${kind}, id ${result.payload.deviceId || result.payload.device?.id || "?"})`);
+  console.log(`  Token stored at plugins.entries.teamclaw.config.securityToken in ${configPath}`);
+  console.log("  This instance now authenticates automatically. Keep that config file private; the token is shown only once by the controller and cannot be recovered.");
+  console.log("Next step: restart this instance (or run `openclaw gateway restart`) so its API calls pick up the token.");
+}
+
+async function runTokenReset(options) {
+  const controllerUrl = normalizeControllerUrlArg(options.controllerUrl);
+  const result = await securityFetch(controllerUrl, "/security/reset", { body: {}, token: options.token });
+  if (!result.ok) {
+    if (result.status === 401) {
+      throw new Error(
+        "Reset refused: only the controller host itself (loopback) or an authenticated device may reset. " +
+        "Run this on the controller machine, or pass --token <device-token>.",
+      );
+    }
+    throw new Error(describeSecurityError(result, "Token reset failed"));
+  }
+  // Best effort: drop the now-invalid local token so the next pair starts clean.
+  const configPath = expandUserPath(options.configPath || resolveDefaultOpenClawConfigPath());
+  try {
+    const config = await readOpenClawConfig(configPath);
+    const teamclawConfig = getExistingTeamClawConfig(config);
+    if (typeof teamclawConfig.securityToken === "string" && teamclawConfig.securityToken) {
+      delete teamclawConfig.securityToken;
+      const plugins = ensureRecord(config, "plugins");
+      const entries = ensureRecord(plugins, "entries");
+      const teamclawEntry = ensureRecord(entries, PLUGIN_ID);
+      teamclawEntry.config = teamclawConfig;
+      await writeConfig(configPath, config);
+      console.log(`Cleared the stored device token from ${configPath}`);
+    }
+  } catch {
+    // No local config/token to clear - resetting a remote controller only.
+  }
+  console.log(`All paired devices on ${controllerUrl} were revoked; the controller is back to unpaired local mode (L0).`);
 }
 
 function isRecord(value) {
@@ -2103,8 +2352,29 @@ async function runInstall(options) {
 }
 
 async function main() {
+  const argv = process.argv.slice(2);
+  // Issue #23 pairing commands dispatch before the installer parser (their
+  // positional <controller-url> argument is not an installer flag).
+  if (argv[0] === "pair") {
+    const { help, options } = parsePairArgs(argv.slice(1));
+    if (help) {
+      printHelp();
+      return;
+    }
+    await runPair(options);
+    return;
+  }
+  if (argv[0] === "token") {
+    const { help, options } = parseTokenArgs(argv.slice(1));
+    if (help) {
+      printHelp();
+      return;
+    }
+    await runTokenReset(options);
+    return;
+  }
   await loadRoleOptions();
-  const { command, options } = parseArgs(process.argv.slice(2));
+  const { command, options } = parseArgs(argv);
   if (command === "help") {
     printHelp();
     return;
