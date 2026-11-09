@@ -131,6 +131,8 @@ import {
   handleSecurityPairRequest,
   handleSecurityPairStartRequest,
   handleSecurityResetRequest,
+  isLanIp,
+  isProtectionOn,
 } from "./security.js";
 import type { SecurityPeer } from "./security.js";
 
@@ -1592,6 +1594,31 @@ export function createTunnelGateRoutes(tunnelManager: TunnelManager): readonly R
 /** /api/v1/tunnel/* management API (direct requests only, never via tunnel). */
 export function createTunnelManagementRoutes(tunnelManager: TunnelManager, deps: ControllerHttpDeps): readonly RouteDef[] {
   const { config, logger } = deps;
+
+  // Issue #222 (coordinated scope): creating a public tunnel is an
+  // internet-EXPOSURE escalation, so in L0 (protection off) the three start
+  // endpoints accept only loopback/LAN origins - a public-network peer that
+  // merely reached the port must never be able to open a share URL into
+  // this controller. While protection is on, the device gate in
+  // http-server.ts has already authenticated the caller (#23) and stays the
+  // governing rule: a deliberately paired device may share, including
+  // remotely. Loopback/LAN classification reuses the security module's
+  // isLanIp (via-tunnel requests never reach this table - they dispatch to
+  // the gate table instead - so the raw socket peer is authoritative).
+  const tunnelStartAllowedFrom = (req: IncomingMessage, res: ServerResponse): boolean => {
+    if (isProtectionOn(deps.getTeamState())) {
+      return true;
+    }
+    if (isLanIp(req.socket.remoteAddress)) {
+      return true;
+    }
+    sendJson(res, 403, {
+      error: "forbidden",
+      hint: "Creating a public tunnel exposes this controller to the internet. Start tunnels from the controller host (loopback or LAN), or enable device pairing (POST /api/v1/security/enable from the controller host) and share from a paired device.",
+    });
+    return false;
+  };
+
   return [
     {
       method: "GET",
@@ -1603,7 +1630,10 @@ export function createTunnelManagementRoutes(tunnelManager: TunnelManager, deps:
     {
       method: "POST",
       path: "/api/v1/tunnel/start",
-      handler: async ({ res }) => {
+      handler: async ({ req, res }) => {
+        if (!tunnelStartAllowedFrom(req, res)) {
+          return;
+        }
         const authStatus = await getGithubAuthManager(config, logger).getStatus();
         const account = authStatus.account;
         if (!account?.login) { sendError(res, 401, "GitHub login required to share a tunnel"); return; }
@@ -1620,6 +1650,9 @@ export function createTunnelManagementRoutes(tunnelManager: TunnelManager, deps:
       method: "POST",
       path: "/api/v1/tunnel/start-self-hosted",
       handler: async ({ req, res }) => {
+        if (!tunnelStartAllowedFrom(req, res)) {
+          return;
+        }
         let token = "";
         try {
           const body = await readFormBody(req) as { token?: unknown };
@@ -1638,7 +1671,10 @@ export function createTunnelManagementRoutes(tunnelManager: TunnelManager, deps:
     {
       method: "POST",
       path: "/api/v1/tunnel/start-quick",
-      handler: ({ res }) => {
+      handler: ({ req, res }) => {
+        if (!tunnelStartAllowedFrom(req, res)) {
+          return;
+        }
         const r = tunnelManager.startQuick();
         if (!r.launched) { sendError(res, 400, r.error ?? "failed to start quick tunnel"); return; }
         sendJson(res, 202, { launched: true, status: tunnelManager.status() });
