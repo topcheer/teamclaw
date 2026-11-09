@@ -329,8 +329,8 @@ async function runControllerIntakePromptSmoke() {
   );
   assert.match(
     workerProvisioningSource,
-    /await fs\.writeFile\(configPath,\s*spec\.configJson,\s*"utf8"\);/,
-    "process-provisioned workers should boot from the exact generated worker config JSON payload",
+    /await fs\.writeFile\(configPath,\s*spec\.configJson,\s*\{ encoding: "utf8", mode: 0o600 \}\);/,
+    "process-provisioned workers should boot from the exact generated worker config JSON payload, written owner-only (mode 0600, #237 W4 - the config carries provider API keys)",
   );
   assert.match(
     workerProvisioningSource,

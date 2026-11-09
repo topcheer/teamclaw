@@ -65,7 +65,14 @@ export function buildContainerBootstrapScript(): string {
     "set -eu",
     "mkdir -p \"$OPENCLAW_STATE_DIR\"",
     "if [ -n \"${TEAMCLAW_WORKSPACE_DIR:-}\" ]; then mkdir -p \"$TEAMCLAW_WORKSPACE_DIR\"; fi",
-    "node -e 'const fs=require(\"fs\"); const configPath=process.env.OPENCLAW_CONFIG_PATH; const raw=Buffer.from(process.env.TEAMCLAW_BOOTSTRAP_CONFIG_B64||\"\", \"base64\").toString(\"utf8\"); fs.mkdirSync(require(\"path\").dirname(configPath), { recursive: true }); fs.writeFileSync(configPath, raw);'",
+    // Issue #237 W4: the bootstrap config carries provider API keys - write
+    // it owner-only inside the container too (the old permissionless call
+    // defaulted to 0644). The remaining exposure is the env injection
+    // itself (TEAMCLAW_BOOTSTRAP_CONFIG_B64 is visible to `docker inspect`
+    // and pod-env readers); migrating the docker/kubernetes backends to
+    // mounted Secrets needs a coordinated chart/image change (cf. #230's
+    // image-skew caveat) and is tracked by #237 W4.
+    "node -e 'const fs=require(\"fs\"); const configPath=process.env.OPENCLAW_CONFIG_PATH; const raw=Buffer.from(process.env.TEAMCLAW_BOOTSTRAP_CONFIG_B64||\"\", \"base64\").toString(\"utf8\"); fs.mkdirSync(require(\"path\").dirname(configPath), { recursive: true }); fs.writeFileSync(configPath, raw, { mode: 0o600 });'",
     "exec node dist/index.js gateway --allow-unconfigured",
   ].join("\n");
 }

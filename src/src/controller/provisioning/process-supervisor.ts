@@ -44,7 +44,14 @@ export class ProcessProvisioner implements WorkerProvisionerBackend {
     const configPath = path.join(stateDir, "openclaw.json");
     await fs.mkdir(stateDir, { recursive: true });
     await prepareProcessRuntimeExtensions(stateDir);
-    await fs.writeFile(configPath, spec.configJson, "utf8");
+    // Issue #237 W4: the bootstrap config carries provider API keys, so it
+    // must land owner-only - the default 0644 let any local user read the
+    // worker's credentials. { mode } applies at creation; on Windows (no
+    // POSIX perms) the option is a no-op and behavior is unchanged.
+    // Container backends have the same exposure via the
+    // TEAMCLAW_BOOTSTRAP_CONFIG_B64 env (docker inspect / pod env); see the
+    // migration note on buildContainerBootstrapScript().
+    await fs.writeFile(configPath, spec.configJson, { encoding: "utf8", mode: 0o600 });
 
     const gatewayEntrypoint = resolveGatewayEntrypoint();
     const child = spawn(process.execPath, [
