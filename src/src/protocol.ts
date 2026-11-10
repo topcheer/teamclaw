@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { HeartbeatPayload, RegistrationRequest, RoleId } from "./types.js";
 
@@ -7,10 +8,50 @@ export const HEARTBEAT_MS = 10000;
 export const WORKER_TIMEOUT_MS = 30000;
 export const API_PREFIX = "/api/v1";
 
+// Issue #255 P0-1: id fragments used to come from the V8 Math PRNG
+// (xorshift128+ - the internal state is recoverable from a handful of
+// observed outputs, so past fragments leak future ones). Fragments now
+// derive from the CSPRNG. The output shape (timestamp + 6 base36 chars) is
+// kept byte-compatible so no generateId consumer sees a format change.
+const ID_FRAGMENT_ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz";
+
+function randomIdFragment(length = 6): string {
+  let fragment = "";
+  while (fragment.length < length) {
+    for (const byte of randomBytes(length * 2)) {
+      // 256 is not a multiple of 36: bytes >= 252 would bias the last four
+      // alphabet symbols - reject them and draw again.
+      if (byte >= 252) {
+        continue;
+      }
+      fragment += ID_FRAGMENT_ALPHABET[byte % 36]!;
+      if (fragment.length === length) {
+        break;
+      }
+    }
+  }
+  return fragment;
+}
+
 function generateId(): string {
   const ts = Date.now().toString(36);
-  const rand = Math.random().toString(36).slice(2, 8);
+  const rand = randomIdFragment();
   return `${ts}-${rand}`;
+}
+
+/**
+ * Issue #255 P0-1: bearer token a provisioned worker must present at
+ * registration (and that the controller echoes on task dispatch). 256 bits
+ * from the CSPRNG, hex-encoded. This is an internal value with no external
+ * format contract - it travels controller -> worker through the
+ * TEAMCLAW_LAUNCH_TOKEN env var and is only ever equality-checked - so the
+ * old `${generateId()}-${generateId()}` shape (two ~31-bit xorshift128+
+ * fragments) is replaced outright. Tokens minted by older builds stay valid:
+ * the check is an equality either way (now constant-time), only generation
+ * changes.
+ */
+function generateLaunchToken(): string {
+  return randomBytes(32).toString("hex");
 }
 
 async function parseJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -94,6 +135,7 @@ function createHeartbeatPayload(
 
 export {
   generateId,
+  generateLaunchToken,
   parseJsonBody,
   readRequestBody,
   sendJson,
