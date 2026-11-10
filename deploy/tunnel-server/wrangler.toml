@@ -7,9 +7,9 @@ routes = [
 ]
 
 [vars]
-# Issue #231 grey window: the relay ships before controllers send
-# Authorization on create. "true" (deploy default) still passes headerless
-# creates — each logs a console.warn so convergence is observable in
-# `wrangler tail`; flip to "false" once legacy traffic has stopped to
-# require the github_user ownership proof (401 without the header).
-ACCEPT_LEGACY_CREATE = "true"
+# Issue #231 grey window CLOSED 2026-11-10: a 180s `wrangler tail` window
+# observed zero "legacy controller" warns (the only traffic was our own
+# /api/health probes), so ACCEPT_LEGACY_CREATE flipped to "false".
+# POST /api/tunnels now requires Authorization: Bearer <github token>
+# proving github_user ownership — headerless creates get 401.
+ACCEPT_LEGACY_CREATE = "false"
