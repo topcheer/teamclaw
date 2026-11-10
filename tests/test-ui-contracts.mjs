@@ -126,7 +126,7 @@ async function runUiContractSmoke() {
 
   // Day/night theming: paired token blocks, no-flash bootstrap, live toggle,
   // window chrome follows the theme.
-  const desktopPreload = await fs.readFile(path.join(projectRoot, "desktop", "preload.mjs"), "utf8");
+  const desktopPreload = await fs.readFile(path.join(projectRoot, "desktop", "preload.cjs"), "utf8");
   assert.match(desktopStyle, /html\[data-theme="dark"\]/, "a dark theme token block must exist");
   assert.match(desktopStyle, /--info-bg|--danger-bg/, "status colors must be semantic tokens");
   assert.match(desktopHtml, /teamclaw-theme/, "index.html must bootstrap the theme before paint");

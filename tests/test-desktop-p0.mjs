@@ -20,7 +20,9 @@
 //       double-counted) - verified behaviorally on a real child process.
 //   W5  will-navigate / setWindowOpenHandler guards exist.
 //   #220 openclaw probe pre-resolves the executable (no PATH-dependent spawn,
-//       no bare "openclaw") and hard-kills a hung --help after a timeout.
+//       no bare "openclaw") and hard-kills a hung --help after a timeout;
+//       #220 review follow-up - a null resolution is never cached, so a
+//       mid-session install becomes visible to the next probe.
 //   #223 DNS-rebinding follow-up: validateArtifactUrl only saw the hostname
 //       STRING - https://localtest.me (public DNS -> 127.0.0.1) passed it
 //       untouched. Every fetch hop now RESOLVES non-literal hosts
@@ -38,7 +40,7 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, "..");
 const desktopDir = path.join(projectRoot, "desktop");
 const mainPath = path.join(desktopDir, "main.mjs");
-const preloadPath = path.join(desktopDir, "preload.mjs");
+const preloadPath = path.join(desktopDir, "preload.cjs");
 const htmlPath = path.join(desktopDir, "renderer", "index.html");
 const appJsPath = path.join(desktopDir, "renderer", "app.js");
 
@@ -155,12 +157,24 @@ assert.match(mainSource, /import dns from "node:dns\/promises"/, "the DNS gate m
 assert.match(mainSource, /dns\.lookup\(effectiveHost, \{ all: true \}\)/, "dns.lookup must request ALL addresses (every A/AAAA record is checked)");
 assert.match(mainSource, /await assertArtifactHostResolvesPublic\(current\)/, "every fetch hop (first request + each redirect) must pass the DNS gate");
 assert.match(mainSource, /const ARTIFACT_DNS_TIMEOUT_MS = \d+/, "the DNS gate must have an explicit timeout budget");
+// #246 NAT64: the 64:ff9b::/96 unwrap must live in the SHARED pure layer
+// (artifactEffectiveHost), so the textual validator and the DNS re-check
+// both judge the embedded IPv4 automatically.
+assert.match(mainSource, /function nat64EmbeddedIpv4\(/, "the NAT64 64:ff9b::/96 unwrap helper must exist (#246)");
+assert.match(
+  mainSource,
+  /const nat64 = nat64EmbeddedIpv4\(host\);/,
+  "artifactEffectiveHost must consult the NAT64 unwrap (#246)",
+);
 
 // C1 behavioral: run the REAL validator against injection payloads. The
 // blocklist lives in shared helpers (artifactEffectiveHost unwrap +
-// isBlockedArtifactHost predicate) so the textual check and the DNS
-// re-check below provably run the SAME rules.
-const artifactEffectiveHost = evalWithDeps(extractFunction(mainSource, "artifactEffectiveHost"), {});
+// nat64EmbeddedIpv4 + isBlockedArtifactHost predicate) so the textual check
+// and the DNS re-check below provably run the SAME rules.
+const nat64EmbeddedIpv4 = evalWithDeps(extractFunction(mainSource, "nat64EmbeddedIpv4"), {});
+const artifactEffectiveHost = evalWithDeps(extractFunction(mainSource, "artifactEffectiveHost"), {
+  nat64EmbeddedIpv4,
+});
 const isBlockedArtifactHost = evalWithDeps(extractFunction(mainSource, "isBlockedArtifactHost"), {});
 const isLiteralIpHost = evalWithDeps(extractFunction(mainSource, "isLiteralIpHost"), {});
 const validateArtifactUrl = evalWithDeps(extractFunction(mainSource, "validateArtifactUrl"), {
@@ -194,11 +208,36 @@ for (const [label, payload] of [
   ["v4-mapped metadata (hex)", "https://[::ffff:a9fe:a9fe]/x.tar.gz"],
   ["v4-mapped private v4 (hex)", "https://[::ffff:c0a8:101]/x.tar.gz"],
   ["v4-compatible loopback (hex)", "https://[::7f00:1]/x.tar.gz"],
+  // #246 NAT64: 64:ff9b::/96 embeds the IPv4 target in the low 32 bits - the
+  // textual v6 rules see nothing wrong while the gateway dials the intranet.
+  ["NAT64-embedded loopback v4", "https://[64:ff9b::7f00:1]/x.tar.gz"],
+  ["NAT64-embedded private v4 (10/8)", "https://[64:ff9b::a00:1]/x.tar.gz"],
+  ["NAT64-embedded private v4 (172.16/12)", "https://[64:ff9b::ac10:1]/x.tar.gz"],
+  ["NAT64-embedded private v4 (192.168/16)", "https://[64:ff9b::c0a8:101]/x.tar.gz"],
+  ["NAT64-embedded cloud metadata", "https://[64:ff9b::a9fe:a9fe]/x.tar.gz"],
+  ["NAT64-embedded metadata (dotted in v6)", "https://[64:ff9b::169.254.169.254]/x.tar.gz"],
+  ["NAT64-embedded private v4 (full 8-group form)", "https://[64:ff9b:0:0:0:0:a00:1]/x.tar.gz"],
   ["not a url", "just-some-text"],
   ["empty", ""],
 ]) {
   assert.throws(() => validateArtifactUrl(payload), /https|not allowed|credentials|characters|Invalid/i, `${label} payload must be rejected: ${payload}`);
 }
+// #246 NAT64 (behavioral, pass side): an embedded PUBLIC v4 must stay
+// allowed - NAT64 to the internet is a legitimate network setup; only the
+// embedded private/loopback/metadata ranges reject.
+assert.equal(
+  validateArtifactUrl("https://[64:ff9b::808:808]/x.tar.gz").href,
+  "https://[64:ff9b::808:808]/x.tar.gz",
+  "NAT64 embedding a public v4 (8.8.8.8) must stay allowed",
+);
+// #246 NAT64 (behavioral, unwrap unit): the shared pure helper extracts the
+// embedded v4 from every textual form (bracketed URL form, the URL parser's
+// canonical compressed form, the full 8-group form dns.lookup can return).
+assert.equal(artifactEffectiveHost("[64:ff9b::a00:1]"), "10.0.0.1", "NAT64 unwrap: [64:ff9b::a00:1] -> 10.0.0.1");
+assert.equal(artifactEffectiveHost("64:ff9b:0:0:0:0:a00:1"), "10.0.0.1", "NAT64 unwrap: full 8-group form -> 10.0.0.1");
+assert.equal(artifactEffectiveHost("64:ff9b::808:808"), "8.8.8.8", "NAT64 unwrap: public embedded v4 -> 8.8.8.8");
+assert.equal(artifactEffectiveHost("64:ff9b::"), "0.0.0.0", "NAT64 unwrap: all-zero tail is the 0.0.0.0 'this network' address");
+assert.equal(artifactEffectiveHost("64:ff9c::a00:1"), "64:ff9c::a00:1", "a NEAR miss (64:ff9c, not the well-known 64:ff9b::/96) must NOT be unwrapped");
 // Cross-review SSRF fix (behavioral): every redirect hop goes through the
 // SAME validator - a public https URL that 302s to the intranet must bounce
 // at the next hop (with redirect:"follow" the loopback response body was
@@ -268,6 +307,14 @@ const dnsStub = (addresses, opts = {}) => ({
   const publicUrl = new URL("https://rebind.example/x.tar.gz");
   // A fully public answer set passes the gate.
   await dnsGate(dnsStub(["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"]))(publicUrl);
+  // #246 NAT64 on the DNS path: a public NAME whose AAAA answer is a NAT64
+  // address embedding an intranet v4 must reject; embedding a public v4 passes.
+  await dnsGate(dnsStub(["64:ff9b::808:808"]))(publicUrl);
+  await assert.rejects(
+    () => dnsGate(dnsStub(["64:ff9b::a9fe:a9fe"]))(publicUrl),
+    /blocked address/,
+    "a DNS64 answer embedding the metadata v4 (169.254.169.254) must be rejected",
+  );
   // ANY private/loopback/link-local/metadata address in the answer set
   // rejects - the localtest.me shape: public NAME, intranet ADDRESS.
   for (const [label, addresses] of [
@@ -276,6 +323,8 @@ const dnsStub = (addresses, opts = {}) => ({
     ["private v4 (172.16/12)", ["172.31.255.1"]],
     ["cloud metadata v4", ["169.254.169.254"]],
     ["v4-mapped loopback", ["::ffff:127.0.0.1"]],
+    ["NAT64-embedded private v4", ["64:ff9b::a00:1"]],
+    ["NAT64-embedded loopback v4 (full form)", ["64:ff9b:0:0:0:0:7f00:1"]],
     ["private v6", ["fd12:3456:789a::1"]],
     ["link-local v6", ["fe80::1"]],
   ]) {
@@ -373,6 +422,54 @@ for (const [label, src] of [["main", mainSource], ["preload", preloadSource], ["
   assert.ok(!src.includes("installLocalTeamClaw"), `installLocalTeamClaw must be gone from ${label} (C2)`);
 }
 assert.ok(!preloadSource.includes("install-open-claw-locally"), "no leftover IPC channel name (C2)");
+
+// ---------------------------------------------------------------------------
+// #223 W6 follow-up: preload.mjs -> preload.cjs + sandbox:true.
+// Sandboxed preloads must be CommonJS; the conversion must not change a
+// single IPC channel (one-by-one parity against main.mjs's handlers).
+// ---------------------------------------------------------------------------
+assert.match(mainSource, /preload: path\.join\(__dirname, "preload\.cjs"\)/, "the window must load the CommonJS preload (#223 W6)");
+assert.ok(!mainSource.includes('"preload.mjs"'), "no preload.mjs reference may remain in main.mjs (#223 W6)");
+assert.match(mainSource, /sandbox: true/, "the renderer must run sandboxed now that the preload is CJS (#223 W6)");
+assert.match(preloadSource, /const \{ contextBridge, ipcRenderer \} = require\("electron"\)/, "the preload must use CommonJS require (#223 W6)");
+assert.ok(!preloadSource.includes("import "), "the sandboxed preload must not be an ES module (#223 W6)");
+{
+  const desktopPackageJson = JSON.parse(await fs.readFile(path.join(desktopDir, "package.json"), "utf8"));
+  assert.ok(
+    desktopPackageJson.build.files.includes("preload.cjs"),
+    "electron-builder files list must ship preload.cjs (#223 W6)",
+  );
+  assert.ok(
+    !desktopPackageJson.build.files.includes("preload.mjs"),
+    "the stale preload.mjs entry must be gone from the packaging files list (#223 W6)",
+  );
+  assert.match(
+    desktopPackageJson.scripts.smoke,
+    /node --check preload\.cjs/,
+    "the smoke script must check preload.cjs (#223 W6)",
+  );
+}
+{
+  // IPC channel parity, derived from the preload source itself: every
+  // ipcRenderer.invoke channel needs its ipcMain.handle, every ipcRenderer.on
+  // event needs its webContents.send. The conversion is a module-system
+  // change ONLY - a renamed or dropped channel here breaks the renderer.
+  const invokeChannels = [...preloadSource.matchAll(/ipcRenderer\.invoke\("([^"]+)"/g)].map((m) => m[1]);
+  const eventChannels = [...preloadSource.matchAll(/ipcRenderer\.on\("([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(invokeChannels.length >= 20, `the preload must keep its full invoke surface (found ${invokeChannels.length})`);
+  for (const channel of invokeChannels) {
+    assert.ok(
+      new RegExp(`ipcMain\\.handle\\("${channel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"[,)]`).test(mainSource),
+      `every preload invoke channel must keep its ipcMain.handle: ${channel}`,
+    );
+  }
+  for (const channel of eventChannels) {
+    assert.ok(
+      mainSource.includes(`.send("${channel}"`),
+      `every preload event channel must keep its webContents.send: ${channel}`,
+    );
+  }
+}
 
 // ---------------------------------------------------------------------------
 // W2: CSP meta - strict for scripts (self + pinned hash, no unsafe-inline),
@@ -514,10 +611,47 @@ const resolveExecutableOnPath = evalWithDeps(
   assert.equal(resolveExecutableOnPath("definitely-not-a-real-binary-xyz"), null, "missing executables must resolve to null (old ENOENT signal)");
 }
 
+// #220 review follow-up (behavioral): a null resolution must NOT be cached -
+// `openclaw` installed between two probes (the wizard's own install writes
+// it onto PATH) becomes visible on the very next probe, while a SUCCESS
+// stays cached for the app's lifetime.
+{
+  const resolvedOpenClawBinary = evalWithDeps(
+    extractFunction(mainSource, "resolvedOpenClawBinary"),
+    { OPENCLAW_PATH_CACHE: undefined, resolveExecutableOnPath },
+  );
+  const fsSyncModule = await import("node:fs");
+  const os = await import("node:os");
+  const binDir = fsSyncModule.mkdtempSync(path.join(os.tmpdir(), "tc-openclaw-path-"));
+  const binName = process.platform === "win32" ? "openclaw.cmd" : "openclaw";
+  const binPath = path.join(binDir, binName);
+  const prevPath = process.env.PATH;
+  try {
+    process.env.PATH = binDir;
+    // Probe 1: nothing on PATH yet -> null (the old ENOENT signal).
+    assert.equal(resolvedOpenClawBinary(), null, "empty PATH must resolve to null");
+    // Mid-session "install": the binary appears BETWEEN the two probes.
+    fsSyncModule.writeFileSync(binPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    // Probe 2: the fresh install must already be visible (null not cached).
+    assert.equal(
+      resolvedOpenClawBinary(),
+      binPath,
+      "a mid-session openclaw install must be visible to the next probe (null must not be permanently cached)",
+    );
+    // Probe 3: the SUCCESS stays cached even after the file disappears
+    // (PATH does not change while the app runs - documented behavior).
+    fsSyncModule.rmSync(binPath);
+    assert.equal(resolvedOpenClawBinary(), binPath, "a successful resolution stays cached for the app's lifetime");
+  } finally {
+    process.env.PATH = prevPath;
+    fsSyncModule.rmSync(binDir, { recursive: true, force: true });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Smoke: every desktop JS entry parses (node --check parity via spawn).
 // ---------------------------------------------------------------------------
-for (const file of ["main.mjs", "preload.mjs", "runtime-extract.mjs", "renderer/app.js", "renderer/i18n.js"]) {
+for (const file of ["main.mjs", "preload.cjs", "runtime-extract.mjs", "renderer/app.js", "renderer/i18n.js"]) {
   const check = spawnSync(process.execPath, ["--check", path.join(desktopDir, file)], { encoding: "utf8" });
   assert.equal(check.status, 0, `node --check must pass for ${file}: ${check.stderr}`);
 }

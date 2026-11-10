@@ -29,7 +29,7 @@ const rendererAppPath = path.join(projectRoot, "desktop", "renderer", "app.js");
 const rendererHtmlPath = path.join(projectRoot, "desktop", "renderer", "index.html");
 const rendererI18nPath = path.join(projectRoot, "desktop", "renderer", "i18n.js");
 const desktopMainPath = path.join(projectRoot, "desktop", "main.mjs");
-const desktopPreloadPath = path.join(projectRoot, "desktop", "preload.mjs");
+const desktopPreloadPath = path.join(projectRoot, "desktop", "preload.cjs");
 const profilesDir = path.join(projectRoot, "src", "src", "profiles");
 
 const [appSource, htmlSource, i18nSource, mainSource, preloadSource] = await Promise.all([

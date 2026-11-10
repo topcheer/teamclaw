@@ -1,4 +1,8 @@
-import { contextBridge, ipcRenderer } from "electron";
+// CommonJS on purpose (#223 W6 follow-up): sandboxed preloads must be CJS -
+// Electron does not load ESM preload scripts under sandbox:true. The bridge
+// uses contextBridge + ipcRenderer only; the sandboxed preload's limited
+// require (electron + a few polyfilled builtins) covers everything here.
+const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("teamclawDesktop", {
   platform: process.platform,
