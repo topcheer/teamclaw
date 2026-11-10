@@ -262,7 +262,18 @@
       "security.resetConfirm": "This revokes every paired device and returns the controller to unpaired local mode. Continue?",
       "security.resetDone": "Device protection reset - the controller is back to local mode.",
       "security.devicesUnavailable": "Device management needs a paired browser.",
-      "security.noDevices": "No paired devices yet."
+      "security.noDevices": "No paired devices yet.",
+      "workflow.sectionTitle": "Common workflows",
+      "workflow.stepsTooltip": "{n} steps · {roles}",
+      "workflow.started": "Workflow {name} started",
+      "workflow.startFailed": "Failed to start workflow - {reason}",
+      "workflow.badgeRound": "Round {n}",
+      "roleDisplay.title": "Role display",
+      "roleDisplay.hint": "Hide roles this team does not use, or rename them for your team. Saved in this browser only (display layer) - the team profile itself is not modified. The Team models panel always lists every role because model overrides live server-side, so hiding a role here does not remove it there.",
+      "roleDisplay.save": "Save",
+      "roleDisplay.reset": "Reset to defaults",
+      "roleDisplay.saved": "Role display settings saved",
+      "roleDisplay.resetDone": "Role display reset to the profile defaults"
     },
     zh: {
       "action.refresh": "刷新",
@@ -462,7 +473,18 @@
       "security.resetConfirm": "这将撤销所有已配对设备，并让 controller 回到未保护的本机模式。继续？",
       "security.resetDone": "设备保护已重置 - controller 已回到本机模式。",
       "security.devicesUnavailable": "需要在已配对的浏览器中管理设备。",
-      "security.noDevices": "暂无已配对设备。"
+      "security.noDevices": "暂无已配对设备。",
+      "workflow.sectionTitle": "常用工作流",
+      "workflow.stepsTooltip": "{n} 步 · {roles}",
+      "workflow.started": "工作流「{name}」已启动",
+      "workflow.startFailed": "启动工作流失败 - {reason}",
+      "workflow.badgeRound": "第{n}轮",
+      "roleDisplay.title": "角色显示",
+      "roleDisplay.hint": "隐藏本团队用不到的角色，或改成本团队的叫法。仅保存在此浏览器（纯显示层）——不修改团队画像本身。“团队模型”面板始终列出全部角色（模型覆盖保存在服务端），此处隐藏不会将其移除。",
+      "roleDisplay.save": "保存",
+      "roleDisplay.reset": "恢复默认",
+      "roleDisplay.saved": "角色显示设置已保存",
+      "roleDisplay.resetDone": "角色显示已恢复画像默认"
     }
   };
 
@@ -2423,7 +2445,7 @@
       card.classList.add("hidden");
       return;
     }
-    var roles = Array.isArray(info.roles) ? info.roles : [];
+    var roles = visibleRoles(Array.isArray(info.roles) ? info.roles : []);
     if (!roles.length) {
       card.classList.add("hidden");
       card.innerHTML = "";
@@ -2437,7 +2459,7 @@
     }
     var roleOptions = roles.map(function (role) {
       return '<option value="' + escapeHtml(role.id) + '"' + (role.id === selectedExternalWorkerRole ? " selected" : "") + ">" +
-        escapeHtml((role.icon ? role.icon + " " : "") + (role.label || role.id)) +
+        escapeHtml((role.icon ? role.icon + " " : "") + roleDisplayLabel(role)) +
         "</option>";
     }).join("");
     var command = buildExternalWorkerCommand(info, selectedExternalWorkerRole, selectedExternalWorkerDiscoveryMode);
@@ -2804,6 +2826,10 @@
         reconcileTeamProfileSwitch();
       }
 
+      // Workflow quick actions + running badges read the same profile mirror:
+      // unguarded so a failed/absent fetch re-hides the launcher cleanly.
+      renderWorkflowLauncher();
+
       renderWorkers(teamState.workers);
       renderTasks(teamState.tasks);
       renderPlanningTab(teamState.controllerRuns);
@@ -2954,7 +2980,7 @@
         '<div class="task-card' + liveClass + '" data-task-id="' + escapeHtml(task.id) + '" tabindex="0" role="button" aria-label="Open details for ' + escapeHtml(task.title) + '">' +
         '  <span class="task-priority ' + escapeHtml(priority) + '">' + escapeHtml(priority) + "</span>" +
         '  <div class="task-body">' +
-        '    <div class="task-title-row"><div class="task-title">' + escapeHtml(task.title) + "</div>" + creatorBadge + "</div>" +
+        '    <div class="task-title-row"><div class="task-title">' + escapeHtml(task.title) + "</div>" + creatorBadge + workflowBadgeHtml(task) + "</div>" +
         (task.description ? '<div class="task-desc clamp">' + escapeHtml(task.description).slice(0, 220) + "</div>" : "") +
         renderSkillPills(recommendedSkills, "skill-pills task-skill-pills") +
         contractSummary +
@@ -2977,6 +3003,115 @@
         renderTasks(teamState.tasks || []);
       });
     }
+  }
+
+  // ==================== Workflow template launcher (design 2.4) ====================
+  // Quick-action button group over the ACTIVE profile's workflow templates
+  // (GET /team/profile -> profile.workflows[], serialized verbatim by the
+  // backend - PR #243 API contract). Profiles without workflows
+  // (software-rd) and older controllers without the field both resolve to an
+  // empty template list, so the launcher hides itself - purely data-driven,
+  // no per-profile branches. Click posts POST /api/v1/workflows/{id}/start
+  // with an empty context (minimal v1 invocation); 201 -> refreshAll() so
+  // the new task chain appears; 404/503 surface the backend message.
+
+  function activeWorkflows() {
+    return activeTeamProfile && activeTeamProfile.profile && Array.isArray(activeTeamProfile.profile.workflows)
+      ? activeTeamProfile.profile.workflows
+      : [];
+  }
+
+  function workflowStepRoleLabel(step) {
+    var id = step && typeof step.role === "string" ? step.role : "";
+    if (!id) return "";
+    var entry = roleRegistry.filter(function (role) { return role && role.id === id; })[0];
+    // Route through the rename layer so tooltip chains honor custom names.
+    return entry ? roleDisplayLabel(entry) : id;
+  }
+
+  function renderWorkflowLauncher() {
+    var container = $("#workflow-launcher");
+    if (!container) return;
+    var workflows = activeWorkflows();
+    if (!workflows.length) {
+      container.hidden = true;
+      container.innerHTML = "";
+      return;
+    }
+    container.hidden = false;
+    container.setAttribute("aria-label", t("workflow.sectionTitle"));
+    container.innerHTML = workflows.map(function (workflow) {
+      if (!workflow || typeof workflow.id !== "string" || !workflow.id) return "";
+      var steps = Array.isArray(workflow.steps) ? workflow.steps : [];
+      var roles = steps.map(workflowStepRoleLabel).filter(Boolean).join(" → ");
+      var tooltip = t("workflow.stepsTooltip", { n: steps.length, roles: roles });
+      return (
+        '<button type="button" class="filter-btn workflow-launch-btn" data-workflow-id="' + escapeHtml(workflow.id) +
+        '" title="' + escapeHtml((workflow.name || workflow.id) + " — " + tooltip) + '">' +
+        escapeHtml(workflow.name || workflow.id) +
+        "</button>"
+      );
+    }).join("");
+    container.querySelectorAll("[data-workflow-id]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        startWorkflow(button.getAttribute("data-workflow-id") || "", button);
+      });
+    });
+  }
+
+  function startWorkflow(workflowId, button) {
+    if (!workflowId) return;
+    if (button) button.disabled = true;
+    apiPost("/workflows/" + encodeURIComponent(workflowId) + "/start", { context: "" })
+      .then(function (data) {
+        var name = (data && data.workflowName) || workflowId;
+        showError(t("workflow.started", { name: name }));
+        // The task chain itself is the workflow run state (design 2.4): a
+        // full refresh makes the first step task (workflow badge on) appear.
+        return refreshAll();
+      })
+      .catch(function (err) {
+        // 404 unknown id / 400 bad context / 503 mid-switch: apiRequest
+        // already extracts the backend error string; prefix the context.
+        showError(t("workflow.startFailed", {
+          reason: err instanceof Error ? err.message : String(err || "request failed"),
+        }));
+      })
+      .finally(function () {
+        if (button) button.disabled = false;
+      });
+  }
+
+  // Running-workflow badge: tasks created by the workflow engine carry
+  // task.workflow { workflowId, runId, stepKey, visitCounts }. The context
+  // holds ids only - the display join (workflow name, step title) resolves
+  // against the active profile's templates, and visitCounts > 1 on the
+  // current step surfaces the re-entry round (return-edge loops).
+  function workflowBadgeHtml(task) {
+    var context = task && task.workflow;
+    if (!context || !context.workflowId) return "";
+    var template = activeWorkflows().filter(function (workflow) {
+      return workflow.id === context.workflowId;
+    })[0];
+    var workflowName = template ? (template.name || template.id) : context.workflowId;
+    var stepTitle = "";
+    if (template && Array.isArray(template.steps)) {
+      var step = template.steps.filter(function (entry) {
+        return String(entry && entry.id) === String(context.stepKey);
+      })[0];
+      if (step && step.title) stepTitle = step.title;
+    }
+    var visits = context.visitCounts ? context.visitCounts[String(context.stepKey)] : undefined;
+    var roundPart = typeof visits === "number" && visits > 1
+      ? " · " + t("workflow.badgeRound", { n: visits })
+      : "";
+    var label = workflowName + (stepTitle ? " · " + stepTitle : "") + roundPart;
+    return (
+      '<span class="task-origin-badge task-workflow-badge" title="' +
+      escapeHtml(t("workflow.sectionTitle") + ": " + label) + '">' +
+      escapeHtml(label) +
+      "</span>"
+    );
   }
 
   function renderControllerRuns(runs) {
@@ -3546,11 +3681,11 @@
     const container = $("#roles-list");
     if (!container) return;
 
-    container.innerHTML = roles.map(function (role) {
+    container.innerHTML = visibleRoles(roles).map(function (role) {
       return (
         '<div class="role-chip">' +
         "  <span>" + escapeHtml(role.icon || "") + "</span>" +
-        "  <span>" + escapeHtml(role.label) + "</span>" +
+        "  <span>" + escapeHtml(roleDisplayLabel(role)) + "</span>" +
         "</div>"
       );
     }).join("");
@@ -3567,11 +3702,11 @@
     while (select.options.length > 1) {
       select.remove(1);
     }
-    roleRegistry.forEach(function (role) {
+    visibleRoles(roleRegistry).forEach(function (role) {
       if (!role || typeof role.id !== "string" || !role.id) return;
       const option = document.createElement("option");
       option.value = role.id;
-      option.textContent = role.label || role.id;
+      option.textContent = roleDisplayLabel(role);
       select.appendChild(option);
     });
     if (previous && Array.prototype.some.call(select.options, function (option) { return option.value === previous; })) {
@@ -3588,6 +3723,131 @@
       return preferred;
     }
     return roles.length > 0 ? roles[0].id : "";
+  }
+
+  // ============ Role display prefs (Phase 4 lightweight customization) ============
+  // v1 lightweight customization (design Phase 4): hide roles the team does
+  // not use and rename the rest for the local team. PURE UI filter layer -
+  // prefs persist in this browser's localStorage only; /roles, TeamState and
+  // the profile JSON schema stay untouched (the full JSON editor is v2).
+  // Applied at render time to the manual-task role select, the
+  // external-worker role select and the sidebar Roles list.
+  const ROLE_DISPLAY_STORAGE_KEY = "teamclaw.ui.roleDisplay.v1";
+  let roleDisplayPrefs = loadRoleDisplayPrefs();
+
+  function defaultRoleDisplayPrefs() {
+    return { hidden: {}, names: {} };
+  }
+
+  function loadRoleDisplayPrefs() {
+    try {
+      var raw = window.localStorage.getItem(ROLE_DISPLAY_STORAGE_KEY);
+      if (!raw) return defaultRoleDisplayPrefs();
+      var parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return defaultRoleDisplayPrefs();
+      return {
+        hidden: parsed.hidden && typeof parsed.hidden === "object" && !Array.isArray(parsed.hidden) ? parsed.hidden : {},
+        names: parsed.names && typeof parsed.names === "object" && !Array.isArray(parsed.names) ? parsed.names : {},
+      };
+    } catch (_err) {
+      return defaultRoleDisplayPrefs();
+    }
+  }
+
+  function saveRoleDisplayPrefs(prefs) {
+    roleDisplayPrefs = prefs || defaultRoleDisplayPrefs();
+    try {
+      window.localStorage.setItem(ROLE_DISPLAY_STORAGE_KEY, JSON.stringify(roleDisplayPrefs));
+    } catch (_err) {}
+  }
+
+  function resetRoleDisplayPrefs() {
+    roleDisplayPrefs = defaultRoleDisplayPrefs();
+    try {
+      window.localStorage.removeItem(ROLE_DISPLAY_STORAGE_KEY);
+    } catch (_err) {}
+  }
+
+  function isRoleVisible(roleId) {
+    return !(roleDisplayPrefs.hidden && roleDisplayPrefs.hidden[roleId]);
+  }
+
+  // Rename layer: a non-empty custom name wins; anything else falls back to
+  // the registry label (and the id when even the label is missing).
+  function roleDisplayLabel(role) {
+    if (!role) return "";
+    var custom = roleDisplayPrefs.names ? roleDisplayPrefs.names[role.id] : "";
+    if (typeof custom === "string" && custom.trim()) return custom.trim();
+    return role.label || role.id || "";
+  }
+
+  function visibleRoles(roles) {
+    return (roles || []).filter(function (role) {
+      return role && typeof role.id === "string" && role.id && isRoleVisible(role.id);
+    });
+  }
+
+  // Re-render every surface the prefs drive (manual-task select, external
+  // worker card, sidebar chips) after a save/reset.
+  function rerenderRoleSurfaces() {
+    renderTaskRoleOptions();
+    renderExternalWorkerInstallCard();
+    renderRoles(roleRegistry);
+  }
+
+  // Editor rows live in the team-profile modal's "Role display" section:
+  // one row per /roles registry entry - visibility checkbox (keyed by the
+  // stable role id) + display-name input whose placeholder is the registry
+  // label (an empty value falls back to it on save).
+  function renderRoleDisplayEditor() {
+    var listEl = $("#role-display-list");
+    if (!listEl) return;
+    if (!roleRegistry.length) {
+      listEl.innerHTML = "";
+      return;
+    }
+    listEl.innerHTML = roleRegistry.map(function (role) {
+      var fallback = role.label || role.id;
+      var customName = (roleDisplayPrefs.names && roleDisplayPrefs.names[role.id]) || "";
+      return (
+        '<div class="team-profile-archive-row role-display-row" data-role-display-id="' + escapeHtml(role.id) + '">' +
+        '<label class="role-display-visible">' +
+        '<input type="checkbox" data-role-display-visible' + (isRoleVisible(role.id) ? " checked" : "") + "> " +
+        escapeHtml((role.icon ? role.icon + " " : "") + role.id) +
+        "</label>" +
+        '<input type="text" class="role-display-name" data-role-display-name spellcheck="false" autocomplete="off" value="' +
+        escapeHtml(customName) + '" placeholder="' + escapeHtml(fallback) + '">' +
+        "</div>"
+      );
+    }).join("");
+  }
+
+  function saveRoleDisplayFromEditor() {
+    var listEl = $("#role-display-list");
+    if (!listEl) return;
+    var prefs = defaultRoleDisplayPrefs();
+    listEl.querySelectorAll("[data-role-display-id]").forEach(function (row) {
+      var roleId = row.getAttribute("data-role-display-id") || "";
+      if (!roleId) return;
+      var checkbox = row.querySelector("[data-role-display-visible]");
+      if (checkbox && !checkbox.checked) prefs.hidden[roleId] = true;
+      var nameInput = row.querySelector("[data-role-display-name]");
+      if (nameInput) {
+        var custom = nameInput.value.trim();
+        if (custom) prefs.names[roleId] = custom;
+      }
+    });
+    saveRoleDisplayPrefs(prefs);
+    rerenderRoleSurfaces();
+    renderRoleDisplayEditor();
+    showError(t("roleDisplay.saved"));
+  }
+
+  function resetRoleDisplay() {
+    resetRoleDisplayPrefs();
+    rerenderRoleSurfaces();
+    renderRoleDisplayEditor();
+    showError(t("roleDisplay.resetDone"));
   }
 
   function tabNameFromHash() {
@@ -4285,6 +4545,10 @@
     modal.classList.add("open");
     modal.setAttribute("aria-hidden", "false");
     refreshTeamProfileModalData();
+    // Role display editor renders from the /roles mirror + the saved prefs;
+    // rendered on open (not on refreshAll) so an in-progress edit survives
+    // background refreshes while the modal is open.
+    renderRoleDisplayEditor();
     // Issue #23: the devices section lives at the bottom of this modal; it
     // re-renders on every refreshAll while the modal is open.
     renderSecurityDevices();
@@ -4603,6 +4867,15 @@
         if (!pendingSwitchTarget || teamProfileSwitchInFlight) return;
         submitTeamProfileSwitch(pendingSwitchTarget.id);
       });
+    }
+
+    var roleDisplaySave = $("#role-display-save");
+    if (roleDisplaySave) {
+      roleDisplaySave.addEventListener("click", saveRoleDisplayFromEditor);
+    }
+    var roleDisplayReset = $("#role-display-reset");
+    if (roleDisplayReset) {
+      roleDisplayReset.addEventListener("click", resetRoleDisplay);
     }
   }
 
