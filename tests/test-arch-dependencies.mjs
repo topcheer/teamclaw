@@ -4,16 +4,25 @@
 // via teamclaw-unit-tests.yml's named step; the suite glob also picks this
 // file up automatically).
 //
-//   Rule 1 (runtime 0-cycle): no import cycles anywhere under src/src - the
-//     layering is a DAG: `controller -> shared <- worker`.
+//   Rule 1 (runtime 0-cycle, RATCHET): no import cycles anywhere under src/src
+//     - the layering is a DAG: `controller -> shared <- worker`. HEAD carries
+//     documented legacy debt (the review itself calls http-server.ts the
+//     structural bottleneck, line 79), and src/src is outside #255's file
+//     scope, so the gate is a ratchet over STRONGLY-CONNECTED COMPONENTS:
+//     the set of multi-node SCCs must never grow - no NEW SCC, and no
+//     existing SCC absorbing new members (both change the sorted member key
+//     and fail the gate). Breaking an SCC lets you delete its key from the
+//     baseline, tightening the ratchet permanently.
+//     SCC semantics are order-independent by construction (Tarjan), unlike
+//     the first draft's simple-cycle enumeration, whose reported paths
+//     depended on readdir order and missed cycles on one machine while
+//     catching them on another.
 //   Rule 2 (worker -> controller = 0, one documented exception): worker
 //     modules must not import controller modules. The single sanctioned
 //     back-reference is `worker/tools.ts -> controller/orchestration-manifest.ts`
 //     (types + pure normalize function, ARCHITECTURE_REVIEW.md lines 119/130).
 //
-// Source-level static scan (no dist, no bundler, no third-party dep): regex
-// the import/export-from specifiers of every src/src .ts file, resolve the
-// relative ones against the filesystem, build the module graph, assert.
+// Source-level static scan (no dist, no bundler, no third-party dep).
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -59,75 +68,88 @@ for (const file of tsFiles) {
     const resolved = resolveImport(file, match[1]);
     if (!resolved) continue;
     const to = moduleId(resolved);
-    if (to === from) continue; // self-import counted as a cycle below instead
+    if (to === from) continue;
     if (!edges.has(from)) edges.set(from, new Set());
     edges.get(from).add(to);
   }
 }
 
-// Rule 1: import cycles anywhere under src/src (DFS, three-color).
-const WHITE = 0, GRAY = 1, BLACK = 2;
-const color = new Map();
-const stack = [];
-const cycles = [];
-function dfs(node) {
-  color.set(node, GRAY);
-  stack.push(node);
-  for (const next of edges.get(node) ?? []) {
-    if (color.get(next) === GRAY) {
-      cycles.push([...stack.slice(stack.indexOf(next)), next].join(" -> "));
-    } else if ((color.get(next) ?? WHITE) === WHITE) {
-      dfs(next);
+// --- SCC via mutual reachability (transitive-closure fixpoint) -------------
+// Deliberately NOT a hand-rolled Tarjan: the first iterative attempt silently
+// missed SCC members and under-reported the controller hub. A closure
+// fixpoint is harder to get wrong and is order-independent by construction;
+// on ~90 nodes the extra cost is irrelevant. NOTE: type-only imports count
+// as edges - tsc still requires the target module to exist and compile.
+const allNodes = new Set(tsFiles.map(moduleId));
+for (const [from, targets] of edges) {
+  allNodes.add(from);
+  for (const to of targets) allNodes.add(to);
+}
+const reach = new Map();
+for (const node of allNodes) reach.set(node, new Set([node]));
+let changed = true;
+while (changed) {
+  changed = false;
+  for (const [from, targets] of edges) {
+    const fromReach = reach.get(from);
+    for (const to of targets) {
+      for (const member of reach.get(to)) {
+        if (!fromReach.has(member)) {
+          fromReach.add(member);
+          changed = true;
+        }
+      }
     }
   }
-  stack.pop();
-  color.set(node, BLACK);
 }
-for (const node of edges.keys()) {
-  if ((color.get(node) ?? WHITE) === WHITE) dfs(node);
+const sccs = [];
+const assigned = new Set();
+for (const node of allNodes) {
+  if (assigned.has(node)) continue;
+  const members = [node];
+  for (const other of allNodes) {
+    if (other !== node && reach.get(node).has(other) && reach.get(other).has(node)) {
+      members.push(other);
+      assigned.add(other);
+    }
+  }
+  assigned.add(node);
+  if (members.length > 1) sccs.push(members);
 }
-// Rule 1 (runtime cycles, RATCHET): ARCHITECTURE_REVIEW.md's "无循环依赖"
-// ideal is 0 cycles, but HEAD carries documented legacy debt (the review
-// itself calls http-server.ts the structural bottleneck, section line 79):
-// a types<->roles<->prompt-policy cluster and a controller/route-table hub
-// cluster. src/src is outside this issue's file scope, so the gate is a
-// ratchet: NO NEW cycle node-sets may appear, and resolving a cycle should
-// shrink the baseline below (each removal tightens the gate permanently).
-const BASELINE_CYCLE_SETS = new Set([
-  "prompt-policy,roles,types",
-  "profile-loader,prompt-policy,roles,types",
-  "openclaw-workspace,prompt-policy,role-ids,roles,types",
-  "roles,types",
-  "controller/controller-service,controller/http-server",
-  "controller/controller-service,controller/http-server,controller/repo-routes,controller/route-table,controller/task-assignment",
-  "controller/controller-service,controller/profile-switch",
-  "controller/http-server,controller/route-table",
-  "controller/http-server,controller/route-table,controller/security",
-  // Post-#256 regression (caught by this gate's FIRST CI run): 33e8f81 added
-  // worker-provisioning -> security (secretsEqual), closing a 4-module cycle.
-  // src/src is outside #255 scope - flagged for follow-up; REMOVE this entry
-  // once the cycle is broken (e.g. secretsEqual hoisted to protocol.ts).
-  "controller/http-server,controller/route-table,controller/security,controller/worker-provisioning",
-  "controller/route-table,controller/webui-routes",
-  "controller/auth-routes,controller/route-table",
-  "controller/route-table,controller/workspace-routes",
-  "controller/controller-routes,controller/route-table",
-  "controller/route-table,controller/status-routes",
-  "controller/report-routes,controller/route-table",
-  "controller/route-table,controller/tunnel-routes",
-  "controller/route-table,controller/task-results,controller/task-routes,controller/workflow-routes",
-]);
-const actualCycleSets = new Set(cycles.map((cycle) => {
-  const nodes = cycle.split(" -> ").filter((node, index, all) => index < all.length - 1 || !all.slice(0, -1).includes(node));
-  return [...new Set(nodes)].sort().join(",");
-}));
-const newCycles = [...actualCycleSets].filter((key) => !BASELINE_CYCLE_SETS.has(key));
+const sccKey = (members) => [...members].sort().join(",");
+const actualSccs = new Set(sccs.map(sccKey));
+
+// Baseline: the multi-node SCCs of src/src at #255 time. An actual SCC PASSES
+// when its member set is contained in some baseline entry - identical key, or
+// a pure SHRINK of one (e.g. the follow-up hoist of secretsEqual to
+// protocol.ts will shrink the grown controller hub back; that improvement
+// must not trip the gate). A violation is an actual SCC contained in NO
+// baseline entry: a brand-new cycle, or an existing SCC that GREW by absorbing
+// members (post-#256 the controller hub absorbed worker-provisioning via the
+// secretsEqual import - caught by this gate's first CI run; the grown shape is
+// pinned below as the largest controller-hub entry).
+// Breaking/shrinking an SCC: please replace the baseline entry with the new
+// smaller member set - each replacement tightens the ratchet permanently.
+const BASELINE_SCCS = [
+  // The controller route hub (http-server <-> route-table <-> every route
+  // module, mostly via type-only RouteContext imports). Post-8371f70 the
+  // secretsEqual hoist freed worker-provisioning from this SCC; shrinking it
+  // further means deleting members from this entry.
+  "controller/auth-routes,controller/clarification-routes,controller/controller-intake,controller/controller-planning,controller/controller-routes,controller/controller-service,controller/http-server,controller/profile-switch,controller/repo-routes,controller/report-routes,controller/route-table,controller/security,controller/status-routes,controller/task-assignment,controller/task-results,controller/task-routes,controller/tunnel-routes,controller/webui-routes,controller/worker-routes,controller/workflow-routes,controller/workspace-routes".split(","),
+  // The types spine cluster: types <-> roles <-> prompt-policy (+ the
+  // profile-loader / openclaw-workspace / role-ids spokes it absorbed).
+  "openclaw-workspace,profile-loader,prompt-policy,role-ids,roles,types".split(","),
+];
+const violations = [];
+for (const scc of sccs) {
+  const contained = BASELINE_SCCS.some((baseline) => scc.every((member) => baseline.includes(member)));
+  if (!contained) violations.push(sccKey(scc));
+}
 assert.deepEqual(
-  newCycles,
+  violations,
   [],
-  `ARCHITECTURE_REVIEW.md line 18 red line broken - NEW import cycles under src/src (${newCycles.length}); layering must stay a DAG: controller -> shared <- worker`,
+  `ARCHITECTURE_REVIEW.md line 18 red line broken - NEW or GROWN import SCCs under src/src (${violations.length}); layering must stay a DAG: controller -> shared <- worker`,
 );
-const resolved = BASELINE_CYCLE_SETS.size - actualCycleSets.size;
 
 // Rule 2: worker -> controller imports are forbidden except the documented
 // worker/tools -> controller/orchestration-manifest types+normalize edge.
@@ -149,6 +171,7 @@ assert.deepEqual(
 
 const edgeCount = [...edges.values()].reduce((sum, targets) => sum + targets.size, 0);
 console.log(
-  `✅ dependency gate: ${tsFiles.length} modules, ${edgeCount} internal import edges - 0 unsanctioned worker->controller edges, 0 new cycles `
-  + `(baseline ${BASELINE_CYCLE_SETS.size} legacy cycle sets, ${resolved > 0 ? `${resolved} resolved - shrink the baseline` : "all still present"})`,
+  `✅ dependency gate: ${tsFiles.length} modules, ${edgeCount} internal import edges - 0 unsanctioned worker->controller edges, `
+  + `${actualSccs.size} multi-node SCCs all within baseline (${BASELINE_SCCS.length} entries}):`,
 );
+for (const key of [...actualSccs].sort()) console.log(`  - SCC [${key}]`);
