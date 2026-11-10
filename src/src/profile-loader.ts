@@ -451,6 +451,16 @@ function crossValidateWorkflows(
     if (stepIds.size !== workflow.steps.length) {
       referenceErrors.push(`${workflowLabel} has duplicate step ids`);
     }
+    // #251 L7: runs start at steps[0] (workflow-routes "按 steps 建任务链"),
+    // so the first step must sit on the numeric spine - a branch-only string
+    // id first step would route nowhere on completion and the run dies
+    // instantly. Load validation refuses such templates.
+    const firstStepId = workflow.steps[0]?.id;
+    if (firstStepId !== undefined && typeof firstStepId !== "number") {
+      referenceErrors.push(
+        `${workflowLabel} first step must be a numeric spine step (design 2.4): runs start at steps[0], and the branch-only string id ${JSON.stringify(firstStepId)} would end the run immediately`,
+      );
+    }
     const outputKeys = new Set<string>();
     for (const step of workflow.steps) {
       for (const output of step.outputs ?? []) {

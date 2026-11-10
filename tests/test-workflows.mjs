@@ -104,7 +104,14 @@ expectFatal("duplicate-output-key", (p) => {
 // cycle (0 -> 1 via 需补充材料, 1 -> 0 via the existing 退回补充材料) - load must
 // reject it instead of waiting for the runtime visit cap to burn LLM calls.
 expectFatal("on-jump-cycle", (p) => { p.workflows[0].steps[0].on.需补充材料 = 1; });
-console.log("✅ loader fatal pipeline: banking passes, 9 mutated variants rejected (incl. on-jump cycle)");
+// #251 L7: steps[0] must sit on the numeric spine - a branch-only string id
+// first step would end the run instantly (no next spine edge to follow). The
+// back-reference is repointed so ONLY the new red line fires.
+expectFatal("first-step-not-numeric-spine", (p) => {
+  p.workflows[0].steps[0].id = "intake";
+  p.workflows[0].steps[1].on.退回补充材料 = "intake";
+});
+console.log("✅ loader fatal pipeline: banking passes, 10 mutated variants rejected (incl. on-jump cycle, non-numeric first step)");
 
 // software-rd carries no workflows (prompt surface untouched, golden tests hold).
 const softwareRd = JSON.parse(await fs.promises.readFile(path.join(SOURCE_PROFILES_DIR, "software-rd.json"), "utf8"));
