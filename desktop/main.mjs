@@ -1042,16 +1042,14 @@ async function createMainWindow() {
       },
     }),
     webPreferences: {
-      preload: path.join(__dirname, "preload.mjs"),
+      preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
-      // #223 W6 (kept false, deliberate): sandboxed preloads must be
-      // CommonJS - Electron does not load ESM preload scripts under
-      // sandbox:true, and preload.mjs is an ES module (contextBridge +
-      // ipcRenderer only, no Node APIs). Converting it to preload.cjs is the
-      // prerequisite for sandbox:true and is left as a follow-up (it changes
-      // the packaged entry, outside this fix's file scope).
-      sandbox: false,
+      // #223 W6 follow-up: the preload is CommonJS now (preload.cjs), so the
+      // renderer runs fully sandboxed. The sandboxed preload's limited
+      // require (electron + a few polyfilled builtins) is all this bridge
+      // ever used - contextBridge + ipcRenderer, no other Node APIs.
+      sandbox: true,
     },
   });
 

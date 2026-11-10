@@ -38,7 +38,7 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(scriptDir, "..");
 const desktopDir = path.join(projectRoot, "desktop");
 const mainPath = path.join(desktopDir, "main.mjs");
-const preloadPath = path.join(desktopDir, "preload.mjs");
+const preloadPath = path.join(desktopDir, "preload.cjs");
 const htmlPath = path.join(desktopDir, "renderer", "index.html");
 const appJsPath = path.join(desktopDir, "renderer", "app.js");
 
@@ -422,6 +422,54 @@ for (const [label, src] of [["main", mainSource], ["preload", preloadSource], ["
 assert.ok(!preloadSource.includes("install-open-claw-locally"), "no leftover IPC channel name (C2)");
 
 // ---------------------------------------------------------------------------
+// #223 W6 follow-up: preload.mjs -> preload.cjs + sandbox:true.
+// Sandboxed preloads must be CommonJS; the conversion must not change a
+// single IPC channel (one-by-one parity against main.mjs's handlers).
+// ---------------------------------------------------------------------------
+assert.match(mainSource, /preload: path\.join\(__dirname, "preload\.cjs"\)/, "the window must load the CommonJS preload (#223 W6)");
+assert.ok(!mainSource.includes('"preload.mjs"'), "no preload.mjs reference may remain in main.mjs (#223 W6)");
+assert.match(mainSource, /sandbox: true/, "the renderer must run sandboxed now that the preload is CJS (#223 W6)");
+assert.match(preloadSource, /const \{ contextBridge, ipcRenderer \} = require\("electron"\)/, "the preload must use CommonJS require (#223 W6)");
+assert.ok(!preloadSource.includes("import "), "the sandboxed preload must not be an ES module (#223 W6)");
+{
+  const desktopPackageJson = JSON.parse(await fs.readFile(path.join(desktopDir, "package.json"), "utf8"));
+  assert.ok(
+    desktopPackageJson.build.files.includes("preload.cjs"),
+    "electron-builder files list must ship preload.cjs (#223 W6)",
+  );
+  assert.ok(
+    !desktopPackageJson.build.files.includes("preload.mjs"),
+    "the stale preload.mjs entry must be gone from the packaging files list (#223 W6)",
+  );
+  assert.match(
+    desktopPackageJson.scripts.smoke,
+    /node --check preload\.cjs/,
+    "the smoke script must check preload.cjs (#223 W6)",
+  );
+}
+{
+  // IPC channel parity, derived from the preload source itself: every
+  // ipcRenderer.invoke channel needs its ipcMain.handle, every ipcRenderer.on
+  // event needs its webContents.send. The conversion is a module-system
+  // change ONLY - a renamed or dropped channel here breaks the renderer.
+  const invokeChannels = [...preloadSource.matchAll(/ipcRenderer\.invoke\("([^"]+)"/g)].map((m) => m[1]);
+  const eventChannels = [...preloadSource.matchAll(/ipcRenderer\.on\("([^"]+)"/g)].map((m) => m[1]);
+  assert.ok(invokeChannels.length >= 20, `the preload must keep its full invoke surface (found ${invokeChannels.length})`);
+  for (const channel of invokeChannels) {
+    assert.ok(
+      new RegExp(`ipcMain\\.handle\\("${channel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"[,)]`).test(mainSource),
+      `every preload invoke channel must keep its ipcMain.handle: ${channel}`,
+    );
+  }
+  for (const channel of eventChannels) {
+    assert.ok(
+      mainSource.includes(`.send("${channel}"`),
+      `every preload event channel must keep its webContents.send: ${channel}`,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // W2: CSP meta - strict for scripts (self + pinned hash, no unsafe-inline),
 // open for connect (external-controller URLs are a product feature).
 // ---------------------------------------------------------------------------
@@ -564,7 +612,7 @@ const resolveExecutableOnPath = evalWithDeps(
 // ---------------------------------------------------------------------------
 // Smoke: every desktop JS entry parses (node --check parity via spawn).
 // ---------------------------------------------------------------------------
-for (const file of ["main.mjs", "preload.mjs", "runtime-extract.mjs", "renderer/app.js", "renderer/i18n.js"]) {
+for (const file of ["main.mjs", "preload.cjs", "runtime-extract.mjs", "renderer/app.js", "renderer/i18n.js"]) {
   const check = spawnSync(process.execPath, ["--check", path.join(desktopDir, file)], { encoding: "utf8" });
   assert.equal(check.status, 0, `node --check must pass for ${file}: ${check.stderr}`);
 }
