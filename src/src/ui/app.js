@@ -269,7 +269,7 @@
       "workflow.startFailed": "Failed to start workflow - {reason}",
       "workflow.badgeRound": "Round {n}",
       "roleDisplay.title": "Role display",
-      "roleDisplay.hint": "Hide roles this team does not use, or rename them for your team. Saved in this browser only (display layer) - the team profile itself is not modified.",
+      "roleDisplay.hint": "Hide roles this team does not use, or rename them for your team. Saved in this browser only (display layer) - the team profile itself is not modified. The Team models panel always lists every role because model overrides live server-side, so hiding a role here does not remove it there.",
       "roleDisplay.save": "Save",
       "roleDisplay.reset": "Reset to defaults",
       "roleDisplay.saved": "Role display settings saved",
@@ -480,7 +480,7 @@
       "workflow.startFailed": "启动工作流失败 - {reason}",
       "workflow.badgeRound": "第{n}轮",
       "roleDisplay.title": "角色显示",
-      "roleDisplay.hint": "隐藏本团队用不到的角色，或改成本团队的叫法。仅保存在此浏览器（纯显示层）——不修改团队画像本身。",
+      "roleDisplay.hint": "隐藏本团队用不到的角色，或改成本团队的叫法。仅保存在此浏览器（纯显示层）——不修改团队画像本身。“团队模型”面板始终列出全部角色（模型覆盖保存在服务端），此处隐藏不会将其移除。",
       "roleDisplay.save": "保存",
       "roleDisplay.reset": "恢复默认",
       "roleDisplay.saved": "角色显示设置已保存",
@@ -3025,7 +3025,8 @@
     var id = step && typeof step.role === "string" ? step.role : "";
     if (!id) return "";
     var entry = roleRegistry.filter(function (role) { return role && role.id === id; })[0];
-    return entry ? (entry.label || entry.id) : id;
+    // Route through the rename layer so tooltip chains honor custom names.
+    return entry ? roleDisplayLabel(entry) : id;
   }
 
   function renderWorkflowLauncher() {
