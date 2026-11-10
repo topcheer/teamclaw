@@ -75,6 +75,15 @@ import { createT as i18nCreateT } from "./i18n.js";
     // effort - only shown as a chip, never written).
     wizardTeamProfileId: "",
     wizardCurrentProfileId: "",
+    // #255 P0-3: mirrors of the two profile-scoped endpoints refreshAll now
+    // pulls (GET /roles, GET /team/profile). A web-side profile switch
+    // replaces both wholesale; the team.switch_* WS handlers re-fill them so
+    // the desktop follows without a reconnect.
+    roleRegistry: [],
+    roleDefaultId: "",
+    activeTeamProfile: null,
+    teamSwitchInFlight: false,
+    teamSwitchTargetId: "",
     language: loadLanguage(),
   };
 
@@ -1061,6 +1070,42 @@ import { createT as i18nCreateT } from "./i18n.js";
     return llmMode() === "remote" ? null : selectedWizardTeamProfile();
   }
 
+  function applyActiveTeamProfile(profileInfo) {
+    // #255 P0-3: single apply point for the GET /team/profile mirror. The
+    // wizard-echo path (syncWizardProfileFromController) and refreshAll both
+    // funnel through here, so a web-side switch moves the "current" chip and
+    // the switch banner without a desktop reconnect. The response's
+    // `transition` object also re-derives the in-flight banner: a desktop
+    // launched mid-switch (or that missed the WS event) still shows it.
+    state.activeTeamProfile = profileInfo || null;
+    const transition = profileInfo && profileInfo.transition;
+    state.teamSwitchInFlight = Boolean(transition);
+    state.teamSwitchTargetId = transition ? String(transition.targetProfileId || "") : "";
+    const id = profileInfo && typeof profileInfo.profileId === "string" ? profileInfo.profileId : "";
+    if (id && WIZARD_TEAM_PROFILES.some((p) => p.id === id)) {
+      state.wizardCurrentProfileId = id;
+      if (!state.wizardTeamProfileId || state.wizardTeamProfileId === DEFAULT_TEAM_PROFILE_ID) {
+        state.wizardTeamProfileId = id;
+      }
+      renderWizardTeamProfiles();
+    }
+  }
+
+  function teamProfileDisplayName(profileId) {
+    // Toast/banner copy for the switch events: current-language name first,
+    // the same bilingual presentation rule as the wizard cards and the web
+    // switcher (PR #201).
+    if (!profileId) return "";
+    const zh = state.language === "zh";
+    const card = WIZARD_TEAM_PROFILES.find((p) => p.id === profileId);
+    if (card) return zh ? (card.nameZh || card.name || card.id) : (card.name || card.nameZh || card.id);
+    const profile = state.activeTeamProfile && state.activeTeamProfile.profile;
+    if (profile && profile.id === profileId) {
+      return zh ? (profile.nameZh || profile.name || profileId) : (profile.name || profile.nameZh || profileId);
+    }
+    return profileId;
+  }
+
   async function syncWizardProfileFromController() {
     // Reconfigure path (best effort): when a controller is already connected,
     // echo its ACTIVE profile onto the cards so the wizard reflects reality.
@@ -1069,15 +1114,7 @@ import { createT as i18nCreateT } from "./i18n.js";
     try {
       const res = await fetch(`${state.controllerUrl}/api/v1/team/profile`, { signal: AbortSignal.timeout(2500), headers: controllerHeaders() });
       if (!res.ok) return;
-      const data = await res.json();
-      const id = data && typeof data.profileId === "string" ? data.profileId : "";
-      if (id && WIZARD_TEAM_PROFILES.some((p) => p.id === id)) {
-        state.wizardCurrentProfileId = id;
-        if (!state.wizardTeamProfileId || state.wizardTeamProfileId === DEFAULT_TEAM_PROFILE_ID) {
-          state.wizardTeamProfileId = id;
-        }
-        renderWizardTeamProfiles();
-      }
+      applyActiveTeamProfile(await res.json());
     } catch { /* best effort - keep the default selection */ }
   }
 
@@ -1963,6 +2000,14 @@ import { createT as i18nCreateT } from "./i18n.js";
   function renderRuntimeAlert() {
     const el = $("#runtime-alert");
     if (!el) return;
+    // #255 P0-3: a web-initiated team profile switch is draining/re-warming -
+    // the switch banner outranks model readiness for its duration (task
+    // submissions 503 server-side until team.switch_completed lands).
+    if (state.teamSwitchInFlight) {
+      el.classList.remove("hidden");
+      el.innerHTML = `<strong>${escapeHtml(t("teamSwitch.started", { name: teamProfileDisplayName(state.teamSwitchTargetId) || state.teamSwitchTargetId }))}</strong>`;
+      return;
+    }
     const readiness = state.teamStatus.modelReadiness;
     if (!readiness || readiness.status === "ready") {
       el.classList.add("hidden");
@@ -3575,6 +3620,57 @@ import { createT as i18nCreateT } from "./i18n.js";
           renderTaskDetailContent();
         }
         break;
+      case "team.switch_started": {
+        // #255 P0-3 follow semantics (design Phase 5.2 / §2.3): the desktop
+        // has no switcher entry point (that is P2) - it FOLLOWS web-side
+        // switches. Drain phase: raise the banner + a system toast
+        // immediately, and re-pull so the transition state (and the stale
+        // task/worker lists being archived) lands. Submissions during the
+        // window 503 through the shared apiPost error path - same hint the
+        // web UI shows.
+        state.teamSwitchInFlight = true;
+        state.teamSwitchTargetId = String(data.profileId || "");
+        renderRuntimeAlert();
+        upsertNotification({
+          id: "team-switch:started",
+          category: "attention",
+          title: t("teamSwitch.started", { name: teamProfileDisplayName(state.teamSwitchTargetId) || state.teamSwitchTargetId }),
+          body: "",
+          meta: "Team profile",
+          desktopAlert: true,
+        });
+        refreshAll(true).catch(() => {});
+        break;
+      }
+      case "team.switch_completed": {
+        // Roles/workers/tasks change wholesale with the new profile: full
+        // re-pull. refreshAll now also re-reads /roles + /team/profile, and
+        // every profile-scoped surface rebuilds from them: the wizard
+        // "current" chip (applyActiveTeamProfile), the external-worker role
+        // selector (renderExternalWorkerInstallCard), and the per-role model
+        // panel (renderControllerSettings -> /models/config catalog.roles).
+        state.teamSwitchInFlight = false;
+        state.teamSwitchTargetId = "";
+        renderRuntimeAlert();
+        // Distinct card id from switch_started so the completion toast fires
+        // (upsertNotification only raises the OS alert for NEW cards); the
+        // transient "switching" card is dropped in favor of this one.
+        state.notifications = state.notifications.filter((entry) => entry.id !== "team-switch:started");
+        renderNotifications();
+        upsertNotification({
+          id: "team-switch:completed",
+          category: "delivery",
+          title: t("teamSwitch.completed", { name: teamProfileDisplayName(data.profileId) || data.profileId }),
+          body: "",
+          meta: "Team profile",
+          desktopAlert: true,
+        });
+        refreshAll(true).catch(() => {});
+        if (state.currentView === "controller") {
+          renderControllerSettings();
+        }
+        break;
+      }
       default:
         break;
     }
@@ -3675,6 +3771,18 @@ import { createT as i18nCreateT } from "./i18n.js";
       };
       state.reports = normalizeArray(reportsData.reports).sort((a, b) => (b.generatedAt || 0) - (a.generatedAt || 0));
       state.workspaceTree = normalizeArray(workspaceTreeData.entries);
+      // #255 P0-3: the role registry and the active team profile are
+      // profile-scoped - a web-side switch replaces both wholesale, so every
+      // refresh re-pulls them. Tolerated like the web refreshAll: on failure
+      // the last known values stay (older controllers keep working too).
+      try {
+        const rolesData = await apiGet("/roles");
+        state.roleRegistry = normalizeArray(rolesData.roles);
+        state.roleDefaultId = typeof rolesData.defaultRole === "string" ? rolesData.defaultRole : "";
+      } catch { /* keep the last known role registry */ }
+      try {
+        applyActiveTeamProfile(await apiGet("/team/profile"));
+      } catch { /* keep the last known active team profile */ }
     if (!state.selectedPlanningRunId && state.teamStatus.controllerRuns.length > 0) {
         state.selectedPlanningRunId = state.teamStatus.controllerRuns[0].id;
       }
