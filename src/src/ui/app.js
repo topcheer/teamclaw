@@ -262,7 +262,12 @@
       "security.resetConfirm": "This revokes every paired device and returns the controller to unpaired local mode. Continue?",
       "security.resetDone": "Device protection reset - the controller is back to local mode.",
       "security.devicesUnavailable": "Device management needs a paired browser.",
-      "security.noDevices": "No paired devices yet."
+      "security.noDevices": "No paired devices yet.",
+      "workflow.sectionTitle": "Common workflows",
+      "workflow.stepsTooltip": "{n} steps · {roles}",
+      "workflow.started": "Workflow {name} started",
+      "workflow.startFailed": "Failed to start workflow - {reason}",
+      "workflow.badgeRound": "Round {n}"
     },
     zh: {
       "action.refresh": "刷新",
@@ -462,7 +467,12 @@
       "security.resetConfirm": "这将撤销所有已配对设备，并让 controller 回到未保护的本机模式。继续？",
       "security.resetDone": "设备保护已重置 - controller 已回到本机模式。",
       "security.devicesUnavailable": "需要在已配对的浏览器中管理设备。",
-      "security.noDevices": "暂无已配对设备。"
+      "security.noDevices": "暂无已配对设备。",
+      "workflow.sectionTitle": "常用工作流",
+      "workflow.stepsTooltip": "{n} 步 · {roles}",
+      "workflow.started": "工作流「{name}」已启动",
+      "workflow.startFailed": "启动工作流失败 - {reason}",
+      "workflow.badgeRound": "第{n}轮"
     }
   };
 
@@ -2804,6 +2814,10 @@
         reconcileTeamProfileSwitch();
       }
 
+      // Workflow quick actions + running badges read the same profile mirror:
+      // unguarded so a failed/absent fetch re-hides the launcher cleanly.
+      renderWorkflowLauncher();
+
       renderWorkers(teamState.workers);
       renderTasks(teamState.tasks);
       renderPlanningTab(teamState.controllerRuns);
@@ -2954,7 +2968,7 @@
         '<div class="task-card' + liveClass + '" data-task-id="' + escapeHtml(task.id) + '" tabindex="0" role="button" aria-label="Open details for ' + escapeHtml(task.title) + '">' +
         '  <span class="task-priority ' + escapeHtml(priority) + '">' + escapeHtml(priority) + "</span>" +
         '  <div class="task-body">' +
-        '    <div class="task-title-row"><div class="task-title">' + escapeHtml(task.title) + "</div>" + creatorBadge + "</div>" +
+        '    <div class="task-title-row"><div class="task-title">' + escapeHtml(task.title) + "</div>" + creatorBadge + workflowBadgeHtml(task) + "</div>" +
         (task.description ? '<div class="task-desc clamp">' + escapeHtml(task.description).slice(0, 220) + "</div>" : "") +
         renderSkillPills(recommendedSkills, "skill-pills task-skill-pills") +
         contractSummary +
@@ -2977,6 +2991,114 @@
         renderTasks(teamState.tasks || []);
       });
     }
+  }
+
+  // ==================== Workflow template launcher (design 2.4) ====================
+  // Quick-action button group over the ACTIVE profile's workflow templates
+  // (GET /team/profile -> profile.workflows[], serialized verbatim by the
+  // backend - PR #243 API contract). Profiles without workflows
+  // (software-rd) and older controllers without the field both resolve to an
+  // empty template list, so the launcher hides itself - purely data-driven,
+  // no per-profile branches. Click posts POST /api/v1/workflows/{id}/start
+  // with an empty context (minimal v1 invocation); 201 -> refreshAll() so
+  // the new task chain appears; 404/503 surface the backend message.
+
+  function activeWorkflows() {
+    return activeTeamProfile && activeTeamProfile.profile && Array.isArray(activeTeamProfile.profile.workflows)
+      ? activeTeamProfile.profile.workflows
+      : [];
+  }
+
+  function workflowStepRoleLabel(step) {
+    var id = step && typeof step.role === "string" ? step.role : "";
+    if (!id) return "";
+    var entry = roleRegistry.filter(function (role) { return role && role.id === id; })[0];
+    return entry ? (entry.label || entry.id) : id;
+  }
+
+  function renderWorkflowLauncher() {
+    var container = $("#workflow-launcher");
+    if (!container) return;
+    var workflows = activeWorkflows();
+    if (!workflows.length) {
+      container.hidden = true;
+      container.innerHTML = "";
+      return;
+    }
+    container.hidden = false;
+    container.setAttribute("aria-label", t("workflow.sectionTitle"));
+    container.innerHTML = workflows.map(function (workflow) {
+      if (!workflow || typeof workflow.id !== "string" || !workflow.id) return "";
+      var steps = Array.isArray(workflow.steps) ? workflow.steps : [];
+      var roles = steps.map(workflowStepRoleLabel).filter(Boolean).join(" → ");
+      var tooltip = t("workflow.stepsTooltip", { n: steps.length, roles: roles });
+      return (
+        '<button type="button" class="filter-btn workflow-launch-btn" data-workflow-id="' + escapeHtml(workflow.id) +
+        '" title="' + escapeHtml((workflow.name || workflow.id) + " — " + tooltip) + '">' +
+        escapeHtml(workflow.name || workflow.id) +
+        "</button>"
+      );
+    }).join("");
+    container.querySelectorAll("[data-workflow-id]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        startWorkflow(button.getAttribute("data-workflow-id") || "", button);
+      });
+    });
+  }
+
+  function startWorkflow(workflowId, button) {
+    if (!workflowId) return;
+    if (button) button.disabled = true;
+    apiPost("/workflows/" + encodeURIComponent(workflowId) + "/start", { context: "" })
+      .then(function (data) {
+        var name = (data && data.workflowName) || workflowId;
+        showError(t("workflow.started", { name: name }));
+        // The task chain itself is the workflow run state (design 2.4): a
+        // full refresh makes the first step task (workflow badge on) appear.
+        return refreshAll();
+      })
+      .catch(function (err) {
+        // 404 unknown id / 400 bad context / 503 mid-switch: apiRequest
+        // already extracts the backend error string; prefix the context.
+        showError(t("workflow.startFailed", {
+          reason: err instanceof Error ? err.message : String(err || "request failed"),
+        }));
+      })
+      .finally(function () {
+        if (button) button.disabled = false;
+      });
+  }
+
+  // Running-workflow badge: tasks created by the workflow engine carry
+  // task.workflow { workflowId, runId, stepKey, visitCounts }. The context
+  // holds ids only - the display join (workflow name, step title) resolves
+  // against the active profile's templates, and visitCounts > 1 on the
+  // current step surfaces the re-entry round (return-edge loops).
+  function workflowBadgeHtml(task) {
+    var context = task && task.workflow;
+    if (!context || !context.workflowId) return "";
+    var template = activeWorkflows().filter(function (workflow) {
+      return workflow.id === context.workflowId;
+    })[0];
+    var workflowName = template ? (template.name || template.id) : context.workflowId;
+    var stepTitle = "";
+    if (template && Array.isArray(template.steps)) {
+      var step = template.steps.filter(function (entry) {
+        return String(entry && entry.id) === String(context.stepKey);
+      })[0];
+      if (step && step.title) stepTitle = step.title;
+    }
+    var visits = context.visitCounts ? context.visitCounts[String(context.stepKey)] : undefined;
+    var roundPart = typeof visits === "number" && visits > 1
+      ? " · " + t("workflow.badgeRound", { n: visits })
+      : "";
+    var label = workflowName + (stepTitle ? " · " + stepTitle : "") + roundPart;
+    return (
+      '<span class="task-origin-badge task-workflow-badge" title="' +
+      escapeHtml(t("workflow.sectionTitle") + ": " + label) + '">' +
+      escapeHtml(label) +
+      "</span>"
+    );
   }
 
   function renderControllerRuns(runs) {

@@ -135,6 +135,13 @@
             <button class="filter-btn" data-filter="failed">Failed</button>
             <input id="task-keyword" class="task-keyword-input" type="search" placeholder="Filter by keyword..." spellcheck="false" autocomplete="off" />
           </div>
+          <!-- Workflow template button group (design 2.4 / PR #243 API
+               contract): buttons come from GET /api/v1/team/profile ->
+               profile.workflows[] (renderWorkflowLauncher in app.js).
+               hidden by default so profiles without workflows (software-rd)
+               never show it - purely data-driven, no per-profile branches.
+               Click posts /api/v1/workflows/{id}/start. -->
+          <div id="workflow-launcher" class="task-filters workflow-launcher" role="group" hidden></div>
           <div id="tasks-board" class="tasks-board">
             <div class="empty-state" data-i18n="empty.noTasks">No tasks yet</div>
           </div>

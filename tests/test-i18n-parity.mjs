@@ -7,8 +7,8 @@
 //
 //   A. each side's en/zh dictionaries are complete pairs (same key sets);
 //   B. inventory counts are pinned (reproducible audit numbers):
-//        web 198 keys, desktop 294 keys, 60 shared,
-//        138 web-only, 234 desktop-only;
+//        web 203 keys, desktop 294 keys, 60 shared,
+//        143 web-only, 234 desktop-only;
 //   C. shared keys carry identical en AND zh values, except the explicit
 //      VALUE_ALLOWED allowlist below (one reason per entry);
 //   D. single-side keys match the explicit WEB_ONLY/DESKTOP_ONLY groups
@@ -92,7 +92,7 @@ for (const dict of [web, desktop]) {
 // ---------------------------------------------------------------------------
 // B. Pinned inventory counts (audit numbers from the chore-i18n-parity pass).
 // ---------------------------------------------------------------------------
-assert.equal(web.en.size, 198, "web dictionary must carry exactly 198 keys (update alongside deliberate additions)");
+assert.equal(web.en.size, 203, "web dictionary must carry exactly 203 keys (update alongside deliberate additions)");
 assert.equal(desktop.en.size, 294, "desktop dictionary must carry exactly 294 keys (update alongside deliberate additions)");
 
 const webKeys = new Set(web.en.keys());
@@ -102,7 +102,7 @@ const webOnlyKeys = [...webKeys].filter((k) => !desktopKeys.has(k)).sort();
 const desktopOnlyKeys = [...desktopKeys].filter((k) => !webKeys.has(k)).sort();
 
 assert.equal(sharedKeys.length, 60, "exactly 60 keys are shared between web and desktop");
-assert.equal(webOnlyKeys.length, 138, "exactly 138 keys are web-only");
+assert.equal(webOnlyKeys.length, 143, "exactly 143 keys are web-only");
 assert.equal(desktopOnlyKeys.length, 234, "exactly 234 keys are desktop-only");
 
 // ---------------------------------------------------------------------------
@@ -323,6 +323,13 @@ const WEB_ONLY_GROUPS = [
     "workspace.openRaw",
     "workspace.preview",
     "workspace.source"
+  ] },
+  { prefix: "workflow", reason: "web workflow template button group + running badges (design 2.4 / PR #243 UI wave); desktop renders no workflow quick actions", keys: [
+    "workflow.badgeRound",
+    "workflow.sectionTitle",
+    "workflow.startFailed",
+    "workflow.started",
+    "workflow.stepsTooltip"
   ] },
 ];
 
@@ -630,4 +637,4 @@ assert.deepEqual(
     `missing keys [${allowedDesktopOnly.filter((k) => !desktopOnlyKeys.includes(k)).join(", ")}]`,
 );
 
-console.log("i18n parity passed: web 198 / desktop 294 keys, 60 shared aligned, 138+234 single-side keys allowlisted.");
+console.log("i18n parity passed: web 203 / desktop 294 keys, 60 shared aligned, 143+234 single-side keys allowlisted.");
