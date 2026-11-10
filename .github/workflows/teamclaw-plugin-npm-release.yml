@@ -74,8 +74,75 @@ jobs:
         working-directory: src
         run: npm pack --dry-run --json --ignore-scripts
 
-  publish_package:
+  # Test gate for npm publishes (issue #20). PR #217's description claimed
+  # this job but its merge (c0b82d7) never included the workflow file, so the
+  # gate never existed at HEAD; restored here per issue #255 P0-2. Runs the
+  # full tests/test-*.mjs suite against the exact ref preview_package
+  # resolved (workflow_dispatch can name any main SHA), and publish_package
+  # below cannot start until it is green.
+  test_suite:
     needs: preview_package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preview_package.outputs.ref_sha }}
+          fetch-depth: 1
+
+      # Pinned minor: locked openclaw@2026.10.9 requires node >=24.22.1
+      # (preinstall-enforced); floating "24" is not deterministic (a0caf6e).
+      - name: Setup Node (with npm cache)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+          cache: npm
+          cache-dependency-path: src/package-lock.json
+
+      # Registry flake resilience without third-party actions.
+      - name: Install dependencies (retry once on registry flake)
+        run: |
+          set -uo pipefail
+          for attempt in 1 2; do
+            if npm --prefix src ci --no-audit --no-fund; then
+              exit 0
+            fi
+            echo "npm ci attempt ${attempt}/2 failed; retrying after backoff..."
+            sleep $(( attempt * 15 ))
+          done
+          echo "::error::npm ci failed after 2 attempts"
+          exit 1
+
+      - name: Build
+        run: npm --prefix src run build
+
+      - name: Run full unit suite (tests/test-*.mjs)
+        run: |
+          set -uo pipefail
+          total=0
+          failed=0
+          for t in tests/test-*.mjs; do
+            total=$(( total + 1 ))
+            echo "::group::${t}"
+            if node "$t"; then
+              echo "::endgroup::"
+            else
+              status=$?
+              echo "::endgroup::"
+              echo "::error file=${t}::${t} exited ${status}"
+              failed=$(( failed + 1 ))
+            fi
+          done
+          echo "unit suites: ${total} run, ${failed} failed"
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
+
+  publish_package:
+    needs: [preview_package, test_suite]
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 30
