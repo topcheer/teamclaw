@@ -6,10 +6,21 @@ import { buildTeamClawProjectAgentRelativePath } from "./openclaw-workspace.js";
 // free leaf keeps a single source of truth without a module cycle. roles.ts
 // asserts its ROLES registry agrees with the same list.
 import { ROLE_IDS } from "./role-ids.js";
+import { getActiveRoleIds } from "./profile-loader.js";
 
 export const TEAMCLAW_ROLE_IDS: RoleId[] = ROLE_IDS;
 
 export const TEAMCLAW_ROLE_IDS_TEXT = TEAMCLAW_ROLE_IDS.join(", ");
+
+// #251 (design 2.3): the four role-list prompt injections must reflect the
+// ACTIVE team profile, not the software-11 constant - a banking team must
+// not be told to collaborate using "architect"/"release-engineer" IDs.
+// profile-loader is runtime dependency-free (fs + JSON only), so importing
+// it here cannot create a module cycle. Under software-rd the active list
+// IS the canonical software-11 list, so baseline prompts are byte-identical.
+function activeRoleIdsText(): string {
+  return getActiveRoleIds().join(", ");
+}
 
 type PromptSection = string | string[] | null | undefined | false;
 
@@ -36,8 +47,10 @@ export function composePrompt(...sections: PromptSection[]): string {
  * the option (software-rd baseline, roles.ts registry init) the output is
  * byte-identical to the pre-Phase-2.4 value, which the Phase 1.7 prompt
  * goldens lock. The option is injected by the prompt pipelines (controller
- * and worker prompt-injector) rather than read from the loader here: this
- * module stays dependency-free so the roles.ts import chain cannot cycle.
+ * and worker prompt-injector) rather than read from the loader here.
+ * (#251 exception: the four role-LIST injections below now read
+ * getActiveRoleIds() directly - see activeRoleIdsText(). profile-loader is
+ * runtime dependency-free, so this still cannot cycle.)
  */
 export function buildRoleOperatingRules(options: {
   suggestedRoles: string[];
@@ -70,7 +83,7 @@ export function buildRoleOperatingRules(options: {
     "- Treat other workers' OpenClaw sessions and session keys as unavailable; use the shared workspace, the current task context, and teammate messages instead of trying cross-session inspection.",
     "- Do not mark a task completed or failed via progress updates. Finish by returning the deliverable or raising the blocking error so TeamClaw can close the task correctly.",
     "- Do not infer ownership, license scope, or lack of user authorization from technical characteristics such as proprietary branding, bundled assets, binary files, minified code, or repository layout. Focus on technical feasibility and the user's explicit requirements.",
-    `- Use exact TeamClaw role IDs when collaborating: ${TEAMCLAW_ROLE_IDS_TEXT}.`,
+    `- Use exact TeamClaw role IDs when collaborating: ${activeRoleIdsText()}.`,
     `- If a true follow-up is required after your deliverable, prefer these exact next roles: ${suggestedRoles}.`,
     `- Default starter skills for this role: ${recommendedSkills}. If the task includes more specific recommended skills, prefer those.`,
   ];
@@ -104,7 +117,7 @@ export function buildWorkerSessionRules(): string[] {
     "7. If another role must continue later, use review/handoff tools on the current task instead of spawning work.",
     "8. Other workers' OpenClaw sessions are isolated from this worker. Do not attempt cross-session inspection; use task context, the shared workspace, and queued team messages instead.",
     "9. Do not mark the task completed or failed via progress updates. Return the final deliverable and let TeamClaw close the task.",
-    `10. Valid TeamClaw role IDs: ${TEAMCLAW_ROLE_IDS_TEXT}.`,
+    `10. Valid TeamClaw role IDs: ${activeRoleIdsText()}.`,
     "11. Treat file paths from documents, plans, and teammate messages as hints, not guarantees. Verify the real path exists in the current workspace before reading or editing it; if it does not exist, search for the closest real file and note the drift instead of repeatedly calling missing paths.",
     "12. The workspace may be backed by a TeamClaw-managed git repository. Treat the current checkout as canonical project state; do not delete `.git` or replace the repo with ad-hoc archives.",
     "13. If the assigned task includes recommended skills, use those exact skill slugs first. Missing skills should be searched/installed before execution when supported by the runtime.",
@@ -139,7 +152,7 @@ export function buildTaskExecutionRules(rateLimitWaitingSentinel: string): strin
     `- Do NOT use sessions_yield or end your turn while background work, coding agents, or process sessions are still running; if the task is not complete yet, reply with exactly ${rateLimitWaitingSentinel}.`,
     "- Never return 'running in background' as the final result for a TeamClaw task. If you spawn a helper session, keep monitoring it and only return after you have the actual deliverable.",
     "- Use structured fields on progress, review, handoff, and messaging tools whenever coordination is needed.",
-    `- When naming a role, use exact TeamClaw role IDs: ${TEAMCLAW_ROLE_IDS_TEXT}.`,
+    `- When naming a role, use exact TeamClaw role IDs: ${activeRoleIdsText()}.`,
   ];
 }
 
@@ -392,7 +405,7 @@ export function buildControllerDisciplineRules(options: { canProvisionWithoutWor
       ? "- If no workers are currently registered but on-demand provisioning is enabled, you may still create execution-ready tasks so the required roles can be provisioned."
       : "- If no workers are registered, you may mention which roles would be needed, but stop there and report the worker-capacity block to the human.",
     "- Use the controller itself for requirement analysis; use the PM role only for PM-owned deliverables after intake is clear.",
-    `- Use exact TeamClaw role IDs only: ${TEAMCLAW_ROLE_IDS_TEXT}.`,
+    `- Use exact TeamClaw role IDs only: ${activeRoleIdsText()}.`,
     "- Never guess or summarize a worker's unfinished output as if it were a completed result. While work is still in flight, report only current status plus the next concrete step.",
     "- Never fabricate downstream readiness from intent alone. Downstream creation requires evidence: completed task state, a structured result contract, concrete deliverables, or an explicit handoff.",
     "- Never ask the human to manually run an obvious machine step such as rebuild/retest/repro/verification (for example git pull, go build, npm test, rerun and report whether it still crashes) when TeamClaw can create an execution task and do that work itself.",
