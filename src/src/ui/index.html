@@ -24,17 +24,19 @@
     </div>
     <div class="header-status">
       <span id="connection-status" class="status-dot disconnected"></span>
-      <a id="tunnel-live-pill" class="tunnel-live-pill" hidden target="_blank" rel="noopener" title="Managed tunnel is live - open in a new tab"></a>
-      <button id="tunnel-settings-toggle" class="header-mini-btn" type="button" title="Internet tunnel settings">Tunnel</button>
+      <a id="tunnel-live-pill" class="tunnel-live-pill" hidden target="_blank" rel="noopener" data-i18n-title="header.tunnelLiveTitle"></a>
+      <button id="tunnel-settings-toggle" class="header-mini-btn" type="button" data-i18n-title="ctl.tunnel.title" data-i18n="ctl.tab.tunnel">Tunnel</button>
       <button id="language-toggle" class="header-mini-btn" type="button">中文</button>
-      <button id="toast-settings-toggle" class="header-mini-btn" type="button" title="Toast notifications">Toasts</button>
-      <button id="worker-install-toggle" class="header-mini-btn" type="button" hidden>Add worker</button>
+      <button id="toast-settings-toggle" class="header-mini-btn" type="button" data-i18n-title="toast.settingsTitle" data-i18n="header.toasts">Toasts</button>
+      <button id="worker-install-toggle" class="header-mini-btn" type="button" hidden data-i18n="worker.add">Add worker</button>
       <!-- Team profile indicator (Phase 5.1): shows the active profile's
-           icon + localized name; click opens #team-profile-modal. -->
-      <button id="team-profile-toggle" class="header-mini-btn team-profile-toggle" type="button" title="Team profile">Team</button>
-      <span id="team-name">Team</span>
-      <button id="github-corner-login" class="header-mini-btn" type="button">Login</button>
-      <span id="github-corner-user" class="github-corner-user hidden" role="button" tabindex="0" title="GitHub: click to sign out">
+           icon + localized name; click opens #team-profile-modal. Static
+           fallback text/title only cover the pre-fetch paint; refreshAll
+           and renderTeamProfileHeaderButton overwrite both. -->
+      <button id="team-profile-toggle" class="header-mini-btn team-profile-toggle" type="button" data-i18n-title="teamProfile.kicker" data-i18n="header.teamFallback">Team</button>
+      <span id="team-name" data-i18n="header.teamFallback">Team</span>
+      <button id="github-corner-login" class="header-mini-btn" type="button" data-i18n="ctl.gh.login">Login</button>
+      <span id="github-corner-user" class="github-corner-user hidden" role="button" tabindex="0" data-i18n-title="header.githubUserTitle">
         <img id="github-corner-avatar" class="github-corner-avatar hidden" alt="">
         <span id="github-corner-name"></span>
       </span>
@@ -93,7 +95,7 @@
             <aside class="planning-sessions">
               <div class="planning-sessions-header">Sessions</div>
               <div id="planning-session-list" class="planning-session-list">
-                <div class="empty-state">No planning sessions yet</div>
+                <div class="empty-state" data-i18n="empty.noPlanningSessions">No planning sessions yet</div>
               </div>
             </aside>
             <div class="planning-main">
@@ -159,11 +161,11 @@
                 <button id="workspace-tree-refresh" class="btn btn-small" type="button" data-i18n="action.refresh">Refresh</button>
               </div>
               <div class="workspace-current-path">
-                <span class="workspace-current-path-label">Location</span>
+                <span class="workspace-current-path-label" data-i18n="workspace.location">Location</span>
                 <code id="workspace-current-path-value">...</code>
               </div>
               <div id="workspace-tree" class="workspace-tree">
-                <div class="empty-state">Workspace tree loading...</div>
+                <div class="empty-state" data-i18n="empty.workspaceLoading">Workspace tree loading…</div>
               </div>
             </aside>
 
@@ -301,22 +303,22 @@
     <div class="workspace-prompt-backdrop" data-workspace-prompt-close></div>
     <section class="workspace-prompt-panel" role="dialog" aria-modal="true" aria-labelledby="workspace-prompt-title">
       <header class="workspace-prompt-header">
-        <div class="workspace-prompt-kicker">Workspace setup</div>
-        <h2 id="workspace-prompt-title">Choose a workspace directory</h2>
+        <div class="workspace-prompt-kicker" data-i18n="ws.kicker">Workspace setup</div>
+        <h2 id="workspace-prompt-title" data-i18n="ctl.ws.title">Choose a workspace directory</h2>
       </header>
       <div class="workspace-prompt-body">
-        <p class="workspace-prompt-current">Current workspace (default):</p>
+        <p class="workspace-prompt-current" data-i18n="ctl.ws.current">Current workspace (default):</p>
         <p><code id="workspace-prompt-path"></code></p>
-        <p class="workspace-prompt-hint">TeamClaw is using the default workspace location. You can move it anywhere on this machine (for example a project parent directory) before creating tasks.</p>
+        <p class="workspace-prompt-hint" data-i18n="ctl.ws.hint">TeamClaw is using the default workspace location. You can move it anywhere on this machine (for example a project parent directory) before creating tasks.</p>
         <div class="workspace-prompt-controls">
           <input id="workspace-prompt-input" class="workspace-prompt-input" type="text" placeholder="/absolute/path/to/teamclaw_workspace" spellcheck="false" />
           <div class="workspace-prompt-actions">
-            <button id="workspace-prompt-browse" class="btn" type="button">Browse...</button>
-            <button id="workspace-prompt-apply" class="btn btn-primary" type="button">Apply</button>
-            <button id="workspace-prompt-dismiss" class="btn btn-small" type="button" data-workspace-prompt-close>Keep default</button>
+            <button id="workspace-prompt-browse" class="btn" type="button" data-i18n="ws.browse">Browse...</button>
+            <button id="workspace-prompt-apply" class="btn btn-primary" type="button" data-i18n="ctl.ws.apply">Apply</button>
+            <button id="workspace-prompt-dismiss" class="btn btn-small" type="button" data-workspace-prompt-close data-i18n="ws.keepDefault">Keep default</button>
           </div>
         </div>
-        <p class="workspace-prompt-note">Applies after a gateway restart. Existing files are not moved automatically.</p>
+        <p class="workspace-prompt-note" data-i18n="ws.restartNote">Applies after a gateway restart. Existing files are not moved automatically.</p>
       </div>
     </section>
   </div>
@@ -325,19 +327,19 @@
     <div class="workspace-prompt-backdrop" data-model-settings-close></div>
     <section class="workspace-prompt-panel" role="dialog" aria-modal="true" aria-labelledby="model-settings-title">
       <header class="workspace-prompt-header">
-        <div class="workspace-prompt-kicker">Model settings</div>
-        <h2 id="model-settings-title">Team models</h2>
+        <div class="workspace-prompt-kicker" data-i18n="models.kicker">Model settings</div>
+        <h2 id="model-settings-title" data-i18n="ctl.models.title">Team models</h2>
       </header>
       <div class="workspace-prompt-body">
         <label class="model-settings-field">
-          <span class="model-settings-label">Default model (controller &amp; all roles)</span>
+          <span class="model-settings-label" data-i18n="ctl.models.default">Default model (controller &amp; all roles)</span>
           <select id="model-settings-default"></select>
         </label>
         <div id="model-settings-roles" class="model-settings-roles"></div>
-        <p class="workspace-prompt-note">Changes hot-reload when possible; restart the gateway (openclaw gateway restart) if a selection does not take effect. Per-role selections override the default for that role.</p>
+        <p class="workspace-prompt-note" data-i18n="ctl.models.hint">Changes hot-reload when possible; restart the gateway (openclaw gateway restart) if a selection does not take effect. Per-role selections override the default for that role.</p>
         <div class="workspace-prompt-actions">
-          <button id="model-settings-save" class="btn btn-primary" type="button">Save</button>
-          <button id="model-settings-close" class="btn btn-small" type="button" data-model-settings-close>Cancel</button>
+          <button id="model-settings-save" class="btn btn-primary" type="button" data-i18n="ctl.models.save">Save</button>
+          <button id="model-settings-close" class="btn btn-small" type="button" data-model-settings-close data-i18n="action.cancel">Cancel</button>
         </div>
       </div>
     </section>
@@ -459,19 +461,19 @@
 
       <div class="task-detail-tabs">
         <button class="task-detail-tab active" type="button" data-task-detail-tab="details">
-          <span>Task details</span>
+          <span data-i18n="task.details">Task details</span>
           <span class="task-detail-tab-count" data-task-detail-tab-count="details"></span>
         </button>
         <button class="task-detail-tab" type="button" data-task-detail-tab="timeline">
-          <span>Timeline</span>
+          <span data-i18n="task.timeline">Timeline</span>
           <span class="task-detail-tab-count" data-task-detail-tab-count="timeline"></span>
         </button>
         <button class="task-detail-tab" type="button" data-task-detail-tab="clarifications">
-          <span>Clarifications</span>
+          <span data-i18n="tab.clarifications">Clarifications</span>
           <span class="task-detail-tab-count" data-task-detail-tab-count="clarifications"></span>
         </button>
         <button class="task-detail-tab" type="button" data-task-detail-tab="messages">
-          <span>Messages</span>
+          <span data-i18n="task.messages">Messages</span>
           <span class="task-detail-tab-count" data-task-detail-tab-count="messages"></span>
         </button>
       </div>
@@ -487,8 +489,8 @@
 
     <footer class="footer">
       <div class="command-bar">
-        <input type="text" id="command-input" placeholder="Send a controller message or slash command... (e.g., 继续工作, /status, /assign task-id developer)" autocomplete="off">
-        <button id="command-send" class="btn btn-small">Send to Controller</button>
+        <input type="text" id="command-input" placeholder="Send a controller message or slash command... (e.g., 继续工作, /status, /assign task-id developer)" data-i18n-placeholder="command.placeholder" autocomplete="off">
+        <button id="command-send" class="btn btn-small" data-i18n="command.send">Send to Controller</button>
       </div>
     </footer>
 
@@ -497,12 +499,12 @@
        active). -->
   <div id="tunnel-popover" class="tunnel-popover" hidden>
     <div class="tunnel-popover-backdrop" data-act="close"></div>
-    <div class="tunnel-popover-card" role="dialog" aria-modal="true" aria-label="Internet tunnel settings">
+    <div class="tunnel-popover-card" role="dialog" aria-modal="true" data-i18n-aria="ctl.tunnel.title">
       <div class="tunnel-popover-head">
-        <h3>Internet Tunnel</h3>
-        <button class="tunnel-popover-close" data-act="close" type="button" aria-label="Close">×</button>
+        <h3 data-i18n="ctl.tunnel.title">Internet Tunnel</h3>
+        <button class="tunnel-popover-close" data-act="close" type="button" aria-label="Close" data-i18n-aria="action.close">×</button>
       </div>
-      <div class="tunnel-state"><span class="tunnel-note">loading…</span></div>
+      <div class="tunnel-state"><span class="tunnel-note" data-i18n="ctl.tunnel.loading">loading…</span></div>
     </div>
   </div>
 

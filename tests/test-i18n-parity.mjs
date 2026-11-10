@@ -7,8 +7,20 @@
 //
 //   A. each side's en/zh dictionaries are complete pairs (same key sets);
 //   B. inventory counts are pinned (reproducible audit numbers):
-//        web 209 keys, desktop 294 keys, 60 shared,
-//        149 web-only, 234 desktop-only;
+//        web 280 keys, desktop 294 keys, 91 shared,
+//        189 web-only, 203 desktop-only;
+//
+//   chore-web-i18n-migration (shared-package re-evaluation marker): the web
+//   UI's hardcoded copy (model-settings modal, tunnel popover, workspace
+//   prompt modal, header buttons, task-detail chrome, command bar) was
+//   migrated onto the dictionary REUSING desktop's ctl.*/task.* keys with
+//   values copied verbatim. Shared keys went 60 -> 91. Shared-key coverage
+//   per side is now web 91/280 = 32.5% and desktop 91/294 = 30.9%, both
+//   >= 30% (the literal shared/(web+desktop) sum stays 91/574 = 15.9%
+//   because it double-counts shared keys). The >=30% per-side threshold for
+//   the "extract a shared dictionary package" re-evaluation is therefore
+//   MARKED TRIGGERED by data; whether to actually extract the package
+//   remains the owner's decision — this test only records the trigger.
 //   C. shared keys carry identical en AND zh values, except the explicit
 //      VALUE_ALLOWED allowlist below (one reason per entry);
 //   D. single-side keys match the explicit WEB_ONLY/DESKTOP_ONLY groups
@@ -90,9 +102,11 @@ for (const dict of [web, desktop]) {
 }
 
 // ---------------------------------------------------------------------------
-// B. Pinned inventory counts (audit numbers from the chore-i18n-parity pass).
+// B. Pinned inventory counts (audit numbers from the chore-i18n-parity pass,
+//    updated by the chore-web-i18n-migration pass: web hardcoded copy moved
+//    onto the dictionary, reusing desktop ctl.*/task.* keys verbatim).
 // ---------------------------------------------------------------------------
-assert.equal(web.en.size, 209, "web dictionary must carry exactly 209 keys (update alongside deliberate additions)");
+assert.equal(web.en.size, 280, "web dictionary must carry exactly 280 keys (update alongside deliberate additions)");
 assert.equal(desktop.en.size, 294, "desktop dictionary must carry exactly 294 keys (update alongside deliberate additions)");
 
 const webKeys = new Set(web.en.keys());
@@ -101,9 +115,9 @@ const sharedKeys = [...webKeys].filter((k) => desktopKeys.has(k)).sort();
 const webOnlyKeys = [...webKeys].filter((k) => !desktopKeys.has(k)).sort();
 const desktopOnlyKeys = [...desktopKeys].filter((k) => !webKeys.has(k)).sort();
 
-assert.equal(sharedKeys.length, 60, "exactly 60 keys are shared between web and desktop");
-assert.equal(webOnlyKeys.length, 149, "exactly 149 keys are web-only");
-assert.equal(desktopOnlyKeys.length, 234, "exactly 234 keys are desktop-only");
+assert.equal(sharedKeys.length, 91, "exactly 91 keys are shared between web and desktop");
+assert.equal(webOnlyKeys.length, 189, "exactly 189 keys are web-only");
+assert.equal(desktopOnlyKeys.length, 203, "exactly 203 keys are desktop-only");
 
 // ---------------------------------------------------------------------------
 // C. Shared keys must carry identical values on both sides (en and zh
@@ -149,6 +163,7 @@ for (const entryKey of VALUE_ALLOWED.keys()) {
 // ---------------------------------------------------------------------------
 const WEB_ONLY_GROUPS = [
   { prefix: "action", reason: "web generic action-bar buttons; desktop equivalents live under its own namespaces (connection.refresh / worker.copy) with matching values", keys: [
+    "action.cancel",
     "action.close",
     "action.copied",
     "action.copyCommand",
@@ -158,10 +173,24 @@ const WEB_ONLY_GROUPS = [
   ] },
   { prefix: "clarification", reason: "web clarification modal kicker/title; desktop answer panel uses its own detail keys", keys: [
     "clarification.kicker",
+    "clarification.needAnswer",
     "clarification.title"
   ] },
-  { prefix: "detail", reason: "web task-detail kicker label", keys: [
-    "detail.kicker"
+  { prefix: "command", reason: "web footer command bar (controller chat input + send button); desktop uses the mission panel requirement box instead", keys: [
+    "command.placeholder",
+    "command.send"
+  ] },
+  { prefix: "detail", reason: "web task-detail modal chrome (kicker label + metadata subtitle fields)", keys: [
+    "detail.kicker",
+    "detail.role",
+    "detail.taskId",
+    "detail.worker"
+  ] },
+  { prefix: "header", reason: "web header mini-buttons and tooltips (toasts toggle, tunnel pill tooltip, GitHub corner tooltip, team-name fallback); desktop has its own titlebar/rail chrome", keys: [
+    "header.githubUserTitle",
+    "header.teamFallback",
+    "header.toasts",
+    "header.tunnelLiveTitle"
   ] },
   { prefix: "empty", reason: "web-only empty states (worker list, toast-driven task feed, workspace tree, messages/planning panels)", keys: [
     "empty.copiedControllerReply",
@@ -191,11 +220,14 @@ const WEB_ONLY_GROUPS = [
     "filter.in_progress",
     "filter.pending"
   ] },
-  { prefix: "gh", reason: "web header GitHub login button; desktop equivalent is ctl.gh.login (same values, different namespace)", keys: [
-    "gh.login"
-  ] },
   { prefix: "live", reason: "web worker live-status pill", keys: [
     "live.idle"
+  ] },
+  { prefix: "models", reason: "web model-settings modal extras: modal kicker, catalog option suffixes, load-failure fallback (the title/hint/default/useDefault/save/saved/failed labels reuse the shared ctl.models.* keys)", keys: [
+    "models.current",
+    "models.kicker",
+    "models.loadFailed",
+    "models.providerDefault"
   ] },
   { prefix: "manualTask", reason: "web manual task injection form; desktop has no manual task UI", keys: [
     "manualTask.assignedRole",
@@ -286,6 +318,25 @@ const WEB_ONLY_GROUPS = [
     "teamauto.scheduleHint",
     "teamauto.tabConfig"
   ] },
+  { prefix: "tunnel", reason: "web tunnel popover state copy with no desktop equivalent: visitor provenance note, quick (trycloudflare) flow, self-hosted flow (token input, setup help), share-option captions (desktop's managed-tunnel card labels reuse the shared ctl.tunnel.* keys)", keys: [
+    "tunnel.envTokenReady",
+    "tunnel.needToken",
+    "tunnel.or",
+    "tunnel.quick",
+    "tunnel.quickDemoNote",
+    "tunnel.quickNote",
+    "tunnel.requiresGithub",
+    "tunnel.selfHostedLabel",
+    "tunnel.selfHostedLive",
+    "tunnel.selfHostedNote",
+    "tunnel.setupHelp",
+    "tunnel.setupHelpBody",
+    "tunnel.startQuick",
+    "tunnel.startSelf",
+    "tunnel.tokenPlaceholder",
+    "tunnel.visitorNote",
+    "tunnel.waitingUrl"
+  ] },
   { prefix: "toast", reason: "web toast notification center; desktop renders notifications as delivery cards", keys: [
     "toast.clarificationAnswered",
     "toast.clarificationRequested",
@@ -318,11 +369,22 @@ const WEB_ONLY_GROUPS = [
     "toast.workerOffline",
     "toast.workerOnline"
   ] },
-  { prefix: "workspace", reason: "web workspace viewer chrome (preview/source toggle, raw link, files header)", keys: [
+  { prefix: "workspace", reason: "web workspace viewer chrome (preview/source toggle, raw link, files header, current-path label)", keys: [
     "workspace.files",
+    "workspace.location",
     "workspace.openRaw",
     "workspace.preview",
     "workspace.source"
+  ] },
+  { prefix: "ws", reason: "web workspace-prompt modal extras: kicker, browser-picker errors, /-only absolute-path validation (desktop accepts ~/ too via the shared ctl.ws.needAbsolute), restart note, keep-default dismiss (the title/current/hint/apply/saved/failed labels reuse the shared ctl.ws.* keys)", keys: [
+    "ws.browse",
+    "ws.keepDefault",
+    "ws.kicker",
+    "ws.needAbsolute",
+    "ws.pickerNoPath",
+    "ws.pickerUnsupported",
+    "ws.restartNote",
+    "ws.unknown"
   ] },
   { prefix: "workflow", reason: "web workflow template button group + running badges (design 2.4 / PR #243 UI wave); desktop renders no workflow quick actions", keys: [
     "workflow.badgeRound",
@@ -439,53 +501,25 @@ const DESKTOP_ONLY_GROUPS = [
     "connection.title",
     "connection.waiting"
   ] },
-  { prefix: "ctl", reason: "desktop controller settings panes (models / github / tunnel / workspace). The web UI has equivalent surfaces (model-settings modal, tunnel popover) but they are still hardcoded HTML not yet wired to the dictionary — migrating them should REUSE these values, not fork new keys", keys: [
+  { prefix: "ctl", reason: "desktop controller settings panes (models / github / tunnel / workspace). Since chore-web-i18n-migration the shared pane labels (28 keys: ctl.tab.models/tunnel, all models/tunnel/ws action+state labels web renders too, and ctl.gh.login) are SHARED with identical values; the remaining keys are desktop pane chrome with no web surface (github account pane, tab labels web never shows, tunnel off/errNotConnected/hint/stopped states, ws input label + ~ absolute-path variant, notConnected banner)", keys: [
     "ctl.gh.current",
     "ctl.gh.failed",
     "ctl.gh.hint",
     "ctl.gh.loggedOut",
-    "ctl.gh.login",
     "ctl.gh.logout",
     "ctl.gh.pageOpened",
     "ctl.gh.signedOut",
     "ctl.gh.title",
     "ctl.gh.validUntil",
-    "ctl.models.default",
-    "ctl.models.failed",
-    "ctl.models.hint",
-    "ctl.models.save",
-    "ctl.models.saved",
-    "ctl.models.title",
-    "ctl.models.useDefault",
     "ctl.notConnected",
     "ctl.tab.github",
-    "ctl.tab.models",
-    "ctl.tab.tunnel",
     "ctl.tab.workspace",
-    "ctl.tunnel.actionFailed",
     "ctl.tunnel.errNotConnected",
-    "ctl.tunnel.gateToken",
     "ctl.tunnel.hint",
-    "ctl.tunnel.install",
-    "ctl.tunnel.installing",
-    "ctl.tunnel.live",
-    "ctl.tunnel.loading",
-    "ctl.tunnel.notInstalled",
     "ctl.tunnel.off",
-    "ctl.tunnel.share",
-    "ctl.tunnel.starting",
-    "ctl.tunnel.stop",
     "ctl.tunnel.stopped",
-    "ctl.tunnel.title",
-    "ctl.ws.apply",
-    "ctl.ws.current",
-    "ctl.ws.default",
-    "ctl.ws.failed",
-    "ctl.ws.hint",
     "ctl.ws.inputLabel",
-    "ctl.ws.needAbsolute",
-    "ctl.ws.saved",
-    "ctl.ws.title"
+    "ctl.ws.needAbsolute"
   ] },
   { prefix: "mission", reason: "desktop mission panel (requirement input, notifications, summary)", keys: [
     "mission.connectHint",
@@ -534,16 +568,13 @@ const DESKTOP_ONLY_GROUPS = [
     "tab.controller",
     "tab.reports"
   ] },
-  { prefix: "task", reason: "desktop task detail panel (timeline/messages/detail chrome)", keys: [
+  { prefix: "task", reason: "desktop task detail panel (timeline/messages/detail chrome); task.details/task.timeline/task.messages became shared when the web task-detail modal tabs migrated onto them", keys: [
     "task.auto",
-    "task.details",
     "task.failedLoadDetail",
     "task.filter.none",
     "task.groupProject",
     "task.loadingDetail",
-    "task.messages",
     "task.selectHint",
-    "task.timeline",
     "task.title"
   ] },
   { prefix: "teamauto", reason: "desktop TeamAuto combined tab label", keys: [
@@ -645,4 +676,4 @@ assert.deepEqual(
     `missing keys [${allowedDesktopOnly.filter((k) => !desktopOnlyKeys.includes(k)).join(", ")}]`,
 );
 
-console.log("i18n parity passed: web 209 / desktop 294 keys, 60 shared aligned, 149+234 single-side keys allowlisted.");
+console.log("i18n parity passed: web 280 / desktop 294 keys, 91 shared aligned (web 32.5% / desktop 30.9% shared coverage — shared-package re-evaluation marker active), 189+203 single-side keys allowlisted.");

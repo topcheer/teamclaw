@@ -160,7 +160,6 @@
       "runtime.title": "TeamClaw is installed but cannot work yet.",
       "runtime.noModel": "No TeamClaw model is configured for this instance.",
       "runtime.noAuth": "No usable OpenClaw auth profile was found for TeamClaw.",
-      "gh.login": "Sign in with GitHub",
       "teamauto.refreshRepos": "Refresh repos",
       "teamauto.bind": "Bind",
       "teamauto.bindStageVerify": "Verifying access",
@@ -273,7 +272,83 @@
       "roleDisplay.save": "Save",
       "roleDisplay.reset": "Reset to defaults",
       "roleDisplay.saved": "Role display settings saved",
-      "roleDisplay.resetDone": "Role display reset to the profile defaults"
+      "roleDisplay.resetDone": "Role display reset to the profile defaults",
+      // chore-web-i18n-migration: keys for previously hardcoded copy. ctl.*
+      // values are copied VERBATIM from desktop/renderer/i18n.js so both
+      // renderers resolve shared keys to identical strings (enforced by
+      // tests/test-i18n-parity.mjs); the rest are web-only surfaces.
+      "action.cancel": "Cancel",
+      "task.details": "Task details",
+      "task.timeline": "Timeline",
+      "task.messages": "Messages",
+      "command.placeholder": "Send a controller message or slash command... (e.g., 继续工作, /status, /assign task-id developer)",
+      "command.send": "Send to Controller",
+      "detail.taskId": "Task ID: {id}",
+      "detail.worker": "Worker: {id}",
+      "detail.role": "Role: {id}",
+      "header.toasts": "Toasts",
+      "header.tunnelLiveTitle": "Managed tunnel is live - open in a new tab",
+      "header.githubUserTitle": "GitHub: click to sign out",
+      "header.teamFallback": "Team",
+      "workspace.location": "Location",
+      "clarification.needAnswer": "Please provide an answer before submitting.",
+      "models.kicker": "Model settings",
+      "models.providerDefault": "(provider default)",
+      "models.current": "(current)",
+      "models.loadFailed": "Failed to load model catalog",
+      "ws.kicker": "Workspace setup",
+      "ws.browse": "Browse...",
+      "ws.keepDefault": "Keep default",
+      "ws.restartNote": "Applies after a gateway restart. Existing files are not moved automatically.",
+      "ws.unknown": "(unknown)",
+      "ws.pickerNoPath": "Browser directory picker cannot return full server paths; please type the absolute path instead.",
+      "ws.pickerUnsupported": "This browser does not support a native directory picker; please type the absolute path instead.",
+      "ws.needAbsolute": "Please enter an absolute path starting with /",
+      "tunnel.visitorNote": "This dashboard is shared via a TeamClaw tunnel.",
+      "tunnel.quick": "Quick tunnel",
+      "tunnel.waitingUrl": "waiting for URL…",
+      "tunnel.quickNote": "One-off URL - dies on restart. Anyone with the link can open the dashboard.",
+      "tunnel.selfHostedLive": "Self-hosted Cloudflare tunnel: live on your own domain",
+      "tunnel.selfHostedNote": "Public hostname is managed in your Cloudflare Zero Trust dashboard.",
+      "tunnel.envTokenReady": "Connector token detected via TEAMCLAW_TUNNEL_TOKEN — ready to start.",
+      "tunnel.startSelf": "Start self-hosted tunnel",
+      "tunnel.selfHostedLabel": "Self-hosted tunnel (your own Cloudflare account/domain):",
+      "tunnel.tokenPlaceholder": "Cloudflare connector token",
+      "tunnel.setupHelp": "How to get a token & set up the tunnel",
+      "tunnel.setupHelpBody": "Cloudflare Zero Trust → Networks → Tunnels → your tunnel → copy token. Point its public hostname at this machine’s URL (Service: HTTP + the controller port shown in the docs). Protect it with Cloudflare Access — self-hosted domains skip the TeamClaw gate.",
+      "tunnel.or": "— or —",
+      "tunnel.requiresGithub": "requires GitHub login",
+      "tunnel.startQuick": "Anonymous one-off tunnel (trycloudflare.com)",
+      "tunnel.quickDemoNote": "No account needed. Random URL, dies on restart, anyone with the link can open the dashboard - use for quick demos only. Needs the cloudflared binary.",
+      "tunnel.needToken": "Paste a Cloudflare connector token first.",
+      "ctl.tab.models": "Models",
+      "ctl.tab.tunnel": "Tunnel",
+      "ctl.models.title": "Team models",
+      "ctl.models.hint": "Default model applies to the controller and every role; per-role selections override it for that role.",
+      "ctl.models.default": "Default model",
+      "ctl.models.useDefault": "(use default)",
+      "ctl.models.save": "Save models",
+      "ctl.models.saved": "Saved. Hot-reload applies; restart the gateway if needed.",
+      "ctl.models.failed": "Failed to save model settings",
+      "ctl.tunnel.title": "Internet tunnel",
+      "ctl.tunnel.share": "Share via tunnel",
+      "ctl.tunnel.stop": "Stop sharing",
+      "ctl.tunnel.install": "Install cloudflared",
+      "ctl.tunnel.loading": "Loading…",
+      "ctl.tunnel.starting": "Starting tunnel",
+      "ctl.tunnel.installing": "Installing cloudflared",
+      "ctl.tunnel.live": "Live",
+      "ctl.tunnel.gateToken": "Gate token",
+      "ctl.tunnel.notInstalled": "cloudflared connector is not installed on the controller machine.",
+      "ctl.tunnel.actionFailed": "Tunnel action failed: ",
+      "ctl.ws.title": "Workspace directory",
+      "ctl.ws.current": "Current:",
+      "ctl.ws.default": "default",
+      "ctl.ws.hint": "Point the team workspace at any absolute path on the controller machine. Applies after a gateway restart.",
+      "ctl.ws.apply": "Apply workspace",
+      "ctl.ws.saved": "Updated. Restart the gateway (openclaw gateway restart) to apply.",
+      "ctl.ws.failed": "Failed to update workspace",
+      "ctl.gh.login": "Sign in with GitHub"
     },
     zh: {
       "action.refresh": "刷新",
@@ -371,7 +446,6 @@
       "runtime.title": "TeamClaw 已安装，但当前还无法工作。",
       "runtime.noModel": "当前实例还没有为 TeamClaw 配置模型。",
       "runtime.noAuth": "未找到 TeamClaw 可用的 OpenClaw 认证配置。",
-      "gh.login": "使用 GitHub 登录",
       "teamauto.refreshRepos": "刷新仓库",
       "teamauto.bind": "绑定",
       "teamauto.bindStageVerify": "验证访问权限",
@@ -484,7 +558,81 @@
       "roleDisplay.save": "保存",
       "roleDisplay.reset": "恢复默认",
       "roleDisplay.saved": "角色显示设置已保存",
-      "roleDisplay.resetDone": "角色显示已恢复画像默认"
+      "roleDisplay.resetDone": "角色显示已恢复画像默认",
+      // chore-web-i18n-migration: ctl.* 值从 desktop/renderer/i18n.js 原样
+      // 复制，双端共享键必须逐字一致（tests/test-i18n-parity.mjs 强制）。
+      "action.cancel": "取消",
+      "task.details": "任务详情",
+      "task.timeline": "时间线",
+      "task.messages": "消息",
+      "command.placeholder": "发送 controller 消息或斜杠命令...（例如：继续工作、/status、/assign task-id developer）",
+      "command.send": "发送给 Controller",
+      "detail.taskId": "任务 ID：{id}",
+      "detail.worker": "Worker：{id}",
+      "detail.role": "角色：{id}",
+      "header.toasts": "通知",
+      "header.tunnelLiveTitle": "托管隧道已开启 - 在新标签页打开",
+      "header.githubUserTitle": "GitHub：点击退出登录",
+      "header.teamFallback": "团队",
+      "workspace.location": "位置",
+      "clarification.needAnswer": "提交前请先填写回答。",
+      "models.kicker": "模型设置",
+      "models.providerDefault": "（提供商默认）",
+      "models.current": "（当前）",
+      "models.loadFailed": "加载模型目录失败",
+      "ws.kicker": "工作区设置",
+      "ws.browse": "浏览...",
+      "ws.keepDefault": "保留默认",
+      "ws.restartNote": "重启网关后生效。已有文件不会自动移动。",
+      "ws.unknown": "（未知）",
+      "ws.pickerNoPath": "浏览器目录选择器无法返回服务器端完整路径；请直接输入绝对路径。",
+      "ws.pickerUnsupported": "此浏览器不支持原生目录选择器；请直接输入绝对路径。",
+      "ws.needAbsolute": "请输入以 / 开头的绝对路径",
+      "tunnel.visitorNote": "本仪表盘通过 TeamClaw 隧道分享。",
+      "tunnel.quick": "快速隧道",
+      "tunnel.waitingUrl": "等待 URL 中…",
+      "tunnel.quickNote": "一次性 URL，重启即失效。任何拿到链接的人都能打开仪表盘。",
+      "tunnel.selfHostedLive": "自托管 Cloudflare 隧道：已在自己的域名上运行",
+      "tunnel.selfHostedNote": "公共域名在你的 Cloudflare Zero Trust 控制台中管理。",
+      "tunnel.envTokenReady": "检测到 TEAMCLAW_TUNNEL_TOKEN 连接器令牌——可随时启动。",
+      "tunnel.startSelf": "启动自托管隧道",
+      "tunnel.selfHostedLabel": "自托管隧道（你自己的 Cloudflare 账号/域名）：",
+      "tunnel.tokenPlaceholder": "Cloudflare 连接器令牌",
+      "tunnel.setupHelp": "如何获取令牌并配置隧道",
+      "tunnel.setupHelpBody": "Cloudflare Zero Trust → 网络（Networks）→ Tunnels → 你的隧道 → 复制令牌。将其公共域名指向本机 URL（Service：HTTP + 文档中所示的控制器端口）。建议用 Cloudflare Access 保护——自托管域名不走 TeamClaw 门禁。",
+      "tunnel.or": "— 或 —",
+      "tunnel.requiresGithub": "需要 GitHub 登录",
+      "tunnel.startQuick": "匿名一次性隧道（trycloudflare.com）",
+      "tunnel.quickDemoNote": "无需账号。随机 URL，重启即失效，任何拿到链接的人都能打开仪表盘——仅用于快速演示。需要 cloudflared 二进制。",
+      "tunnel.needToken": "请先粘贴 Cloudflare 连接器令牌。",
+      "ctl.tab.models": "模型",
+      "ctl.tab.tunnel": "隧道",
+      "ctl.models.title": "团队模型",
+      "ctl.models.hint": "默认模型作用于控制器与所有角色；按角色的选择会覆盖默认值。",
+      "ctl.models.default": "默认模型",
+      "ctl.models.useDefault": "（跟随默认）",
+      "ctl.models.save": "保存模型",
+      "ctl.models.saved": "已保存。配置热重载生效；如未生效请重启网关。",
+      "ctl.models.failed": "保存模型设置失败",
+      "ctl.tunnel.title": "互联网隧道",
+      "ctl.tunnel.share": "通过隧道分享",
+      "ctl.tunnel.stop": "停止分享",
+      "ctl.tunnel.install": "安装 cloudflared",
+      "ctl.tunnel.loading": "加载中…",
+      "ctl.tunnel.starting": "正在启动隧道",
+      "ctl.tunnel.installing": "正在安装 cloudflared",
+      "ctl.tunnel.live": "在线",
+      "ctl.tunnel.gateToken": "门禁令牌",
+      "ctl.tunnel.notInstalled": "控制器机器上尚未安装 cloudflared 连接器。",
+      "ctl.tunnel.actionFailed": "隧道操作失败：",
+      "ctl.ws.title": "工作区目录",
+      "ctl.ws.current": "当前：",
+      "ctl.ws.default": "默认",
+      "ctl.ws.hint": "可将团队工作区指向控制器机器上的任意绝对路径。需重启网关后生效。",
+      "ctl.ws.apply": "应用工作区",
+      "ctl.ws.saved": "已更新。请重启网关（openclaw gateway restart）后生效。",
+      "ctl.ws.failed": "更新工作区失败",
+      "ctl.gh.login": "使用 GitHub 登录"
     }
   };
 
@@ -528,6 +676,18 @@
       var key = element.getAttribute("data-i18n-placeholder");
       if (key) {
         element.setAttribute("placeholder", t(key));
+      }
+    });
+    $$("[data-i18n-title]").forEach(function (element) {
+      var key = element.getAttribute("data-i18n-title");
+      if (key) {
+        element.setAttribute("title", t(key));
+      }
+    });
+    $$("[data-i18n-aria]").forEach(function (element) {
+      var key = element.getAttribute("data-i18n-aria");
+      if (key) {
+        element.setAttribute("aria-label", t(key));
       }
     });
     var languageToggle = $("#language-toggle");
@@ -3277,9 +3437,9 @@
     if (subtitle) {
       subtitle.textContent = task
         ? [
-            "Task ID: " + task.id,
-            task.assignedWorkerId ? "Worker: " + task.assignedWorkerId : null,
-            task.assignedRole ? "Role: " + task.assignedRole : null,
+            t("detail.taskId", { id: task.id }),
+            task.assignedWorkerId ? t("detail.worker", { id: task.assignedWorkerId }) : null,
+            task.assignedRole ? t("detail.role", { id: task.assignedRole }) : null,
           ].filter(Boolean).join(" • ")
         : "";
     }
@@ -4134,7 +4294,7 @@
     const answer = answerInput ? answerInput.value.trim() : "";
 
     if (!clarificationId || !answer) {
-      showError("Please provide an answer before submitting.");
+      showError(t("clarification.needAnswer"));
       return;
     }
 
@@ -4365,7 +4525,7 @@
     if (!el) return;
     apiGet("/workspace/status").then(function (data) {
       if (data && typeof data.workspaceDir === "string") {
-        el.textContent = data.workspaceDir + (data.isDefault ? "  (default)" : "");
+        el.textContent = data.workspaceDir + (data.isDefault ? "  (" + t("ctl.ws.default") + ")" : "");
         el.title = data.workspaceDir;
       }
     }).catch(function () { /* leave placeholder */ });
@@ -4376,7 +4536,7 @@
     var pathEl = $("#workspace-prompt-path");
     var input = $("#workspace-prompt-input");
     if (!modal || !pathEl || !input) return;
-    pathEl.textContent = currentPath || "(unknown)";
+    pathEl.textContent = currentPath || t("ws.unknown");
     input.value = currentPath || "";
     modal.classList.add("open");
     modal.setAttribute("aria-hidden", "false");
@@ -4428,13 +4588,13 @@
                 input.value = handle.name || input.value;
                 input.dataset.verifiedPath = "";
               }
-              showError("Browser directory picker cannot return full server paths; please type the absolute path instead.");
+              showError(t("ws.pickerNoPath"));
             })
             .catch(function () {
               /* user cancelled */
             });
         } else {
-          showError("This browser does not support a native directory picker; please type the absolute path instead.");
+          showError(t("ws.pickerUnsupported"));
         }
       });
     }
@@ -4443,17 +4603,17 @@
       apply.addEventListener("click", function () {
         var value = input && typeof input.value === "string" ? input.value.trim() : "";
         if (!value || value.indexOf("/") !== 0) {
-          showError("Please enter an absolute path starting with /");
+          showError(t("ws.needAbsolute"));
           return;
         }
         apply.disabled = true;
         apiPost("/workspace/change-dir", { workspaceDir: value }).then(function () {
           localStorage.setItem(WORKSPACE_PROMPT_DISMISSED_KEY, "1");
           closeWorkspacePromptModal();
-          showError("Workspace updated to " + value + ". Restart the gateway (openclaw gateway restart) to apply it.");
+          showError(t("ctl.ws.saved"));
           updateWorkspacePathIndicator();
         }).catch(function (err) {
-          showError(err instanceof Error ? err.message : "Failed to update workspace directory");
+          showError(err instanceof Error ? err.message : t("ctl.ws.failed"));
         }).finally(function () {
           apply.disabled = false;
         });
@@ -4885,7 +5045,10 @@
   opener.className = "btn btn-small";
   opener.type = "button";
   opener.id = "model-settings-open";
-  opener.textContent = "Models";
+  // data-i18n lets applyStaticTranslations refresh the label on language
+  // switches (the same mechanism as the static header buttons).
+  opener.setAttribute("data-i18n", "ctl.tab.models");
+  opener.textContent = t("ctl.tab.models");
   var refreshBtn = document.querySelector("#workspace-tree-refresh");
   if (refreshBtn && refreshBtn.parentElement) {
     refreshBtn.parentElement.appendChild(opener);
@@ -4922,10 +5085,10 @@
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       }).then(function () {
-        showError("Model settings saved. Hot-reload applies; restart the gateway if needed.");
+        showError(t("ctl.models.saved"));
         closeModelSettings();
       }).catch(function (err) {
-        showError(err instanceof Error ? err.message : "Failed to save model settings");
+        showError(err instanceof Error ? err.message : t("ctl.models.failed"));
       }).finally(function () {
         save.disabled = false;
       });
@@ -4999,7 +5162,7 @@ function renderGithubCorner(status) {
     loginBtn.hidden = true;
   } else {
     userChip.classList.add("hidden");
-    loginBtn.textContent = t("gh.login");
+    loginBtn.textContent = t("ctl.gh.login");
     loginBtn.hidden = false;
   }
 }
@@ -5020,11 +5183,11 @@ function openModelSettings() {
         options.push({ value: provider.id + "/" + modelId, label: provider.id + " / " + modelId });
       });
       if (!provider.models || provider.models.length === 0) {
-        options.push({ value: provider.id, label: provider.id + " (provider default)" });
+        options.push({ value: provider.id, label: provider.id + " " + t("models.providerDefault") });
       }
     });
     if (catalog.defaultModel && !options.some(function (opt) { return opt.value === catalog.defaultModel; })) {
-      options.unshift({ value: catalog.defaultModel, label: catalog.defaultModel + " (current)" });
+      options.unshift({ value: catalog.defaultModel, label: catalog.defaultModel + " " + t("models.current") });
     }
 
     var defaultSelect = document.querySelector("#model-settings-default");
@@ -5043,7 +5206,7 @@ function openModelSettings() {
           '<label class="model-settings-field">' +
           '  <span class="model-settings-label">' + escapeHtml(role.label) + '</span>' +
           '  <select data-role-model="' + escapeHtml(role.id) + '">' +
-          '    <option value="">(use default)</option>' +
+          '    <option value="">' + escapeHtml(t("ctl.models.useDefault")) + '</option>' +
           options.map(function (opt) {
             return '<option value="' + escapeHtml(opt.value) + '"' + (current === opt.value ? " selected" : "") + '>' + escapeHtml(opt.label) + "</option>";
           }).join("") +
@@ -5056,7 +5219,7 @@ function openModelSettings() {
     modal.classList.add("open");
     modal.setAttribute("aria-hidden", "false");
   }).catch(function (err) {
-    showError(err instanceof Error ? err.message : "Failed to load model catalog");
+    showError(err instanceof Error ? err.message : t("models.loadFailed"));
   });
 }
 
@@ -5361,7 +5524,7 @@ function closeModelSettings() {
     const host = (location.hostname || "").toLowerCase();
     const isLocalView = host === "127.0.0.1" || host === "localhost" || host.endsWith(".local");
     if (!isLocalView) {
-      wrap.querySelector(".tunnel-state").innerHTML = '<span class="tunnel-note">This dashboard is shared via a TeamClaw tunnel.</span>';
+      wrap.querySelector(".tunnel-state").innerHTML = '<span class="tunnel-note">' + escapeHtml(t("tunnel.visitorNote")) + '</span>';
       if (toggleBtn) toggleBtn.hidden = true;
       return;
     }
@@ -5378,56 +5541,58 @@ function closeModelSettings() {
         }
       }
       var progress = st.startOp && st.startOp.running
-        ? '<div class="tunnel-note">Starting tunnel: ' + escapeHtml(st.startOp.phase) + '…</div>'
+        ? '<div class="tunnel-note">' + escapeHtml(t("ctl.tunnel.starting") + ": " + String(st.startOp.phase || "") + "…") + '</div>'
         : (st.install && st.install.running
-          ? '<div class="tunnel-note">cloudflared ' + escapeHtml(st.install.phase) + (st.install.percent != null ? ' ' + st.install.percent + '%' : '') + '…</div>'
+          ? '<div class="tunnel-note">' + escapeHtml(t("ctl.tunnel.installing") + " " + String(st.install.phase || "") + (st.install.percent != null ? " " + st.install.percent + "%" : "") + "…") + '</div>'
           : '');
       if (progress) { wrap.querySelector(".tunnel-state").innerHTML = progress; return; }
       if (st.active && st.mode === "quick") {
         wrap.querySelector(".tunnel-state").innerHTML =
-          '<div class="tunnel-on">Quick tunnel: ' + (st.hostname ? '<a href="https://' + st.hostname + '" target="_blank" rel="noopener">https://' + st.hostname + '</a>' : 'waiting for URL…') + '</div>'
-          + '<div class="tunnel-note">One-off URL - dies on restart. Anyone with the link can open the dashboard.</div>'
-          + '<button class="btn btn-small" data-act="stop">Stop sharing</button>';
+          '<div class="tunnel-on">' + escapeHtml(t("tunnel.quick") + ": ") + (st.hostname ? '<a href="https://' + st.hostname + '" target="_blank" rel="noopener">https://' + st.hostname + '</a>' : escapeHtml(t("tunnel.waitingUrl"))) + '</div>'
+          + '<div class="tunnel-note">' + escapeHtml(t("tunnel.quickNote")) + '</div>'
+          + '<button class="btn btn-small" data-act="stop">' + escapeHtml(t("ctl.tunnel.stop")) + '</button>';
         return;
       }
       if (st.active && st.mode === "self-hosted") {
         wrap.querySelector(".tunnel-state").innerHTML =
-          '<div class="tunnel-on">Self-hosted Cloudflare tunnel: live on your own domain</div>'
-          + '<div class="tunnel-note">Public hostname is managed in your Cloudflare Zero Trust dashboard.</div>'
-          + '<button class="btn btn-small" data-act="stop">Stop sharing</button>';
+          '<div class="tunnel-on">' + escapeHtml(t("tunnel.selfHostedLive")) + '</div>'
+          + '<div class="tunnel-note">' + escapeHtml(t("tunnel.selfHostedNote")) + '</div>'
+          + '<button class="btn btn-small" data-act="stop">' + escapeHtml(t("ctl.tunnel.stop")) + '</button>';
         return;
       }
       if (st.active) {
+        // Gate token label: shared with desktop via ctl.tunnel.gateToken
+        // ("Gate token" / 门禁令牌), appended with a colon here.
         wrap.querySelector(".tunnel-state").innerHTML =
-          '<div class="tunnel-on">Live: <a href="https://' + st.hostname + '" target="_blank" rel="noopener">https://' + st.hostname + '</a></div>'
-          + '<div class="tunnel-token">Gate token: <b>' + st.gateToken + '</b> <button class="btn btn-small" data-act="copy-token">' + escapeHtml(t("action.copyToken")) + '</button></div>'
-          + '<button class="btn btn-small" data-act="stop">Stop sharing</button>';
+          '<div class="tunnel-on">' + escapeHtml(t("ctl.tunnel.live") + ": ") + '<a href="https://' + st.hostname + '" target="_blank" rel="noopener">https://' + st.hostname + '</a></div>'
+          + '<div class="tunnel-token">' + escapeHtml(t("ctl.tunnel.gateToken") + ": ") + '<b>' + st.gateToken + '</b> <button class="btn btn-small" data-act="copy-token">' + escapeHtml(t("action.copyToken")) + '</button></div>'
+          + '<button class="btn btn-small" data-act="stop">' + escapeHtml(t("ctl.tunnel.stop")) + '</button>';
         return;
       }
       if (st.cloudflaredInstalled === false) {
-        wrap.querySelector(".tunnel-state").innerHTML = '<div class="tunnel-note">cloudflared connector is not installed.</div>'
-          + '<button class="btn btn-small btn-primary" data-act="install">Install cloudflared</button>';
+        wrap.querySelector(".tunnel-state").innerHTML = '<div class="tunnel-note">' + escapeHtml(t("ctl.tunnel.notInstalled")) + '</div>'
+          + '<button class="btn btn-small btn-primary" data-act="install">' + escapeHtml(t("ctl.tunnel.install")) + '</button>';
         return;
       }
       // Idle: self-hosted (env token detected -> one click; otherwise token
       // input) alongside the managed share button.
       var html = '';
       if (st.envTokenDetected) {
-        html += '<div class="tunnel-note">Connector token detected via TEAMCLAW_TUNNEL_TOKEN — ready to start.</div>'
-          + '<button class="btn btn-small btn-primary" data-act="start-self">Start self-hosted tunnel</button>';
+        html += '<div class="tunnel-note">' + escapeHtml(t("tunnel.envTokenReady")) + '</div>'
+          + '<button class="btn btn-small btn-primary" data-act="start-self">' + escapeHtml(t("tunnel.startSelf")) + '</button>';
       } else {
-        html += '<div class="tunnel-note">Self-hosted tunnel (your own Cloudflare account/domain):</div>'
-          + '<input type="password" class="tunnel-token-input" data-input="token" placeholder="Cloudflare connector token" autocomplete="off">'
-          + '<button class="btn btn-small btn-primary" data-act="start-self-token">Start self-hosted tunnel</button>'
-          + '<details class="tunnel-setup-help"><summary>How to get a token &amp; set up the tunnel</summary>'
-          + '<div class="tunnel-note">Cloudflare Zero Trust → Networks → Tunnels → your tunnel → copy token. Point its public hostname at this machine’s URL (Service: HTTP + the controller port shown in the docs). Protect it with Cloudflare Access — self-hosted domains skip the TeamClaw gate.</div></details>';
+        html += '<div class="tunnel-note">' + escapeHtml(t("tunnel.selfHostedLabel")) + '</div>'
+          + '<input type="password" class="tunnel-token-input" data-input="token" placeholder="' + escapeHtml(t("tunnel.tokenPlaceholder")) + '" autocomplete="off">'
+          + '<button class="btn btn-small btn-primary" data-act="start-self-token">' + escapeHtml(t("tunnel.startSelf")) + '</button>'
+          + '<details class="tunnel-setup-help"><summary>' + escapeHtml(t("tunnel.setupHelp")) + '</summary>'
+          + '<div class="tunnel-note">' + escapeHtml(t("tunnel.setupHelpBody")) + '</div></details>';
       }
-      html += '<div class="tunnel-note">— or —</div>'
-        + '<button class="btn btn-small" data-act="start">Share via *.teamclaw.dev</button>'
-        + '<span class="tunnel-note">requires GitHub login</span>'
-        + '<div class="tunnel-note">— or —</div>'
-        + '<button class="btn btn-small" data-act="start-quick">Anonymous one-off tunnel (trycloudflare.com)</button>'
-        + '<div class="tunnel-note">No account needed. Random URL, dies on restart, anyone with the link can open the dashboard - use for quick demos only. Needs the cloudflared binary.</div>';
+      html += '<div class="tunnel-note">' + escapeHtml(t("tunnel.or")) + '</div>'
+        + '<button class="btn btn-small" data-act="start">' + escapeHtml(t("ctl.tunnel.share")) + '</button>'
+        + '<span class="tunnel-note">' + escapeHtml(t("tunnel.requiresGithub")) + '</span>'
+        + '<div class="tunnel-note">' + escapeHtml(t("tunnel.or")) + '</div>'
+        + '<button class="btn btn-small" data-act="start-quick">' + escapeHtml(t("tunnel.startQuick")) + '</button>'
+        + '<div class="tunnel-note">' + escapeHtml(t("tunnel.quickDemoNote")) + '</div>';
       wrap.querySelector(".tunnel-state").innerHTML = html;
     };
     const refresh = () => apiGet("/tunnel/status").then((st) => render(st || {})).catch(() => {});
@@ -5455,7 +5620,7 @@ function closeModelSettings() {
         if (act === "start-self-token") {
           const input = wrap.querySelector('[data-input="token"]');
           if (!input || !input.value.trim()) {
-            wrap.querySelector(".tunnel-state").innerHTML = '<div class="tunnel-err">Paste a Cloudflare connector token first.</div>';
+            wrap.querySelector(".tunnel-state").innerHTML = '<div class="tunnel-err">' + escapeHtml(t("tunnel.needToken")) + '</div>';
             return;
           }
           opts.body = JSON.stringify({ token: input.value.trim() });
@@ -5466,7 +5631,7 @@ function closeModelSettings() {
           : act === "install" ? apiRequest("/tunnel/install-cloudflared", { method: "POST" })
           : apiRequest("/tunnel/stop", { method: "POST" });
       }
-      call.then(refresh).catch((err) => { wrap.querySelector(".tunnel-state").innerHTML = '<div class="tunnel-err">' + escapeHtml(String(err.message || err)) + "</div>"; });
+      call.then(refresh).catch((err) => { wrap.querySelector(".tunnel-state").innerHTML = '<div class="tunnel-err">' + escapeHtml(t("ctl.tunnel.actionFailed") + String(err.message || err)) + "</div>"; });
     });
     refresh();
     setInterval(refresh, 5000);
