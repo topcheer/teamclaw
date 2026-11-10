@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, nativeTheme, Notification, shell } from "electron";
 import { spawn } from "node:child_process";
+import dns from "node:dns/promises";
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import os from "node:os";
@@ -308,6 +309,46 @@ async function runShellCommand(command, options = {}) {
  * URL: no shell anywhere in the path, and the SAME validated URL feeds the
  * "<url>.sha256" companion fetch (shared, bounded SSRF surface).
  */
+/* Host hygiene shared by the TEXTUAL validator below and the post-DNS
+ * re-check (DNS rebinding follow-up, Refs #223): one normalization + one
+ * blocklist for literal hostnames AND for dns.lookup results, so the two
+ * paths can never drift apart.
+ */
+function artifactEffectiveHost(hostname) {
+  const host = String(hostname || "").toLowerCase().replace(/^\[|\]$/g, "");
+  // Unwrap IPv4-mapped / IPv4-compatible IPv6 BEFORE the blocklist: the URL
+  // parser normalizes [::ffff:127.0.0.1] to the hex form [::ffff:7f00:1],
+  // which slips past every textual rule below (cross-review finding).
+  const mappedDotted = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(host);
+  const mappedHex = /^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(host);
+  if (mappedDotted) {
+    return mappedDotted[1];
+  }
+  if (mappedHex) {
+    // ::ffff:7f00:1 (mapped) or ::7f00:1 (compatible) -> dotted quad
+    const hi = parseInt(mappedHex[1], 16);
+    const lo = parseInt(mappedHex[2], 16);
+    return `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
+  }
+  return host;
+}
+function isBlockedArtifactHost(effectiveHost) {
+  // "localhost" / cloud metadata names / loopback / RFC1918 / link-local
+  // v4+v6 / "this network" - the same list the literal check has always used.
+  return effectiveHost === "localhost" ||
+    effectiveHost === "metadata.google.internal" ||
+    effectiveHost === "::1" ||
+    /^127\.|^10\.|^192\.168\.|^169\.254\.|^0\./.test(effectiveHost) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(effectiveHost) ||
+    /^(f[cd]|fe[89ab])/i.test(effectiveHost); // fc00::/7 (private v6), fe80::/10 (link-local v6)
+}
+// Literal IPv4 (dotted quad, incl. v4-mapped IPv6 after the unwrap above) or
+// any IPv6 literal (contains ":"): already judged character-for-character by
+// the blocklist - running it through DNS again would be a no-op.
+function isLiteralIpHost(effectiveHost) {
+  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(effectiveHost) || effectiveHost.includes(":");
+}
+
 function validateArtifactUrl(raw) {
   const rawUrl = String(raw || "");
   // Reject dangerous characters on the RAW input first: the URL parser
@@ -331,34 +372,74 @@ function validateArtifactUrl(raw) {
   // The URL originates in the renderer: refuse obvious intranet / cloud
   // metadata / loopback targets (plain-http metadata endpoints are already
   // unreachable via the https-only rule above).
-  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
-  // Unwrap IPv4-mapped / IPv4-compatible IPv6 BEFORE the blocklist: the URL
-  // parser normalizes [::ffff:127.0.0.1] to the hex form [::ffff:7f00:1],
-  // which slips past every textual rule below (cross-review finding).
-  let effectiveHost = host;
-  const mappedDotted = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(host);
-  const mappedHex = /^::(?:ffff:)?([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(host);
-  if (mappedDotted) {
-    effectiveHost = mappedDotted[1];
-  } else if (mappedHex) {
-    // ::ffff:7f00:1 (mapped) or ::7f00:1 (compatible) -> dotted quad
-    const hi = parseInt(mappedHex[1], 16);
-    const lo = parseInt(mappedHex[2], 16);
-    effectiveHost = `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
-  }
-  const blocked = effectiveHost === "localhost" ||
-    effectiveHost === "metadata.google.internal" ||
-    effectiveHost === "::1" ||
-    /^127\.|^10\.|^192\.168\.|^169\.254\.|^0\./.test(effectiveHost) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(effectiveHost) ||
-    /^(f[cd]|fe[89ab])/i.test(effectiveHost); // fc00::/7 (private v6), fe80::/10 (link-local v6)
-  if (blocked) {
+  const effectiveHost = artifactEffectiveHost(parsed.hostname);
+  if (isBlockedArtifactHost(effectiveHost)) {
     throw new Error(`Runtime artifact host not allowed: ${parsed.hostname}`);
   }
   if (/%22|%27|%60|%5[cC]|%3[cC]|%3[eE]/i.test(parsed.pathname + parsed.search)) {
     throw new Error("Runtime artifact URL contains disallowed characters.");
   }
   return parsed;
+}
+
+/* DNS-rebinding gate (#223 review follow-up): validateArtifactUrl only ever
+ * saw the hostname STRING - a public DNS name that resolves straight into the
+ * intranet (https://localtest.me -> 127.0.0.1) passed validation untouched.
+ * After the textual checks pass, resolve the hostname with
+ * dns.lookup(hostname, { all: true }) and run the SAME blocklist over every
+ * resolved address: any private/loopback/link-local/metadata hit rejects.
+ * Literal IP hosts never reach here in practice (callers skip them), but the
+ * check is idempotent for them anyway.
+ *
+ * TOCTOU declaration: this resolves, then fetch resolves again - a rebinding
+ * attacker controlling a short-TTL record could in theory answer the second
+ * lookup with an intranet IP (check-then-use gap). The complete fix is a
+ * custom undici Agent with a connect-time lookup (fetch "dispatcher" option)
+ * that pins or re-refuses the address at connect - but building an Agent
+ * requires importing the undici npm package (Node's bundled copy is not
+ * importable, and desktop/package.json deliberately ships zero runtime deps),
+ * i.e. a new supply-chain dependency for the packaged app. Declared residual
+ * window instead: this gate runs in the SAME loop iteration as the fetch it
+ * guards (validatedArtifactFetch, every hop), and both this lookup and
+ * undici's connect go through getaddrinfo - the fetch's answer normally comes
+ * from the same OS resolver cache (mDNSResponder / systemd-resolved) within
+ * the record's TTL, so the attacker must win a race against that cache, not
+ * merely flip a DNS record.
+ *
+ * Failure semantics are FAIL-CLOSED: an unresolvable name, an empty answer,
+ * or a resolver that does not answer within ARTIFACT_DNS_TIMEOUT_MS refuses
+ * the download (a hostile or broken resolver is indistinguishable). The one
+ * extra DNS roundtrip per download (cached by the OS resolver between the
+ * gate and the fetch) is an acceptable cost for closing the rebinding hole.
+ */
+const ARTIFACT_DNS_TIMEOUT_MS = 2500;
+async function assertArtifactHostResolvesPublic(parsedUrl) {
+  const effectiveHost = artifactEffectiveHost(parsedUrl.hostname);
+  if (isLiteralIpHost(effectiveHost)) return; // literal IPs were judged directly - no DNS hop
+  let addresses;
+  try {
+    const lookup = dns.lookup(effectiveHost, { all: true });
+    // Silence the race loser: a slow/hung lookup rejecting after the timeout
+    // already failed us must not surface as an unhandled rejection (fatal).
+    lookup.catch(() => {});
+    let timer = null;
+    addresses = await Promise.race([
+      lookup,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`DNS lookup timed out after ${ARTIFACT_DNS_TIMEOUT_MS}ms`)), ARTIFACT_DNS_TIMEOUT_MS);
+      }),
+    ]).finally(() => clearTimeout(timer));
+  } catch (e) {
+    throw new Error(`Runtime artifact host '${parsedUrl.hostname}' could not be resolved (fail-closed): ${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (!Array.isArray(addresses) || addresses.length === 0) {
+    throw new Error(`Runtime artifact host '${parsedUrl.hostname}' resolved to no addresses (fail-closed).`);
+  }
+  for (const { address } of addresses) {
+    if (isBlockedArtifactHost(artifactEffectiveHost(address))) {
+      throw new Error(`Runtime artifact host not allowed: ${parsedUrl.hostname} resolves to blocked address ${address}`);
+    }
+  }
 }
 
 // The derived file name lands on disk inside userData/downloads: charset-
@@ -385,10 +466,14 @@ const ARTIFACT_MAX_REDIRECTS = 5;
 // Follow redirects MANUALLY, re-validating EVERY hop through
 // validateArtifactUrl: with redirect:"follow" a public https URL could 302
 // to http://127.0.0.1 and fetch would happily read the intranet response
-// body (cross-review finding - verified with a live 302 server).
+// body (cross-review finding - verified with a live 302 server). Every hop
+// (including the first) ALSO passes the DNS rebinding gate, immediately
+// before the fetch it guards - same loop iteration, minimal check-to-use
+// gap, and the ".sha256" companion fetch shares this whole path.
 async function validatedArtifactFetch(parsedUrl) {
   let current = parsedUrl;
   for (let hop = 0; hop <= ARTIFACT_MAX_REDIRECTS; hop++) {
+    await assertArtifactHostResolvesPublic(current);
     const res = await fetch(current.href, { redirect: "manual" });
     if (res.status >= 300 && res.status < 400) {
       const location = res.headers.get("location");

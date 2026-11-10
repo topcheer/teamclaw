@@ -21,6 +21,11 @@
 //   W5  will-navigate / setWindowOpenHandler guards exist.
 //   #220 openclaw probe pre-resolves the executable (no PATH-dependent spawn,
 //       no bare "openclaw") and hard-kills a hung --help after a timeout.
+//   #223 DNS-rebinding follow-up: validateArtifactUrl only saw the hostname
+//       STRING - https://localtest.me (public DNS -> 127.0.0.1) passed it
+//       untouched. Every fetch hop now RESOLVES non-literal hosts
+//       (dns.lookup all:true) and rejects any private-range address,
+//       fail-closed on DNS failure/timeout; literal IPs never hit DNS.
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -144,9 +149,24 @@ assert.match(mainSource, /redirect: "manual"/, "redirects must be followed manua
 assert.ok(!mainSource.includes('redirect: "follow"'), "no fetch may follow redirects itself (302 -> intranet bypass)");
 assert.match(mainSource, /const \{ createHash \} = await import\("node:crypto"\)/, "sha256 must be computed with node:crypto (C1)");
 assert.match(mainSource, /await runSpawnStream\(tarBinary\(\), \["xzf", dest, "-C", extractDir\]/, "tar extraction must use an argv array, not a shell string (C1)");
+// #223 DNS-rebinding follow-up: hostname-string validation alone let public
+// names that RESOLVE into the intranet through (localtest.me -> 127.0.0.1).
+assert.match(mainSource, /import dns from "node:dns\/promises"/, "the DNS gate must use node:dns/promises");
+assert.match(mainSource, /dns\.lookup\(effectiveHost, \{ all: true \}\)/, "dns.lookup must request ALL addresses (every A/AAAA record is checked)");
+assert.match(mainSource, /await assertArtifactHostResolvesPublic\(current\)/, "every fetch hop (first request + each redirect) must pass the DNS gate");
+assert.match(mainSource, /const ARTIFACT_DNS_TIMEOUT_MS = \d+/, "the DNS gate must have an explicit timeout budget");
 
-// C1 behavioral: run the REAL validator against injection payloads.
-const validateArtifactUrl = evalWithDeps(extractFunction(mainSource, "validateArtifactUrl"), {});
+// C1 behavioral: run the REAL validator against injection payloads. The
+// blocklist lives in shared helpers (artifactEffectiveHost unwrap +
+// isBlockedArtifactHost predicate) so the textual check and the DNS
+// re-check below provably run the SAME rules.
+const artifactEffectiveHost = evalWithDeps(extractFunction(mainSource, "artifactEffectiveHost"), {});
+const isBlockedArtifactHost = evalWithDeps(extractFunction(mainSource, "isBlockedArtifactHost"), {});
+const isLiteralIpHost = evalWithDeps(extractFunction(mainSource, "isLiteralIpHost"), {});
+const validateArtifactUrl = evalWithDeps(extractFunction(mainSource, "validateArtifactUrl"), {
+  artifactEffectiveHost,
+  isBlockedArtifactHost,
+});
 const artifactFileNameFromUrl = evalWithDeps(
   extractFunction(mainSource, "artifactFileNameFromUrl"),
   { path },
@@ -218,6 +238,120 @@ for (const [label, payload] of [
     redirector.close();
   }
 }
+// ---------------------------------------------------------------------------
+// #223 DNS-rebinding follow-up (behavioral): run the REAL gate - with
+// stubbed dns.lookup (private/public/failure/empty/hang resolver states) and
+// against the real resolver for the original proof-of-bypass domain.
+// ---------------------------------------------------------------------------
+const realDns = await import("node:dns/promises");
+const dnsGate = (dnsImpl) =>
+  evalWithDeps(extractFunction(mainSource, "assertArtifactHostResolvesPublic"), {
+    dns: dnsImpl,
+    artifactEffectiveHost,
+    isBlockedArtifactHost,
+    isLiteralIpHost,
+    ARTIFACT_DNS_TIMEOUT_MS: 2500,
+  });
+// dns.lookup stub: a fixed answer set, a thrown getaddrinfo error, or a
+// resolver that never answers at all.
+const dnsStub = (addresses, opts = {}) => ({
+  lookup: async (hostname, options) => {
+    if (opts.throw) {
+      throw Object.assign(new Error(opts.throw), { code: opts.code || "ENOTFOUND" });
+    }
+    if (opts.hang) return new Promise(() => {});
+    assert.equal(options?.all, true, "dns.lookup must request { all: true } so every A/AAAA record is checked");
+    return addresses.map((address) => ({ address, family: address.includes(":") ? 6 : 4 }));
+  },
+});
+{
+  const publicUrl = new URL("https://rebind.example/x.tar.gz");
+  // A fully public answer set passes the gate.
+  await dnsGate(dnsStub(["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"]))(publicUrl);
+  // ANY private/loopback/link-local/metadata address in the answer set
+  // rejects - the localtest.me shape: public NAME, intranet ADDRESS.
+  for (const [label, addresses] of [
+    ["loopback v4", ["127.0.0.1"]],
+    ["private v4 among public", ["93.184.216.34", "10.1.2.3"]],
+    ["private v4 (172.16/12)", ["172.31.255.1"]],
+    ["cloud metadata v4", ["169.254.169.254"]],
+    ["v4-mapped loopback", ["::ffff:127.0.0.1"]],
+    ["private v6", ["fd12:3456:789a::1"]],
+    ["link-local v6", ["fe80::1"]],
+  ]) {
+    await assert.rejects(
+      () => dnsGate(dnsStub(addresses))(publicUrl),
+      /blocked address|not allowed/,
+      `${label} resolution must be rejected (${addresses.join(", ")})`,
+    );
+  }
+  // DNS failure / empty answer: FAIL-CLOSED - the download refuses rather
+  // than falling back to connecting anyway.
+  await assert.rejects(
+    () => dnsGate(dnsStub([], { throw: "getaddrinfo ENOTFOUND rebind.example" }))(publicUrl),
+    /fail-closed/,
+    "an unresolvable host must fail closed",
+  );
+  await assert.rejects(
+    () => dnsGate(dnsStub([]))(publicUrl),
+    /fail-closed/,
+    "an empty answer set must fail closed",
+  );
+  // A resolver that never answers is bounded by the timeout budget.
+  {
+    const t0 = Date.now();
+    await assert.rejects(
+      () => dnsGate(dnsStub([], { hang: true }))(publicUrl),
+      /could not be resolved \(fail-closed\): DNS lookup timed out after \d+ms/,
+      "a hung resolver must be cut off by the DNS timeout (fail-closed)",
+    );
+    const waited = Date.now() - t0;
+    assert.ok(waited >= 2400 && waited < 15000, `the timeout must bound the DNS wait (~2.5s, waited ${waited}ms)`);
+  }
+  // Literal IP hosts must never trigger DNS at all - the textual blocklist
+  // already judged them character-for-character.
+  {
+    let lookups = 0;
+    const guard = dnsGate({
+      lookup: async () => {
+        lookups += 1;
+        return [{ address: "127.0.0.1", family: 4 }];
+      },
+    });
+    await guard(new URL("https://93.184.216.34/x.tar.gz")); // dotted quad
+    await guard(new URL("https://[2606:2800:220:1:248:1893:25c8:1946]/x.tar.gz")); // IPv6 literal
+    assert.equal(lookups, 0, "literal IP hosts must be judged directly - dns.lookup must never fire for them");
+  }
+}
+// Real resolver: localtest.me is a PUBLIC DNS name that resolves to
+// 127.0.0.1 - the exact vector that sailed through the string-only check.
+{
+  const gate = dnsGate(realDns);
+  let online = true;
+  try {
+    await gate(new URL("https://github.com/topcheer/teamclaw/x.tar.gz"));
+  } catch (e) {
+    online = false;
+    assert.match(String(e.message), /fail-closed/, "offline DNS failure must refuse the download, never pass it");
+  }
+  const localtest = online ? await realDns.lookup("localtest.me", { all: true }).catch(() => null) : null;
+  if (localtest?.length) {
+    assert.ok(
+      localtest.some((a) => a.address === "127.0.0.1"),
+      `precondition: localtest.me must resolve to 127.0.0.1 (got ${JSON.stringify(localtest)})`,
+    );
+    await assert.rejects(
+      () => gate(new URL("https://localtest.me/x.tar.gz")),
+      /blocked address 127\.0\.0\.1/,
+      "https://localtest.me (public DNS -> 127.0.0.1) must now be rejected",
+    );
+  } else {
+    // Offline environment: the gate must still REFUSE localtest.me (a
+    // resolver-less world is fail-closed), never let it through.
+    await assert.rejects(() => gate(new URL("https://localtest.me/x.tar.gz")), /fail-closed|blocked address/);
+  }
+}
+
 // Non-injecting but odd names fall back to a safe generated filename.
 assert.equal(
   artifactFileNameFromUrl({ pathname: "/a/../.." }),
@@ -388,4 +522,4 @@ for (const file of ["main.mjs", "preload.mjs", "runtime-extract.mjs", "renderer/
   assert.equal(check.status, 0, `node --check must pass for ${file}: ${check.stderr}`);
 }
 
-console.log("test-desktop-p0: all assertions passed (C1 fetch+validation incl. live injection payloads, C2 dead RCE gone, CSP hash pinned, W1/W3/W4/W5 lifecycle+guards, #220 probe resolve+timeout)");
+console.log("test-desktop-p0: all assertions passed (C1 fetch+validation incl. live injection payloads, #223 DNS-rebinding gate incl. real localtest.me->127.0.0.1 rejection, C2 dead RCE gone, CSP hash pinned, W1/W3/W4/W5 lifecycle+guards, #220 probe resolve+timeout)");
