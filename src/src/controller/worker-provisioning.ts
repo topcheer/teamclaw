@@ -19,7 +19,12 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import type { PluginLogger } from "../../api.js";
-import { generateId } from "../protocol.js";
+import { generateId, generateLaunchToken } from "../protocol.js";
+// Issue #255 P0-1: the launch-token check at registration uses the shared
+// constant-time secret equality (same helper the device gate and tunnel gate
+// use). controller -> controller edge; security.ts never imports back here,
+// so the module graph stays acyclic.
+import { secretsEqual } from "./security.js";
 import {
   resolveDefaultOpenClawConfigPath,
   resolveDefaultTeamClawRuntimeRootDir,
@@ -160,7 +165,10 @@ export class WorkerProvisioningManager {
         reason: `Provisioned worker ${workerId} expected role ${record.role}, got ${role}`,
       };
     }
-    if (!launchToken || launchToken !== record.launchToken) {
+    // Issue #255 P0-1: constant-time equality. Semantics unchanged (old
+    // PRNG-era tokens in upgraded TeamStates still match their own value);
+    // only the timing side channel of `!==` goes away.
+    if (!launchToken || !secretsEqual(launchToken, record.launchToken)) {
       return {
         ok: false,
         managed: true,
@@ -585,7 +593,10 @@ export class WorkerProvisioningManager {
     }
 
     const workerId = `provisioned-${role}-${generateId()}`;
-    const launchToken = `${generateId()}-${generateId()}`;
+    // Issue #255 P0-1: 256-bit CSPRNG token (see generateLaunchToken) -
+    // replaces the old two-generateId construction whose PRNG-derived
+    // fragments made tokens predictable from observed output.
+    const launchToken = generateLaunchToken();
     const controllerUrl = this.resolveControllerUrl();
     const requiresDedicatedHostPorts = requiresDedicatedHostPortsForProvisioner(
       this.backend.type,

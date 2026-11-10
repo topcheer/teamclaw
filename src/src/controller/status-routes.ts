@@ -8,7 +8,7 @@
 // module imports route-table.js as TYPE ONLY (RouteContext), so the module
 // graph stays acyclic.
 import type { IncomingMessage } from "node:http";
-import type { PluginConfig, TeamState } from "../types.js";
+import type { PluginConfig, TeamProvisioningState, TeamState } from "../types.js";
 import { parseJsonBody, sendJson, sendError } from "../protocol.js";
 import { listArchivedTeams } from "../state.js";
 import {
@@ -99,6 +99,30 @@ function resolveRecommendedLanControllerUrl(req: IncomingMessage, fallbackPort: 
   return preferredLan ? `http://${preferredLan}:${port}` : "";
 }
 
+/**
+ * Issue #255 P0-1: GET /team/status is unauthenticated at L0 and reachable by
+ * every LAN peer; spreading state.provisioning verbatim (the historical
+ * behavior) published each managed worker's plaintext launchToken - a bearer
+ * credential for worker registration. Consumers of this response (web UI
+ * src/src/ui/app.js, desktop renderer) read worker metadata and readiness
+ * only - none reads launchToken (verified by grep; the worker itself gets the
+ * token out-of-band via the TEAMCLAW_LAUNCH_TOKEN env at launch). So the wire
+ * copy drops the token field; the controller keeps the full record in memory
+ * and in TeamState.
+ */
+function serializeProvisioningForStatus(
+  provisioning: TeamProvisioningState | undefined,
+  startupReadiness: ReturnType<typeof getEffectiveStartupReadiness>,
+): Record<string, unknown> {
+  const workers = Object.fromEntries(
+    Object.entries(provisioning?.workers ?? {}).map(([workerId, record]) => {
+      const { launchToken: _redacted, ...safeRecord } = record;
+      return [workerId, safeRecord];
+    }),
+  );
+  return { ...(provisioning ?? { workers: {} }), workers, startupReadiness };
+}
+
 function buildExternalWorkerInstallInfo(req: IncomingMessage, config: PluginConfig): Record<string, unknown> {
   const recommendedControllerUrl = resolveRecommendedLanControllerUrl(req, config.port);
   return {
@@ -140,7 +164,11 @@ async function teamStatusRoute(ctx: RouteContext): Promise<void> {
       pendingClarificationCount: 0,
       modelReadiness,
       externalWorkerInstall,
-      provisioning: startupReadiness ? { startupReadiness } : undefined,
+      // No team state = no provisioning workers; only readiness rides along
+      // (still through the redacting serializer so the shape stays uniform).
+      provisioning: startupReadiness
+        ? serializeProvisioningForStatus(undefined, startupReadiness)
+        : undefined,
       security: buildTeamStatusSecurity(null),
     });
     return;
@@ -160,10 +188,9 @@ async function teamStatusRoute(ctx: RouteContext): Promise<void> {
     repo: state.repo ?? null,
     modelReadiness,
     externalWorkerInstall,
-    provisioning: {
-      ...(state.provisioning ?? { workers: {} }),
-      startupReadiness,
-    },
+    // Issue #255 P0-1: provisioning goes through the redacting serializer -
+    // the raw spread leaked per-worker plaintext launchTokens to the LAN.
+    provisioning: serializeProvisioningForStatus(state.provisioning, startupReadiness),
     taskCount: Object.keys(state.tasks).length,
     workerCount: Object.keys(state.workers).length,
     pendingClarificationCount: clarifications.filter((item) => item.status === "pending").length,
