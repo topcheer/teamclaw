@@ -7,8 +7,8 @@
 //
 //   A. each side's en/zh dictionaries are complete pairs (same key sets);
 //   B. inventory counts are pinned (reproducible audit numbers):
-//        web 280 keys, desktop 294 keys, 91 shared,
-//        189 web-only, 203 desktop-only;
+//        web 280 keys, desktop 296 keys, 91 shared,
+//        189 web-only, 205 desktop-only;
 //
 //   shared-package re-evaluation — DECIDED 2026-11-10: retain the parity
 //   enforcement, do NOT extract a shared dictionary package. Context: the
@@ -119,7 +119,7 @@ for (const dict of [web, desktop]) {
 //    onto the dictionary, reusing desktop ctl.*/task.* keys verbatim).
 // ---------------------------------------------------------------------------
 assert.equal(web.en.size, 280, "web dictionary must carry exactly 280 keys (update alongside deliberate additions)");
-assert.equal(desktop.en.size, 294, "desktop dictionary must carry exactly 294 keys (update alongside deliberate additions)");
+assert.equal(desktop.en.size, 296, "desktop dictionary must carry exactly 296 keys (update alongside deliberate additions)");
 
 const webKeys = new Set(web.en.keys());
 const desktopKeys = new Set(desktop.en.keys());
@@ -129,7 +129,7 @@ const desktopOnlyKeys = [...desktopKeys].filter((k) => !webKeys.has(k)).sort();
 
 assert.equal(sharedKeys.length, 91, "exactly 91 keys are shared between web and desktop");
 assert.equal(webOnlyKeys.length, 189, "exactly 189 keys are web-only");
-assert.equal(desktopOnlyKeys.length, 203, "exactly 203 keys are desktop-only");
+assert.equal(desktopOnlyKeys.length, 205, "exactly 205 keys are desktop-only");
 
 // ---------------------------------------------------------------------------
 // C. Shared keys must carry identical values on both sides (en and zh
@@ -576,6 +576,10 @@ const DESKTOP_ONLY_GROUPS = [
     "summary.pending",
     "summary.workers"
   ] },
+  { prefix: "teamSwitch", reason: "desktop follow-mode banner/toast copy for web-initiated team profile switches (#255 P0-3, design Phase 5.2 desktop-follows promise); web surfaces the same transitions through its own switcher toasts (teamProfile.switchStarted/switchCompleted)", keys: [
+    "teamSwitch.started",
+    "teamSwitch.completed"
+  ] },
   { prefix: "tab", reason: "desktop-only tabs (controller settings, reports)", keys: [
     "tab.controller",
     "tab.reports"
@@ -688,4 +692,4 @@ assert.deepEqual(
     `missing keys [${allowedDesktopOnly.filter((k) => !desktopOnlyKeys.includes(k)).join(", ")}]`,
 );
 
-console.log("i18n parity passed: web 280 / desktop 294 keys, 91 shared aligned (official per-side shared coverage: web 32.5% / desktop 30.9%; shared-package re-evaluation DECIDED 2026-11-10 — retain parity enforcement, no extraction), 189+203 single-side keys allowlisted.");
+console.log("i18n parity passed: web 280 / desktop 296 keys, 91 shared aligned (official per-side shared coverage: web 32.5% / desktop 30.7%; shared-package re-evaluation DECIDED 2026-11-10 — retain parity enforcement, no extraction), 189+205 single-side keys allowlisted.");
