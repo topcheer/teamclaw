@@ -391,8 +391,9 @@ const dnsStub = (addresses, opts = {}) => ({
     );
     await assert.rejects(
       () => gate(new URL("https://localtest.me/x.tar.gz")),
-      /blocked address 127\.0\.0\.1/,
-      "https://localtest.me (public DNS -> 127.0.0.1) must now be rejected",
+      /blocked address (127\.0\.0\.1|::1)/,
+      "https://localtest.me (public DNS -> loopback) must now be rejected "
+        + "(glibc answers AAAA ::1 before A 127.0.0.1 on Linux runners; either loopback literal proves the gate)",
     );
   } else {
     // Offline environment: the gate must still REFUSE localtest.me (a
