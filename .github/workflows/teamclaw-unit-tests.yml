@@ -65,6 +65,16 @@ jobs:
       - name: Build
         run: npm --prefix src run build
 
+      # P1-9 (#255): the comment-enforced dependency rules of
+      # ARCHITECTURE_REVIEW.md line 18 ("无循环依赖：Worker 模块不依赖
+      # Controller 模块… controller -> shared <- worker") as an executable
+      # gate: 0 unsanctioned worker->controller edges, and a ratchet on import
+      # cycles (no NEW cycle sets vs the 17-set legacy baseline). Runs before
+      # the behavioral suite so violations fail fast under a named step; the
+      # suite glob below picks the same file up for local runs too.
+      - name: Dependency direction gate (ARCHITECTURE_REVIEW.md rule, P1-9)
+        run: node tests/test-arch-dependencies.mjs
+
       # Run every suite; collect failures instead of aborting on the first so
       # one red test does not hide the state of the other 49.
       - name: Run full unit suite (tests/test-*.mjs)
