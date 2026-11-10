@@ -267,7 +267,13 @@
       "workflow.stepsTooltip": "{n} steps · {roles}",
       "workflow.started": "Workflow {name} started",
       "workflow.startFailed": "Failed to start workflow - {reason}",
-      "workflow.badgeRound": "Round {n}"
+      "workflow.badgeRound": "Round {n}",
+      "roleDisplay.title": "Role display",
+      "roleDisplay.hint": "Hide roles this team does not use, or rename them for your team. Saved in this browser only (display layer) - the team profile itself is not modified.",
+      "roleDisplay.save": "Save",
+      "roleDisplay.reset": "Reset to defaults",
+      "roleDisplay.saved": "Role display settings saved",
+      "roleDisplay.resetDone": "Role display reset to the profile defaults"
     },
     zh: {
       "action.refresh": "刷新",
@@ -472,7 +478,13 @@
       "workflow.stepsTooltip": "{n} 步 · {roles}",
       "workflow.started": "工作流「{name}」已启动",
       "workflow.startFailed": "启动工作流失败 - {reason}",
-      "workflow.badgeRound": "第{n}轮"
+      "workflow.badgeRound": "第{n}轮",
+      "roleDisplay.title": "角色显示",
+      "roleDisplay.hint": "隐藏本团队用不到的角色，或改成本团队的叫法。仅保存在此浏览器（纯显示层）——不修改团队画像本身。",
+      "roleDisplay.save": "保存",
+      "roleDisplay.reset": "恢复默认",
+      "roleDisplay.saved": "角色显示设置已保存",
+      "roleDisplay.resetDone": "角色显示已恢复画像默认"
     }
   };
 
@@ -2433,7 +2445,7 @@
       card.classList.add("hidden");
       return;
     }
-    var roles = Array.isArray(info.roles) ? info.roles : [];
+    var roles = visibleRoles(Array.isArray(info.roles) ? info.roles : []);
     if (!roles.length) {
       card.classList.add("hidden");
       card.innerHTML = "";
@@ -2447,7 +2459,7 @@
     }
     var roleOptions = roles.map(function (role) {
       return '<option value="' + escapeHtml(role.id) + '"' + (role.id === selectedExternalWorkerRole ? " selected" : "") + ">" +
-        escapeHtml((role.icon ? role.icon + " " : "") + (role.label || role.id)) +
+        escapeHtml((role.icon ? role.icon + " " : "") + roleDisplayLabel(role)) +
         "</option>";
     }).join("");
     var command = buildExternalWorkerCommand(info, selectedExternalWorkerRole, selectedExternalWorkerDiscoveryMode);
@@ -3668,11 +3680,11 @@
     const container = $("#roles-list");
     if (!container) return;
 
-    container.innerHTML = roles.map(function (role) {
+    container.innerHTML = visibleRoles(roles).map(function (role) {
       return (
         '<div class="role-chip">' +
         "  <span>" + escapeHtml(role.icon || "") + "</span>" +
-        "  <span>" + escapeHtml(role.label) + "</span>" +
+        "  <span>" + escapeHtml(roleDisplayLabel(role)) + "</span>" +
         "</div>"
       );
     }).join("");
@@ -3689,11 +3701,11 @@
     while (select.options.length > 1) {
       select.remove(1);
     }
-    roleRegistry.forEach(function (role) {
+    visibleRoles(roleRegistry).forEach(function (role) {
       if (!role || typeof role.id !== "string" || !role.id) return;
       const option = document.createElement("option");
       option.value = role.id;
-      option.textContent = role.label || role.id;
+      option.textContent = roleDisplayLabel(role);
       select.appendChild(option);
     });
     if (previous && Array.prototype.some.call(select.options, function (option) { return option.value === previous; })) {
@@ -3710,6 +3722,131 @@
       return preferred;
     }
     return roles.length > 0 ? roles[0].id : "";
+  }
+
+  // ============ Role display prefs (Phase 4 lightweight customization) ============
+  // v1 lightweight customization (design Phase 4): hide roles the team does
+  // not use and rename the rest for the local team. PURE UI filter layer -
+  // prefs persist in this browser's localStorage only; /roles, TeamState and
+  // the profile JSON schema stay untouched (the full JSON editor is v2).
+  // Applied at render time to the manual-task role select, the
+  // external-worker role select and the sidebar Roles list.
+  const ROLE_DISPLAY_STORAGE_KEY = "teamclaw.ui.roleDisplay.v1";
+  let roleDisplayPrefs = loadRoleDisplayPrefs();
+
+  function defaultRoleDisplayPrefs() {
+    return { hidden: {}, names: {} };
+  }
+
+  function loadRoleDisplayPrefs() {
+    try {
+      var raw = window.localStorage.getItem(ROLE_DISPLAY_STORAGE_KEY);
+      if (!raw) return defaultRoleDisplayPrefs();
+      var parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return defaultRoleDisplayPrefs();
+      return {
+        hidden: parsed.hidden && typeof parsed.hidden === "object" && !Array.isArray(parsed.hidden) ? parsed.hidden : {},
+        names: parsed.names && typeof parsed.names === "object" && !Array.isArray(parsed.names) ? parsed.names : {},
+      };
+    } catch (_err) {
+      return defaultRoleDisplayPrefs();
+    }
+  }
+
+  function saveRoleDisplayPrefs(prefs) {
+    roleDisplayPrefs = prefs || defaultRoleDisplayPrefs();
+    try {
+      window.localStorage.setItem(ROLE_DISPLAY_STORAGE_KEY, JSON.stringify(roleDisplayPrefs));
+    } catch (_err) {}
+  }
+
+  function resetRoleDisplayPrefs() {
+    roleDisplayPrefs = defaultRoleDisplayPrefs();
+    try {
+      window.localStorage.removeItem(ROLE_DISPLAY_STORAGE_KEY);
+    } catch (_err) {}
+  }
+
+  function isRoleVisible(roleId) {
+    return !(roleDisplayPrefs.hidden && roleDisplayPrefs.hidden[roleId]);
+  }
+
+  // Rename layer: a non-empty custom name wins; anything else falls back to
+  // the registry label (and the id when even the label is missing).
+  function roleDisplayLabel(role) {
+    if (!role) return "";
+    var custom = roleDisplayPrefs.names ? roleDisplayPrefs.names[role.id] : "";
+    if (typeof custom === "string" && custom.trim()) return custom.trim();
+    return role.label || role.id || "";
+  }
+
+  function visibleRoles(roles) {
+    return (roles || []).filter(function (role) {
+      return role && typeof role.id === "string" && role.id && isRoleVisible(role.id);
+    });
+  }
+
+  // Re-render every surface the prefs drive (manual-task select, external
+  // worker card, sidebar chips) after a save/reset.
+  function rerenderRoleSurfaces() {
+    renderTaskRoleOptions();
+    renderExternalWorkerInstallCard();
+    renderRoles(roleRegistry);
+  }
+
+  // Editor rows live in the team-profile modal's "Role display" section:
+  // one row per /roles registry entry - visibility checkbox (keyed by the
+  // stable role id) + display-name input whose placeholder is the registry
+  // label (an empty value falls back to it on save).
+  function renderRoleDisplayEditor() {
+    var listEl = $("#role-display-list");
+    if (!listEl) return;
+    if (!roleRegistry.length) {
+      listEl.innerHTML = "";
+      return;
+    }
+    listEl.innerHTML = roleRegistry.map(function (role) {
+      var fallback = role.label || role.id;
+      var customName = (roleDisplayPrefs.names && roleDisplayPrefs.names[role.id]) || "";
+      return (
+        '<div class="team-profile-archive-row role-display-row" data-role-display-id="' + escapeHtml(role.id) + '">' +
+        '<label class="role-display-visible">' +
+        '<input type="checkbox" data-role-display-visible' + (isRoleVisible(role.id) ? " checked" : "") + "> " +
+        escapeHtml((role.icon ? role.icon + " " : "") + role.id) +
+        "</label>" +
+        '<input type="text" class="role-display-name" data-role-display-name spellcheck="false" autocomplete="off" value="' +
+        escapeHtml(customName) + '" placeholder="' + escapeHtml(fallback) + '">' +
+        "</div>"
+      );
+    }).join("");
+  }
+
+  function saveRoleDisplayFromEditor() {
+    var listEl = $("#role-display-list");
+    if (!listEl) return;
+    var prefs = defaultRoleDisplayPrefs();
+    listEl.querySelectorAll("[data-role-display-id]").forEach(function (row) {
+      var roleId = row.getAttribute("data-role-display-id") || "";
+      if (!roleId) return;
+      var checkbox = row.querySelector("[data-role-display-visible]");
+      if (checkbox && !checkbox.checked) prefs.hidden[roleId] = true;
+      var nameInput = row.querySelector("[data-role-display-name]");
+      if (nameInput) {
+        var custom = nameInput.value.trim();
+        if (custom) prefs.names[roleId] = custom;
+      }
+    });
+    saveRoleDisplayPrefs(prefs);
+    rerenderRoleSurfaces();
+    renderRoleDisplayEditor();
+    showError(t("roleDisplay.saved"));
+  }
+
+  function resetRoleDisplay() {
+    resetRoleDisplayPrefs();
+    rerenderRoleSurfaces();
+    renderRoleDisplayEditor();
+    showError(t("roleDisplay.resetDone"));
   }
 
   function tabNameFromHash() {
@@ -4407,6 +4544,10 @@
     modal.classList.add("open");
     modal.setAttribute("aria-hidden", "false");
     refreshTeamProfileModalData();
+    // Role display editor renders from the /roles mirror + the saved prefs;
+    // rendered on open (not on refreshAll) so an in-progress edit survives
+    // background refreshes while the modal is open.
+    renderRoleDisplayEditor();
     // Issue #23: the devices section lives at the bottom of this modal; it
     // re-renders on every refreshAll while the modal is open.
     renderSecurityDevices();
@@ -4725,6 +4866,15 @@
         if (!pendingSwitchTarget || teamProfileSwitchInFlight) return;
         submitTeamProfileSwitch(pendingSwitchTarget.id);
       });
+    }
+
+    var roleDisplaySave = $("#role-display-save");
+    if (roleDisplaySave) {
+      roleDisplaySave.addEventListener("click", saveRoleDisplayFromEditor);
+    }
+    var roleDisplayReset = $("#role-display-reset");
+    if (roleDisplayReset) {
+      roleDisplayReset.addEventListener("click", resetRoleDisplay);
     }
   }
 

@@ -365,6 +365,19 @@
           </div>
         </div>
         <p id="team-profile-switch-status" class="team-profile-switch-status" hidden></p>
+        <!-- Role display (Phase 4 lightweight customization): per-browser
+             visibility + rename layer over GET /roles - localStorage only,
+             the profile JSON and the API stay untouched (full editing is
+             v2). Rows render in app.js from the /roles registry mirror. -->
+        <section class="team-profile-archived" id="role-display-section">
+          <h3 data-i18n="roleDisplay.title">Role display</h3>
+          <p class="workspace-prompt-note" data-i18n="roleDisplay.hint">Hide roles this team does not use, or rename them for your team. Saved in this browser only (display layer) - the team profile itself is not modified.</p>
+          <div id="role-display-list" class="team-profile-archives"></div>
+          <div class="workspace-prompt-actions">
+            <button id="role-display-save" class="btn btn-primary" type="button" data-i18n="roleDisplay.save">Save</button>
+            <button id="role-display-reset" class="btn btn-small" type="button" data-i18n="roleDisplay.reset">Reset to defaults</button>
+          </div>
+        </section>
         <section class="team-profile-archived">
           <h3 data-i18n="teamProfile.archivedTitle">Archived teams</h3>
           <div id="team-profile-archives" class="team-profile-archives"></div>

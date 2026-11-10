@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Wave 23b web UI contract tests for the declarative workflow surfaces
-// (docs/vertical-team-profiles-design.md 2.4 + Phase 5 row 5.1; backend API
-// frozen by PR #243).
+// Wave 23b web UI contract tests: declarative workflow surfaces (design 2.4
+// + Phase 5 row 5.1; backend API frozen by PR #243) and the Phase 4
+// lightweight role-display customization.
 //
 // Source-level assertions in the test-profile-switcher-ui.mjs style (regex
 // over the literal, no browser, no backend re-testing):
@@ -169,7 +169,126 @@ assert.match(
 );
 
 // ---------------------------------------------------------------------------
-// 4. i18n: workflow.* keys must exist in BOTH the en and zh inline dicts.
+// 4. Role visibility toggle (Phase 4 lightweight customization): pure UI
+//    filter layer - localStorage only, /roles and the profile JSON untouched.
+// ---------------------------------------------------------------------------
+assert.match(
+  htmlSource,
+  /<section class="team-profile-archived" id="role-display-section">/,
+  "the team-profile modal must carry the Role display settings section",
+);
+for (const id of ["role-display-section", "role-display-list", "role-display-save", "role-display-reset"]) {
+  assert.ok(htmlSource.includes(`id="${id}"`), `index.html must define #${id}`);
+}
+assert.match(
+  htmlSource,
+  /data-i18n="roleDisplay\.title"/,
+  "the section heading must translate through the inline dictionary",
+);
+assert.match(
+  appSource,
+  /const ROLE_DISPLAY_STORAGE_KEY = "teamclaw\.ui\.roleDisplay\.v1";/,
+  "prefs must persist under the dedicated localStorage key",
+);
+assert.match(
+  appSource,
+  /function loadRoleDisplayPrefs\(\) \{[\s\S]*?window\.localStorage\.getItem\(ROLE_DISPLAY_STORAGE_KEY\)[\s\S]*?return defaultRoleDisplayPrefs\(\);[\s\S]*?\}/,
+  "loading must read the key and fall back to defaults (absent/corrupt/throwing storage)",
+);
+assert.match(
+  appSource,
+  /function saveRoleDisplayPrefs\(prefs\) \{[\s\S]*?window\.localStorage\.setItem\(ROLE_DISPLAY_STORAGE_KEY, JSON\.stringify\(roleDisplayPrefs\)\)/,
+  "saving must persist the prefs as JSON",
+);
+assert.match(
+  appSource,
+  /function resetRoleDisplayPrefs\(\) \{[\s\S]*?window\.localStorage\.removeItem\(ROLE_DISPLAY_STORAGE_KEY\)/,
+  "reset must CLEAR the storage key so defaults return",
+);
+// Filter layer applied to every consuming surface.
+assert.match(
+  appSource,
+  /function visibleRoles\(roles\) \{[\s\S]*?isRoleVisible\(role\.id\)/,
+  "the visibility filter helper must exist",
+);
+assert.match(
+  appSource,
+  /container\.innerHTML = visibleRoles\(roles\)\.map/,
+  "the sidebar Roles list must filter through visibleRoles",
+);
+assert.match(
+  appSource,
+  /visibleRoles\(roleRegistry\)\.forEach/,
+  "the manual-task role select must filter through visibleRoles",
+);
+assert.match(
+  appSource,
+  /var roles = visibleRoles\(Array\.isArray\(info\.roles\) \? info\.roles : \[\]\);/,
+  "the external-worker role select must filter through visibleRoles",
+);
+// Rename layer: custom name wins, empty falls back to the registry label.
+assert.match(
+  appSource,
+  /function roleDisplayLabel\(role\) \{[\s\S]*?if \(typeof custom === "string" && custom\.trim\(\)\) return custom\.trim\(\);[\s\S]*?return role\.label \|\| role\.id \|\| "";/,
+  "rename must fall back to the registry label (then the id) when no custom name is set",
+);
+assert.match(
+  appSource,
+  /option\.textContent = roleDisplayLabel\(role\);/,
+  "the manual-task select must show the (possibly renamed) display label",
+);
+assert.match(
+  appSource,
+  /escapeHtml\(\(role\.icon \? role\.icon \+ " " : ""\) \+ roleDisplayLabel\(role\)\)/,
+  "the external-worker select must show the (possibly renamed) display label",
+);
+assert.match(
+  appSource,
+  /escapeHtml\(roleDisplayLabel\(role\)\)/,
+  "the sidebar role chips must show the (possibly renamed) display label",
+);
+// Editor + save/reset wiring.
+assert.match(
+  appSource,
+  /function renderRoleDisplayEditor/,
+  "the editor must render one row per registry role",
+);
+assert.match(
+  appSource,
+  /data-role-display-visible/,
+  "each row must carry a visibility checkbox",
+);
+assert.match(
+  appSource,
+  /placeholder="' \+ escapeHtml\(fallback\)/,
+  "the display-name input must use the registry label as its placeholder (empty = fallback)",
+);
+assert.match(
+  appSource,
+  /roleDisplaySave\.addEventListener\("click", saveRoleDisplayFromEditor\)/,
+  "Save must collect the editor rows into prefs and re-render the surfaces",
+);
+assert.match(
+  appSource,
+  /roleDisplayReset\.addEventListener\("click", resetRoleDisplay\)/,
+  "Reset must restore the profile defaults",
+);
+assert.match(
+  appSource,
+  /function rerenderRoleSurfaces\(\) \{[\s\S]*?renderTaskRoleOptions\(\);[\s\S]*?renderExternalWorkerInstallCard\(\);[\s\S]*?renderRoles\(roleRegistry\);/,
+  "save/reset must re-render every consuming surface",
+);
+// Pure UI layer: no writes to /roles or the profile JSON.
+const roleApiCalls = appSource.match(/api(?:Get|Post|Request)\("\/roles"\)/g) || [];
+assert.deepEqual(
+  roleApiCalls,
+  ['apiGet("/roles")'],
+  "the /roles contract stays read-only (visibility is a UI-layer filter, not a backend change)",
+);
+
+// ---------------------------------------------------------------------------
+// 5. i18n: workflow.* + roleDisplay.* keys must exist in BOTH the en and
+//    zh inline dicts.
 // ---------------------------------------------------------------------------
 for (const key of [
   "workflow.sectionTitle",
@@ -177,6 +296,12 @@ for (const key of [
   "workflow.started",
   "workflow.startFailed",
   "workflow.badgeRound",
+  "roleDisplay.title",
+  "roleDisplay.hint",
+  "roleDisplay.save",
+  "roleDisplay.reset",
+  "roleDisplay.saved",
+  "roleDisplay.resetDone",
 ]) {
   const count = (appSource.match(new RegExp(`"${key.replace(/\./g, "\\.")}":`, "g")) || []).length;
   assert.equal(count, 2, `i18n key ${key} must exist in both en and zh dictionaries`);
