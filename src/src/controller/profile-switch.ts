@@ -160,7 +160,7 @@ export async function executeTeamProfileSwitch(
 
   if (!options.skipArchive) {
     // Step 2: drain in-flight work, then stop every worker.
-    void setPhase("draining").persisted;
+    void setPhase("draining").persisted.catch(() => undefined);
     workerProvisioningManager?.setReconcileSuspended(true);
     const drain = await drainTeamForProfileSwitch(deps);
     for (const workerId of Object.keys(getTeamState()?.provisioning?.workers ?? {})) {
@@ -198,6 +198,12 @@ export async function executeTeamProfileSwitch(
     // is the single entry's persisted handle (one save enqueued at the same
     // point the old fire-and-forget + awaited second save pair wrote).
     const archiving = setPhase("archiving");
+    // #251 note (no behavior change): `sourceState` below is whatever
+    // getTeamState() returns AFTER the awaited "archiving" persist barrier
+    // - it is NOT a phase-accurate snapshot frozen at the moment the drain
+    // finished. In-flight mutations racing the switch can be captured in
+    // the archive; the resume path tolerates this because the transition
+    // marker, not the snapshot contents, drives recovery.
     const sourceState = getTeamState();
     if (sourceState) {
       await archiving.persisted;
