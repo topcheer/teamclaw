@@ -330,7 +330,47 @@ function artifactEffectiveHost(hostname) {
     const lo = parseInt(mappedHex[2], 16);
     return `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
   }
+  // NAT64 unwrap (#246): the well-known prefix 64:ff9b::/96 embeds the real
+  // IPv4 destination in the low 32 bits. A DNS64/NAT64 network hands out e.g.
+  // 64:ff9b::a00:1, which no v6 rule below flags, while the NAT64 gateway
+  // dials the embedded 10.0.0.1 straight into the intranet. Extract the
+  // embedded v4 so the SAME v4 blocklist judges the actual target (a public
+  // embedded v4 stays allowed - NAT64 to the internet is legitimate).
+  const nat64 = nat64EmbeddedIpv4(host);
+  if (nat64) {
+    return nat64;
+  }
   return host;
+}
+
+// #246: parse a textual IPv6 literal (hex groups, at most one "::"; dotted
+// tails were already unwrapped above) and return the embedded IPv4 dotted
+// quad when the address sits inside the well-known NAT64 prefix 64:ff9b::/96
+// (first 96 bits exactly 0064:ff9b:...:0000), else null. Pure and shared by
+// the textual validator and the post-DNS re-check via artifactEffectiveHost.
+function nat64EmbeddedIpv4(host) {
+  if (!host.startsWith("64:ff9b")) return null; // fast reject: hostnames, other literals
+  if (!/^[0-9a-f:]+$/.test(host)) return null; // dotted tails / zone ids / junk
+  const halves = host.split("::");
+  if (halves.length > 2) return null;
+  const groups = (half) =>
+    half === "" ? [] : half.split(":").map((g) => (/^[0-9a-f]{1,4}$/.test(g) ? parseInt(g, 16) : NaN));
+  const head = groups(halves[0]);
+  const tail = halves.length === 2 ? groups(halves[1]) : null;
+  if (head.some((g) => Number.isNaN(g)) || (tail && tail.some((g) => Number.isNaN(g)))) return null;
+  let all;
+  if (tail) {
+    const zeros = 8 - head.length - tail.length;
+    if (zeros < 1) return null; // "::" must stand in for at least one zero group
+    all = [...head, ...new Array(zeros).fill(0), ...tail];
+  } else {
+    if (head.length !== 8) return null; // no "::": must be exactly 8 groups
+    all = head;
+  }
+  if (all[0] !== 0x64 || all[1] !== 0xff9b || all.slice(2, 6).some((g) => g !== 0)) return null;
+  const hi = all[6];
+  const lo = all[7];
+  return `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
 }
 function isBlockedArtifactHost(effectiveHost) {
   // "localhost" / cloud metadata names / loopback / RFC1918 / link-local
