@@ -1,0 +1,90 @@
+name: TeamClaw Unit Tests
+
+# Issue #255 P0-2: of the (then) 48 behavioral suites under tests/, only the
+# five profile-smoke tests had per-PR CI; everything else ran nowhere. This
+# workflow runs the FULL tests/test-*.mjs suite on every PR / main push that
+# touches source, test assets, or helper scripts. The list is glob-driven, so
+# newly added suites are picked up automatically (never a stale hardcoded
+# list). profile-smoke (first per-PR test workflow in this repo) is kept
+# untouched: it gives named, targeted feedback for profile-only changes;
+# overlap with the five suites it covers is accepted (~3 min total).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "scripts/**"
+      - ".github/workflows/teamclaw-unit-tests.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "scripts/**"
+      - ".github/workflows/teamclaw-unit-tests.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: teamclaw-unit-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Pinned minor, not floating "24": the locked openclaw@2026.10.9 in
+      # src/package-lock.json requires node >=24.22.1 <25 || >=26.12.1 and
+      # enforces it in preinstall; a floating "24" once resolved to a cached
+      # 24.19.0 and broke installs (see commit a0caf6e).
+      - name: Setup Node (with npm cache)
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.22.1
+          cache: npm
+          cache-dependency-path: src/package-lock.json
+
+      # Registry flake resilience without third-party actions: one automatic
+      # retry with linear backoff, hard-fail after the second attempt.
+      - name: Install dependencies (retry once on registry flake)
+        run: |
+          set -uo pipefail
+          for attempt in 1 2; do
+            if npm --prefix src ci --no-audit --no-fund; then
+              exit 0
+            fi
+            echo "npm ci attempt ${attempt}/2 failed; retrying after backoff..."
+            sleep $(( attempt * 15 ))
+          done
+          echo "::error::npm ci failed after 2 attempts"
+          exit 1
+
+      - name: Build
+        run: npm --prefix src run build
+
+      # Run every suite; collect failures instead of aborting on the first so
+      # one red test does not hide the state of the other 49.
+      - name: Run full unit suite (tests/test-*.mjs)
+        run: |
+          set -uo pipefail
+          total=0
+          failed=0
+          for t in tests/test-*.mjs; do
+            total=$(( total + 1 ))
+            echo "::group::${t}"
+            if node "$t"; then
+              echo "::endgroup::"
+            else
+              status=$?
+              echo "::endgroup::"
+              echo "::error file=${t}::${t} exited ${status}"
+              failed=$(( failed + 1 ))
+            fi
+          done
+          echo "unit suites: ${total} run, ${failed} failed"
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
