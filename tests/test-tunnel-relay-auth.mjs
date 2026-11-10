@@ -6,8 +6,10 @@
 //      - create verifies ownership via one GET api.github.com/user with the
 //        caller's Bearer token (login === github_user, case-folded);
 //      - the ACCEPT_LEGACY_CREATE grey-window flag exists, defaults to
-//        "true" in wrangler.toml, and its headerless branch warns (legacy
-//        traffic observable) while "false" 401s;
+//        "false" in wrangler.toml (grey window closed 2026-11-10 by #245,
+//        after a `wrangler tail` window observed zero legacy warns), and
+//        its headerless branch warns (legacy traffic observable) while
+//        "false" 401s;
 //      - ordering: the 10/h/IP create rate limit runs BEFORE the GitHub
 //        verification call, and verification runs BEFORE any Cloudflare API
 //        work (no 409/watermark/CF-call leakage to unauthenticated probers);
@@ -71,7 +73,8 @@ const mgr = readSource(path.join("src", "src", "controller", "tunnel-manager.ts"
     "login mismatch must be a 403 ownership rejection (#231)",
   );
 
-  // Grey window: flag consulted, default open, warn while open, 401 when closed.
+  // Grey window: flag consulted, default closed since #245 (wrangler.toml
+  // pins "false"), unset still warns via the legacy branch, "false" 401s.
   assert.match(worker, /ACCEPT_LEGACY_CREATE/, "relay reads ACCEPT_LEGACY_CREATE (#231)");
   assert.match(
     worker,
@@ -84,7 +87,7 @@ const mgr = readSource(path.join("src", "src", "controller", "tunnel-manager.ts"
     "headerless creates under the open flag must console.warn so convergence is observable (#231)",
   );
   assert.doesNotMatch(worker, /console\.log/, "no console.log in the worker (token hygiene, pre-existing pin)");
-  assert.match(wrangler, /ACCEPT_LEGACY_CREATE = "true"/, "wrangler.toml declares ACCEPT_LEGACY_CREATE defaulting to true (grey window starts open, #231)");
+  assert.match(wrangler, /ACCEPT_LEGACY_CREATE = "false"/, "wrangler.toml pins ACCEPT_LEGACY_CREATE=false (grey window closed by #245, config reality is tightened)");
 
   // Ordering: rate limit strictly before the GitHub verification call,
   // verification strictly before the first Cloudflare API work / 409 signal.
