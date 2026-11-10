@@ -224,7 +224,15 @@ function teamProfileGetRoute(ctx: RouteContext): void {
 async function teamProfileSwitchRoute(ctx: RouteContext): Promise<void> {
   const { req, res, deps } = ctx;
   const { config, logger, getTeamState, updateTeamState } = deps;
-  const body = await parseJsonBody(req);
+  let body: Record<string, unknown>;
+  try {
+    body = await parseJsonBody(req);
+  } catch (error) {
+    // #251 L6: a malformed request body is a client error (400), not a
+    // top-level 500 - parseJsonBody throws "Invalid JSON body: ...".
+    sendError(res, 400, error instanceof Error ? error.message : "invalid JSON body");
+    return;
+  }
   const profileId = typeof body.profileId === "string" ? body.profileId.trim() : "";
   if (!profileId || !hasProfile(profileId)) {
     sendError(

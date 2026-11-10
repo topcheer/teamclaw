@@ -449,7 +449,15 @@ export async function workflowStartRoute(ctx: RouteContext): Promise<void> {
     return;
   }
 
-  const body = await parseJsonBody(req);
+  let body: Record<string, unknown>;
+  try {
+    body = await parseJsonBody(req);
+  } catch (error) {
+    // #251 L6: a malformed request body is a client error (400), not a
+    // top-level 500 - parseJsonBody throws "Invalid JSON body: ...".
+    sendError(res, 400, error instanceof Error ? error.message : "invalid JSON body");
+    return;
+  }
   if (body.context !== undefined && typeof body.context !== "string") {
     sendError(res, 400, "body field \"context\" must be a string when provided (initial business context for the first step)");
     return;

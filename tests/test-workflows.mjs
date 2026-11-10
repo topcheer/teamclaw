@@ -183,8 +183,19 @@ async function bootScenario({ initialState } = {}) {
     const json = await res.json().catch(() => null);
     return { status: res.status, headers: res.headers, json };
   };
+  // Raw-text POST for #251 L6: malformed JSON bodies must land as 400 client
+  // errors on both workflow start and the profile switch route (not a 500).
+  const rawPost = async (pathname, text) => {
+    const res = await fetch(`${baseUrl}${pathname}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: text,
+    });
+    const json = await res.json().catch(() => null);
+    return { status: res.status, headers: res.headers, json };
+  };
   return {
-    deps, server, call, getTeamState,
+    deps, server, call, rawPost, getTeamState,
     async close() {
       await new Promise((resolve) => server.close(resolve));
       wsServer.close();
@@ -245,6 +256,14 @@ try {
   const badContext = await scenario.call("POST", "/api/v1/workflows/credit-approval/start", { context: 42 });
   assert.equal(badContext.status, 400);
   assert.match(badContext.json.error, /"context" must be a string/);
+
+  // #251 L6: malformed JSON bodies are 400 client errors, not top-level 500s.
+  const badStartBody = await scenario.rawPost("/api/v1/workflows/credit-approval/start", "{ not json");
+  assert.equal(badStartBody.status, 400, "invalid JSON body on workflow start must be 400 (not 500)");
+  assert.match(badStartBody.json.error, /[Ii]nvalid JSON body/);
+  const badSwitchBody = await scenario.rawPost("/api/v1/team/profile", "{ not json");
+  assert.equal(badSwitchBody.status, 400, "invalid JSON body on profile switch must be 400 (not 500)");
+  assert.match(badSwitchBody.json.error, /[Ii]nvalid JSON body/);
 
   // transition in flight -> 503 + Retry-After (handler-level transition matrix).
   scenario.deps.updateTeamState((s) => {
