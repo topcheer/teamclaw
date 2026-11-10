@@ -340,7 +340,7 @@ async function waitForSwitchCompletion(call, timeoutMs = 10000) {
     // Archive: whole TeamState + roles snapshot + profile metadata, roundtrip.
     const files = listArchiveFiles();
     assert.equal(files.length, 1, "exactly one archive file for the switch");
-    assert.match(files[0], /^software-rd-\d+\.json$/, "archive file name is <profileId>-<timestamp>.json");
+    assert.match(files[0], /^software-rd-\d+-(?:[a-z0-9]{6})\.json$/, "archive file name is <profileId>-<timestamp>-<suffix>.json (#251 collision guard)");
     const envelope = JSON.parse(fs.readFileSync(path.join(archivedDir(), files[0]), "utf8"));
     assert.equal(envelope.profile.id, "software-rd", "archive embeds the profile id");
     assert.equal(envelope.profile.name, "Software R&D Team", "archive embeds the profile name");
@@ -708,7 +708,7 @@ async function waitForSwitchCompletion(call, timeoutMs = 10000) {
 
     const files = listArchiveFiles();
     assert.equal(files.length, 1, "resume must not write an additional archive in the ghost window");
-    assert.match(files[0], /^software-rd-\d+\.json$/, "no minimal-bank-named ghost archive may appear");
+    assert.match(files[0], /^software-rd-\d+-(?:[a-z0-9]{6})\.json$/, "no minimal-bank-named ghost archive may appear");
     assert.doesNotMatch(files[0], /^minimal-bank-/);
 
     const state = scenario.getTeamState();

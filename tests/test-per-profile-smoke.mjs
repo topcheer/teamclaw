@@ -409,7 +409,7 @@ async function runSwitchRoundtrip(targetId) {
     const archivedDir = path.join(stateDir, "archived");
     const files = fs.existsSync(archivedDir) ? fs.readdirSync(archivedDir).sort() : [];
     assert.equal(files.length, 1, `switch to ${targetId}: exactly one archive file`);
-    assert.match(files[0], /^software-rd-\d+\.json$/, `archive file name is <sourceProfileId>-<timestamp>.json`);
+    assert.match(files[0], /^software-rd-\d+-(?:[a-z0-9]{6})\.json$/, `archive file name is <sourceProfileId>-<timestamp>-<suffix>.json (#251 collision guard)`);
     const envelope = JSON.parse(fs.readFileSync(path.join(archivedDir, files[0]), "utf8"));
     assert.equal(envelope.profile.id, "software-rd", "archive embeds the SOURCE profile id");
     assert.equal(envelope.profile.roles.length, 11, "archive embeds the full software-rd roles snapshot");

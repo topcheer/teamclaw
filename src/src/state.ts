@@ -338,7 +338,7 @@ async function saveTeamState(state: TeamState): Promise<void> {
 // ---------------------------------------------------------------------------
 
 const ARCHIVED_TEAMS_DIR_NAME = "archived";
-const ARCHIVE_FILE_RE = /^([a-z0-9-]+)-(\d+)\.json$/;
+const ARCHIVE_FILE_RE = /^([a-z0-9-]+)-(\d+)(?:-([a-z0-9]+))?\.json$/;
 
 /** Embedded profile snapshot stored alongside the archived team state. */
 export type ArchivedTeamProfileSnapshot = {
@@ -389,7 +389,12 @@ async function archiveTeamState(
 ): Promise<string> {
   const dir = archivedTeamsDirPath();
   await ensureDir(dir);
-  const fileName = `${state.profileId}-${Date.now()}.json`;
+  // #251: a short random suffix disambiguates same-millisecond archives
+  // (two switches inside one ms would otherwise silently overwrite each
+  // other). Capture groups 1/2 keep their original semantics; group 3 is
+  // the optional suffix, so pre-#251 archive names still parse.
+  const suffix = Math.random().toString(36).slice(2, 8).padEnd(6, "0");
+  const fileName = `${state.profileId}-${Date.now()}-${suffix}.json`;
   const filePath = path.join(dir, fileName);
   const envelope: ArchivedTeamEnvelope = {
     archivedAt: Date.now(),
