@@ -42,6 +42,13 @@ async function transpileManifestModuleSubset(outDir) {
       output: path.join(outDir, "src", "prompt-policy.js"),
     },
     {
+      // #251 P1: prompt-policy.ts now imports getActiveRoleIds from the
+      // profile loader at runtime, so the minimal manifest runtime needs the
+      // loader plus its profiles/*.json data directory.
+      source: path.join(packageRoot, "src", "profile-loader.ts"),
+      output: path.join(outDir, "src", "profile-loader.js"),
+    },
+    {
       source: path.join(packageRoot, "src", "openclaw-workspace.ts"),
       output: path.join(outDir, "src", "openclaw-workspace.js"),
     },
@@ -84,6 +91,10 @@ async function transpileManifestModuleSubset(outDir) {
     await fs.mkdir(path.dirname(file.output), { recursive: true });
     await fs.writeFile(file.output, result.outputText, "utf8");
   }
+
+  // #251 P1: profile-loader resolves profiles/*.json relative to its own
+  // module URL, so the transpiled runtime needs the JSON data too.
+  await fs.cp(path.join(packageRoot, "src", "profiles"), path.join(outDir, "src", "profiles"), { recursive: true });
 }
 
 async function runManifestRuntimeChecks() {
