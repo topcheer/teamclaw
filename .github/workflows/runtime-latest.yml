@@ -46,7 +46,11 @@ jobs:
           # these URLs for all platforms (#225 E1).
           gh release view runtime-latest >/dev/null 2>&1 || gh release create runtime-latest --title "Runtime bundle (rolling)" --notes "Auto-replaced on every main push. Fixed URL by design." --prerelease
           for f in dist-runtime/teamclaw-runtime-${{ matrix.plat }}.tar.gz*; do
-            gh release delete-asset runtime-latest "$f" --yes 2>/dev/null || true
+            # delete-asset takes the ASSET name, not a path - strip the
+            # dist-runtime/ prefix (desktop-release.yml avoids this by cd'ing
+            # into dist first; without basename the delete silently no-ops and
+            # the upload then fails on "asset already exists").
+            gh release delete-asset runtime-latest "$(basename "$f")" --yes 2>/dev/null || true
           done
           gh release upload runtime-latest dist-runtime/teamclaw-runtime-${{ matrix.plat }}.tar.gz*
         env:
