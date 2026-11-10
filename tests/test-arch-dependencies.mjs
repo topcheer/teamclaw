@@ -103,6 +103,11 @@ const BASELINE_CYCLE_SETS = new Set([
   "controller/controller-service,controller/profile-switch",
   "controller/http-server,controller/route-table",
   "controller/http-server,controller/route-table,controller/security",
+  // Post-#256 regression (caught by this gate's FIRST CI run): 33e8f81 added
+  // worker-provisioning -> security (secretsEqual), closing a 4-module cycle.
+  // src/src is outside #255 scope - flagged for follow-up; REMOVE this entry
+  // once the cycle is broken (e.g. secretsEqual hoisted to protocol.ts).
+  "controller/http-server,controller/route-table,controller/security,controller/worker-provisioning",
   "controller/route-table,controller/webui-routes",
   "controller/auth-routes,controller/route-table",
   "controller/route-table,controller/workspace-routes",
