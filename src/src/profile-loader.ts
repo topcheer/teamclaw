@@ -493,6 +493,51 @@ function crossValidateWorkflows(
         }
       }
     }
+
+    // #251 M2 static cycle red line: explicit on-jumps between DISTINCT steps
+    // must not form a cycle. Without this check a mutual-jump template loads
+    // fine and the cycle is only cut off at runtime by the visit cap, after
+    // burning real LLM calls. A step jumping back to ITSELF stays legal - it
+    // is the bounded self-retry pattern the banking pack ships
+    // (需补充材料 -> re-run intake), still guarded by MAX_WORKFLOW_STEP_VISITS.
+    const jumpTargets = new Map<string, string[]>();
+    for (const step of workflow.steps) {
+      const targets: string[] = [];
+      for (const target of Object.values(step.on ?? {})) {
+        if (target !== "next" && stepKey(target) !== stepKey(step.id)) {
+          targets.push(stepKey(target));
+        }
+      }
+      if (targets.length > 0) {
+        jumpTargets.set(stepKey(step.id), targets);
+      }
+    }
+    for (const startId of jumpTargets.keys()) {
+      const path: string[] = [];
+      const onPath = new Set<string>();
+      const visit = (nodeId: string): boolean => {
+        path.push(nodeId);
+        onPath.add(nodeId);
+        for (const nextId of jumpTargets.get(nodeId) ?? []) {
+          if (onPath.has(nextId)) {
+            referenceErrors.push(
+              `${workflowLabel} explicit on-jump cycle ${[...path.slice(path.indexOf(nextId)), nextId].join(" -> ")} `
+                + "(design 2.4: the runtime visit cap would only stop it after burning real LLM calls)",
+            );
+            return true;
+          }
+          if (visit(nextId)) {
+            return true;
+          }
+        }
+        path.pop();
+        onPath.delete(nodeId);
+        return false;
+      };
+      if (visit(startId)) {
+        break;
+      }
+    }
   }
 }
 

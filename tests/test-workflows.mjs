@@ -100,7 +100,11 @@ expectFatal("duplicate-step-id", (p) => { p.workflows[0].steps[3].id = 2; });
 expectFatal("duplicate-output-key", (p) => {
   p.workflows[0].steps[2].outputs.push({ key: "dueDiligenceReport", name: "重复" });
 });
-console.log("✅ loader fatal pipeline: banking passes, 8 mutated variants rejected");
+// #251 M2: two steps mutually jumping via explicit on edges form a static
+// cycle (0 -> 1 via 需补充材料, 1 -> 0 via the existing 退回补充材料) - load must
+// reject it instead of waiting for the runtime visit cap to burn LLM calls.
+expectFatal("on-jump-cycle", (p) => { p.workflows[0].steps[0].on.需补充材料 = 1; });
+console.log("✅ loader fatal pipeline: banking passes, 9 mutated variants rejected (incl. on-jump cycle)");
 
 // software-rd carries no workflows (prompt surface untouched, golden tests hold).
 const softwareRd = JSON.parse(await fs.promises.readFile(path.join(SOURCE_PROFILES_DIR, "software-rd.json"), "utf8"));
