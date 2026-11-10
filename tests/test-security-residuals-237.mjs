@@ -79,7 +79,7 @@ const dist = (rel) => import(path.join(projectRoot, "src", "dist", "src", rel));
   // secretsEqual helper, never a plain ===.
   assert.match(
     securitySource,
-    /export \{ secretsEqual \} from "\.\.\/protocol\.js";|export function secretsEqual/,
+    /export \{ secretsEqual \}( from "\.\.\/protocol\.js")?;|export function secretsEqual/,
     "security.ts must export secretsEqual (canonical home: protocol.ts leaf, #259 cycle fix; security.ts re-exports) for reuse by the tunnel gate verify (#237 W3)",
   );
   assert.match(

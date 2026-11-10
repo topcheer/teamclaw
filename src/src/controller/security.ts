@@ -43,6 +43,7 @@ import type {
   TeamState,
 } from "../types.js";
 import { parseJsonBody, sendJson } from "../protocol.js";
+import { secretsEqual } from "../protocol.js";
 import type { RouteContext } from "./route-table.js";
 
 // ---------------------------------------------------------------------------
@@ -99,14 +100,10 @@ export function hashToken(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
 }
 
-/** Constant-time string equality for secrets of the same expected length.
- * Exported since issue #237 W3: the tunnel-gate verify endpoint reuses this
- * instead of a timing-leaky plain === on an internet-reachable route. */
-export function secretsEqual(a: string, b: string): boolean {
-  const left = Buffer.from(a, "utf8");
-  const right = Buffer.from(b, "utf8");
-  return left.length === right.length && timingSafeEqual(left, right);
-}
+/** Constant-time secret comparison lives in protocol.ts (leaf module) since
+ * the #259 dependency gate - controller/security re-exports it for its
+ * historical importers (tunnel-routes) so no external call site changes. */
+export { secretsEqual };
 
 /** 8-char uppercase base32 code from 40 random bits (5 bytes -> exactly 8 chars, no padding). */
 export function generatePairingCode(): string {

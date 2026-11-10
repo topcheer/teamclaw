@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { HeartbeatPayload, RegistrationRequest, RoleId } from "./types.js";
 
@@ -52,6 +52,18 @@ function generateId(): string {
  */
 function generateLaunchToken(): string {
   return randomBytes(32).toString("hex");
+}
+
+/** Constant-time string equality for secrets (length guard: token length is
+ * a public format detail, not secret content).
+ * #259 follow-up: canonical home is this leaf module so controller leaves
+ * (worker-provisioning) can compare secrets without importing
+ * controller/security.ts, which would close a module cycle
+ * (http-server <-> route-table <-> security <-> worker-provisioning). */
+export function secretsEqual(a: string, b: string): boolean {
+  const left = Buffer.from(a, "utf8");
+  const right = Buffer.from(b, "utf8");
+  return left.length === right.length && timingSafeEqual(left, right);
 }
 
 async function parseJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {

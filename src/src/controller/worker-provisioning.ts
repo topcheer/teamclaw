@@ -19,12 +19,11 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import type { PluginLogger } from "../../api.js";
-import { generateId, generateLaunchToken } from "../protocol.js";
+import { generateId, generateLaunchToken, secretsEqual } from "../protocol.js";
 // Issue #255 P0-1: the launch-token check at registration uses the shared
 // constant-time secret equality (same helper the device gate and tunnel gate
 // use). controller -> controller edge; security.ts never imports back here,
 // so the module graph stays acyclic.
-import { secretsEqual } from "./security.js";
 import {
   resolveDefaultOpenClawConfigPath,
   resolveDefaultTeamClawRuntimeRootDir,

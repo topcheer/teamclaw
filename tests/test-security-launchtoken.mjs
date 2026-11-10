@@ -194,8 +194,8 @@ const typesMod = await dist("types.js");
     "validateRegistration compares launch tokens with the shared constant-time secretsEqual (issue #255 P0-1)");
   assert.doesNotMatch(provisioningSrc, /launchToken !== record\.launchToken/,
     "the old non-constant-time !== comparison is gone");
-  assert.match(provisioningSrc, /import \{ secretsEqual \} from "\.\/security\.js";/,
-    "secretsEqual is reused from controller security.ts (no duplicated timing helper)");
+  assert.match(provisioningSrc, /import \{ [^}]*secretsEqual[^}]*\} from "\.\.\/protocol\.js";/,
+    "secretsEqual is imported from the protocol.ts leaf (single timing helper, #259 cycle fix)");
 
   // Behavioral compat: tokens minted by pre-#255 builds (Math.random era)
   // live on in upgraded TeamStates and must keep validating.
