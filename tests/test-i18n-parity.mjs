@@ -10,17 +10,29 @@
 //        web 280 keys, desktop 294 keys, 91 shared,
 //        189 web-only, 203 desktop-only;
 //
-//   chore-web-i18n-migration (shared-package re-evaluation marker): the web
-//   UI's hardcoded copy (model-settings modal, tunnel popover, workspace
-//   prompt modal, header buttons, task-detail chrome, command bar) was
-//   migrated onto the dictionary REUSING desktop's ctl.*/task.* keys with
-//   values copied verbatim. Shared keys went 60 -> 91. Shared-key coverage
-//   per side is now web 91/280 = 32.5% and desktop 91/294 = 30.9%, both
-//   >= 30% (the literal shared/(web+desktop) sum stays 91/574 = 15.9%
-//   because it double-counts shared keys). The >=30% per-side threshold for
-//   the "extract a shared dictionary package" re-evaluation is therefore
-//   MARKED TRIGGERED by data; whether to actually extract the package
-//   remains the owner's decision — this test only records the trigger.
+//   shared-package re-evaluation — DECIDED 2026-11-10: retain the parity
+//   enforcement, do NOT extract a shared dictionary package. Context: the
+//   chore-web-i18n-migration pass (#247) moved the web UI's hardcoded copy
+//   (model-settings modal, tunnel popover, workspace prompt modal, header
+//   buttons, task-detail chrome, command bar) onto the dictionary reusing
+//   desktop's ctl.*/task.* keys verbatim, taking shared keys 60 -> 91 and
+//   tripping the >=30% per-side trigger set by the #216 evaluation. Rationale:
+//     1. section C below is a compile-time-equivalent single source of truth
+//        for shared values at zero publishing cost — editing a shared value
+//        on one side only turns this test red, drift cannot happen silently;
+//     2. extraction's only real gain is not maintaining a second copy of 91
+//        values, but its cost is structural: web would take on a build/codegen
+//        step or cross-package reference (/ui/app.js is served as a plain
+//        static script — zero-build by design), and desktop would take on a
+//        release dependency (separate package, electron-builder pipeline) —
+//        two packaging paths coupled forever for a file-copy saving;
+//     3. official metric going forward — per-side shared coverage:
+//        web 91/280 = 32.5%, desktop 91/294 = 30.9%. The merged ratio
+//        91/574 = 15.9% double-counts shared keys: deprecated, disclosed
+//        for continuity only.
+//   Re-open condition (no longer a coverage ratio): the manual double-edit
+//   of shared keys gets complained about in practice, OR either side adopts
+//   a build step anyway — whichever comes first.
 //   C. shared keys carry identical en AND zh values, except the explicit
 //      VALUE_ALLOWED allowlist below (one reason per entry);
 //   D. single-side keys match the explicit WEB_ONLY/DESKTOP_ONLY groups
@@ -676,4 +688,4 @@ assert.deepEqual(
     `missing keys [${allowedDesktopOnly.filter((k) => !desktopOnlyKeys.includes(k)).join(", ")}]`,
 );
 
-console.log("i18n parity passed: web 280 / desktop 294 keys, 91 shared aligned (web 32.5% / desktop 30.9% shared coverage — shared-package re-evaluation marker active), 189+203 single-side keys allowlisted.");
+console.log("i18n parity passed: web 280 / desktop 294 keys, 91 shared aligned (official per-side shared coverage: web 32.5% / desktop 30.9%; shared-package re-evaluation DECIDED 2026-11-10 — retain parity enforcement, no extraction), 189+203 single-side keys allowlisted.");
