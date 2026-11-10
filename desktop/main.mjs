@@ -136,10 +136,15 @@ function resolveExecutableOnPath(name) {
   return null;
 }
 
-// Cached PATH resolution (PATH does not change while the app runs).
+// Cached PATH resolution: a SUCCESS is cached permanently (PATH does not
+// change while the app runs), but a null MISS is not (#220 review
+// follow-up) - `openclaw` installed mid-session (the wizard's own install
+// puts it onto PATH) must be visible to the very next probe. Probes are
+// low-frequency, so re-scanning PATH on each miss is effectively free and
+// needs no TTL.
 let OPENCLAW_PATH_CACHE;
 function resolvedOpenClawBinary() {
-  if (OPENCLAW_PATH_CACHE === undefined) {
+  if (OPENCLAW_PATH_CACHE === undefined || OPENCLAW_PATH_CACHE === null) {
     OPENCLAW_PATH_CACHE = resolveExecutableOnPath("openclaw");
   }
   return OPENCLAW_PATH_CACHE;

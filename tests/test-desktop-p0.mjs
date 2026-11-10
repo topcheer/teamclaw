@@ -20,7 +20,9 @@
 //       double-counted) - verified behaviorally on a real child process.
 //   W5  will-navigate / setWindowOpenHandler guards exist.
 //   #220 openclaw probe pre-resolves the executable (no PATH-dependent spawn,
-//       no bare "openclaw") and hard-kills a hung --help after a timeout.
+//       no bare "openclaw") and hard-kills a hung --help after a timeout;
+//       #220 review follow-up - a null resolution is never cached, so a
+//       mid-session install becomes visible to the next probe.
 //   #223 DNS-rebinding follow-up: validateArtifactUrl only saw the hostname
 //       STRING - https://localtest.me (public DNS -> 127.0.0.1) passed it
 //       untouched. Every fetch hop now RESOLVES non-literal hosts
@@ -607,6 +609,43 @@ const resolveExecutableOnPath = evalWithDeps(
   const nodePath = resolveExecutableOnPath("node");
   assert.ok(nodePath && path.isAbsolute(nodePath), "node must resolve to an absolute executable path");
   assert.equal(resolveExecutableOnPath("definitely-not-a-real-binary-xyz"), null, "missing executables must resolve to null (old ENOENT signal)");
+}
+
+// #220 review follow-up (behavioral): a null resolution must NOT be cached -
+// `openclaw` installed between two probes (the wizard's own install writes
+// it onto PATH) becomes visible on the very next probe, while a SUCCESS
+// stays cached for the app's lifetime.
+{
+  const resolvedOpenClawBinary = evalWithDeps(
+    extractFunction(mainSource, "resolvedOpenClawBinary"),
+    { OPENCLAW_PATH_CACHE: undefined, resolveExecutableOnPath },
+  );
+  const fsSyncModule = await import("node:fs");
+  const os = await import("node:os");
+  const binDir = fsSyncModule.mkdtempSync(path.join(os.tmpdir(), "tc-openclaw-path-"));
+  const binName = process.platform === "win32" ? "openclaw.cmd" : "openclaw";
+  const binPath = path.join(binDir, binName);
+  const prevPath = process.env.PATH;
+  try {
+    process.env.PATH = binDir;
+    // Probe 1: nothing on PATH yet -> null (the old ENOENT signal).
+    assert.equal(resolvedOpenClawBinary(), null, "empty PATH must resolve to null");
+    // Mid-session "install": the binary appears BETWEEN the two probes.
+    fsSyncModule.writeFileSync(binPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    // Probe 2: the fresh install must already be visible (null not cached).
+    assert.equal(
+      resolvedOpenClawBinary(),
+      binPath,
+      "a mid-session openclaw install must be visible to the next probe (null must not be permanently cached)",
+    );
+    // Probe 3: the SUCCESS stays cached even after the file disappears
+    // (PATH does not change while the app runs - documented behavior).
+    fsSyncModule.rmSync(binPath);
+    assert.equal(resolvedOpenClawBinary(), binPath, "a successful resolution stays cached for the app's lifetime");
+  } finally {
+    process.env.PATH = prevPath;
+    fsSyncModule.rmSync(binDir, { recursive: true, force: true });
+  }
 }
 
 // ---------------------------------------------------------------------------
