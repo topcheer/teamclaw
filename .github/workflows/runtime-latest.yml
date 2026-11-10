@@ -32,7 +32,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 24.22.1
       - name: Build runtime tar
         run: node scripts/build-runtime-tar.mjs dist-runtime
       - name: Replace asset on runtime-latest release
