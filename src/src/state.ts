@@ -210,9 +210,35 @@ async function ensureDir(dir: string): Promise<void> {
   await fs.mkdir(dir, { recursive: true });
 }
 
+/**
+ * Issue #255 P1-4: every file written through this helper is controller
+ * state that can carry plaintext secrets - team-state.json holds the device
+ * pairingCode and each provisioned worker's launchToken, the archived team
+ * envelopes and worker-identity.json ride the same path. Writes are now
+ * owner-only (0600), matching the github-auth.ts auth-store precedent:
+ *   - the tmp file is created with mode 0600 and the rename carries that
+ *     mode onto the final path, and
+ *   - an existing file from an older build (created 0644 by this same
+ *     helper before the mode existed) is pre-tightened before the rewrite
+ *     (#242 process-supervisor pattern: chmod first, ENOENT tolerated for
+ *     first writes).
+ */
 async function writeFileAtomically(filePath: string, contents: string): Promise<void> {
   const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
-  await fs.writeFile(tmpPath, contents, "utf8");
+  try {
+    await fs.chmod(filePath, 0o600);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+  await fs.writeFile(tmpPath, contents, { encoding: "utf8", mode: 0o600 });
+  try {
+    await fs.chmod(tmpPath, 0o600);
+  } catch {
+    // Best-effort: the write itself already requested mode 0600; some
+    // filesystems (e.g. network mounts) reject explicit chmod.
+  }
   await fs.rename(tmpPath, filePath);
 }
 
