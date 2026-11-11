@@ -118,7 +118,7 @@ for (const dict of [web, desktop]) {
 //    updated by the chore-web-i18n-migration pass: web hardcoded copy moved
 //    onto the dictionary, reusing desktop ctl.*/task.* keys verbatim).
 // ---------------------------------------------------------------------------
-assert.equal(web.en.size, 280, "web dictionary must carry exactly 280 keys (update alongside deliberate additions)");
+assert.equal(web.en.size, 289, "web dictionary must carry exactly 289 keys (update alongside deliberate additions)");
 assert.equal(desktop.en.size, 296, "desktop dictionary must carry exactly 296 keys (update alongside deliberate additions)");
 
 const webKeys = new Set(web.en.keys());
@@ -128,7 +128,7 @@ const webOnlyKeys = [...webKeys].filter((k) => !desktopKeys.has(k)).sort();
 const desktopOnlyKeys = [...desktopKeys].filter((k) => !webKeys.has(k)).sort();
 
 assert.equal(sharedKeys.length, 91, "exactly 91 keys are shared between web and desktop");
-assert.equal(webOnlyKeys.length, 189, "exactly 189 keys are web-only");
+assert.equal(webOnlyKeys.length, 198, "exactly 198 keys are web-only");
 assert.equal(desktopOnlyKeys.length, 205, "exactly 205 keys are desktop-only");
 
 // ---------------------------------------------------------------------------

@@ -173,11 +173,20 @@ jobs:
         run: |
           set -euo pipefail
           if npm view --registry https://registry.npmjs.org/ "${PACKAGE_NAME}@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
+            if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+              # Push-triggered runs fire on every src/** commit; a version that
+              # is already on npm means "nothing to publish", not a failure.
+              # Only an explicit workflow_dispatch release must go red here.
+              echo "${PACKAGE_NAME}@${PACKAGE_VERSION} is already published on npm; push-triggered run skips publishing cleanly."
+              echo "SKIP_PUBLISH=true" >> "$GITHUB_ENV"
+              exit 0
+            fi
             echo "${PACKAGE_NAME}@${PACKAGE_VERSION} is already published on npm."
             exit 1
           fi
 
       - name: Publish package
+        if: env.SKIP_PUBLISH != 'true'
         env:
           TEAMCLAW_NPM_PROVENANCE: always
         run: bash scripts/teamclaw-npm-publish.sh --publish src
