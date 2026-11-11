@@ -1,5 +1,49 @@
 # Changelog
 
+## 2026.11.1
+
+Released 2026-11-11. Patch release over 2026.11.0: workflows, knowledge
+packs, post-review fixes (#251), and the #255 security batch.
+
+### Added
+- Industry workflow engine: workflow-routes, per-profile workflow
+  templates (e.g. banking credit-approval), start->conclusion routing
+  with bounded visits, and UI wiring (post-2026.11.0 commits).
+- Knowledge packs: hs-structure, incoterms-2020, vat-principles.
+- S2 live-dynamic profile-switch scenario in test-local-dynamic.sh
+  (#252): banking switch under real provisioned workers with
+  /roles + /workflows assertions.
+- dist import-closure anchor in release:check (#253): "imported but
+  not shipped" files (e.g. roles.js) fail locally before publish.
+- Desktop WS switch events: renderer follows team.switch_started/
+  completed and refreshes /roles + /team/profile (#255 P0-3).
+- Per-PR full unit suite CI + release test gate (#255 P0-2) and the
+  dependency-direction gate (#259 / P1-9, worker->controller=0 with
+  cycle ratchet).
+
+### Fixed
+- #251: prompt role lists derive from the active team profile; archive
+  filename random suffix (same-ms collision); static workflow cycle
+  rejection; first-step numeric-spine rule; 400 for malformed JSON
+  bodies; draining-phase persist .catch.
+- #255 P0-1: CSPRNG launch tokens (crypto.randomBytes), launchToken
+  stripped from /team/status, constant-time compare; TeamState 0600.
+- #255 P1-5/7/8: quick trycloudflare tunnel behind a per-launch gate
+  token; /security/reset requires confirm:"RESET" + audit broadcast;
+  main-process model discovery gates renderer endpoints (https /
+  loopback rules).
+- CI: delete-asset uses the asset name (runtime-latest release swap);
+  Node pinned 24.22.1 (openclaw engine floor); DNS rebinding test
+  accepts either loopback literal on Linux.
+- Desktop security wave: NAT64/IPv6 egress sandbox, DNS rebinding
+  hardening, preload.cjs rename (#250).
+
+### Changed
+- openclaw submodule bumped to upstream aed2383 (160 commits, incl.
+  zai Coding Plan catalog fix, expired-API-key messaging, OTel session
+  ids). Runtime tar pulls openclaw@latest (2026.11.2) — engine floor
+  Node >=24.22.1.
+
 ## 2026.11.0
 
 Released 2026-11-08. Minor release over 2026.8.1: TeamProfile
