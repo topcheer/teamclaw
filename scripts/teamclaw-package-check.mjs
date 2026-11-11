@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import vm from "node:vm";
@@ -237,6 +237,57 @@ if (!originUrl) {
   errors.push(
     `package.json repository.url (${repo.url}) does not match git remote origin (${originUrl}).`,
   );
+}
+
+// #253 anchor: every relative import inside the packaged dist (plus the
+// cli.mjs root shim) must resolve to a file that actually ships. The docker
+// image build composes/ prunes dist into dist/extensions/teamclaw and once
+// dropped a file the graph still imported (dist/src/roles.js) - the failure
+// only surfaced deep inside the image build. This closure check fails at
+// release-check time instead, before publish, with no Docker needed.
+{
+  const distRoot = path.resolve(packageDir, "dist");
+  const importGraphFiles = [];
+  if (existsSync(distRoot)) {
+    const pending = [distRoot];
+    while (pending.length > 0) {
+      const currentDir = pending.pop();
+      for (const entry of readdirSync(currentDir)) {
+        const entryPath = path.join(currentDir, entry);
+        const stats = statSync(entryPath);
+        if (stats.isDirectory()) {
+          pending.push(entryPath);
+        } else if (/\.[cm]?js$/u.test(entry)) {
+          importGraphFiles.push(entryPath);
+        }
+      }
+    }
+  }
+  const cliShimPath = path.resolve(packageDir, "cli.mjs");
+  if (existsSync(cliShimPath)) {
+    importGraphFiles.push(cliShimPath);
+  }
+  if (importGraphFiles.length === 0) {
+    errors.push(
+      "dist/ contains no JS output to closure-check; run `npm --prefix src run build` before release:check (issue #253 anchor).",
+    );
+  }
+  const specPattern =
+    /\b(?:from|import|export\s+[^;]*?from)\s*["'](\.[^"']+)["']|\bimport\s*\(\s*["'](\.[^"']+)["']\s*\)|\brequire\s*\(\s*["'](\.[^"']+)["']\s*\)/gu;
+  for (const importerPath of importGraphFiles) {
+    const source = readFileSync(importerPath, "utf8");
+    let match;
+    while ((match = specPattern.exec(source)) !== null) {
+      const specifier = match[1] ?? match[2] ?? match[3];
+      const base = path.resolve(path.dirname(importerPath), specifier);
+      const candidates = [base, `${base}.js`, `${base}.mjs`, `${base}.cjs`, path.join(base, "index.js")];
+      if (!candidates.some((candidate) => existsSync(candidate))) {
+        errors.push(
+          `dist import closure (issue #253): ${path.relative(packageDir, importerPath)} imports "${specifier}", which no packaged file provides - a compose/prune step would ship a broken graph.`,
+        );
+      }
+    }
+  }
 }
 
 if (errors.length > 0) {
