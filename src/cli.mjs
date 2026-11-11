@@ -20,6 +20,7 @@ const PACKAGE_INSTALL_SPEC = `${PACKAGE_NAME}@${PACKAGE_VERSION}`;
 const PLUGIN_ID = "teamclaw";
 const DANGEROUS_INSTALL_FLAG = "--dangerously-force-unsafe-install";
 const CAPABILITY_CONSENT_FLAG = "--accept-capabilities";
+const FORCE_INSTALL_FLAG = "--force";
 
 /**
  * OpenClaw 2026.10+ replaced the legacy break-glass install flag (now a
@@ -31,6 +32,19 @@ const CAPABILITY_CONSENT_FLAG = "--accept-capabilities";
  */
 function isCapabilityConsentRequired(output) {
   return /accept-capabilities|capability[\s-]?consent|CapabilityConsentRequired/i.test(String(output || ""));
+}
+
+/**
+ * openclaw 2026.10+ retired the legacy break-glass install flag (now a
+ * deprecated no-op) and cancels any install from a source outside ClawHub
+ * review/trust metadata — local package directories and npm-registry packages
+ * alike — asking the operator to rerun with --force after reviewing the
+ * source. This source gate cancels before the capability-consent check, so
+ * the capability error never surfaces on its own and both consents must be
+ * appended on the retry (issue #261).
+ */
+function isSourceTrustGateCancel(output) {
+  return /rerun with --force|outside ClawHub review/i.test(String(output || ""));
 }
 const DEFAULT_TEAMCLAW_IMAGE = "ghcr.io/topcheer/teamclaw-openclaw:latest";
 const DEFAULT_CONTROLLER_PORT = 9527;
@@ -44,6 +58,16 @@ const TEAMCLAW_AGENT_ID = "teamclaw";
 const TEAMCLAW_RECOMMENDED_EXEC_SECURITY = "full";
 const TEAMCLAW_RECOMMENDED_EXEC_ASK = "off";
 const TEAMCLAW_RECOMMENDED_COMMAND_MODE = "auto";
+/**
+ * The installer historically wrote commands.ownerDisplay="raw" as a host
+ * default. openclaw 2026.11 renders owner ids raw when the key is absent and
+ * its doctor now removes the key outright, while openclaw 2026.10.x config
+ * validation rejects the key as unrecognized — poisoning every later host CLI
+ * invocation after an install (issue #261). This value is what the installer
+ * used to write and what it now prunes; explicit non-default user choices are
+ * preserved.
+ */
+const TEAMCLAW_RETIRED_OWNER_DISPLAY_DEFAULT = "raw";
 const AGENT_MODE_OPTIONS = [
   {
     value: "independent",
@@ -672,6 +696,36 @@ async function createBackup(configPath, dryRun) {
 async function writeConfig(configPath, config) {
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+}
+
+/**
+ * openclaw 2026.10.x config validation rejects the retired commands.ownerDisplay
+ * key ("Unrecognized key"), so a config still carrying the value written by an
+ * earlier installer deadlocks every host CLI invocation — including the plugin
+ * install this run is about to attempt (issue #261). Prune the
+ * installer-written "raw" default before any host command runs: the value is
+ * openclaw 2026.11's built-in default, and explicit non-default user choices
+ * are left untouched.
+ */
+async function pruneInstallerWrittenOwnerDisplay(configPath) {
+  let config;
+  try {
+    config = await readOpenClawConfig(configPath);
+  } catch {
+    // Unparseable config: leave it alone; the host CLI and the existing
+    // config-parse error path will surface the problem.
+    return false;
+  }
+  const commands = isRecord(config.commands) ? config.commands : null;
+  if (!commands || commands.ownerDisplay !== TEAMCLAW_RETIRED_OWNER_DISPLAY_DEFAULT) {
+    return false;
+  }
+  delete commands.ownerDisplay;
+  await writeConfig(configPath, config);
+  console.log(
+    `Removed commands.ownerDisplay from ${configPath}: the key is retired, openclaw 2026.10.x rejects it as unrecognized (which blocks every OpenClaw command), and openclaw renders owner ids raw by default.`,
+  );
+  return true;
 }
 
 function getExistingTeamClawConfig(config) {
@@ -1353,7 +1407,7 @@ function attemptPluginInstall({ configPath }) {
     }
   }
   console.log(
-    `\nTeamClaw uses host-level orchestration capabilities, so OpenClaw requires an install consent flag during plugin installation (legacy: ${DANGEROUS_INSTALL_FLAG}; OpenClaw 2026.10+: ${CAPABILITY_CONSENT_FLAG}).`,
+    `\nTeamClaw uses host-level orchestration capabilities, so OpenClaw requires install consent flags during plugin installation (legacy: ${DANGEROUS_INSTALL_FLAG}; OpenClaw 2026.10+: ${FORCE_INSTALL_FLAG} ${CAPABILITY_CONSENT_FLAG}).`,
   );
   const candidates = [
     {
@@ -1408,12 +1462,14 @@ function attemptPluginInstall({ configPath }) {
     if (
       result.status !== 0 &&
       !candidate.args.includes(CAPABILITY_CONSENT_FLAG) &&
-      isCapabilityConsentRequired(result.output)
+      (isCapabilityConsentRequired(result.output) || isSourceTrustGateCancel(result.output))
     ) {
-      console.log("OpenClaw requires capability consent; retrying with --accept-capabilities...");
+      console.log(
+        `OpenClaw requires install consent; retrying with ${FORCE_INSTALL_FLAG} and ${CAPABILITY_CONSENT_FLAG}...`,
+      );
       result = installPluginWithCommand(
         candidate.command,
-        [...candidate.args, CAPABILITY_CONSENT_FLAG],
+        [...candidate.args, FORCE_INSTALL_FLAG, CAPABILITY_CONSENT_FLAG],
         env,
       );
     }
@@ -1898,8 +1954,12 @@ function applyTeamClawHostRuntimeDefaults(next) {
   if (typeof commands.restart !== "boolean") {
     commands.restart = true;
   }
-  if (typeof commands.ownerDisplay !== "string" || !commands.ownerDisplay.trim()) {
-    commands.ownerDisplay = "raw";
+  if (commands.ownerDisplay === TEAMCLAW_RETIRED_OWNER_DISPLAY_DEFAULT) {
+    // openclaw 2026.10.x rejects this retired key ("Unrecognized key"), which
+    // deadlocks every later host CLI invocation; openclaw 2026.11 renders
+    // owner ids raw by default anyway. Prune the installer-written default
+    // and keep explicit non-default user choices (issue #261).
+    delete commands.ownerDisplay;
   }
 
   const tools = ensureRecord(next, "tools");
@@ -2271,6 +2331,12 @@ async function runInstall(options) {
       prompter.note(options.dryRun
         ? `Would create ${configPath}`
         : `Created ${configPath}`);
+    }
+
+    if (!options.dryRun) {
+      // Heal configs poisoned by earlier installers before any host OpenClaw
+      // command runs (issue #261).
+      await pruneInstallerWrittenOwnerDisplay(configPath);
     }
 
     let pluginInstallStatus = "skipped";

@@ -1379,6 +1379,252 @@ async function runInstallerWorkerMdnsDefaultSmoke() {
   }
 }
 
+/**
+ * openclaw 2026.10.x host stub (issue #261): config validation rejects the
+ * retired commands.ownerDisplay/ownerDisplaySecret keys on EVERY invocation,
+ * and `plugins install` enforces both consent layers of a 2026.10+ host — the
+ * source-trust gate ("rerun with --force") first, then capability consent.
+ * Only an install carrying both flags materializes a plugin manifest like the
+ * real CLI; every other invocation fails once the config validates.
+ */
+async function writeOpenClaw2026StrictStub(binDir) {
+  await fs.mkdir(binDir, { recursive: true });
+  await writeExecutable(
+    path.join(binDir, "openclaw"),
+    `#!/usr/bin/env node
+const fs = require("node:fs");
+const nodePath = require("node:path");
+const args = process.argv.slice(2);
+const configPath = process.env.OPENCLAW_CONFIG_PATH || "";
+if (args[0] === "--version") {
+  process.stdout.write("OpenClaw " + (process.env.TEAMCLAW_STUB_OPENCLAW_VERSION || "2026.10.9") + " (stub)\\n");
+  process.exit(0);
+}
+let config = {};
+try {
+  config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+} catch {}
+const commands = config.commands && typeof config.commands === "object" ? config.commands : {};
+for (const key of ["ownerDisplay", "ownerDisplaySecret"]) {
+  if (commands[key] !== undefined) {
+    process.stderr.write("Invalid config at " + configPath + ":\\n- commands: Unrecognized key: \\"" + key + "\\"\\n[openclaw] The CLI command failed.\\n");
+    process.exit(1);
+  }
+}
+if (args[0] === "plugins" && args[1] === "install") {
+  if (process.env.TEAMCLAW_STUB_CAPTURE_FILE) {
+    fs.appendFileSync(process.env.TEAMCLAW_STUB_CAPTURE_FILE, args.join(" ") + "\\n");
+  }
+  if (!args.includes("--force")) {
+    process.stderr.write("WARNING - Installing plugin from local path\\nThis source is outside ClawHub review and trust metadata.\\nInstall cancelled; rerun with --force after reviewing the source.\\n");
+    process.exit(1);
+  }
+  if (!args.includes("--accept-capabilities")) {
+    process.stderr.write('Plugin "teamclaw" requires capability consent. The plugin was not installed. Re-run the same "openclaw plugins install" command with --accept-capabilities, keeping its source and other options.\\n');
+    process.exit(1);
+  }
+  const pluginDir = nodePath.join(process.env.OPENCLAW_STATE_DIR || "", "extensions", "teamclaw");
+  fs.mkdirSync(pluginDir, { recursive: true });
+  fs.writeFileSync(
+    nodePath.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({ version: process.env.TEAMCLAW_STUB_PLUGIN_VERSION || "2026.10.9-stub" }),
+  );
+  process.exit(0);
+}
+process.exit(0);
+`,
+  );
+  await writeExecutable(
+    path.join(binDir, "npm"),
+    `#!/bin/sh
+echo "simulated npm fallback failure: $*" >&2
+exit 1
+`,
+  );
+}
+
+/**
+ * Issue #261 recovery scenario: the config on disk still carries the
+ * retired commands.ownerDisplay key written by an earlier installer, and the
+ * host openclaw 2026.10.x rejects it before any command can run. The
+ * installer must prune the poisoned key before invoking the host CLI so the
+ * plugin install succeeds in a single run, and the final config must stay
+ * era-clean.
+ */
+async function runInstallerRetiredOwnerDisplayPoisonedConfigSmoke() {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "teamclaw-installer-ownerdisplay-heal-test-"));
+  try {
+    const stateDir = path.join(tempRoot, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const binDir = path.join(tempRoot, "bin");
+    const capturePath = path.join(tempRoot, "openclaw-args.txt");
+    const initialConfig = {
+      commands: {
+        native: "auto",
+        nativeSkills: "auto",
+        restart: true,
+        ownerDisplay: "raw",
+      },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5",
+        },
+      },
+      plugins: {
+        enabled: true,
+        entries: {},
+      },
+    };
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf8");
+    await writeOpenClaw2026StrictStub(binDir);
+
+    const result = spawnSync(
+      "node",
+      [cliPath, "install", "--config", configPath, "--yes"],
+      {
+        cwd: projectRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: tempRoot,
+          PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+          TEAMCLAW_STUB_CAPTURE_FILE: capturePath,
+        },
+      },
+    );
+
+    if (result.status !== 0) {
+      throw new Error(
+        `Installer retired-ownerDisplay recovery smoke failed with status ${result.status}.\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`,
+      );
+    }
+
+    assert.doesNotMatch(
+      result.stdout,
+      /Plugin installation failed/,
+      "installer should heal the poisoned config before invoking the host openclaw CLI",
+    );
+    assert.doesNotMatch(
+      result.stdout,
+      /Unrecognized key/,
+      "host openclaw should never see the retired commands.ownerDisplay key",
+    );
+    assert.match(
+      result.stdout,
+      /Plugin install: completed via openclaw \(local package directory\)/,
+      "installer should complete the plugin install on the 2026.10.x host after pruning",
+    );
+    assert.match(
+      result.stdout,
+      /Gateway restart: completed via openclaw/,
+      "host openclaw should accept the healed config when restarting the gateway",
+    );
+
+    const installAttempts = (await fs.readFile(capturePath, "utf8"))
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => line.split(" "));
+    assert.ok(
+      installAttempts.length >= 2,
+      "the 2026.10+ consent flow should retry the cancelled first install attempt",
+    );
+    assert.ok(
+      !installAttempts[0].includes("--force"),
+      "the first install attempt mirrors the legacy-flag-only invocation",
+    );
+    assert.ok(
+      installAttempts[installAttempts.length - 1].includes("--force") &&
+        installAttempts[installAttempts.length - 1].includes("--accept-capabilities"),
+      "the successful install attempt must carry both 2026.10+ consent flags",
+    );
+
+    const updated = JSON.parse(await fs.readFile(configPath, "utf8"));
+    assert.equal(
+      updated.commands?.ownerDisplay,
+      undefined,
+      "installer must not keep the retired commands.ownerDisplay key in the config",
+    );
+    assert.equal(updated.commands?.native, "auto", "era-clean commands defaults should survive the prune");
+    assert.equal(updated.commands?.restart, true, "commands.restart should survive the prune");
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(stateDir, "extensions", "teamclaw", "openclaw.plugin.json"), "utf8"),
+    );
+    assert.ok(manifest.version, "plugin should materialize on the 2026.10.x host");
+
+    console.log("Installer retired-ownerDisplay poisoned-config recovery smoke passed.");
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Issue #261 fresh-install scenario: on a host whose openclaw rejects the
+ * retired key, the installer must never introduce commands.ownerDisplay.
+ */
+async function runInstallerRetiredOwnerDisplayFreshConfigSmoke() {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "teamclaw-installer-ownerdisplay-fresh-test-"));
+  try {
+    const stateDir = path.join(tempRoot, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const binDir = path.join(tempRoot, "bin");
+    const initialConfig = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5",
+        },
+      },
+      plugins: {
+        enabled: true,
+        entries: {},
+      },
+    };
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf8");
+    await writeOpenClaw2026StrictStub(binDir);
+
+    const result = spawnSync(
+      "node",
+      [cliPath, "install", "--config", configPath, "--yes"],
+      {
+        cwd: projectRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: tempRoot,
+          PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+        },
+      },
+    );
+
+    if (result.status !== 0) {
+      throw new Error(
+        `Installer retired-ownerDisplay fresh-config smoke failed with status ${result.status}.\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`,
+      );
+    }
+
+    const updated = JSON.parse(await fs.readFile(configPath, "utf8"));
+    assert.equal(
+      updated.commands?.ownerDisplay,
+      undefined,
+      "installer must not write the retired commands.ownerDisplay key on 2026.10.x hosts",
+    );
+    assert.equal(updated.commands?.native, "auto", "installer should still apply era-clean commands defaults");
+    assert.equal(updated.commands?.restart, true, "installer should still apply commands.restart");
+    assert.match(
+      result.stdout,
+      /Gateway restart: completed via openclaw/,
+      "host openclaw should accept the installer-written config",
+    );
+
+    console.log("Installer retired-ownerDisplay fresh-config smoke passed.");
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
 await runInstallerSmoke();
 await runInstallerHostExecPreservationSmoke();
 await runInstallerDedicatedWorkspaceDefaultSmoke();
@@ -1388,6 +1634,8 @@ await runInstallerExactVersionFallbackSmoke();
 await runInstallerExistingPluginSkipSmoke();
 await runInstallerExistingPluginUpgradeSmoke();
 await runInstallerRestartAndHealthSmoke();
+await runInstallerRetiredOwnerDisplayPoisonedConfigSmoke();
+await runInstallerRetiredOwnerDisplayFreshConfigSmoke();
 await runInstallerMissingModelWarningSmoke();
 await runInstallerLocalQuickstartSmoke();
 await runInstallerWorkerManualControllerSmoke();
