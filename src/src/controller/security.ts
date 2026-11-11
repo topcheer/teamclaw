@@ -817,7 +817,9 @@ export async function handleSecurityDeviceDeleteRequest(ctx: RouteContext): Prom
   sendJson(res, 200, { ok: true, revoked: deviceId, revokedSelf, protection });
 }
 
-// POST /api/v1/security/reset - authenticated OR loopback (anti-lockout hatch).
+// POST /api/v1/security/reset - authenticated OR loopback (anti-lockout
+// hatch), plus an explicit confirm token (#255 P1-8): a paired device must
+// knowingly opt in, since the reset drops protection to L0 for EVERYONE.
 export async function handleSecurityResetRequest(ctx: RouteContext): Promise<void> {
   const { req, res, deps, peer } = ctx;
   const state = deps.getTeamState();
@@ -826,10 +828,26 @@ export async function handleSecurityResetRequest(ctx: RouteContext): Promise<voi
     sendUnauthorized(res);
     return;
   }
+  const body = await parseJsonBody(req);
+  if (body.confirm !== "RESET") {
+    sendJson(res, 400, { error: 'security reset requires confirm:"RESET" in the body (destructive: revokes every paired device)' });
+    return;
+  }
   deps.updateTeamState((s) => {
     delete s.security; // back to L0: no devices, no codes, no signal history
+    // #255 P1-8 audit: broadcast through the existing team message channel
+    // so every UI surface sees the protection-level drop. (ws push would need
+    // a deps surface security.ts does not own; the message + log line are the
+    // minimal in-scope audit trail.)
+    s.messages.push({
+      id: `security-reset-${Date.now().toString(36)}`,
+      from: "controller",
+      type: "broadcast",
+      content: `Device protection reset by ${auth ? `device ${auth.device.id}` : `loopback peer ${peer?.ip ?? "unknown"}`} (confirm:"RESET") - all paired devices revoked, protection level L0.`,
+      createdAt: Date.now(),
+    });
   });
-  deps.logger.info("Controller: device protection reset (all devices revoked) - controller is back to unpaired L0");
+  deps.logger.info("Controller: device protection reset (all devices revoked, confirm received) - controller is back to unpaired L0");
   sendJson(res, 200, { ok: true, protection: false });
 }
 

@@ -456,8 +456,8 @@ const mintedTokens = [];
     // ---- 5b. reset escape hatch --------------------------------------------
     const remoteReset = await scenario.callViaTunnelHost("POST", "/api/v1/security/reset");
     assert.equal(remoteReset.status, 403, "tunnel-host reset is blocked by the tunnel gate (remote cannot reset)");
-    const reset = await scenario.call("POST", "/api/v1/security/reset");
-    assert.equal(reset.status, 200, "loopback reset WITHOUT a token succeeds (anti-lockout hatch)");
+    const reset = await scenario.call("POST", "/api/v1/security/reset", { confirm: "RESET" });
+    assert.equal(reset.status, 200, "loopback reset WITHOUT a token but WITH confirm:\"RESET\" succeeds (anti-lockout hatch, #255 P1-8)");
     assert.equal(reset.json.protection, false, "reset returns the controller to L0");
     const afterReset = await scenario.call("GET", "/api/v1/tasks");
     assert.equal(afterReset.status, 200, "after reset everything is open again (L0)");
