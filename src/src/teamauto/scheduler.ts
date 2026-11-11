@@ -475,6 +475,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "sweep", text: "sweep recovered, auto-pause cleared" });
       }
       repo.sweepFailures = 0;
+      repo.lastAttemptAt = Date.now(); // #266: success is also an attempt
       recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "sweep", text: repo.lastSweepSummary ?? "sweep complete" });
       await saveTeamAutoStore(s);
       if (created > 0) {
@@ -492,6 +493,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       // backoff below, and a success clears the state in the block above.
       repo.sweepFailures = (repo.sweepFailures ?? 0) + 1;
       repo.lastSweepErrorAt = Date.now();
+      repo.lastAttemptAt = repo.lastSweepErrorAt; // #266: failures must be visible without inferring from lastSweepErrorAt
       repo.pausedReason = `sweep failed: ${message}`;
       recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "sweep", text: `sweep failed (auto-retry in ~${sweepBackoffMinutes(repo.sweepFailures)}min): ${message}` });
       await saveTeamAutoStore(s).catch(() => {});

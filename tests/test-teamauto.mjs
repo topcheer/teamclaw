@@ -110,6 +110,12 @@ async function sourceContracts() {
   assert.match(scheduler, /if \(dryRun\) \{[\s\S]{0,400}?repo\.dryRunDone = true;/u, "a completed dry-run sweep must flip dryRunDone even with zero candidates");
   assert.doesNotMatch(scheduler, /repo\.dryRunDone = true;\s*\n\s*repo\.lastSweepSummary = `dry-run/u, "dryRunDone must not depend on candidates existing");
 
+  // #266: both sweep outcomes must stamp lastAttemptAt so success-scoped
+  // fields (lastSweepAt/lastSweepSummary) never have to be read as attempt
+  // evidence next to pausedReason.
+  assert.match(scheduler, /repo\.sweepFailures = 0;\s*\n\s*repo\.lastAttemptAt = Date\.now\(\);/, "success path stamps lastAttemptAt");
+  assert.match(scheduler, /repo\.lastSweepErrorAt = Date\.now\(\);\s*\n\s*repo\.lastAttemptAt = repo\.lastSweepErrorAt;/, "failure path stamps lastAttemptAt");
+
   // Activity persistence: bounded log recorded at bind/provision/sweep/task/writeback.
   assert.match(store, /pushTeamAutoActivity/, "store must export the activity recorder");
   assert.match(store, /Array\.isArray\(parsed\.activity\)/, "loadTeamAutoStore must carry persisted activity across restarts (the whitelist rebuild silently dropped it)");
@@ -252,6 +258,7 @@ async function unitTests() {
   assert.equal(schedMod2.sweepBackoffMinutes(9), 240, "backoff caps at 240 minutes");
   assert.equal(schedMod2.sweepRetryDueAt(1, 1_000_000), 1_000_000 + 30 * 60_000, "retry due = last error + backoff");
   assert.equal(schedMod2.isAutoPause("sweep failed: fetch failed"), true, "sweep failures are auto-pauses");
+  assert.equal(schedMod2.sweepRetryDueAt(2, 1_000_000), 1_000_000 + 60 * 60_000, "failure backoff table stays consistent");
   assert.equal(schedMod2.isAutoPause("disabled by user"), false, "user pauses are never auto-cleared");
   assert.equal(schedMod2.isAutoPause(null), false, "null pause is healthy");
   // Agent-facing TeamAuto surface: scheduler method + tool contract + prompt injection.

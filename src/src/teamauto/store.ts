@@ -70,6 +70,11 @@ export type TeamAutoRepo = {
   sweepFailures?: number;
   /** Epoch ms of the last auto-pausing sweep failure. */
   lastSweepErrorAt?: number;
+  /** Epoch ms of the last sweep ATTEMPT (success or failure), #266:
+   * lastSweepAt/lastSweepSummary stay success-scoped while lastAttemptAt
+   * answers "did the scheduler try recently" without the two surfaces
+   * contradicting each other when read side by side. */
+  lastAttemptAt?: number;
   dryRunDone: boolean;
   /** Bind-time provisioning state; ready/undefined means sweepable. */
   provision?: TeamAutoRepoProvision;
