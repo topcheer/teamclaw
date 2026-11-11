@@ -1433,7 +1433,84 @@ import { createT as i18nCreateT } from "./i18n.js";
     bindGithubAuthControls();
     renderControllerWorkspaceCard();
     renderControllerModelsCard();
+    renderControllerWorkersCard();
     renderGithubAuthCard();
+  }
+
+  let controllerWorkersCardBound = false;
+  // Hot-reloadable worker provisioning caps (#hot-config): dynamic card in the
+  // Controller tab. Applies immediately (no gateway restart) and persists to
+  // the host openclaw.json where the deployment shape allows it.
+  async function renderControllerWorkersCard() {
+    const view = document.getElementById("view-controller");
+    if (!view) return;
+    let card = document.getElementById("ctl-workers-card");
+    if (!card) {
+      card = document.createElement("section");
+      card.id = "ctl-workers-card";
+      card.className = "panel";
+      card.style.marginTop = "12px";
+      card.innerHTML = `
+        <div class="section-head compact"><h2>Worker scaling (hot)</h2></div>
+        <p class="ctl-hint" id="ctl-workers-hint">Applies immediately without restarting the gateway. Lowering a cap never kills busy workers; idle workers drain by TTL.</p>
+        <div class="ctl-grid" style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px">Max workers / role
+            <input id="ctl-workers-max" type="number" min="1" max="50" style="width:90px" />
+          </label>
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px">Min warm / role
+            <input id="ctl-workers-min" type="number" min="0" max="50" style="width:90px" />
+          </label>
+          <label style="display:flex;flex-direction:column;gap:4px;font-size:12px">Idle TTL (ms)
+            <input id="ctl-workers-ttl" type="number" min="1000" max="86400000" step="1000" style="width:120px" />
+          </label>
+          <button id="ctl-workers-save" class="btn btn-primary" type="button">Apply</button>
+          <span id="ctl-workers-result" class="ctl-result"></span>
+        </div>
+        <p class="ctl-hint" id="ctl-workers-mode" style="margin-top:6px"></p>`;
+      const anchor = card;
+      const wsCard = document.getElementById("ctl-ws-title")?.closest("section, .panel") ?? null;
+      if (wsCard && wsCard.parentNode) wsCard.parentNode.insertBefore(anchor, wsCard);
+      else view.appendChild(anchor);
+    }
+    try {
+      const cfg = await apiGet("/team/config");
+      const set = (id, v) => { const el = document.getElementById(id); if (el && v !== undefined && v !== null) el.value = String(v); };
+      set("ctl-workers-max", cfg.workerProvisioningMaxPerRole);
+      set("ctl-workers-min", cfg.workerProvisioningMinPerRole);
+      set("ctl-workers-ttl", cfg.workerProvisioningIdleTtlMs);
+      const mode = document.getElementById("ctl-workers-mode");
+      if (mode) {
+        mode.textContent = `provisioning: ${cfg.workerProvisioningType ?? "process"}` +
+          (cfg.persistenceMode === "memory-only" ? " | persistence: memory-only (restart reverts - containerized controller)" : " | persistence: host config");
+      }
+    } catch (err) {
+      const r = document.getElementById("ctl-workers-result");
+      if (r) r.textContent = err instanceof Error ? err.message : "load failed";
+    }
+    if (controllerWorkersCardBound) return;
+    controllerWorkersCardBound = true;
+    const saveBtn = document.getElementById("ctl-workers-save");
+    if (saveBtn) {
+      saveBtn.addEventListener("click", async () => {
+        const num = (id) => { const el = document.getElementById(id); const v = el ? Number(el.value) : NaN; return Number.isFinite(v) ? v : undefined; };
+        const payload = {};
+        const mx = num("ctl-workers-max"); const mn = num("ctl-workers-min"); const ttl = num("ctl-workers-ttl");
+        if (mx !== undefined) payload.workerProvisioningMaxPerRole = mx;
+        if (mn !== undefined) payload.workerProvisioningMinPerRole = mn;
+        if (ttl !== undefined) payload.workerProvisioningIdleTtlMs = ttl;
+        if (Object.keys(payload).length === 0) return;
+        saveBtn.disabled = true;
+        try {
+          const out = await apiPatch("/team/config", payload);
+          const r = document.getElementById("ctl-workers-result");
+          if (r) r.textContent = out && out.persisted === false ? "Applied in memory (not persisted)" : "Applied";
+          renderControllerWorkersCard();
+        } catch (err) {
+          const r = document.getElementById("ctl-workers-result");
+          if (r) r.textContent = err instanceof Error ? err.message : "failed";
+        } finally { saveBtn.disabled = false; }
+      });
+    }
   }
 
   async function renderGithubAuthCard() {

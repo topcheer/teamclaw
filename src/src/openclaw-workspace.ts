@@ -808,6 +808,53 @@ export async function updateTeamClawModelConfig(
 }
 
 /**
+ * Persist hot-reloadable worker-provisioning fields into the host
+ * openclaw.json plugins.entries.teamclaw.config (read-modify-write, same
+ * pattern as updateTeamClawModelConfig). Only whitelisted fields are
+ * touched; unknown keys in the existing plugin config are preserved.
+ */
+export async function updateTeamClawProvisioningConfig(
+  update: {
+    workerProvisioningMinPerRole?: number;
+    workerProvisioningMaxPerRole?: number;
+    workerProvisioningIdleTtlMs?: number;
+  },
+  logger?: { warn?: (message: string) => void },
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): Promise<{ configPath: string }> {
+  const configPath = resolveDefaultOpenClawConfigPath(env, homedir);
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON5.parse(await fs.readFile(configPath, "utf8")) as Record<string, unknown>;
+    if (!isRecord(parsed)) {
+      throw new Error("host config is not an object");
+    }
+  } catch (err) {
+    throw new Error(`failed to read host config at ${configPath}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const plugins = isRecord(parsed.plugins) ? parsed.plugins : {};
+  const pluginEntries = isRecord(plugins.entries) ? plugins.entries : {};
+  const teamclawPlugin = isRecord(pluginEntries[TEAMCLAW_AGENT_ID]) ? pluginEntries[TEAMCLAW_AGENT_ID] : { enabled: true };
+  const pluginConfig = isRecord((teamclawPlugin as { config?: unknown }).config)
+    ? { ...(teamclawPlugin as { config: Record<string, unknown> }).config }
+    : {};
+  for (const [key, value] of Object.entries(update)) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      pluginConfig[key] = value;
+    }
+  }
+  pluginEntries[TEAMCLAW_AGENT_ID] = { ...teamclawPlugin, config: pluginConfig };
+  plugins.entries = pluginEntries;
+  parsed.plugins = plugins;
+
+  await fs.writeFile(configPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+  logger?.warn?.("TeamClaw: worker provisioning config persisted (hot-reload applies to the running controller)");
+  return { configPath };
+}
+
+/**
  * Resolve the `projects/` root inside the TeamClaw workspace.
  * Each orchestration run or ad-hoc task gets its own subdirectory here.
  */

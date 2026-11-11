@@ -20,6 +20,7 @@ export type WsEvent =
   | { type: "project:deleted"; data: unknown }
   | { type: "requirement:complete"; data: unknown }
   | { type: "report:ready"; data: unknown }
+  | { type: "team:config_updated"; data: unknown }
   | { type: "teamauto:activity"; data: unknown }
   // Phase 2.2 (design sections 2.3/4): team profile switch lifecycle. Event
   // names follow the design document verbatim (dot-separated) rather than the

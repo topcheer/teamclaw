@@ -5173,7 +5173,84 @@ function refreshGithubAuthStatus() {
   });
 }
 
+// Hot worker-provisioning config (#hot-config): a self-contained modal +
+// entry button injected next to the model-settings opener. PATCH /team/config
+// applies in-memory to the running controller (no restart) and persists to
+// the host openclaw.json where the deployment shape allows it.
+var workerSettingsEnsured = false;
+function ensureWorkerSettingsEntry() {
+  if (workerSettingsEnsured) return;
+  workerSettingsEnsured = true;
+  var opener = document.querySelector("[data-model-settings-open], #model-settings-open, .model-settings-opener");
+  var host = opener && opener.parentNode ? opener.parentNode : document.body;
+  var btn = document.createElement("button");
+  btn.id = "worker-settings-open";
+  btn.type = "button";
+  btn.className = opener ? opener.className : "btn";
+  btn.textContent = "Workers";
+  btn.style.marginLeft = "8px";
+  btn.addEventListener("click", openWorkerSettings);
+  host.appendChild(btn);
+}
+
+function openWorkerSettings() {
+  closeWorkerSettings();
+  var modal = document.createElement("div");
+  modal.id = "worker-settings-modal";
+  modal.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:12000";
+  var card = document.createElement("div");
+  card.style.cssText = "background:#fff;color:#111;border-radius:8px;padding:18px 20px;width:340px;font:13px/1.5 system-ui";
+  card.innerHTML =
+    '<h3 style="margin:0 0 6px">Worker scaling (hot)</h3>' +
+    '<p style="margin:0 0 10px;color:#555">Applies immediately without restarting the gateway. Lowering a cap never kills busy workers.</p>' +
+    '<label style="display:block;margin-bottom:6px">Max workers / role <input id="wk-max" type="number" min="1" max="50" style="width:80px"></label>' +
+    '<label style="display:block;margin-bottom:6px">Min warm / role <input id="wk-min" type="number" min="0" max="50" style="width:80px"></label>' +
+    '<label style="display:block;margin-bottom:10px">Idle TTL (ms) <input id="wk-ttl" type="number" min="1000" max="86400000" step="1000" style="width:110px"></label>' +
+    '<p id="wk-mode" style="margin:0 0 8px;color:#666;font-size:12px"></p>' +
+    '<button id="wk-save" type="button" style="margin-right:8px">Apply</button>' +
+    '<button id="wk-close" type="button">Close</button>' +
+    '<span id="wk-result" style="margin-left:8px;color:#080"></span>';
+  modal.appendChild(card);
+  document.body.appendChild(modal);
+  modal.addEventListener("click", function (e) { if (e.target === modal) closeWorkerSettings(); });
+  document.getElementById("wk-close").addEventListener("click", closeWorkerSettings);
+  apiRequest("/team/config").then(function (cfg) {
+    if (cfg.workerProvisioningMaxPerRole != null) document.getElementById("wk-max").value = cfg.workerProvisioningMaxPerRole;
+    if (cfg.workerProvisioningMinPerRole != null) document.getElementById("wk-min").value = cfg.workerProvisioningMinPerRole;
+    if (cfg.workerProvisioningIdleTtlMs != null) document.getElementById("wk-ttl").value = cfg.workerProvisioningIdleTtlMs;
+    var mode = document.getElementById("wk-mode");
+    if (mode) mode.textContent = "provisioning: " + (cfg.workerProvisioningType || "process") +
+      (cfg.persistenceMode === "memory-only" ? " | persistence: memory-only (restart reverts)" : " | persistence: host config");
+  }).catch(function () {});
+  document.getElementById("wk-save").addEventListener("click", function () {
+    var payload = {};
+    var mx = Number(document.getElementById("wk-max").value);
+    var mn = Number(document.getElementById("wk-min").value);
+    var ttl = Number(document.getElementById("wk-ttl").value);
+    if (Number.isFinite(mx) && document.getElementById("wk-max").value !== "") payload.workerProvisioningMaxPerRole = mx;
+    if (Number.isFinite(mn) && document.getElementById("wk-min").value !== "") payload.workerProvisioningMinPerRole = mn;
+    if (Number.isFinite(ttl) && document.getElementById("wk-ttl").value !== "") payload.workerProvisioningIdleTtlMs = ttl;
+    if (!Object.keys(payload).length) return;
+    var save = document.getElementById("wk-save");
+    save.disabled = true;
+    apiRequest("/team/config", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
+      .then(function (out) {
+        document.getElementById("wk-result").textContent = out && out.persisted === false ? "Applied (memory only)" : "Applied";
+      })
+      .catch(function (err) {
+        document.getElementById("wk-result").textContent = (err && err.message) || "failed";
+      })
+      .finally(function () { save.disabled = false; });
+  });
+}
+
+function closeWorkerSettings() {
+  var m = document.getElementById("worker-settings-modal");
+  if (m && m.parentNode) m.parentNode.removeChild(m);
+}
+
 function openModelSettings() {
+  ensureWorkerSettingsEntry();
   var modal = document.querySelector("#model-settings-modal");
   if (!modal) return;
   apiGet("/models/config").then(function (catalog) {

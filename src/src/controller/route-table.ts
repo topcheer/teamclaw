@@ -52,6 +52,7 @@ import {
   teamProfileSwitchRoute,
   archivedTeamsRoute,
 } from "./status-routes.js";
+import { teamConfigGetRoute, teamConfigPatchRoute } from "./config-routes.js";
 import {
   reportsListRoute,
   reportsSessionRoute,
@@ -594,4 +595,9 @@ export const controllerRouteTable: readonly RouteDef[] = [
   // { context } (initial business context). The handler enforces the
   // transition-matrix 503 itself (see workflow-routes.ts).
   { method: "POST", path: /^\/api\/v1\/workflows\/[^/]+\/start$/, handler: workflowStartRoute },
+  // Hot worker-provisioning config (#hot-config): GET snapshot + PATCH
+  // hot-apply. Appended at the table tail on the same append-only precedent
+  // (no path overlap with any earlier route).
+  { method: "GET", path: "/api/v1/team/config", handler: teamConfigGetRoute },
+  { method: "PATCH", path: "/api/v1/team/config", handler: teamConfigPatchRoute },
 ];

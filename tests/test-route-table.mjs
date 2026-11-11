@@ -217,6 +217,15 @@ const WORKFLOW_ROUTES = [
   ["POST", "regex", "^\\/api\\/v1\\/workflows\\/[^/]+\\/start$"],
 ];
 
+// Hot worker-provisioning config (#hot-config): GET snapshot + PATCH
+// hot-apply, appended after the workflow suffix on the same append-only
+// precedent (no path overlap with any earlier route; handlers live in
+// ./config-routes.ts).
+const HOT_CONFIG_ROUTES = [
+  ["GET", "exact", "/api/v1/team/config"],
+  ["PATCH", "exact", "/api/v1/team/config"],
+];
+
 /** Normalizes a live RouteDef into {method, kind, value} for comparison. */
 function routeToSpec(route, index) {
   assert.equal(typeof route.handler, "function", `route #${index} must bind a handler function`);
@@ -233,9 +242,9 @@ function routeToSpec(route, index) {
 }
 
 const tableSpecs = routeTableMod.controllerRouteTable.map(routeToSpec);
-assert.equal(tableSpecs.length, EXPECTED_ROUTES.length + SECURITY_ROUTES.length + WORKFLOW_ROUTES.length,
-  `controllerRouteTable must have exactly ${EXPECTED_ROUTES.length} historical + ${SECURITY_ROUTES.length} security + ${WORKFLOW_ROUTES.length} workflow entries in order (got ${tableSpecs.length})`);
-const FULL_EXPECTED_ROUTES = [...EXPECTED_ROUTES, ...SECURITY_ROUTES, ...WORKFLOW_ROUTES];
+assert.equal(tableSpecs.length, EXPECTED_ROUTES.length + SECURITY_ROUTES.length + WORKFLOW_ROUTES.length + HOT_CONFIG_ROUTES.length,
+  `controllerRouteTable must have exactly ${EXPECTED_ROUTES.length} historical + ${SECURITY_ROUTES.length} security + ${WORKFLOW_ROUTES.length} workflow + ${HOT_CONFIG_ROUTES.length} hot-config entries in order (got ${tableSpecs.length})`);
+const FULL_EXPECTED_ROUTES = [...EXPECTED_ROUTES, ...SECURITY_ROUTES, ...WORKFLOW_ROUTES, ...HOT_CONFIG_ROUTES];
 FULL_EXPECTED_ROUTES.forEach(([method, kind, value], i) => {
   const actual = tableSpecs[i];
   const methodMatches = Array.isArray(method)

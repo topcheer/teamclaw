@@ -135,7 +135,7 @@ const BASELINE_SCCS = [
   // module, mostly via type-only RouteContext imports). Post-8371f70 the
   // secretsEqual hoist freed worker-provisioning from this SCC; shrinking it
   // further means deleting members from this entry.
-  "controller/auth-routes,controller/clarification-routes,controller/controller-intake,controller/controller-planning,controller/controller-routes,controller/controller-service,controller/http-server,controller/profile-switch,controller/repo-routes,controller/report-routes,controller/route-table,controller/security,controller/status-routes,controller/task-assignment,controller/task-results,controller/task-routes,controller/tunnel-routes,controller/webui-routes,controller/worker-routes,controller/workflow-routes,controller/workspace-routes".split(","),
+  "controller/auth-routes,controller/clarification-routes,controller/config-routes,controller/controller-intake,controller/controller-planning,controller/controller-routes,controller/controller-service,controller/http-server,controller/profile-switch,controller/repo-routes,controller/report-routes,controller/route-table,controller/security,controller/status-routes,controller/task-assignment,controller/task-results,controller/task-routes,controller/tunnel-routes,controller/webui-routes,controller/worker-routes,controller/workflow-routes,controller/workspace-routes".split(","),
   // The types spine cluster: types <-> roles <-> prompt-policy (+ the
   // profile-loader / openclaw-workspace / role-ids spokes it absorbed).
   "openclaw-workspace,profile-loader,prompt-policy,role-ids,roles,types".split(","),
