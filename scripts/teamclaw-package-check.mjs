@@ -272,6 +272,7 @@ if (!originUrl) {
       "dist/ contains no JS output to closure-check; run `npm --prefix src run build` before release:check (issue #253 anchor).",
     );
   }
+  const hasDist = existsSync(distRoot);
   const specPattern =
     /\b(?:from|import|export\s+[^;]*?from)\s*["'](\.[^"']+)["']|\bimport\s*\(\s*["'](\.[^"']+)["']\s*\)|\brequire\s*\(\s*["'](\.[^"']+)["']\s*\)/gu;
   for (const importerPath of importGraphFiles) {
@@ -281,7 +282,19 @@ if (!originUrl) {
       const specifier = match[1] ?? match[2] ?? match[3];
       const base = path.resolve(path.dirname(importerPath), specifier);
       const candidates = [base, `${base}.js`, `${base}.mjs`, `${base}.cjs`, path.join(base, "index.js")];
-      if (!candidates.some((candidate) => existsSync(candidate))) {
+      let resolved = candidates.some((candidate) => existsSync(candidate));
+      // Pre-build contexts (CI preview_package checks out sources without
+      // building): resolve dist/* targets against their TS sources instead
+      // (dist/src/roles.js <- src/src/roles.ts). With dist/ present the
+      // file-level check above stays strict - a built graph must be complete.
+      if (!resolved && !hasDist && importerPath === cliShimPath) {
+        // dist/src/roles.js <- src/roles.ts (tsc rootDir: the package's TS
+        // root is <packageDir>/src, so dropping the dist/ prefix + .js->.ts
+        // yields the package-relative source path).
+        const sourceRelative = specifier.replace(/^\.\//u, "").replace(/^dist\//u, "").replace(/\.js$/u, ".ts");
+        resolved = existsSync(path.resolve(packageDir, sourceRelative));
+      }
+      if (!resolved) {
         errors.push(
           `dist import closure (issue #253): ${path.relative(packageDir, importerPath)} imports "${specifier}", which no packaged file provides - a compose/prune step would ship a broken graph.`,
         );
