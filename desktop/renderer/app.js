@@ -1070,6 +1070,27 @@ import { createT as i18nCreateT } from "./i18n.js";
     return llmMode() === "remote" ? null : selectedWizardTeamProfile();
   }
 
+  function applyCapabilityVisibility(profileInfo) {
+    // #255 P1-6: capability-gated nav visibility, the desktop twin of the
+    // web applyCapabilitiesVisibility contract (design section 4): the
+    // TeamAuto nav button hides (NOT removed) when the active profile has
+    // teamauto:false, so its apiGet("/teamauto/*") calls cannot 404-trap a
+    // banking/insurance/securities/trading-co/crossborder desktop. Unknown
+    // or missing capabilities default to visible so software-rd and older
+    // controllers keep the full nav. Reports has no nav button and its
+    // /reports fetch is already optional-with-fallback, so nothing to gate
+    // there; workspace routes are capability-agnostic reads.
+    const caps = profileInfo && profileInfo.profile && profileInfo.profile.capabilities;
+    const teamautoEnabled = !caps || caps.teamauto !== false;
+    const navBtn = document.querySelector('.nav-btn[data-view="teamauto"]');
+    if (navBtn) {
+      navBtn.hidden = !teamautoEnabled;
+    }
+    if (!teamautoEnabled && state.currentView === "teamauto") {
+      activateView("mission");
+    }
+  }
+
   function applyActiveTeamProfile(profileInfo) {
     // #255 P0-3: single apply point for the GET /team/profile mirror. The
     // wizard-echo path (syncWizardProfileFromController) and refreshAll both
@@ -1081,6 +1102,7 @@ import { createT as i18nCreateT } from "./i18n.js";
     const transition = profileInfo && profileInfo.transition;
     state.teamSwitchInFlight = Boolean(transition);
     state.teamSwitchTargetId = transition ? String(transition.targetProfileId || "") : "";
+    applyCapabilityVisibility(profileInfo);
     const id = profileInfo && typeof profileInfo.profileId === "string" ? profileInfo.profileId : "";
     if (id && WIZARD_TEAM_PROFILES.some((p) => p.id === id)) {
       state.wizardCurrentProfileId = id;

@@ -357,6 +357,12 @@ button, input, textarea { font: inherit; }
 .nav-signal.is-hidden {
   display: none;
 }
+/* #255 P1-6: capability-gated nav buttons hide via the hidden attribute
+   (same contract as the web UI's .tab[hidden]); .nav-btn's display:flex
+   would otherwise defeat the UA default, so enforce it here. */
+.nav-btn[hidden] {
+  display: none;
+}
 .nav-signal.tone-active {
   background: var(--info-bg);
   color: var(--info-text);
