@@ -886,9 +886,27 @@ const PROVIDER_MODEL_SOURCES = {
   google: { url: "https://generativelanguage.googleapis.com/v1beta/models", auth: "query" },
   zai: { url: "https://api.z.ai/api/paas/v4/models", auth: "bearer" },
 };
+// #255 P1-7: llm:list-models runs in the MAIN process with the user's API
+// key, so a renderer-supplied endpoint must not be able to aim that key at
+// an arbitrary host (SSRF / credential exfiltration). Allowed: https
+// anywhere, or plain http ONLY for explicit loopback hosts (local model
+// gateways like Ollama/LM Studio on 127.0.0.1/[::1]). Empty endpoint falls
+// back to the built-in https provider URL and passes trivially.
+function assertAllowedModelEndpoint(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return;
+  let parsed;
+  try { parsed = new URL(value); } catch { throw new Error("Invalid model endpoint URL."); }
+  const host = parsed.hostname.toLowerCase();
+  const loopback = host === "localhost" || host === "127.0.0.1" || host === "[::1]" || host === "[::ffff:127.0.0.1]";
+  if (parsed.protocol === "https:") return;
+  if (parsed.protocol === "http:" && loopback) return;
+  throw new Error(`Model endpoint must be https (or http on loopback); got ${parsed.protocol}//${parsed.hostname}`);
+}
 async function fetchProviderModels(provider, endpoint, apiKey) {
   const src = PROVIDER_MODEL_SOURCES[provider];
   if (!src) return { models: [] };
+  try { assertAllowedModelEndpoint(endpoint); } catch (e) { return { error: e.message }; }
   const https = await import("node:https");
   const target = endpoint && endpoint.trim() ? endpoint.trim().replace(/\/$/, "") + "/models" : src.url;
   const headers = { Accept: "application/json" };
