@@ -78,6 +78,7 @@
           <span id="tasks-tab-signal" class="tab-signal"></span>
         </button>
         <button class="tab" data-tab="workspace"><span class="tab-label" data-i18n="tab.workspace">Workspace</span></button>
+        <button class="tab" data-tab="settings"><span class="tab-label" data-i18n="tab.settings">Settings</span></button>
         <button class="tab" data-tab="clarifications">
           <span class="tab-label" data-i18n="tab.clarifications">Clarifications</span>
           <span id="clarifications-tab-count" class="tab-badge">0</span>
@@ -150,6 +151,28 @@
         </div>
 
         <!-- Workspace Tab -->
+        <div id="tab-settings" class="tab-panel">
+          <div class="panel-note" style="padding:12px 14px">
+            <h3 data-i18n="settings.models.title" style="margin:0 0 6px">Model settings</h3>
+            <p data-i18n="settings.models.hint" style="margin:0 0 8px;color:#666">Default model and per-role overrides.</p>
+            <div id="settings-models-slot"></div>
+          </div>
+          <div class="panel-note" style="padding:12px 14px;margin-top:10px">
+            <h3 data-i18n="settings.workers.title" style="margin:0 0 6px">Worker scaling (hot)</h3>
+            <p data-i18n="settings.workers.hint" style="margin:0 0 8px;color:#666">Applies immediately without restarting the gateway. Lowering a cap never kills busy workers.</p>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+              <label style="display:flex;flex-direction:column;gap:4px;font-size:12px"><span data-i18n="settings.workers.max">Max workers / role</span>
+                <input id="wk-max" type="number" min="1" max="50" style="width:90px" /></label>
+              <label style="display:flex;flex-direction:column;gap:4px;font-size:12px"><span data-i18n="settings.workers.min">Min warm / role</span>
+                <input id="wk-min" type="number" min="0" max="50" style="width:90px" /></label>
+              <label style="display:flex;flex-direction:column;gap:4px;font-size:12px"><span data-i18n="settings.workers.ttl">Idle TTL (ms)</span>
+                <input id="wk-ttl" type="number" min="1000" max="86400000" step="1000" style="width:120px" /></label>
+              <button id="wk-save" type="button" class="btn btn-small">Apply</button>
+              <span id="wk-result" style="margin-left:8px;color:#080"></span>
+            </div>
+            <p id="wk-mode" style="margin:8px 0 0;color:#666;font-size:12px"></p>
+          </div>
+        </div>
         <div id="tab-workspace" class="tab-panel">
           <div class="workspace-browser">
             <aside class="workspace-sidebar-panel">

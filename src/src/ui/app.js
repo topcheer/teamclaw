@@ -76,6 +76,15 @@
       "tab.planning": "Planning",
       "tab.tasks": "Tasks",
       "tab.workspace": "Workspace",
+      "common.showOlder": "Show older ({n})",
+      "tab.settings": "Settings",
+      "settings.models.title": "Model settings",
+      "settings.models.hint": "Default model and per-role overrides.",
+      "settings.workers.title": "Worker scaling (hot)",
+      "settings.workers.hint": "Applies immediately without restarting the gateway. Lowering a cap never kills busy workers.",
+      "settings.workers.max": "Max workers / role",
+      "settings.workers.min": "Min warm / role",
+      "settings.workers.ttl": "Idle TTL (ms)",
       "tab.teamauto": "TeamAuto",
       "tab.clarifications": "Clarifications",
       "tab.messages": "Messages",
@@ -362,6 +371,15 @@
       "tab.planning": "规划",
       "tab.tasks": "任务",
       "tab.workspace": "工作区",
+      "common.showOlder": "显示更早（{n}）",
+      "tab.settings": "设置",
+      "settings.models.title": "模型设置",
+      "settings.models.hint": "默认模型与按角色覆盖。",
+      "settings.workers.title": "Worker 弹性伸缩（热）",
+      "settings.workers.hint": "立即生效无需重启 gateway。下调上限不会终止忙碌 worker。",
+      "settings.workers.max": "每角色最大 worker",
+      "settings.workers.min": "每角色保活下限",
+      "settings.workers.ttl": "空闲回收 TTL（毫秒）",
       "tab.teamauto": "TeamAuto",
       "tab.clarifications": "澄清",
       "tab.messages": "消息",
@@ -1417,12 +1435,16 @@
   var selectedPlanningRunId = null;
 
   function renderPlanningTab(runs) {
+    lastRenderedData.planning = runs || [];
     var sessionList = $("#planning-session-list");
     if (!sessionList) return;
 
     var planningRuns = (runs || [])
       .filter(function (r) { return r && r.manifest; })
       .sort(function (a, b) { return (b.updatedAt || 0) - (a.updatedAt || 0); });
+    var planningWindow = splitByRecency(planningRuns, function (r) { return r.updatedAt || r.createdAt; }, "planning");
+    planningRuns = planningWindow.shown;
+    var planningOlderHtml = olderToggleHtml(planningWindow.olderCount, "planning");
 
     if (planningRuns.length === 0) {
       sessionList.innerHTML = '<div class="empty-state">' + escapeHtml(t("empty.noPlanningSessions")) + "</div>";
@@ -1452,7 +1474,7 @@
         '  <div class="planning-session-meta">' + escapeHtml(humanizeStatus(status)) + " · " + roles + " roles" + (assessments.length ? " · " + needed + " confirmed" : "") + " · " + escapeHtml(formatTime(run.updatedAt) || "") + "</div>" +
         "</button>"
       );
-    }).join("");
+    }).join("") + planningOlderHtml;
 
     // Render selected run
     renderPlanningDetail(planningRuns.find(function (r) { return r.id === selectedPlanningRunId; }));
@@ -3078,7 +3100,38 @@
     return haystack.includes(keyword);
   }
 
+  // ---- 24h recency window + lazy "show older" (#recent-window) ----
+  // Planning / Tasks / Clarifications / Messages only list items from the
+  // last 24h by default; older items appear after an explicit click.
+  const TWENTY_FOUR_H_MS = 24 * 60 * 60 * 1000;
+  const showOlderSections = { tasks: false, planning: false, clarifications: false, messages: false };
+  const lastRenderedData = { tasks: [], planning: [], clarifications: [], messages: [] };
+  function splitByRecency(items, tsOf, section) {
+    const cutoff = Date.now() - TWENTY_FOUR_H_MS;
+    const recent = [];
+    const older = [];
+    for (const item of items || []) {
+      ((tsOf(item) || 0) >= cutoff ? recent : older).push(item);
+    }
+    return showOlderSections[section] ? { shown: recent.concat(older), olderCount: 0 } : { shown: recent, olderCount: older.length };
+  }
+  function olderToggleHtml(count, section) {
+    if (!count) return "";
+    return '<div style="text-align:center;padding:8px"><button type="button" class="btn btn-small" data-show-older="' + section + '">' +
+      escapeHtml(t("common.showOlder", { n: count })) + "</button></div>";
+  }
+  document.addEventListener("click", function (event) {
+    const btn = event.target instanceof Element && event.target.closest("[data-show-older]");
+    if (!btn || btn.tagName !== "BUTTON") return;
+    showOlderSections[btn.getAttribute("data-show-older")] = true;
+    renderTasks(lastRenderedData.tasks);
+    renderPlanningTab(lastRenderedData.planning);
+    renderClarifications(lastRenderedData.clarifications);
+    renderMessages(lastRenderedData.messages);
+  });
+
   function renderTasks(tasks) {
+    lastRenderedData.tasks = tasks || [];
     const container = $("#tasks-board");
     if (!container) return;
 
@@ -3099,10 +3152,13 @@
     }
 
     const sorted = filtered.slice().sort(taskComparator);
+    // #recent-window: 24h recency first, older tasks behind the lazy toggle
+    // (applied before the terminal chunking, so both windows stay fast).
+    const recency = splitByRecency(sorted, function (task) { return task.updatedAt || task.createdAt; }, "tasks");
     // Active tasks render in full; terminal ones chunk so long-lived installs
     // with hundreds of completed tasks stay fast and meaningful.
-    const activeTasks = sorted.filter(function (task) { return !TERMINAL_STATUSES[task.status]; });
-    const terminalTasks = sorted.filter(function (task) { return TERMINAL_STATUSES[task.status]; });
+    const activeTasks = recency.shown.filter(function (task) { return !TERMINAL_STATUSES[task.status]; });
+    const terminalTasks = recency.shown.filter(function (task) { return TERMINAL_STATUSES[task.status]; });
     const visibleTerminal = terminalTasks.slice(0, terminalTasksVisible);
     const hiddenTerminal = terminalTasks.length - visibleTerminal.length;
     const visibleList = activeTasks.concat(visibleTerminal);
@@ -3154,7 +3210,7 @@
         "  </div>" +
         "</div>"
       );
-    }).join("") + showMoreHtml;
+    }).join("") + showMoreHtml + olderToggleHtml(recency.olderCount, "tasks");
 
     const showMoreBtn = $("#tasks-show-more");
     if (showMoreBtn) {
@@ -3808,6 +3864,7 @@
   }
 
   function renderClarifications(clarifications) {
+    lastRenderedData.clarifications = clarifications || [];
     const container = $("#clarifications-list");
     if (!container) return;
 
@@ -3816,14 +3873,21 @@
       return;
     }
 
-    container.innerHTML = renderClarificationCards(sortClarifications(clarifications), { linkToTask: true });
+    const clWindow = splitByRecency(sortClarifications(clarifications), function (c) { return c.createdAt || c.updatedAt; }, "clarifications");
+    if (clWindow.shown.length === 0) {
+      container.innerHTML = olderToggleHtml(clWindow.olderCount, "clarifications");
+      return;
+    }
+    container.innerHTML = renderClarificationCards(clWindow.shown, { linkToTask: true }) +
+      olderToggleHtml(clWindow.olderCount, "clarifications");
   }
 
   function renderMessages(messages) {
+    lastRenderedData.messages = messages || [];
     const container = $("#messages-feed");
     if (!container) return;
 
-    const recent = (messages || [])
+    var recent = (messages || [])
       .concat(controllerConversation || [])
       .sort(function (left, right) {
         return (right.createdAt || 0) - (left.createdAt || 0);
@@ -3834,7 +3898,13 @@
       return;
     }
 
-    container.innerHTML = renderMessageCards(recent);
+    const msgWindow = splitByRecency(recent, function (m) { return m.createdAt; }, "messages");
+    if (msgWindow.shown.length === 0) {
+      container.innerHTML = olderToggleHtml(msgWindow.olderCount, "messages");
+      return;
+    }
+    container.innerHTML = renderMessageCards(msgWindow.shown) +
+      olderToggleHtml(msgWindow.olderCount, "messages");
   }
 
   function renderRoles(roles) {
@@ -4057,6 +4127,9 @@
     }
     if (activeTab === "workspace") {
       refreshWorkspaceTree(false);
+    }
+    if (activeTab === "settings") {
+      renderWorkerSettingsPanel();
     }
     if (activeTab === "teamauto") {
       refreshTeamAutoTab();
@@ -5050,10 +5123,13 @@
   opener.setAttribute("data-i18n", "ctl.tab.models");
   opener.textContent = t("ctl.tab.models");
   var refreshBtn = document.querySelector("#workspace-tree-refresh");
-  if (refreshBtn && refreshBtn.parentElement) {
-    refreshBtn.parentElement.appendChild(opener);
-    opener.addEventListener("click", openModelSettings);
-  }
+  // Settings tab (#hot-config): the models opener now lives in the Settings
+  // tab slot instead of the workspace header (its old home raised "why is
+  // models inside workspace"). Workspace fallback only if the slot is absent.
+  var settingsSlot = document.querySelector("#settings-models-slot");
+  var mount = settingsSlot || (refreshBtn && refreshBtn.parentElement) || document.body;
+  mount.appendChild(opener);
+  opener.addEventListener("click", openModelSettings);
 
   var modal = document.querySelector("#model-settings-modal");
   if (!modal || modal.dataset.bound === "true") return;
@@ -5173,63 +5249,49 @@ function refreshGithubAuthStatus() {
   });
 }
 
-// Hot worker-provisioning config (#hot-config): a self-contained modal +
-// entry button injected next to the model-settings opener. PATCH /team/config
-// applies in-memory to the running controller (no restart) and persists to
-// the host openclaw.json where the deployment shape allows it.
-var workerSettingsEnsured = false;
-function ensureWorkerSettingsEntry() {
-  if (workerSettingsEnsured) return;
-  workerSettingsEnsured = true;
-  var opener = document.querySelector("[data-model-settings-open], #model-settings-open, .model-settings-opener");
-  var host = opener && opener.parentNode ? opener.parentNode : document.body;
-  var btn = document.createElement("button");
-  btn.id = "worker-settings-open";
-  btn.type = "button";
-  btn.className = opener ? opener.className : "btn";
-  btn.textContent = "Workers";
-  btn.style.marginLeft = "8px";
-  btn.addEventListener("click", openWorkerSettings);
-  host.appendChild(btn);
-}
-
-function openWorkerSettings() {
-  closeWorkerSettings();
-  var modal = document.createElement("div");
-  modal.id = "worker-settings-modal";
-  modal.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;z-index:12000";
-  var card = document.createElement("div");
-  card.style.cssText = "background:#fff;color:#111;border-radius:8px;padding:18px 20px;width:340px;font:13px/1.5 system-ui";
-  card.innerHTML =
-    '<h3 style="margin:0 0 6px">Worker scaling (hot)</h3>' +
-    '<p style="margin:0 0 10px;color:#555">Applies immediately without restarting the gateway. Lowering a cap never kills busy workers.</p>' +
-    '<label style="display:block;margin-bottom:6px">Max workers / role <input id="wk-max" type="number" min="1" max="50" style="width:80px"></label>' +
-    '<label style="display:block;margin-bottom:6px">Min warm / role <input id="wk-min" type="number" min="0" max="50" style="width:80px"></label>' +
-    '<label style="display:block;margin-bottom:10px">Idle TTL (ms) <input id="wk-ttl" type="number" min="1000" max="86400000" step="1000" style="width:110px"></label>' +
-    '<p id="wk-mode" style="margin:0 0 8px;color:#666;font-size:12px"></p>' +
-    '<button id="wk-save" type="button" style="margin-right:8px">Apply</button>' +
-    '<button id="wk-close" type="button">Close</button>' +
-    '<span id="wk-result" style="margin-left:8px;color:#080"></span>';
-  modal.appendChild(card);
-  document.body.appendChild(modal);
-  modal.addEventListener("click", function (e) { if (e.target === modal) closeWorkerSettings(); });
-  document.getElementById("wk-close").addEventListener("click", closeWorkerSettings);
+// Hot worker-provisioning config (#hot-config): renders into the Settings
+// tab's static form (#tab-settings). PATCH /team/config applies in-memory to
+// the running controller (no restart) and persists to the host openclaw.json
+// where the deployment shape allows it.
+var workerSettingsBound = false;
+function renderWorkerSettingsPanel() {
+  var modal = document.getElementById("wk-save");
+  if (!modal) return;
   apiRequest("/team/config").then(function (cfg) {
-    if (cfg.workerProvisioningMaxPerRole != null) document.getElementById("wk-max").value = cfg.workerProvisioningMaxPerRole;
-    if (cfg.workerProvisioningMinPerRole != null) document.getElementById("wk-min").value = cfg.workerProvisioningMinPerRole;
-    if (cfg.workerProvisioningIdleTtlMs != null) document.getElementById("wk-ttl").value = cfg.workerProvisioningIdleTtlMs;
+    if (cfg.workerProvisioningMaxPerRole != null) {
+      var mx = document.getElementById("wk-max");
+      if (mx) mx.value = cfg.workerProvisioningMaxPerRole;
+    }
+    if (cfg.workerProvisioningMinPerRole != null) {
+      var mn = document.getElementById("wk-min");
+      if (mn) mn.value = cfg.workerProvisioningMinPerRole;
+    }
+    if (cfg.workerProvisioningIdleTtlMs != null) {
+      var ttl = document.getElementById("wk-ttl");
+      if (ttl) ttl.value = cfg.workerProvisioningIdleTtlMs;
+    }
     var mode = document.getElementById("wk-mode");
-    if (mode) mode.textContent = "provisioning: " + (cfg.workerProvisioningType || "process") +
-      (cfg.persistenceMode === "memory-only" ? " | persistence: memory-only (restart reverts)" : " | persistence: host config");
-  }).catch(function () {});
+    if (mode) {
+      mode.textContent = "provisioning: " + (cfg.workerProvisioningType || "process") +
+        (cfg.persistenceMode === "memory-only" ? " | persistence: memory-only (restart reverts)" : " | persistence: host config");
+    }
+  }).catch(function (err) {
+    var mode = document.getElementById("wk-mode");
+    if (mode) mode.textContent = (err && err.message) || "load failed";
+  });
+  if (workerSettingsBound) return;
+  workerSettingsBound = true;
   document.getElementById("wk-save").addEventListener("click", function () {
     var payload = {};
-    var mx = Number(document.getElementById("wk-max").value);
-    var mn = Number(document.getElementById("wk-min").value);
-    var ttl = Number(document.getElementById("wk-ttl").value);
-    if (Number.isFinite(mx) && document.getElementById("wk-max").value !== "") payload.workerProvisioningMaxPerRole = mx;
-    if (Number.isFinite(mn) && document.getElementById("wk-min").value !== "") payload.workerProvisioningMinPerRole = mn;
-    if (Number.isFinite(ttl) && document.getElementById("wk-ttl").value !== "") payload.workerProvisioningIdleTtlMs = ttl;
+    var mxEl = document.getElementById("wk-max");
+    var mnEl = document.getElementById("wk-min");
+    var ttlEl = document.getElementById("wk-ttl");
+    var mx = Number(mxEl && mxEl.value);
+    var mn = Number(mnEl && mnEl.value);
+    var ttl = Number(ttlEl && ttlEl.value);
+    if (mxEl && mxEl.value !== "" && Number.isFinite(mx)) payload.workerProvisioningMaxPerRole = mx;
+    if (mnEl && mnEl.value !== "" && Number.isFinite(mn)) payload.workerProvisioningMinPerRole = mn;
+    if (ttlEl && ttlEl.value !== "" && Number.isFinite(ttl)) payload.workerProvisioningIdleTtlMs = ttl;
     if (!Object.keys(payload).length) return;
     var save = document.getElementById("wk-save");
     save.disabled = true;
@@ -5244,13 +5306,7 @@ function openWorkerSettings() {
   });
 }
 
-function closeWorkerSettings() {
-  var m = document.getElementById("worker-settings-modal");
-  if (m && m.parentNode) m.parentNode.removeChild(m);
-}
-
 function openModelSettings() {
-  ensureWorkerSettingsEntry();
   var modal = document.querySelector("#model-settings-modal");
   if (!modal) return;
   apiGet("/models/config").then(function (catalog) {
