@@ -174,6 +174,18 @@ for (const entryKey of VALUE_ALLOWED.keys()) {
 //    a key legitimately becomes shared, move it out of these groups.
 // ---------------------------------------------------------------------------
 const WEB_ONLY_GROUPS = [
+  { prefix: "common", reason: "web 24h recency-window lazy toggle (#recent-window); desktop lists have their own pagination surfaces", keys: [
+    "common.showOlder",
+  ]},
+  { prefix: "settings", reason: "web Settings tab (#hot-config follow-up): models entry + hot worker-scaling form; the desktop twin lives in its Controller tab under the ctl.* namespace with its own values", keys: [
+    "settings.models.hint",
+    "settings.models.title",
+    "settings.workers.hint",
+    "settings.workers.max",
+    "settings.workers.min",
+    "settings.workers.title",
+    "settings.workers.ttl",
+  ]},
   { prefix: "action", reason: "web generic action-bar buttons; desktop equivalents live under its own namespaces (connection.refresh / worker.copy) with matching values", keys: [
     "action.cancel",
     "action.close",
@@ -295,9 +307,10 @@ const WEB_ONLY_GROUPS = [
     "sidebar.roles",
     "sidebar.workers"
   ] },
-  { prefix: "tab", reason: "web-only tabs (messages feed, manual task); desktop has no equivalent surfaces", keys: [
+  { prefix: "tab", reason: "web-only tabs (messages feed, manual task, settings); desktop has no equivalent surfaces (its controller/worker forms live under ctl.*)", keys: [
     "tab.manualTask",
-    "tab.messages"
+    "tab.messages",
+    "tab.settings"
   ] },
   { prefix: "tasks", reason: "web task keyword filter and show-more affordances", keys: [
     "tasks.noMatch",
