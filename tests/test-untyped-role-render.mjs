@@ -153,8 +153,8 @@ async function runUntypedRoleRenderSmoke() {
   );
   assert.match(
     cliSource,
-    /import\("\.\/dist\/src\/roles\.js"\)/,
-    "cli.mjs must load the role registry from the packaged dist build",
+    /ROLE_MODULE_CANDIDATES = \["\.\/dist\/src\/roles\.js", "\.\/index\.js"\]/,
+    "cli.mjs must load the role registry from the packaged dist build (layout-adaptive candidates, #253)",
   );
   assert.match(
     cliSource,

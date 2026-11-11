@@ -233,8 +233,8 @@ async function runRoleRegistrySmoke() {
   const uiIndexSource = await readSource("src/src/ui/index.html");
   assert.match(
     cliSource,
-    /import\("\.\/dist\/src\/roles\.js"\)/,
-    "installer CLI should load its role table from the packaged role registry",
+    /ROLE_MODULE_CANDIDATES = \["\.\/dist\/src\/roles\.js", "\.\/index\.js"\]/,
+    "installer CLI should load its role table from the packaged role registry (layout-adaptive candidates, #253)",
   );
   assert.match(
     cliSource,

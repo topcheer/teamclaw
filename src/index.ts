@@ -20,6 +20,14 @@ import { installRecommendedSkills } from "./src/worker/skill-installer.js";
 // one (identical semantics; alias keeps the call site byte-identical).
 import { pathExistsTolerant as pathExists } from "./src/shared/utils.js";
 
+// #253: the image build compiles this plugin into a flat rolldown bundle
+// (dist/extensions/teamclaw/index.js) with NO nested dist/src tree, while the
+// npm tarball layout ships dist/src/roles.js and no top-level index.js. The
+// installer CLI (cli.mjs) reads the role registry through whichever layout it
+// lands in, so the registry must be reachable from this entry as a named
+// export for the bundled layout to resolve it.
+export { ROLES, DEFAULT_ROLE } from "./src/roles.js";
+
 export default definePluginEntry({
   id: "teamclaw",
   name: "TeamClaw",

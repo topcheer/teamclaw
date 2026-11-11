@@ -67,8 +67,27 @@ let ROLE_OPTIONS = [];
 let DEFAULT_WORKER_ROLE = "";
 
 async function loadRoleOptions() {
+  // #253 layout-adaptive loading via VARIABLE specifiers: bundlers and the
+  // image's dist-import checker treat a LITERAL dynamic import whose target
+  // does not exist in the current layout (./dist/src/roles.js is a phantom
+  // under the image's flat bundle; ./index.js does not exist in the npm
+  // tarball) as an unresolved edge and fail the build. A runtime variable
+  // defeats static resolution on purpose: whichever layout this file ships
+  // in resolves exactly one of the candidates.
+  const ROLE_MODULE_CANDIDATES = ["./dist/src/roles.js", "./index.js"];
+  let rolesModule = null;
+  for (const candidate of ROLE_MODULE_CANDIDATES) {
+    try {
+      rolesModule = await import(candidate);
+      break;
+    } catch {
+      // try the next layout
+    }
+  }
   try {
-    const rolesModule = await import("./dist/src/roles.js");
+    if (!rolesModule) {
+      throw new Error("no role registry module found in any known layout");
+    }
     const roles = Array.isArray(rolesModule.ROLES) ? rolesModule.ROLES : [];
     ROLE_OPTIONS = roles
       .filter((role) => role && typeof role.id === "string" && role.id.trim())
@@ -81,9 +100,9 @@ async function loadRoleOptions() {
       ? registryDefault
       : "";
   } catch {
-    // dist not built yet (dev checkout). Keep the registry empty so callers
-    // fail with the actionable guidance in ensureRoleOptionsLoaded instead
-    // of presenting a stale role list.
+    // Neither layout resolvable (pre-build dev checkout). Keep the registry
+    // empty so callers fail with the actionable guidance in
+    // ensureRoleOptionsLoaded instead of presenting a stale role list.
     ROLE_OPTIONS = [];
     DEFAULT_WORKER_ROLE = "";
   }
@@ -92,7 +111,7 @@ async function loadRoleOptions() {
 function ensureRoleOptionsLoaded() {
   if (ROLE_OPTIONS.length === 0) {
     throw new Error(
-      "TeamClaw role registry unavailable (./dist/src/roles.js). Run `npm --prefix src run build` in the repository, or reinstall the @teamclaws/teamclaw package, then retry.",
+      "TeamClaw role registry unavailable (tried ./dist/src/roles.js and ./index.js). Run `npm --prefix src run build` in the repository, or reinstall the @teamclaws/teamclaw package, then retry.",
     );
   }
 }
