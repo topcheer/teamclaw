@@ -102,11 +102,24 @@ export async function sweepRepo(
   repo: TeamAutoRepo,
   client: TeamAutoGithubClient,
   now = Date.now(),
-): Promise<{ candidates: Candidate[]; issues: SweepableIssue[]; pulls: SweepablePull[] }> {
+): Promise<{ candidates: Candidate[]; issues: SweepableIssue[]; pulls: SweepablePull[]; newCommits: { sha: string; message: string }[]; commits: { sha: string; message: string }[] }> {
   const [owner, name] = repo.id.split("/");
   const issues = await client.listIssues(owner, name, repo.cursors.lastIssueSince, repo.cursors.etags);
   const pulls = repo.policy.actions.prReview
     ? await client.listPulls(owner, name, repo.cursors.etags)
+    : [];
+  // #265: the commits leg was dead code (listCommits had zero callers,
+  // lastCommitSha never advanced) - the designed third signal source never
+  // ran. Wire it as an observation-only feed: fetch, filter past the cursor,
+  // and surface the delta. Cursor advance happens in advanceCursors (with
+  // the other legs, so dry-run semantics stay intact); it produces no task
+  // candidates (issue/pull policies stay the sole candidate sources).
+  const commits = await client.listCommits(owner, name, repo.cursors.lastCommitSha);
+  // Newest-first feed: when the cursor is set, stop the delta at the first
+  // entry whose sha equals it (that commit and everything after is already
+  // known). An unset cursor means first sweep: observe only, report nothing.
+  const newCommits = repo.cursors.lastCommitSha
+    ? commits.slice(0, (() => { const i = commits.findIndex((c) => c.sha === repo.cursors.lastCommitSha); return i === -1 ? commits.length : i; })())
     : [];
   const candidates: Candidate[] = [];
 
@@ -220,16 +233,22 @@ export async function sweepRepo(
     }
   }
 
-  return { candidates: candidates.slice(0, repo.policy.maxTasksPerSweep * 2), issues, pulls };
+  return { candidates: candidates.slice(0, repo.policy.maxTasksPerSweep * 2), issues, pulls, newCommits, commits };
 }
 
 /** Advance cursors after tasks were enqueued (or observed on first sweep). */
-export function advanceCursors(repo: TeamAutoRepo, issues: SweepableIssue[], pulls: SweepablePull[], now = Date.now()): void {
+export function advanceCursors(repo: TeamAutoRepo, issues: SweepableIssue[], pulls: SweepablePull[], now = Date.now(), commits: { sha: string; message: string }[] = []): void {
   for (const issue of issues) {
     repo.cursors.seen[`${repo.id}#issue-${issue.number}`] = Date.parse(issue.updatedAt) || now;
   }
   for (const pull of pulls) {
     repo.cursors.seen[`${repo.id}#pr-${pull.number}`] = Date.parse(pull.updated_at) || now;
+  }
+  // Commit cursor: the feed is newest-first, so when anything came back the
+  // HEAD entry IS the new cursor. Empty feed keeps the old cursor (nothing
+  // new to advance to).
+  if (commits.length > 0) {
+    repo.cursors.lastCommitSha = commits[0].sha;
   }
   // Cap the seen map so it cannot grow unbounded.
   const entries = Object.entries(repo.cursors.seen);

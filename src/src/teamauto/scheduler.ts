@@ -409,7 +409,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     }
     sweeping.add(repo.id);
     try {
-      const { candidates, issues, pulls } = await sweepRepo(repo, client);
+      const { candidates, issues, pulls, newCommits, commits } = await sweepRepo(repo, client);
       const dryRun = !repo.dryRunDone && s.budget.firstSweepDryRun;
       if (dryRun) {
         // One observing pass, then act. Flip unconditionally - flipping only
@@ -422,7 +422,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         // Advance only for acting sweeps: a dry-run must leave the cursors
         // untouched so the reported actions are actually performed next time
         // instead of being marked as already-seen.
-        advanceCursors(repo, issues, pulls);
+        advanceCursors(repo, issues, pulls, Date.now(), commits);
       }
       // Joint full reviews bypass the per-sweep cap: they append AFTER issue/
       // pull candidates, so a busy repo would otherwise starve them forever
@@ -433,6 +433,11 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       const capped = [...fullReviews, ...regular];
       let created = 0;
       const summary: string[] = [`found ${candidates.length} candidate(s)`];
+      // #265: surface the commits delta so the third signal source is
+      // observable in sweep summaries (was silently dead before).
+      if (newCommits.length > 0) {
+        summary.push(`${newCommits.length} new commit(s) (HEAD ${newCommits[0].sha.slice(0, 7)})`);
+      }
 
       if (capped.length && dryRun) {
         summary.push(...capped.map((c) => `DRY-RUN would ${c.kind}: ${c.title}`));
