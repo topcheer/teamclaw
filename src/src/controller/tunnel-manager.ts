@@ -207,7 +207,10 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
   let installState: { running: boolean; phase: string; percent: number | null; detail: string | null } = { running: false, phase: "idle", percent: null, detail: null };
 
   function isTunnelRequest(hostHeader: string | undefined): boolean {
-    return Boolean(hostHeader && hostHeader.toLowerCase().endsWith(TUNNEL_HOST_SUFFIX));
+    // #255 P1-5: quick tunnels (*.trycloudflare.com) are internet-reachable
+    // too, so they join the same gate enforcement as *.teamclaw.dev.
+    const host = hostHeader?.toLowerCase() ?? "";
+    return host.endsWith(TUNNEL_HOST_SUFFIX) || host.endsWith(".trycloudflare.com");
   }
 
   function gateAllows(req: { headers: Record<string, unknown> }): boolean {
@@ -306,8 +309,12 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
   /** Anonymous one-off tunnel: `cloudflared tunnel --url`, no Cloudflare
    * account, no token, no platform server. Cloudflare assigns a random
    * trycloudflare.com URL (printed on stderr) which dies with the process -
-   * it is NOT recovered on restart and must not be treated as stable. No
-   * TeamClaw gate: anyone with the URL can reach the dashboard. */
+   * it is NOT recovered on restart and must not be treated as stable.
+   * #255 P1-5: the quick URL is internet-reachable, so it now gets the SAME
+   * per-launch gate token as managed tunnels (cookie-gated by the shared
+   * http-server enforcement point). The token is deliberately NOT
+   * persisted: quick tunnels have no recovery, and a token that dies with
+   * the process is strictly safer than one saved to disk. */
   function startQuick(): { launched: boolean; error: string | null } {
     if (handle && child) return { launched: true, error: null };
     const bin = findCloudflared();
@@ -320,7 +327,9 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
       env: { ...process.env, HOME: tunnelRuntimeHome() },
     });
     child = proc;
-    handle = { tunnelId: "quick", hostname: "", gateToken: "", deleteToken: "" };
+    // #255 P1-5: same entropy class as the managed gate token (16 CSPRNG
+    // bytes, base64url) - the cookie check gates on it via gateAllows().
+    handle = { tunnelId: "quick", hostname: "", gateToken: randomBytes(16).toString("base64url"), deleteToken: "" };
     lastError = null;
     // The trycloudflare.com URL appears on stderr once the edge assigns it.
     let announced = false;
