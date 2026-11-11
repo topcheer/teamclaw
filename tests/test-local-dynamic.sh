@@ -311,5 +311,95 @@ else
 fi
 
 # ----------------------------------------------------------
+# Step 8: software-rd -> banking profile switch under the live
+# dynamic topology (issue #252 S2 coverage gap: every switch E2E
+# before this ran against in-process stubs; this one exercises
+# draining real spawned workers, the archive, and re-warming the
+# banking warmup roles through ProcessProvisioner).
+# ----------------------------------------------------------
+echo ""
+echo -e "${BOLD}[8]${NC} software-rd -> banking profile switch (live dynamic workers)..."
+
+SWITCH_HTTP=$(curl -s -o "${TEMP_DIR}/switch-post.json" -w "%{http_code}" \
+  -X POST "${BASE_URL}/api/v1/team/profile" \
+  -H "Content-Type: application/json" \
+  -d '{"profileId":"banking"}' 2>/dev/null || echo "000")
+
+if [ "$SWITCH_HTTP" = "202" ] || [ "$SWITCH_HTTP" = "200" ]; then
+  log_pass "Switch accepted (HTTP ${SWITCH_HTTP})"
+else
+  log_fail "Switch POST failed (HTTP ${SWITCH_HTTP})"
+  cat "${TEMP_DIR}/switch-post.json" 2>/dev/null || true
+  exit 1
+fi
+
+log_info "Waiting up to 180s for drain -> archive -> banking warmup..."
+SWITCH_DONE=false
+for i in $(seq 1 90); do
+  PROFILE_JSON=$(curl -sf "${BASE_URL}/api/v1/team/profile" 2>/dev/null || echo "{}")
+  SWITCH_STATE=$(echo "$PROFILE_JSON" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print('invalid')
+    raise SystemExit
+if data.get('transition'):
+    print('transition:' + str(data['transition'].get('phase', '?')))
+elif data.get('profileId') == 'banking':
+    print('done')
+else:
+    print('profile:' + str(data.get('profileId')))
+" 2>/dev/null || echo "invalid")
+  if [ "$SWITCH_STATE" = "done" ]; then
+    SWITCH_DONE=true
+    log_pass "Switch completed: banking is the active profile"
+    break
+  fi
+  if [ "$((i % 10))" = "0" ]; then
+    log_info "  ... still ${SWITCH_STATE}"
+  fi
+  sleep 2
+done
+
+if [ "$SWITCH_DONE" != true ]; then
+  log_fail "Switch did not complete within 180s (last state: ${SWITCH_STATE})"
+  exit 1
+fi
+
+# Banking role registry is live (credit-officer exists only in banking).
+ROLES_OK=$(curl -sf "${BASE_URL}/api/v1/roles" 2>/dev/null | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+roles = data if isinstance(data, list) else data.get('roles', [])
+ids = [r.get('id') for r in roles if isinstance(r, dict)]
+print('yes' if 'credit-officer' in ids else 'no')
+" 2>/dev/null || echo "no")
+if [ "$ROLES_OK" = "yes" ]; then
+  log_pass "Banking role registry active (credit-officer present)"
+else
+  log_fail "Banking roles not active after switch (no credit-officer in /api/v1/roles)"
+  exit 1
+fi
+
+# Banking workflows ride the profile (capability生效 proxy): the
+# credit-approval template must now be startable.
+WORKFLOWS_OK=$(curl -sf "${BASE_URL}/api/v1/workflows" 2>/dev/null | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+workflows = data if isinstance(data, list) else data.get('workflows', [])
+ids = [w.get('id') for w in workflows if isinstance(w, dict)]
+print('yes' if 'credit-approval' in ids else 'no')
+" 2>/dev/null || echo "no")
+if [ "$WORKFLOWS_OK" = "yes" ]; then
+  log_pass "Banking capability live (credit-approval workflow listed)"
+else
+  log_fail "Banking workflows not listed after switch"
+  exit 1
+fi
+
+log_info "S2 switch scenario passed (drain/archive/warmup under ProcessProvisioner)"
+
+# ----------------------------------------------------------
 echo ""
 echo -e "${BOLD}${GREEN}S2: Local Dynamic Provision test complete.${NC}"
