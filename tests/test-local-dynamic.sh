@@ -383,11 +383,17 @@ else
 fi
 
 # Banking workflows ride the profile (capability生效 proxy): the
-# credit-approval template must now be startable.
-WORKFLOWS_OK=$(curl -sf "${BASE_URL}/api/v1/workflows" 2>/dev/null | python3 -c "
+# credit-approval template must now be exposed on the active profile.
+# (There is no GET /api/v1/workflows list route - the profile detail
+# serializes the templates verbatim: profile.workflows[].id.)
+WORKFLOWS_OK=$(echo "$PROFILE_JSON" | python3 -c "
 import sys, json
-data = json.load(sys.stdin)
-workflows = data if isinstance(data, list) else data.get('workflows', [])
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    print('no')
+    raise SystemExit
+workflows = (data.get('profile') or {}).get('workflows') or []
 ids = [w.get('id') for w in workflows if isinstance(w, dict)]
 print('yes' if 'credit-approval' in ids else 'no')
 " 2>/dev/null || echo "no")
