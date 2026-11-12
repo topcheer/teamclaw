@@ -119,6 +119,19 @@ export function createTunnelGateRoutes(tunnelManager: TunnelManager): readonly R
 }
 
 /** /api/v1/tunnel/* management API (direct requests only, never via tunnel). */
+// Audit trail for every tunnel lifecycle call (#ghost-stop): the gateway's
+// plugin log previously only showed the EFFECT ("stopped team-..."), never
+// the caller, so a stop of unknown origin was undiagnosable (two such
+// incidents: 2026-11-12 14:23 and 15:20). Log origin + user-agent on every
+// mutating tunnel endpoint; status stays quiet (polled constantly).
+function tunnelCaller(req: IncomingMessage): string {
+  const ua = String(req.headers["user-agent"] ?? "-");
+  const origin = String(req.headers.origin ?? "-");
+  const xff = String(req.headers["x-forwarded-for"] ?? "-");
+  const remote = req.socket.remoteAddress ?? "-";
+  return `caller=${remote} xff=${xff} origin=${origin} ua=${ua.slice(0, 120)}`;
+}
+
 export function createTunnelManagementRoutes(tunnelManager: TunnelManager, deps: ControllerHttpDeps): readonly RouteDef[] {
   const { config, logger } = deps;
 
@@ -161,6 +174,7 @@ export function createTunnelManagementRoutes(tunnelManager: TunnelManager, deps:
         if (!tunnelStartAllowedFrom(req, res)) {
           return;
         }
+        logger.info(`TeamClaw tunnel: start requested (${tunnelCaller(req)})`);
         const authStatus = await getGithubAuthManager(config, logger).getStatus();
         const account = authStatus.account;
         if (!account?.login) { sendError(res, 401, "GitHub login required to share a tunnel"); return; }
@@ -180,6 +194,7 @@ export function createTunnelManagementRoutes(tunnelManager: TunnelManager, deps:
         if (!tunnelStartAllowedFrom(req, res)) {
           return;
         }
+        logger.info(`TeamClaw tunnel: start-self-hosted requested (${tunnelCaller(req)})`);
         let token = "";
         try {
           const body = await readFormBody(req) as { token?: unknown };
@@ -202,6 +217,7 @@ export function createTunnelManagementRoutes(tunnelManager: TunnelManager, deps:
         if (!tunnelStartAllowedFrom(req, res)) {
           return;
         }
+        logger.info(`TeamClaw tunnel: start-quick requested (${tunnelCaller(req)})`);
         const r = tunnelManager.startQuick();
         if (!r.launched) { sendError(res, 400, r.error ?? "failed to start quick tunnel"); return; }
         sendJson(res, 202, { launched: true, status: tunnelManager.status() });
@@ -210,7 +226,8 @@ export function createTunnelManagementRoutes(tunnelManager: TunnelManager, deps:
     {
       method: "POST",
       path: "/api/v1/tunnel/stop",
-      handler: async ({ res }) => {
+      handler: async ({ req, res }) => {
+        logger.warn(`TeamClaw tunnel: STOP requested (${tunnelCaller(req)})`);
         await tunnelManager.stop();
         sendJson(res, 200, tunnelManager.status());
       },
