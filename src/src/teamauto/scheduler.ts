@@ -173,6 +173,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
    */
   function markWritebackFailure(store: TeamAutoStore, entry: TeamAutoWriteBack, message: string, options: { terminal?: boolean } = {}): void {
     entry.error = message;
+    entry.inFlightAt = undefined; // #269: failed dispatch releases the intent
     entry.attempts = (entry.attempts ?? 0) + 1;
     entry.lastErrorAt = Date.now();
     entry.nextAttemptAt = writebackRetryDueAt(entry.attempts, entry.lastErrorAt);
@@ -648,8 +649,26 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
   }
 
   // ---------- write-back reconciler ----------
-
+  // #269: the 20s interval fires `void reconcileWritebacks()` fire-and-forget,
+  // and a slow delivery (worktree ensure + commit + PR > 20s) let the next
+  // tick re-read the same pending entries before doneAt landed - same
+  // comment delivered twice (ggcode#5480, byte-identical pair). Two-layer
+  // fix: serialize the whole pass (guard below) + intent-first inFlightAt
+  // persisted BEFORE dispatch so even a concurrent caller cannot re-send.
+  let reconcileInFlight = false;
   async function reconcileWritebacks(): Promise<void> {
+    if (reconcileInFlight) {
+      return; // a pass is still delivering - never overlap (#269)
+    }
+    reconcileInFlight = true;
+    try {
+      await doReconcileWritebacks();
+    } finally {
+      reconcileInFlight = false;
+    }
+  }
+
+  async function doReconcileWritebacks(): Promise<void> {
     const s = await ensureStore();
     const state0 = deps.getTeamState();
     // Dead letters: entries whose task is gone or failed without a result can
@@ -703,7 +722,14 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         }
       }
     }
-    const pending = s.writebacks.filter((w) => !w.doneAt && !w.error && !w.failedAt);
+    // #269: reset stale in-flight intents (crashed mid-dispatch) so they
+    // re-enter the pending set instead of wedging forever.
+    for (const w of s.writebacks) {
+      if (w.inFlightAt && !w.doneAt && Date.now() - w.inFlightAt > 600_000) {
+        w.inFlightAt = undefined;
+      }
+    }
+    const pending = s.writebacks.filter((w) => !w.doneAt && !w.error && !w.failedAt && !w.inFlightAt);
     if (!pending.length) {
       return;
     }
@@ -712,6 +738,11 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       return;
     }
     for (const entry of pending) {
+      // #269 intent-first: persist the dispatch intent BEFORE any await so
+      // an overlapping pass (or a future guard-less caller) filters this
+      // entry out instead of re-delivering it.
+      entry.inFlightAt = Date.now();
+      await saveTeamAutoStore(s);
       const task = state.tasks[entry.taskId];
       if (!task || (task.status !== "completed" && task.status !== "failed")) {
         continue;
@@ -778,6 +809,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           if (entry.action === "issueComment" && entry.targetId) {
             await client.postIssueComment(owner, name, entry.targetId, body);
             entry.doneAt = Date.now();
+            entry.inFlightAt = undefined;
             writebackDone = true;
             // Our own comment bumps the issue's updatedAt, which the scanner
             // treats as new activity - advance the seen cursor so we do not
@@ -790,6 +822,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           } else if (entry.action === "prComment" && entry.targetId) {
             await client.postPullReviewComment(owner, name, entry.targetId, body);
             entry.doneAt = Date.now();
+            entry.inFlightAt = undefined;
             writebackDone = true;
             const prRepo = s.repos.find((r) => r.id === entry.repoId);
             if (prRepo) {
@@ -806,6 +839,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
                 await client.postIssueComment(owner, name, umbrella.targetId, sectionBody);
                 entry.targetId = umbrella.targetId;
                 entry.doneAt = Date.now();
+            entry.inFlightAt = undefined;
                 writebackDone = true;
               } else if (entry.targetId == null) {
                 const number = await client.createIssue(
@@ -817,12 +851,14 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
                 );
                 entry.targetId = number;
                 entry.doneAt = Date.now();
+            entry.inFlightAt = undefined;
                 writebackDone = true;
               }
             } else {
               const number = await client.createIssue(owner, name, `[teamclaw:${role}] ${task.title.replace(/^\[[^\]]+\]\s*/, "")}`, sectionBody, ["teamclaw"]);
               entry.targetId = number;
               entry.doneAt = Date.now();
+            entry.inFlightAt = undefined;
               writebackDone = true;
             }
           } else {

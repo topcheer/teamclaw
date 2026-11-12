@@ -105,6 +105,11 @@ export type TeamAutoWriteBack = {
   lastErrorAt?: number;
   /** Epoch ms when the next retry becomes due (exponential backoff gate). */
   nextAttemptAt?: number;
+  /** #269: set (and persisted) BEFORE dispatch starts so overlapping
+   * reconcile passes can see the in-flight intent; cleared on success
+   * (doneAt) or failure (error/nextAttemptAt). A crashed process can
+   * leave it stale - reconciles older than 10 minutes are reset. */
+  inFlightAt?: number;
   /** Terminal marker: set when retry attempts are exhausted; never retried again. */
   failedAt?: number | null;
 };
