@@ -54,9 +54,16 @@
     },
     "win": {
       "icon": "build/icon.ico",
+      "asar": true,
       "target": [
         "nsis"
-      ]
+      ],
+      "nsis": {
+        "oneClick": false,
+        "allowToChangeInstallationDirectory": true,
+        "perMachine": false,
+        "include": "build/installer.nsh"
+      }
     },
     "linux": {
       "icon": "build/icon.png",
