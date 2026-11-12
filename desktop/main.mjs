@@ -689,6 +689,14 @@ async function ensureOpenClawRuntime({ source, artifactUrl }, onEvent) {
   }
   const bundled = bundledBinary("openclaw");
   if (bundled) {
+    // Self-heal the Windows .cmd shim before returning it: its body embeds an
+    // ABSOLUTE electronPath, and an upgrade/reinstall (old tree removed or
+    // replaced) leaves the previously written shim pointing at a dead exe -
+    // the first-run wizard then dies with cmd's "path not found" (user-found
+    // 2026-11-12). Rewriting costs nothing and always matches THIS process.
+    if (process.platform === "win32" && EXTRACTED_RUNTIME_DIR) {
+      makeOpenclawShim(EXTRACTED_RUNTIME_DIR, process.execPath);
+    }
     onEvent({ phase: "openclaw", line: "Using bundled OpenClaw runtime: " + bundled });
     return bundled;
   }
