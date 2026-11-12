@@ -54,7 +54,6 @@
     },
     "win": {
       "icon": "build/icon.ico",
-      "asar": true,
       "target": [
         "nsis"
       ],
@@ -92,7 +91,8 @@
       "signIgnore": [
         "\\.lproj/locale\\.pak$"
       ]
-    }
+    },
+    "asar": true
   },
   "devDependencies": {
     "electron": "^45.2.2",
