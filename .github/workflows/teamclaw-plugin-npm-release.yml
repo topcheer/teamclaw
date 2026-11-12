@@ -5,16 +5,15 @@ name: TeamClaw Plugin NPM Release
 # - Workflow file: .github/workflows/teamclaw-plugin-npm-release.yml
 
 on:
+  # Releases fire ONLY on tags and explicit dispatch. Plain main pushes used
+  # to trigger this workflow too (paths src/**) - every code change then ran
+  # the full release pipeline just to hit the already-published guard, so
+  # ordinary commits showed up as (at best) pointless green runs and (at
+  # worst, when the guard predated the skip fix) red ones. Publishing from a
+  # push is also wrong semantically: a release is a deliberate act.
   push:
-    branches:
-      - main
     tags:
       - "v*"
-    paths:
-      - ".github/workflows/teamclaw-plugin-npm-release.yml"
-      - "src/**"
-      - "scripts/teamclaw-package-check.mjs"
-      - "scripts/teamclaw-npm-publish.sh"
   workflow_dispatch:
     inputs:
       ref:

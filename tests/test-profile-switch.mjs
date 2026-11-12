@@ -325,9 +325,17 @@ async function waitForSwitchCompletion(call, timeoutMs = 10000) {
     assert.equal(settled.teamName, "Minimal Bank Team", "new teamName comes from the new profile");
     assert.equal(settled.profile.roles[0].id, "credit-officer");
 
-    // WS event contract (Phase 2.2).
+    // WS event contract (Phase 2.2). The completed broadcast is emitted at
+    // the tail of the settle path: the completion poll above can observe the
+    // settled state a tick BEFORE the broadcast lands in wsEvents. On slow CI
+    // runners that window widens and an immediate find() flakes (observed on
+    // the 2026.11.2 release run). Poll the event buffer briefly instead.
     const started = scenario.wsEvents.find((event) => event.type === "team.switch_started");
-    const completed = scenario.wsEvents.find((event) => event.type === "team.switch_completed");
+    let completed = null;
+    for (let i = 0; i < 40 && !completed; i++) {
+      completed = scenario.wsEvents.find((event) => event.type === "team.switch_completed");
+      if (!completed) await new Promise((resolve) => setTimeout(resolve, 25));
+    }
     assert.ok(started, "team.switch_started must be broadcast");
     assert.deepEqual(
       { profileId: started.data.profileId, previousProfileId: started.data.previousProfileId },
