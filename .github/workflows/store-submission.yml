@@ -129,6 +129,14 @@ jobs:
           # submission POST/PATCH). Reuses the ggcode submission script shape;
           # see desktop/msstore/README.md for the endpoint sequence.
           if (-not (Test-Path scripts/release/store-submit.ps1)) {
-            throw "scripts/release/store-submit.ps1 not implemented yet - see desktop/msstore/README.md roadmap"
+            throw "scripts/release/store-submit.ps1 missing"
           }
-          .\scripts\release\store-submit.ps1 -Version $env:PACKAGE_VERSION -Notes $env:RELEASE_NOTES -Product $env:STORE_PRODUCT_ID
+          # ggcode-proven script shape: it takes AAD creds + package dir and
+          # walks create-or-resume -> zip upload to SAS -> body normalize
+          # (pricing/deviceFamilies) -> commit -> status poll.
+          $pkgDir = "desktop\dist"
+          if (-not (Test-Path $pkgDir)) { $pkgDir = "dist-msstore" }
+          .\scripts\release\store-submit.ps1 `
+            -TenantId $env:STORE_TENANT_ID -ClientId $env:STORE_CLIENT_ID `
+            -ClientSecret $env:STORE_CLIENT_SECRET -ProductId $env:STORE_PRODUCT_ID `
+            -PackageDir $pkgDir -ReleaseNotes $env:RELEASE_NOTES
