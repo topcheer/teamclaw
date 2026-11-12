@@ -126,7 +126,12 @@ async function sourceContracts() {
   assert.match(scheduler, /const failClass = classifySweepError\(err\);/,
     "failure path classifies the error before writing reason/activity");
   assert.match(scheduler, /repo\.pausedReason = `sweep failed\[\$\{failClass\}\]: /,
-    "pausedReason carries the class while keeping the isAutoPause 'sweep failed:' prefix");
+    "pausedReason carries the class in the 'sweep failed[class]:' form");
+  // #267-1 regression pin (found in re-verification): isAutoPause must match
+  // BOTH forms - the class tag silently broke startsWith("sweep failed:")
+  // and re-broke the cooldown contract (permanent pauses again).
+  assert.match(scheduler, /reason\.startsWith\("sweep failed:"\) \|\| reason\.startsWith\("sweep failed\["\)/,
+    "isAutoPause matches legacy and class-tagged failure reasons");
 
   // #267-2: bounded per-repo sweep ring on both outcomes.
   assert.match(scheduler, /pushSweepRecord\(repo, \{ at: Date\.now\(\), ok: true,/, "success sweeps are recorded per-repo");
@@ -285,7 +290,14 @@ async function unitTests() {
   assert.equal(schedMod2.sweepBackoffMinutes(3), 120, "third failure backs off to 120 minutes");
   assert.equal(schedMod2.sweepBackoffMinutes(9), 240, "backoff caps at 240 minutes");
   assert.equal(schedMod2.sweepRetryDueAt(1, 1_000_000), 1_000_000 + 30 * 60_000, "retry due = last error + backoff");
-  assert.equal(schedMod2.isAutoPause("sweep failed: fetch failed"), true, "sweep failures are auto-pauses");
+  assert.equal(schedMod2.isAutoPause("sweep failed: fetch failed"), true, "legacy sweep failures are auto-pauses");
+  // #267-1 regression (found in re-verification): the class-tagged form
+  // `sweep failed[auth]: …` must ALSO be an auto-pause - the merged fix
+  // shipped isAutoPause matching only the legacy prefix, which silently
+  // disabled both the recovery cleanup and the backoff retry gate.
+  assert.equal(schedMod2.isAutoPause("sweep failed[auth]: Bad credentials"), true, "class-tagged sweep failures (auth) are auto-pauses");
+  assert.equal(schedMod2.isAutoPause("sweep failed[ratelimited]: secondary rate limit"), true, "class-tagged sweep failures (ratelimited) are auto-pauses");
+  assert.equal(schedMod2.isAutoPause("sweep failed[network]: fetch failed"), true, "class-tagged sweep failures (network) are auto-pauses");
   assert.equal(schedMod2.sweepRetryDueAt(2, 1_000_000), 1_000_000 + 60 * 60_000, "failure backoff table stays consistent");
   assert.equal(schedMod2.isAutoPause("disabled by user"), false, "user pauses are never auto-cleared");
   assert.equal(schedMod2.isAutoPause(null), false, "null pause is healthy");

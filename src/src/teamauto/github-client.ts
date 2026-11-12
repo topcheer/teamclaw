@@ -57,7 +57,8 @@ export function createGithubClient(auth: GithubAuthManager) {
   // #267-3: cumulative API-call counters; runSweep reads etagStats() before/
   // after each sweep and stores the DELTA on the repo's sweep record, so the
   // shared client still yields correct per-repo attribution (sweeps are
-  // serialized by the sweeping set).
+  // serialized by the sweeping set). "hits" counts REAL 304 responses (the
+  // etag saved a full payload) - fresh 2xx fetches only count in `calls`.
   const etagCounters = { calls: 0, hits: 0 };
   async function request(
     method: string,
@@ -90,6 +91,7 @@ export function createGithubClient(auth: GithubAuthManager) {
       }
     }
     if (response.status === 304) {
+      etagCounters.hits += 1; // #267-3: a 304 IS the hit
       return { status: 304, data: null, notModified: true };
     }
     const text = await response.text();
@@ -104,9 +106,6 @@ export function createGithubClient(auth: GithubAuthManager) {
     if (!response.ok) {
       const message = (data as { message?: string } | null)?.message ?? `HTTP ${response.status}`;
       throw new GithubClientError(message, response.status);
-    }
-    if (response.status >= 200 && response.status < 300) {
-      etagCounters.hits += 1; // #267-3: "hits" = calls that returned fresh data (non-304 successes)
     }
     return { status: response.status, data, notModified: false };
   }

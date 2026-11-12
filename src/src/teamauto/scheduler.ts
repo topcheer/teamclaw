@@ -146,7 +146,14 @@ export function classifySweepError(err: unknown): "auth" | "ratelimited" | "netw
 
 /** Auto-pauses (set by the sweep catch block) are cooldowns; user pauses are not. */
 export function isAutoPause(reason: string | null | undefined): boolean {
-  return !!reason && reason.startsWith("sweep failed:");
+  // #267-1 regression (found in re-verification): fail-class tagging changed
+  // the reason to `sweep failed[class]: …`, which the old
+  // startsWith("sweep failed:") no longer matched - the recovery cleanup and
+  // the backoff retry gate both key off this predicate, so every failed
+  // sweep paused its repo FOREVER again. Match both the legacy and the
+  // class-tagged form; match ANY class so future classifySweepError values
+  // cannot reintroduce the same hole.
+  return !!reason && (reason.startsWith("sweep failed:") || reason.startsWith("sweep failed["));
 }
 
 export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
