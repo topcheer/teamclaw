@@ -34,3 +34,20 @@ npx electron-builder --win appx --x64 --config.win.appx.identityName=<IDENTITY_N
 ## 与 GitHub release 的关系
 
 desktop-release.yml（desktop-latest）出的 NSIS 安装器继续作为直发渠道；Store 渠道是独立的 MSIX 包，两者共存不冲突。macOS 侧已在同 workflow 里加 Developer ID 签名 + 公证（凭据缺失时自动降级 unsigned）。
+
+## CI pipelines (2026-11-12)
+
+- `.github/workflows/store-submission.yml` — manual dispatch. Builds the
+  MSIX (electron-builder appx; identity/publisher injected from secrets)
+  and, with `submit=true`, hands it to the Store Submission API.
+- Until these exist, the workflow fails fast at the guard step:
+  1. Register the app in Partner Center (reserve the name, note the
+     Identity Name + Publisher from the product identity page).
+  2. Create an Azure AD app + key for the Submission API (tenant/client).
+  3. Fill repo secrets: STORE_TENANT_ID, STORE_CLIENT_ID,
+     STORE_CLIENT_SECRET, STORE_PRODUCT_ID, MSSTORE_IDENTITY_NAME,
+     MSSTORE_PUBLISHER.
+  4. Implement scripts/release/store-submit.ps1 (endpoint sequence:
+     token -> packages flight upload -> submissions POST -> PATCH commit;
+     model on topcheer/ggcode scripts/release/store-submit.ps1).
+- First run: dispatch with submit=false to validate the MSIX build only.

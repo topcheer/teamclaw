@@ -1,0 +1,210 @@
+name: Release Mac App Store (production submit)
+
+# Dedicated MAS pipeline for TeamClaw Desktop, adapted from ggcode's proven
+# deploy-mas.yml (three ASC-VALID builds on 2026-11-06). Differences:
+#   - Electron packaging (electron-builder mas+pkg) instead of Wails:
+#     Apple Distribution identity resolved via CSC_NAME (no cert-type prefix)
+#     + CSC_KEYCHAIN pinning; the .pkg target signs with the 3rd Party
+#     Mac Developer Installer identity from the same keychain.
+#   - Provisioning profile decoded from APPLE_MAS_PROFILE_BASE64 (bundle id
+#     dev.ggcode.teamclaw, profile "TeamClaw Desktop MAS") into
+#     build/embedded.provisionprofile, referenced by build.mas config.
+#   - altool --upload-app (the form that works; --upload-package needs the
+#     ASC app resource id, see ggcode run notes) + reviewSubmissions flow in
+#     scripts/release/mas-submit-review.sh (with required aud claim).
+
+# Production lane: unlike deploy-mas.yml (external-beta upload by default),
+# this workflow ALWAYS submits the validated build for App Review via
+# scripts/release/mas-submit-review.sh. Tag pushes go to the beta lane;
+# promote to production by dispatching this workflow on the release tag/SHA.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag or SHA to build from (defaults to the branch you dispatch on)"
+        required: false
+        default: ""
+
+concurrency:
+  group: release-mas-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  submit-mas:
+    name: Build, sign and submit TeamClaw Desktop (MAS)
+    runs-on: macos-latest
+    timeout-minutes: 120
+    env:
+      APPLE_MAC_INSTALLER_P12: ${{ secrets.APPLE_MAC_INSTALLER_P12 }}
+      APPLE_MAC_INSTALLER_P12_PASSWORD: ${{ secrets.APPLE_MAC_INSTALLER_P12_PASSWORD }}
+      APPLE_MAS_DISTRIBUTION_P12: ${{ secrets.APPLE_MAS_DISTRIBUTION_P12 }}
+      APPLE_MAS_DISTRIBUTION_P12_PASSWORD: ${{ secrets.APPLE_MAS_DISTRIBUTION_P12_PASSWORD }}
+      APPLE_MAS_PROFILE_BASE64: ${{ secrets.APPLE_MAS_PROFILE_BASE64 }}
+      APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install desktop toolchain
+        run: npm ci
+        working-directory: desktop
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghcActions 2>/dev/null || true
+          df -h /
+
+      - name: Derive build version (single source of truth)
+        shell: bash
+        run: |
+          # One value feeds CFBundleVersion (electron-builder -c.buildVersion),
+          # altool identity checks AND the submit script's build poll.
+          # Date+HHMMSS keeps builds monotonic and unique per run - a plain
+          # date+"NN" collides with any manual upload of the same day.
+          echo "MAS_BUILD_VERSION=$(date -u +%Y%m%d%H%M%S)" >> "${GITHUB_ENV}"
+          SHORT=$(node -p "require('./desktop/package.json').version")
+          if ! printf '%s' "$SHORT" | grep -qE '^[0-9]+(\.[0-9]+){0,2}$'; then
+            echo "::error::package.json version '$SHORT' is not a numeric short version"; exit 1
+          fi
+          echo "MAS_SHORT_VERSION=${SHORT}" >> "${GITHUB_ENV}"
+          echo "short version: ${SHORT}, build: timestamp"
+
+      - name: Guard - MAS secrets configured?
+        shell: bash
+        run: |
+          if [[ -z "${APPLE_MAC_INSTALLER_P12}" || -z "${APPLE_MAS_DISTRIBUTION_P12}" || -z "${APPLE_MAS_PROFILE_BASE64}" || -z "${APPLE_API_KEY_ID}" ]]; then
+            echo "::error::MAS secrets not configured (need APPLE_MAC_INSTALLER_P12, APPLE_MAS_DISTRIBUTION_P12, APPLE_MAS_PROFILE_BASE64, APPLE_API_KEY_ID/P8, APPLE_API_ISSUER_ID)"; exit 1
+          fi
+
+      - name: Prepare MAS signing credentials (canonical temp keychain)
+        shell: bash
+        run: |
+          set -x
+          # Proven recipe (ggcode DMG lane + deploy-mas): dedicated temp
+          # keychain, import -A, partition-list keyed by ITS OWN password.
+          # The login-keychain route hangs headless runners (GUI prompt).
+          KEYCHAIN="${RUNNER_TEMP}/signing.keychain-db"
+          KEYCHAIN_PASSWORD="ci-$(date +%s)"
+          echo "KC_PATH=${KEYCHAIN}" >> "${GITHUB_ENV}"
+          echo "KC_PASSWORD=${KEYCHAIN_PASSWORD}" >> "${GITHUB_ENV}"
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}"
+          set +x
+          printf '%s' "${APPLE_MAS_DISTRIBUTION_P12}" | base64 -d > "${RUNNER_TEMP}/dist.p12"
+          printf '%s' "${APPLE_MAC_INSTALLER_P12}" | base64 -d > "${RUNNER_TEMP}/installer.p12"
+          security import "${RUNNER_TEMP}/dist.p12" -P "${APPLE_MAS_DISTRIBUTION_P12_PASSWORD}" \
+            -A -t cert -f pkcs12 -k "${KEYCHAIN}" || { echo "::error::distribution p12 import failed"; exit 1; }
+          security import "${RUNNER_TEMP}/installer.p12" -P "${APPLE_MAC_INSTALLER_P12_PASSWORD}" \
+            -A -t cert -f pkcs12 -k "${KEYCHAIN}" || { echo "::error::installer p12 import failed"; exit 1; }
+          set -x
+          # WWDR G3 intermediate: Apple Distribution chains through it, and the
+          # import is idempotent-tolerant (duplicate import exits nonzero).
+          security import "${GITHUB_WORKSPACE}/desktop/scripts/certs/AppleWWDRCAG3.pem" -k "${KEYCHAIN}" -T /usr/bin/codesign 2>&1 | grep -v "already exists" || true
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN}" 2>&1 | tail -2
+          security list-keychains -d user -s "${KEYCHAIN}" login.keychain-db 2>/dev/null || true
+          security find-identity -v -p codesigning "${KEYCHAIN}"
+          # Fail-loud identity gate: both MAS identities must resolve HERE.
+          security find-identity -v -p codesigning "${KEYCHAIN}" | grep -q "Apple Distribution" || { echo "::error::Apple Distribution identity missing"; exit 1; }
+          # Installer identities are NOT listed under the codesigning policy
+          # (verified: find-identity -p codesigning shows 0 for installer
+          # certs, unfiltered shows 1) - gate on the unfiltered list, which
+          # is exactly what @electron/osx-sign uses to resolve identities.
+          security find-identity -v "${KEYCHAIN}" | grep -q "3rd Party Mac Developer Installer" || { echo "::error::Installer identity missing"; exit 1; }
+          # Probe sign before the 10-minute real build: catches ACL problems
+          # cheaply (ggcode run-3 lesson).
+          set +x
+          PROBE_BIN="${RUNNER_TEMP}/probe.bin"
+          printf '#!/bin/sh\n' > "${PROBE_BIN}"; chmod +x "${PROBE_BIN}"
+          perl -e 'alarm 60; exec @ARGV' codesign -f -vvv -s "Apple Distribution: Junjun Zhang (EGZFS7M525)" --keychain "${KEYCHAIN}" "${PROBE_BIN}" \
+            || { echo "::error::PROBE SIGN FAILED - key access problem, see codesign output above"; exit 1; }
+          echo "probe sign OK"
+
+      - name: Stage runtime + decode profile
+        shell: bash
+        working-directory: desktop
+        run: |
+          node scripts/prepare-bundle.mjs
+          printf '%s' "${APPLE_MAS_PROFILE_BASE64}" | base64 -d > build/embedded.provisionprofile
+          security cms -D -i build/embedded.provisionprofile 2>/dev/null | grep -q "dev.ggcode.teamclaw" \
+            || { echo "::error::decoded profile is not for dev.ggcode.teamclaw"; exit 1; }
+          echo "profile embedded"
+
+      - name: Package MAS app + pkg
+        shell: bash
+        working-directory: desktop
+        env:
+          CSC_NAME: Junjun Zhang (EGZFS7M525)
+          CSC_KEYCHAIN: ${{ env.KC_PATH }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "true"
+        run: |
+          sudo sysctl -w kern.maxfiles=65536 kern.maxfilesperproc=65536 || true
+          ulimit -n 65536 2>/dev/null || ulimit -n hard 2>/dev/null || true
+          echo "fd limits: soft=$(ulimit -Sn) hard=$(ulimit -Hn)"
+          security unlock-keychain -p "${KC_PASSWORD}" "${KC_PATH}" 2>&1 || { echo "::error::re-unlock failed"; exit 1; }
+          # No APPLE_API_* here: MAS apps are not notarized, and their
+          # presence would trip electron-builder's notarize env validation.
+          # -c.mac.notarize=false is REQUIRED even though build.mas.notarize
+          # is false: targets/pkg.js:87 calls notarizeIfProvided after
+          # productbuild, and that reads config.MAC (mas is a target of the
+          # mac platform, not its own platform config) - with mac.notarize
+          # true (DMG lane) and APPLE_API_KEY_ID set job-wide, its
+          # any-but-not-all env validation aborts after the 22-min sign.
+          npx electron-builder --mac mas -c.buildVersion="${MAS_BUILD_VERSION}" -c.mac.notarize=false
+          find dist -name "*.pkg" -maxdepth 2 -exec ls -l {} +
+
+      - name: Locate package
+        shell: bash
+        working-directory: desktop
+        run: |
+          # find (not ls): under `set -o pipefail`, a non-matching ls pattern
+          # exits 2 and kills the pipeline before head can pick the match.
+          PKG=$(find dist -name "*.pkg" -maxdepth 2 | head -1)
+          [[ -n "${PKG}" ]] || { echo "::error::no .pkg produced"; exit 1; }
+          echo "PKG_PATH=${GITHUB_WORKSPACE}/desktop/${PKG}" >> "${GITHUB_ENV}"
+          echo "pkg: ${PKG}"
+
+      - name: Validate package (altool)
+        shell: bash
+        run: |
+          mkdir -p ~/private_keys
+          # Secret may be raw p8 or base64; normalise.
+          if printf '%s' "${APPLE_API_KEY_P8}" | head -c 32 | grep -q "BEGIN"; then
+            printf '%s\n' "${APPLE_API_KEY_P8}" > ~/private_keys/AuthKey_"${APPLE_API_KEY_ID}".p8
+          else
+            printf '%s' "${APPLE_API_KEY_P8}" | base64 -d > ~/private_keys/AuthKey_"${APPLE_API_KEY_ID}".p8
+          fi
+          grep -q "BEGIN PRIVATE KEY" ~/private_keys/AuthKey_"${APPLE_API_KEY_ID}".p8 || { echo "::error::p8 malformed"; exit 1; }
+          xcrun altool --validate-app -f "${PKG_PATH}" -t macOS \
+            --apiKey "${APPLE_API_KEY_ID}" --apiIssuer "${APPLE_API_ISSUER_ID}"
+
+      - name: Upload package (altool --upload-app)
+        shell: bash
+        run: |
+          xcrun altool --upload-app -f "${PKG_PATH}" -t macOS \
+            --apiKey "${APPLE_API_KEY_ID}" --apiIssuer "${APPLE_API_ISSUER_ID}"
+
+      - name: Poll processing and submit for review
+        shell: bash
+        continue-on-error: true
+        run: |
+          chmod +x scripts/release/mas-submit-review.sh
+          ARGS=(--bundle-id dev.ggcode.teamclaw --version "${MAS_SHORT_VERSION}"
+                --build "${MAS_BUILD_VERSION}" --platform MAC_OS
+                --key-path ~/private_keys/AuthKey_"${APPLE_API_KEY_ID}".p8
+                --key-id "${APPLE_API_KEY_ID}" --issuer "${APPLE_API_ISSUER_ID}"
+                --max-wait 40)
+          if [[ "true" != "true" ]]; then
+            ARGS+=(--no-submit)
+          fi
+          ./scripts/release/mas-submit-review.sh "${ARGS[@]}"
+
+      - name: Cleanup keychain
+        if: always()
+        shell: bash
+        run: security delete-keychain "${KC_PATH}" 2>/dev/null || true

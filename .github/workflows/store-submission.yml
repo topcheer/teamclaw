@@ -1,0 +1,134 @@
+name: store-submission
+
+# Build the MSIX package and submit it to Microsoft Store certification
+# via the official Store Submission API. Manual trigger only - each
+# submission enters the multi-day certification pipeline.
+#
+# Modeled on topcheer/ggcode store-submission.yml, adapted for the
+# TeamClaw Electron desktop (electron-builder appx target).
+#
+# Required repo secrets (see desktop/msstore/README.md for one-time setup):
+#   STORE_TENANT_ID / STORE_CLIENT_ID / STORE_CLIENT_SECRET / STORE_PRODUCT_ID
+#   MSSTORE_IDENTITY_NAME / MSSTORE_PUBLISHER        (Partner Center identity)
+# Optional:
+#   STORE_SUBMISSION_CONFIG (JSON overrides: markets, notes...)
+#
+# Until the Partner Center app identity exists, the guard step fails fast
+# with setup instructions instead of building an unusable package.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Four-part package version (e.g. 0.1.4.0); defaults to desktop/package.json + .0"
+        required: false
+        default: ""
+      release_notes:
+        description: "What's new notes (optional, en-US)"
+        required: false
+        default: ""
+      submit:
+        description: "Submit for certification after build (false = build-only dry run)"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-submit:
+    name: Build MSIX + submit to Store
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.22.1"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Guard - Store identity + credentials configured?
+        shell: bash
+        env:
+          STORE_TENANT_ID: ${{ secrets.STORE_TENANT_ID }}
+          STORE_CLIENT_ID: ${{ secrets.STORE_CLIENT_ID }}
+          STORE_CLIENT_SECRET: ${{ secrets.STORE_CLIENT_SECRET }}
+          STORE_PRODUCT_ID: ${{ secrets.STORE_PRODUCT_ID }}
+          MSSTORE_IDENTITY_NAME: ${{ secrets.MSSTORE_IDENTITY_NAME }}
+          MSSTORE_PUBLISHER: ${{ secrets.MSSTORE_PUBLISHER }}
+        run: |
+          missing=0
+          for v in STORE_TENANT_ID STORE_CLIENT_ID STORE_CLIENT_SECRET STORE_PRODUCT_ID MSSTORE_IDENTITY_NAME MSSTORE_PUBLISHER; do
+            if [ -z "${!v}" ]; then echo "::error::secret $v is not configured"; missing=1; fi
+          done
+          if [ "$missing" = "1" ]; then
+            echo "::error::Store submission is not set up yet. Register the app in Partner Center, then fill the six secrets listed in the workflow header (see desktop/msstore/README.md)."
+            exit 1
+          fi
+          echo "Store identity + credentials present."
+
+      - name: Resolve version (desktop/package.json -> four-part)
+        id: ver
+        shell: pwsh
+        run: |
+          $v = "${{ github.event.inputs.version }}"
+          if (-not $v) { $v = (Get-Content desktop/package.json | ConvertFrom-Json).version }
+          if ($v -notmatch '^\d+\.\d+\.\d+(\.\d+)?$') { throw "unparseable version: $v" }
+          if ($v.Split('.').Count -eq 3) { $v = "$v.0" }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Install desktop deps + stage runtime
+        shell: pwsh
+        run: |
+          npm ci --prefix desktop
+          npm --prefix desktop run stage:runtime --if-present
+
+      - name: Build MSIX (electron-builder appx)
+        shell: pwsh
+        env:
+          MSSTORE_IDENTITY_NAME: ${{ secrets.MSSTORE_IDENTITY_NAME }}
+          MSSTORE_PUBLISHER: ${{ secrets.MSSTORE_PUBLISHER }}
+        run: |
+          # electron-builder reads identity/publisher for the appx target from
+          # package.json build.win; inject from secrets so the repo never
+          # carries the real identity before Partner Center registration.
+          node -e "
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('desktop/package.json', 'utf8'));
+            p.build = p.build || {};
+            p.build.win = p.build.win || {};
+            p.build.win.identityName = process.env.MSSTORE_IDENTITY_NAME;
+            p.build.win.publisher = process.env.MSSTORE_PUBLISHER;
+            p.build.win.publish = p.build.win.publish || [];
+            fs.writeFileSync('desktop/package.json', JSON.stringify(p, null, 2) + '\n');
+          "
+          npx --prefix desktop electron-builder --win appx --publish never
+          Get-ChildItem dist-msstore, desktop\dist -Filter *.appx -Recurse | Select-Object -First 3
+
+      - name: Upload MSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: teamclaw-msix-${{ steps.ver.outputs.version }}
+          path: |
+            desktop/dist/*.appx
+            dist-msstore/*.appx
+          if-no-files-found: error
+
+      - name: Submit to Microsoft Store
+        if: github.event.inputs.submit == 'true'
+        shell: pwsh
+        env:
+          STORE_TENANT_ID: ${{ secrets.STORE_TENANT_ID }}
+          STORE_CLIENT_ID: ${{ secrets.STORE_CLIENT_ID }}
+          STORE_CLIENT_SECRET: ${{ secrets.STORE_CLIENT_SECRET }}
+          STORE_PRODUCT_ID: ${{ secrets.STORE_PRODUCT_ID }}
+          PACKAGE_VERSION: ${{ steps.ver.outputs.version }}
+          RELEASE_NOTES: ${{ github.event.inputs.release_notes }}
+        run: |
+          # Store Submission API (OAuth client-credentials -> package upload ->
+          # submission POST/PATCH). Reuses the ggcode submission script shape;
+          # see desktop/msstore/README.md for the endpoint sequence.
+          if (-not (Test-Path scripts/release/store-submit.ps1)) {
+            throw "scripts/release/store-submit.ps1 not implemented yet - see desktop/msstore/README.md roadmap"
+          }
+          .\scripts\release\store-submit.ps1 -Version $env:PACKAGE_VERSION -Notes $env:RELEASE_NOTES -Product $env:STORE_PRODUCT_ID
