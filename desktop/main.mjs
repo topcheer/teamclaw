@@ -796,10 +796,21 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
   // Fully-offline registration when a bundled tree exists: install the
   // plugin from the EMBEDDED runtime tree (same tar shape) - no npm, no
   // network. Only falls back to npm when the bundle is absent.
+  // SOURCE PRIORITY (user-found on v6, 2026-11-12): the EXTRACTED runtime
+  // tree in userData/bundled/runtime first - CI packages ship bin/ with
+  // ONLY runtime.tgz, and any half-present unpacked bin/runtime subtree
+  // made the file: install point at a tree missing package.json (openclaw
+  // aborts: "extracted package missing package.json"). The extracted tree
+  // comes from the same tar (verified complete) and is what the shim runs.
   const bundledOpenclaw = bundledBinary("openclaw");
-  const bundledPlugin = bundledOpenclaw
-    ? path.join(BUNDLED_BIN_DIR(), "runtime", "node_modules", "@teamclaws", "teamclaw")
-    : null;
+  const pluginCandidates = [];
+  if (EXTRACTED_RUNTIME_DIR) {
+    pluginCandidates.push(path.join(EXTRACTED_RUNTIME_DIR, "node_modules", "@teamclaws", "teamclaw"));
+  }
+  if (bundledOpenclaw) {
+    pluginCandidates.push(path.join(BUNDLED_BIN_DIR(), "runtime", "node_modules", "@teamclaws", "teamclaw"));
+  }
+  const bundledPlugin = pluginCandidates.find((p) => fsSync.existsSync(path.join(p, "package.json"))) ?? null;
   if (bundledPlugin && fsSync.existsSync(bundledPlugin)) {
     onEvent({ phase: "teamclaw", line: "Registering the bundled TeamClaw plugin (offline)..." });
     await runShellStream(`"${openclawBin}" plugins install "file:${bundledPlugin}" --force --accept-capabilities`, runtimeDir, (line) =>
