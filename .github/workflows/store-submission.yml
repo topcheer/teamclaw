@@ -102,8 +102,9 @@ jobs:
             p.build.win.publish = p.build.win.publish || [];
             fs.writeFileSync('desktop/package.json', JSON.stringify(p, null, 2) + '\n');
           "
-          npx --prefix desktop electron-builder --win appx --publish never
-          Get-ChildItem dist-msstore, desktop\dist -Filter *.appx -Recurse | Select-Object -First 3
+          Set-Location desktop
+          npx electron-builder --win appx --publish never
+          Get-ChildItem dist -Filter *.appx | Select-Object -First 3
 
       - name: Upload MSIX artifact
         uses: actions/upload-artifact@v4
