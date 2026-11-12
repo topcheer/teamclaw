@@ -89,6 +89,49 @@ try {
   // Delivered entries leave the queue entirely (scheduler drops doneAt rows,
   // keep-last-500): an EMPTY writebacks array is the success end-state.
   assert.equal((end.writebacks || []).length, 0, "delivered entry exits the writeback queue (doneAt rows are dropped)");
+  // ── Contract 3 (per-target dedupe, delivery side, #269): two pending rows
+  // aimed at the SAME issue burst at most ONE comment per reconcile pass;
+  // the deferred row rides the next pass. The rows go into the fixture file
+  // BEFORE a fresh scheduler instance loads it (the scheduler caches the
+  // store after its first ensureStore, so external edits are invisible to
+  // the instance above - pre-fix residue is simulated at load time).
+  postCalls = 0;
+  teamState.tasks["task-dbl2"] = { ...teamState.tasks["task-dbl"], id: "task-dbl2" };
+  teamState.tasks["task-dbl3"] = { ...teamState.tasks["task-dbl"], id: "task-dbl3" };
+  await fs.promises.writeFile(storeFile, JSON.stringify({
+    ...end,
+    writebacks: [
+      { taskId: "task-dbl2", action: "issueComment", repoId: "acme/widget", targetId: 42, doneAt: null, prUrl: null, error: null },
+      { taskId: "task-dbl3", action: "issueComment", repoId: "acme/widget", targetId: 42, doneAt: null, prUrl: null, error: null },
+    ],
+  }), "utf8");
+  const scheduler2 = schedMod.createTeamAutoScheduler({
+    logger: noopLogger,
+    auth: { getAuthHeaders: async () => ({ Authorization: "Bearer test" }) },
+    getTeamState: () => teamState,
+    updateTeamState: (fn) => { fn(teamState); return teamState; },
+    onTasksCreated: async () => {},
+  });
+  await scheduler2.reconcileWritebacks();
+  assert.equal(postCalls, 1, "same-target pending rows deliver at most one comment per pass");
+  const midB = await readStore();
+  assert.equal(midB.writebacks.length, 1, "one deferred same-target row remains for the next pass");
+  postCalls = 0;
+  await scheduler2.reconcileWritebacks();
+  assert.equal(postCalls, 1, "the deferred row delivers on the NEXT pass");
+  assert.equal((await readStore()).writebacks.length, 0, "queue drains after the second pass");
+
+  // ── Contract 4 (per-target dedupe, enqueue side, #269): re-registering
+  // the same target+action while undelivered is skipped; a different target
+  // still enqueues.
+  scheduler2.registerWriteback("task-enq-a", "issueComment", "acme/widget", 42);
+  scheduler2.registerWriteback("task-enq-b", "issueComment", "acme/widget", 42); // duplicate target+action
+  scheduler2.registerWriteback("task-enq-c", "issueComment", "acme/widget", 43); // distinct target
+  await new Promise((r) => setTimeout(r, 150)); // registerWriteback persists async
+  const enq = await readStore();
+  const enqTaskIds = enq.writebacks.map((w) => w.taskId).sort();
+  assert.deepEqual(enqTaskIds, ["task-enq-a", "task-enq-c"], "enqueue dedupes same target+action; distinct target enqueues");
+
   console.log("test-teamauto-writeback-guard: all assertions passed");
 } finally {
   globalThis.fetch = realFetch;

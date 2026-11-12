@@ -729,7 +729,23 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         w.inFlightAt = undefined;
       }
     }
-    const pending = s.writebacks.filter((w) => !w.doneAt && !w.error && !w.failedAt && !w.inFlightAt);
+    const pendingAll = s.writebacks.filter((w) => !w.doneAt && !w.error && !w.failedAt && !w.inFlightAt);
+    // #269 per-target dedupe (delivery side): cap at ONE entry per target
+    // key per pass, so N pending rows aimed at the same issue/PR cannot
+    // burst N same-second comments even if they somehow slipped the enqueue
+    // check (e.g. pre-fix stores). Deferred rows simply ride the next 20s
+    // pass. Null-target create* rows key on taskId: each is a distinct
+    // create intent and must never be merged.
+    const seenTarget = new Set<string>();
+    const pending = [];
+    for (const w of pendingAll) {
+      const key = w.targetId != null ? `${w.action}|${w.repoId}|${w.targetId}` : `${w.action}|${w.taskId}`;
+      if (seenTarget.has(key)) {
+        continue;
+      }
+      seenTarget.add(key);
+      pending.push(w);
+    }
     if (!pending.length) {
       return;
     }
@@ -886,6 +902,15 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
   function registerWriteback(taskId: string, action: "issueComment" | "prComment" | "createIssue" | "createPR", repoId: string, targetId: number | null, cycleKey?: string): void {
     void ensureStore().then((s) => {
       if (s.writebacks.some((w) => w.taskId === taskId)) {
+        return;
+      }
+      // #269 per-target dedupe (enqueue side): a second registration for
+      // the SAME target + action with no doneAt yet is a duplicate in the
+      // making - the delivery pass would fan out two comments onto one
+      // target. Skip it; the pending original still delivers the content.
+      // targetId null (create* actions) cannot be target-deduped pre-delivery
+      // and is excluded by the taskId check above.
+      if (targetId != null && s.writebacks.some((w) => w.targetId === targetId && w.repoId === repoId && w.action === action && !w.doneAt)) {
         return;
       }
       s.writebacks.push({ taskId, action, repoId, targetId, doneAt: null, prUrl: null, error: null, cycleKey });
