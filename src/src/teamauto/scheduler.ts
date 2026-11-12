@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import fs from "node:fs/promises";
 
 import type { PluginLogger } from "../../api.js";
 // Issue #226 W5: cross-subsystem contract lives in the shared layer now.
@@ -12,6 +13,7 @@ import { createGithubClient } from "./github-client.js";
 import { learnNorms, renderNormsBlock } from "./norms.js";
 import { createRepoSync, teamAutoProjectDir, type TaskDeliveryOracle } from "./repo-sync.js";
 import { nextFireMs } from "./schedule.js";
+import { resolveTeamAutoPaths } from "./store.js";
 import { advanceCursors, sweepRepo, type Candidate } from "./scanner.js";
 import {
   consumeDailyBudget,
@@ -660,16 +662,54 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     if (reconcileInFlight) {
       return; // a pass is still delivering - never overlap (#269)
     }
-    reconcileInFlight = true;
+    // #269 recurrence (23:40 CST): MULTIPLE gateway processes share one
+    // ~/.openclaw store (launchctl service + spawned gateways). In-process
+    // guards cannot see another process's deliveries - each kept its
+    // startup-cached store and delivered the same pending row (3s apart,
+    // two "issueComment ok" for one task). Cross-process mutex: an atomic
+    // mkdir lock dir next to the store file; stale (>5min) locks are
+    // taken over (crashed holder).
+    const { storeFile } = resolveTeamAutoPaths();
+    const lockDir = `${storeFile}.reconcile-lock`;
+    let locked = false;
     try {
-      await doReconcileWritebacks();
+      try {
+        await fs.mkdir(lockDir);
+        locked = true;
+      } catch {
+        // Held - unless stale (holder crashed mid-pass).
+        try {
+          const st = await fs.stat(lockDir);
+          if (Date.now() - st.mtimeMs > 300_000) {
+            await fs.rm(lockDir, { recursive: true, force: true });
+            await fs.mkdir(lockDir);
+            locked = true;
+          }
+        } catch { /* racing takeover - someone else won; skip this pass */ }
+      }
+      if (!locked) {
+        return; // another PROCESS is mid-reconcile; our next tick re-tries
+      }
+      reconcileInFlight = true;
+      try {
+        await doReconcileWritebacks();
+      } finally {
+        reconcileInFlight = false;
+      }
     } finally {
-      reconcileInFlight = false;
+      if (locked) {
+        await fs.rm(lockDir, { recursive: true, force: true }).catch(() => {});
+      }
     }
   }
 
   async function doReconcileWritebacks(): Promise<void> {
-    const s = await ensureStore();
+    // #269 recurrence: re-read the store from disk EVERY pass - the
+    // closure cache is a startup snapshot that never sees another
+    // process's persisted inFlightAt/doneAt, which is exactly how the
+    // 23:40 double delivery happened.
+    store = await loadTeamAutoStore();
+    const s = store;
     const state0 = deps.getTeamState();
     // Dead letters: entries whose task is gone or failed without a result can
     // never deliver - drop them instead of accumulating forever.

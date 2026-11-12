@@ -132,6 +132,36 @@ try {
   const enqTaskIds = enq.writebacks.map((w) => w.taskId).sort();
   assert.deepEqual(enqTaskIds, ["task-enq-a", "task-enq-c"], "enqueue dedupes same target+action; distinct target enqueues");
 
+  // ── Contract 5 (cross-process re-read, #269 23:40 recurrence): a second
+  // scheduler "process" holding a STALE in-memory snapshot must not deliver
+  // a row another process already delivered and persisted. Old behavior:
+  // the closure cache never re-read disk, so instance X delivered again.
+  postCalls = 0;
+  teamState.tasks["task-xproc"] = { ...teamState.tasks["task-dbl"], id: "task-xproc" };
+  await fs.promises.writeFile(storeFile, JSON.stringify({
+    ...enq,
+    writebacks: [
+      { taskId: "task-xproc", action: "issueComment", repoId: "acme/widget", targetId: 42, doneAt: null, prUrl: null, error: null },
+    ],
+  }), "utf8");
+  const schedulerX = schedMod.createTeamAutoScheduler({
+    logger: noopLogger,
+    auth: { getAuthHeaders: async () => ({ Authorization: "Bearer test" }) },
+    getTeamState: () => teamState,
+    updateTeamState: (fn) => { fn(teamState); return teamState; },
+    onTasksCreated: async () => {},
+  });
+  // Warm X's store cache with the pending row (any store-touching call does).
+  schedulerX.registerWriteback("warm-only", "issueComment", "acme/widget", 99);
+  await new Promise((r) => setTimeout(r, 150));
+  // The OTHER process delivers the row first; disk now has an empty queue.
+  await scheduler2.reconcileWritebacks();
+  assert.equal(postCalls, 1, "process A delivered the row (POST once)");
+  // X still holds the stale snapshot - its reconcile must re-read disk and
+  // find nothing pending, NOT replay its cache.
+  await schedulerX.reconcileWritebacks();
+  assert.equal(postCalls, 1, "process B (stale cache) must not re-deliver; disk re-read wins");
+
   console.log("test-teamauto-writeback-guard: all assertions passed");
 } finally {
   globalThis.fetch = realFetch;
