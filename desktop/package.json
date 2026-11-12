@@ -79,6 +79,9 @@
       "gatekeeperAssess": false,
       "provisioningProfile": "build/embedded.provisionprofile",
       "notarize": false,
+      "extendInfo": {
+        "ITSAppUsesNonExemptEncryption": false
+      },
       "signIgnore": [
         "\\.lproj/locale\\.pak$"
       ]
