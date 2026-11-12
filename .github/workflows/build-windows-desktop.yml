@@ -1,0 +1,39 @@
+name: build-windows-desktop
+
+# On-demand Windows desktop build (NSIS installer + portable dir) for manual
+# testing / store screenshots. Not a release lane: output is a workflow
+# artifact, never published anywhere.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Windows NSIS build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.22.1"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install deps + stage runtime
+        shell: pwsh
+        run: |
+          npm ci --prefix desktop
+          npm --prefix desktop run stage:runtime --if-present
+      - name: Build NSIS installer + portable
+        shell: pwsh
+        run: |
+          Set-Location desktop
+          npx electron-builder --win nsis --publish never
+          Get-ChildItem dist | Select-Object Name, Length
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: teamclaw-windows-desktop
+          path: desktop/dist/*.exe
+          if-no-files-found: error

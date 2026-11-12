@@ -92,6 +92,9 @@ jobs:
           # electron-builder reads identity/publisher for the appx target from
           # package.json build.win; inject from secrets so the repo never
           # carries the real identity before Partner Center registration.
+          # NOTE: win.publish must stay unset - an empty publish array fails
+          # schema validation ("configuration.win should be one of these:
+          # null"); --publish never on the CLI covers it.
           node -e "
             const fs = require('fs');
             const p = JSON.parse(fs.readFileSync('desktop/package.json', 'utf8'));
@@ -99,7 +102,7 @@ jobs:
             p.build.win = p.build.win || {};
             p.build.win.identityName = process.env.MSSTORE_IDENTITY_NAME;
             p.build.win.publisher = process.env.MSSTORE_PUBLISHER;
-            p.build.win.publish = p.build.win.publish || [];
+            delete p.build.win.publish;
             fs.writeFileSync('desktop/package.json', JSON.stringify(p, null, 2) + '\n');
           "
           Set-Location desktop
