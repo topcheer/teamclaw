@@ -79,6 +79,7 @@
         </button>
         <button class="tab" data-tab="workspace"><span class="tab-label" data-i18n="tab.workspace">Workspace</span></button>
         <button class="tab" data-tab="settings"><span class="tab-label" data-i18n="tab.settings">Settings</span></button>
+        <button class="tab" data-tab="activity"><span class="tab-label" data-i18n="tab.activity">Activity</span></button>
         <button class="tab" data-tab="clarifications">
           <span class="tab-label" data-i18n="tab.clarifications">Clarifications</span>
           <span id="clarifications-tab-count" class="tab-badge">0</span>
@@ -151,6 +152,20 @@
         </div>
 
         <!-- Workspace Tab -->
+        <div id="tab-activity" class="tab-panel">
+          <div class="panel-note" style="padding:12px 14px">
+            <h3 data-i18n="activity.events.title" style="margin:0 0 6px">Controller activity</h3>
+            <p data-i18n="activity.events.hint" style="margin:0 0 8px;color:#666">Live provisioning, sweeps, task routing and team events (ring buffer, last 400).</p>
+            <div id="activity-journal" style="font:12px/1.6 ui-monospace,monospace;max-height:320px;overflow:auto;background:#f6f6f6;padding:8px;border-radius:6px;white-space:pre-wrap"></div>
+          </div>
+          <div class="panel-note" style="padding:12px 14px;margin-top:10px">
+            <h3 data-i18n="activity.log.title" style="margin:0 0 6px">TeamClaw log tail</h3>
+            <p style="margin:0 0 8px">
+              <label style="font-size:12px;color:#666"><input id="activity-log-all" type="checkbox" /> <span data-i18n="activity.log.all">unfiltered</span></label>
+            </p>
+            <div id="activity-log" style="font:12px/1.6 ui-monospace,monospace;max-height:420px;overflow:auto;background:#111;color:#9f9;padding:10px;border-radius:6px;white-space:pre-wrap"></div>
+          </div>
+        </div>
         <div id="tab-settings" class="tab-panel">
           <div class="panel-note" style="padding:12px 14px">
             <h3 data-i18n="settings.models.title" style="margin:0 0 6px">Model settings</h3>

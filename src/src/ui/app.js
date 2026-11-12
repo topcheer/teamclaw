@@ -78,6 +78,11 @@
       "tab.workspace": "Workspace",
       "common.showOlder": "Show older ({n})",
       "tab.settings": "Settings",
+      "tab.activity": "Activity",
+      "activity.events.title": "Controller activity",
+      "activity.events.hint": "Live provisioning, sweeps, task routing and team events (ring buffer, last 400).",
+      "activity.log.title": "TeamClaw log tail",
+      "activity.log.all": "unfiltered",
       "settings.models.title": "Model settings",
       "settings.models.hint": "Default model and per-role overrides.",
       "settings.workers.title": "Worker scaling (hot)",
@@ -373,6 +378,11 @@
       "tab.workspace": "工作区",
       "common.showOlder": "显示更早（{n}）",
       "tab.settings": "设置",
+      "tab.activity": "活动",
+      "activity.events.title": "控制器活动",
+      "activity.events.hint": "实时的 worker 供给、sweep、任务分派与团队事件（环形缓冲，最近 400 条）。",
+      "activity.log.title": "TeamClaw 日志尾随",
+      "activity.log.all": "不过滤",
       "settings.models.title": "模型设置",
       "settings.models.hint": "默认模型与按角色覆盖。",
       "settings.workers.title": "Worker 弹性伸缩（热）",
@@ -4131,6 +4141,9 @@
     if (activeTab === "settings") {
       renderWorkerSettingsPanel();
     }
+    if (activeTab === "activity") {
+      renderActivityTab();
+    }
     if (activeTab === "teamauto") {
       refreshTeamAutoTab();
     }
@@ -5304,6 +5317,37 @@ function renderWorkerSettingsPanel() {
       })
       .finally(function () { save.disabled = false; });
   });
+}
+
+// Controller Activity tab (#ui-blindness): journal event stream + gateway
+// log tail. Polls only while the tab is active (no background traffic).
+var activityTimer = null;
+function renderActivityTab() {
+  var journalEl = document.getElementById("activity-journal");
+  if (!journalEl) return;
+  function fmtTime(at) {
+    var d = new Date(at);
+    return ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2) + ":" + ("0" + d.getSeconds()).slice(-2);
+  }
+  function load() {
+    apiRequest("/controller/journal?limit=200").then(function (d) {
+      var ev = d.events || [];
+      journalEl.innerHTML = ev.length
+        ? ev.map(function (e) { return escapeHtml(fmtTime(e.at) + " [" + e.type + "] " + e.summary); }).join("\n")
+        : "(no events yet)";
+    }).catch(function (err) { journalEl.textContent = (err && err.message) || "load failed"; });
+    var all = document.getElementById("activity-log-all");
+    apiRequest("/controller/log-tail?lines=200" + (all && all.checked ? "&all=1" : "")).then(function (d) {
+      var logEl = document.getElementById("activity-log");
+      if (logEl) {
+        logEl.textContent = ((d.path || "") + "\n" + (d.lines || []).join("\n")) || "(no log lines matched)";
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+    }).catch(function () { /* transient */ });
+  }
+  if (activityTimer) clearInterval(activityTimer);
+  load();
+  activityTimer = setInterval(load, 5000);
 }
 
 function openModelSettings() {

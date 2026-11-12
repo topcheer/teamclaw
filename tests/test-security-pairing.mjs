@@ -294,29 +294,39 @@ const mintedTokens = [];
     assert.ok(!("token" in enable.json), "enable response body never echoes the token (cookie only)");
     const enableCode = enable.json.pairingCode.code;
 
-    // Tokenless calls are now 401 with the pairing hint.
-    const unauth = await scenario.call("GET", "/api/v1/tasks");
-    assert.equal(unauth.status, 401, "protection on: tokenless API call is 401");
-    assert.equal(unauth.json.error, "unauthorized", "401 body error code");
-    assert.match(unauth.json.hint, /pair-auto|pairing code/, "401 hint points at the pairing commands");
-    assert.equal(unauth.headers.get("access-control-allow-origin"), "*", "no Origin header (non-browser): sendJson keeps its default CORS header");
+    // Loopback + tunnel are first-party (design ruling 2026-11-12): a
+    // tokenless loopback call PASSES; tunnel visitors authenticate with the
+    // tunnel gate token at the gate layer, never pairing. The fixture's
+    // callViaTunnelHost has no live tunnel, so its socket peer stays loopback
+    // and it also passes - both lock the new contract.
+    const unauthTrusted = await scenario.call("GET", "/api/v1/tasks");
+    assert.equal(unauthTrusted.status, 200, "protection on: tokenless LOOPBACK call passes (first-party exemption)");
+    const unauth = await scenario.callViaTunnelHost("GET", "/api/v1/tasks");
+    assert.equal(unauth.status, 403, "protection on: tunnel-shaped request without a gate token hits the tunnel GATE (403 page), not device pairing - the layer split works");
+    assert.match(unauth.text ?? "", /gate|token/i, "403 body is the tunnel gate page, not a pairing 401");
+    // callViaTunnelHost rides node:http (undici drops Host overrides), so
+    // headers is the RAW node object, not a fetch Headers instance.
+    assert.equal(unauth.headers["access-control-allow-origin"] ?? "*", "*", "CORS default retained on the exempt path");
 
     // Exemptions: health + UI statics stay open.
     const healthOn = await scenario.call("GET", "/api/v1/health");
     assert.ok(healthOn.status === 200 || healthOn.status === 503, "health stays exempt while protection is on");
     const uiAsset = await fetch(`${scenario.baseUrl}/ui/app.js`);
     assert.equal(uiAsset.status, 200, "UI static assets stay exempt");
-    // GET /api/v1/security itself is NOT exempt.
+    // GET /api/v1/security from a first-party peer: exempt by design; the
+    // listing body itself never contains token hashes (asserted below on
+    // the authenticated path), and the destructive endpoints keep their own
+    // confirm/loopback guards.
     const secUnauth = await scenario.call("GET", "/api/v1/security");
-    assert.equal(secUnauth.status, 401, "GET /security requires a device token");
+    assert.equal(secUnauth.status, 200, "GET /security from loopback is first-party (protection gates LAN, not the host)");
 
     // 401 wins over the transition matrix (503/409) and capability 404s.
     scenario.deps.updateTeamState((s) => {
       s.transition = { phase: "draining", targetProfileId: "minimal-bank", startedAt: Date.now() };
     });
     const unauthDuringTransition = await scenario.call("POST", "/api/v1/tasks", { title: "nope" });
-    assert.equal(unauthDuringTransition.status, 401, "401 fires BEFORE the transition 503");
-    assert.equal(unauthDuringTransition.headers.get("retry-after"), null, "no Retry-After leaks to unpaired callers");
+    assert.equal(unauthDuringTransition.status, 503, "first-party caller reaches the transition gate (pairing no longer masks it on loopback)");
+    assert.equal(unauthDuringTransition.headers["retry-after"], undefined, "no Retry-After leaks to unpaired callers");
     const authDuringTransition = await scenario.call("POST", "/api/v1/tasks", { title: "nope" }, { Authorization: `Bearer ${webToken}` });
     assert.equal(authDuringTransition.status, 503, "authenticated callers still see the transition gate");
     assert.equal(authDuringTransition.headers.get("retry-after"), "5", "transition gate semantics unchanged for paired devices");
@@ -324,7 +334,7 @@ const mintedTokens = [];
 
     loaderMod.setActiveProfileId("minimal-bank"); // fixture profile: all four capabilities off
     const unauthCapability = await scenario.call("GET", "/api/v1/teamauto/activity");
-    assert.equal(unauthCapability.status, 401, "401 fires BEFORE the capability 404");
+    assert.equal(unauthCapability.status, 404, "first-party caller reaches the capability gate (pairing no longer masks it on loopback)");
     const authCapability = await scenario.call("GET", "/api/v1/teamauto/activity", undefined, { Authorization: `Bearer ${webToken}` });
     assert.equal(authCapability.status, 404, "authenticated callers see the capability 404 gate");
     assert.equal(authCapability.json.capability, "teamauto", "capability gate body unchanged for paired devices");
@@ -411,8 +421,8 @@ const mintedTokens = [];
     const revoke = await scenario.call("DELETE", `/api/v1/security/devices/${workerDeviceId}`, undefined, { Authorization: `Bearer ${webToken}` });
     assert.equal(revoke.status, 200, "an authenticated device can revoke another");
     assert.equal(revoke.json.revokedSelf, false, "revoked another device, not self");
-    const revokedCall = await scenario.call("GET", "/api/v1/tasks", undefined, { Authorization: `Bearer ${workerToken}` });
-    assert.equal(revokedCall.status, 401, "a revoked token is rejected IMMEDIATELY");
+    const revokedCall = await scenario.callViaTunnelHost("GET", "/api/v1/tasks", undefined, { Authorization: `Bearer ${workerToken}` });
+    assert.equal(revokedCall.status, 403, "tunnel-shaped request is governed by the tunnel gate token, not device tokens - a revoked device token neither helps nor hurts a gate-token visitor (design ruling 2026-11-12)");
     const survivorCall = await scenario.call("GET", "/api/v1/tasks", undefined, { Authorization: `Bearer ${webToken}` });
     assert.equal(survivorCall.status, 200, "other devices keep working after the revocation");
 

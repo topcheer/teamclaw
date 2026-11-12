@@ -53,6 +53,7 @@ import {
   archivedTeamsRoute,
 } from "./status-routes.js";
 import { teamConfigGetRoute, teamConfigPatchRoute } from "./config-routes.js";
+import * as journalRoutes from "./journal.js";
 import {
   reportsListRoute,
   reportsSessionRoute,
@@ -600,4 +601,8 @@ export const controllerRouteTable: readonly RouteDef[] = [
   // (no path overlap with any earlier route).
   { method: "GET", path: "/api/v1/team/config", handler: teamConfigGetRoute },
   { method: "PATCH", path: "/api/v1/team/config", handler: teamConfigPatchRoute },
+  // Controller observability (#ui-blindness): event journal + gateway log
+  // tail for the web UI's Activity tab. Appended on the same precedent.
+  { method: "GET", path: "/api/v1/controller/journal", handler: journalRoutes.controllerJournalRoute },
+  { method: "GET", path: "/api/v1/controller/log-tail", handler: journalRoutes.controllerLogTailRoute },
 ];

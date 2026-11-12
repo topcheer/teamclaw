@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from "ws";
 import type { IncomingMessage, Server } from "node:http";
 import type { PluginLogger } from "../../api.js";
+import { journalFromWsEvent } from "./journal.js";
 
 export type WsEvent =
   | { type: "worker:online"; data: unknown }
@@ -76,6 +77,10 @@ export class TeamWebSocketServer {
 
   broadcastUpdate(event: WsEvent): void {
     if (!this.wss) return;
+
+    // Every broadcast also lands in the controller journal so the web UI's
+    // Activity tab can backfill history after a reconnect (#ui-blindness).
+    journalFromWsEvent(event);
 
     const data = JSON.stringify(event);
     for (const client of this.wss.clients) {

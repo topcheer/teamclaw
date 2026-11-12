@@ -226,6 +226,12 @@ const HOT_CONFIG_ROUTES = [
   ["PATCH", "exact", "/api/v1/team/config"],
 ];
 
+// Controller observability (#ui-blindness): journal + log tail.
+const JOURNAL_ROUTES = [
+  ["GET", "exact", "/api/v1/controller/journal"],
+  ["GET", "exact", "/api/v1/controller/log-tail"],
+];
+
 /** Normalizes a live RouteDef into {method, kind, value} for comparison. */
 function routeToSpec(route, index) {
   assert.equal(typeof route.handler, "function", `route #${index} must bind a handler function`);
@@ -242,9 +248,9 @@ function routeToSpec(route, index) {
 }
 
 const tableSpecs = routeTableMod.controllerRouteTable.map(routeToSpec);
-assert.equal(tableSpecs.length, EXPECTED_ROUTES.length + SECURITY_ROUTES.length + WORKFLOW_ROUTES.length + HOT_CONFIG_ROUTES.length,
-  `controllerRouteTable must have exactly ${EXPECTED_ROUTES.length} historical + ${SECURITY_ROUTES.length} security + ${WORKFLOW_ROUTES.length} workflow + ${HOT_CONFIG_ROUTES.length} hot-config entries in order (got ${tableSpecs.length})`);
-const FULL_EXPECTED_ROUTES = [...EXPECTED_ROUTES, ...SECURITY_ROUTES, ...WORKFLOW_ROUTES, ...HOT_CONFIG_ROUTES];
+assert.equal(tableSpecs.length, EXPECTED_ROUTES.length + SECURITY_ROUTES.length + WORKFLOW_ROUTES.length + HOT_CONFIG_ROUTES.length + JOURNAL_ROUTES.length,
+  `controllerRouteTable must have exactly ${EXPECTED_ROUTES.length} historical + ${SECURITY_ROUTES.length} security + ${WORKFLOW_ROUTES.length} workflow + ${HOT_CONFIG_ROUTES.length} hot-config + ${JOURNAL_ROUTES.length} journal entries in order (got ${tableSpecs.length})`);
+const FULL_EXPECTED_ROUTES = [...EXPECTED_ROUTES, ...SECURITY_ROUTES, ...WORKFLOW_ROUTES, ...HOT_CONFIG_ROUTES, ...JOURNAL_ROUTES];
 FULL_EXPECTED_ROUTES.forEach(([method, kind, value], i) => {
   const actual = tableSpecs[i];
   const methodMatches = Array.isArray(method)

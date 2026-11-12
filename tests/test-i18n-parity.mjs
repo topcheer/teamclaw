@@ -118,7 +118,7 @@ for (const dict of [web, desktop]) {
 //    updated by the chore-web-i18n-migration pass: web hardcoded copy moved
 //    onto the dictionary, reusing desktop ctl.*/task.* keys verbatim).
 // ---------------------------------------------------------------------------
-assert.equal(web.en.size, 289, "web dictionary must carry exactly 289 keys (update alongside deliberate additions)");
+assert.equal(web.en.size, 294, "web dictionary must carry exactly 294 keys (update alongside deliberate additions)");
 assert.equal(desktop.en.size, 296, "desktop dictionary must carry exactly 296 keys (update alongside deliberate additions)");
 
 const webKeys = new Set(web.en.keys());
@@ -128,7 +128,7 @@ const webOnlyKeys = [...webKeys].filter((k) => !desktopKeys.has(k)).sort();
 const desktopOnlyKeys = [...desktopKeys].filter((k) => !webKeys.has(k)).sort();
 
 assert.equal(sharedKeys.length, 91, "exactly 91 keys are shared between web and desktop");
-assert.equal(webOnlyKeys.length, 198, "exactly 198 keys are web-only");
+assert.equal(webOnlyKeys.length, 203, "exactly 203 keys are web-only");
 assert.equal(desktopOnlyKeys.length, 205, "exactly 205 keys are desktop-only");
 
 // ---------------------------------------------------------------------------
@@ -174,6 +174,12 @@ for (const entryKey of VALUE_ALLOWED.keys()) {
 //    a key legitimately becomes shared, move it out of these groups.
 // ---------------------------------------------------------------------------
 const WEB_ONLY_GROUPS = [
+  { prefix: "activity", reason: "web Controller Activity tab (#ui-blindness): journal event stream + gateway log tail; desktop has no equivalent surface yet", keys: [
+    "activity.events.hint",
+    "activity.events.title",
+    "activity.log.all",
+    "activity.log.title",
+  ]},
   { prefix: "common", reason: "web 24h recency-window lazy toggle (#recent-window); desktop lists have their own pagination surfaces", keys: [
     "common.showOlder",
   ]},
@@ -307,10 +313,11 @@ const WEB_ONLY_GROUPS = [
     "sidebar.roles",
     "sidebar.workers"
   ] },
-  { prefix: "tab", reason: "web-only tabs (messages feed, manual task, settings); desktop has no equivalent surfaces (its controller/worker forms live under ctl.*)", keys: [
+  { prefix: "tab", reason: "web-only tabs (messages feed, manual task, settings, activity); desktop has no equivalent surfaces (its controller/worker forms live under ctl.*)", keys: [
     "tab.manualTask",
     "tab.messages",
-    "tab.settings"
+    "tab.settings",
+    "tab.activity"
   ] },
   { prefix: "tasks", reason: "web task keyword filter and show-more affordances", keys: [
     "tasks.noMatch",

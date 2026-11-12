@@ -477,9 +477,19 @@ export function createSecurityMiddleware(deps: SecurityMiddlewareDeps): Security
     // talk to its own gateway - reported as a UX defect 2026-11-12). Local
     // peers stay first-party: tunnel traffic never earns loopback trust
     // (classifySecurityPeer strips it via viaTunnel) and LAN peers still
-    // need a device token. Sensitive endpoints (/security/reset, pair
-    // management) keep their own confirm/loopback guards.
-    if (peer.loopback) {
+    // need a device token. When a loopback caller DOES present a valid
+    // device token, authenticate anyway so lastSeenAt keeps updating (the
+    // token may belong to a paired remote console the owner is driving).
+    // VIA-TUNNEL requests are ALSO exempt: cloudflared dials in from
+    // loopback (the tunnel IS a local connection), and their credential is
+    // the tunnel GATE TOKEN - http-server checks gateAllows for every
+    // tunnel request AFTER this gate. Pairing them is a category error: a
+    // visitor can never obtain a pairing code, so protection-on would just
+    // kill the tunnel with an unanswerable 401 (user design ruling
+    // 2026-11-12). LAN peers remain the pairing boundary.
+    if (peer.loopback || peer.viaTunnel) {
+      const authAny = authenticateDeviceToken(state, extractDeviceToken(req));
+      if (authAny) touchDeviceLastSeen(deps, authAny.device.id);
       return true;
     }
 

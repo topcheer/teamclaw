@@ -55,6 +55,7 @@ import {
   loadOpenClawConfig,
 } from "./provisioning-config.js";
 import type { WorkerProvisionerBackend } from "./provisioning/backend-contract.js";
+import { journalRecord } from "./journal.js";
 import {
   isDockerHostNetwork,
   requiresDedicatedHostPortsForProvisioner,
@@ -236,6 +237,7 @@ export class WorkerProvisioningManager {
     }
 
     this.deps.logger.info(`Provisioner: terminating managed worker ${workerId} (${reason})`);
+    journalRecord("provisioner", "terminated", `${workerId} (${reason})`);
     await this.terminateManagedWorker(workerId, reason, "terminated");
   }
 
@@ -424,6 +426,7 @@ export class WorkerProvisioningManager {
           );
         }
         this.deps.logger.info(`Provisioner: role ${role} needs ${demand} additional worker(s) (${reason})`);
+        journalRecord("provisioner", "demand", `${role} needs +${demand} (${reason})`);
       }
       for (let i = 0; i < demand; i += 1) {
         if (this.hasRecentProvisioningFailure(role)) {
@@ -465,6 +468,7 @@ export class WorkerProvisioningManager {
         continue;
       }
       this.deps.logger.info(`Provisioner: warming ${role} worker (${reason})`);
+      journalRecord("provisioner", "warming", `warming ${role} (${reason})`);
       await this.launchWorker(role);
     }
   }
@@ -661,6 +665,7 @@ export class WorkerProvisioningManager {
       });
 
       this.deps.logger.info(`Provisioner: launched ${role} worker ${workerId} via ${this.backend.type}`);
+      journalRecord("provisioner", "launched", `${role} ${workerId} via ${this.backend.type}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.deps.updateTeamState((state) => {
