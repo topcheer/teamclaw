@@ -95,18 +95,21 @@ jobs:
           # NOTE: win.publish must stay unset - an empty publish array fails
           # schema validation ("configuration.win should be one of these:
           # null"); --publish never on the CLI covers it.
+          # AppX identity lives ENTIRELY in build.appx (AppXOptions):
+          # identityName / publisher / publisherDisplayName. win.publisher
+          # and win.identityName do not exist in 26.18's WinConfiguration
+          # and poison the whole win block (three failed dry-runs; bisected
+          # locally - -c.win.publisher alone fails the schema).
           node -e "
             const fs = require('fs');
             const p = JSON.parse(fs.readFileSync('desktop/package.json', 'utf8'));
             p.build = p.build || {};
-            // identityName is an AppXOptions field (build.appx), NOT
-            // WinConfiguration - injecting it into build.win failed schema
-            // validation ('configuration.win should be one of these: null').
-            // publisher belongs to build.win (code-signing identity).
-            p.build.appx = { ...(p.build.appx || {}), identityName: process.env.MSSTORE_IDENTITY_NAME };
-            p.build.win = p.build.win || {};
-            p.build.win.publisher = process.env.MSSTORE_PUBLISHER;
-            delete p.build.win.publish;
+            p.build.appx = {
+              ...(p.build.appx || {}),
+              identityName: process.env.MSSTORE_IDENTITY_NAME,
+              publisher: process.env.MSSTORE_PUBLISHER,
+              publisherDisplayName: 'GuangGuang AI Studio',
+            };
             fs.writeFileSync('desktop/package.json', JSON.stringify(p, null, 2) + '\n');
           "
           Set-Location desktop
