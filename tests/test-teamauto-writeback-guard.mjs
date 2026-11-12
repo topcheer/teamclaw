@@ -162,6 +162,44 @@ try {
   await schedulerX.reconcileWritebacks();
   assert.equal(postCalls, 1, "process B (stale cache) must not re-deliver; disk re-read wins");
 
+  // ── Contract 6 (#269 4th recurrence, ggcode#5524): a WRITE task whose PR
+  // step fails must NOT post its comment this pass - the old fall-through
+  // posted the link-less comment, marked doneAt, and the #24 cleanup wiped
+  // the error, so the retry added a SECOND (with-link) comment 2s later.
+  postCalls = 0;
+  let prCalls = 0;
+  globalThis.fetch = async (url, init) => {
+    const target = String(url);
+    if (target.includes("/pulls")) {
+      prCalls += 1;
+      return { ok: false, status: 502, headers: { get: () => null }, text: async () => "PR boom", json: async () => ({ message: "PR boom" }) };
+    }
+    if (target.endsWith("/repos/acme/widget/issues/42/comments")) {
+      postCalls += 1;
+      return { ok: true, status: 201, headers: { get: () => null }, text: async () => JSON.stringify({ id: 900 }), json: async () => ({ id: 900 }) };
+    }
+    return { ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify([]), json: async () => [] };
+  };
+  teamState.tasks["task-prfail"] = { ...teamState.tasks["task-dbl"], id: "task-prfail", status: "completed", result: "PR-failure body", writeMode: "write", projectDir: "/x/__task-task-prfail" };
+  await fs.promises.writeFile(storeFile, JSON.stringify({
+    ...enq, writebacks: [
+      { taskId: "task-prfail", action: "issueComment", repoId: "acme/widget", targetId: 42, doneAt: null, prUrl: null, error: null },
+    ],
+  }), "utf8");
+  const schedulerP = schedMod.createTeamAutoScheduler({
+    logger: noopLogger,
+    auth: { getAuthHeaders: async () => ({ Authorization: "Bearer test" }) },
+    getTeamState: () => teamState,
+    updateTeamState: (fn) => { fn(teamState); return teamState; },
+    onTasksCreated: async () => {},
+  });
+  await schedulerP.reconcileWritebacks();
+  const prState = await readStore();
+  const prEntry = prState.writebacks.find((w) => w.taskId === "task-prfail");
+  assert.ok(prEntry && prEntry.error && String(prEntry.error).includes("worktree PR delivery failed"), "the write-delivery step failed (repoInfo/PR path)");
+  assert.equal(postCalls, 0, "#5524: PR failure must abort the comment too - no partial delivery");
+  assert.ok(!prEntry.doneAt, "entry stays undelivered (failed + backoff), retry replays BOTH steps");
+
   console.log("test-teamauto-writeback-guard: all assertions passed");
 } finally {
   globalThis.fetch = realFetch;

@@ -840,6 +840,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           // push its branch, open a PR, and attach the link to the reply.
           const repoId = entry.repoId;
           const isTeamAutoWrite = task.writeMode === "write" && task.projectDir?.includes("__task-");
+          let prDeliveryFailed = false;
           if (isTeamAutoWrite) {
             try {
               const info = await client.getRepoInfo(repoId.split("/")[0]!, repoId.split("/")[1]!);
@@ -860,7 +861,19 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
               await sync.removeTaskWorktree(repoId, task.id);
             } catch (prErr) {
               markWritebackFailure(s, entry, `worktree PR delivery failed: ${prErr instanceof Error ? prErr.message : String(prErr)}`);
+              // #269 4th recurrence (ggcode#5524): a failed PR step must abort
+              // the WHOLE entry this pass. The old fall-through posted the
+              // link-less comment anyway, set doneAt, and the #24 cleanup
+              // cleared the error - a partial delivery masked as success.
+              // The retry pass then delivered the WITH-link comment too:
+              // two comments 2s apart. Fail atomically instead: the entry
+              // keeps its failed state + backoff and replays BOTH steps
+              // (PR first, then comment) on the next attempt.
+              prDeliveryFailed = true;
             }
+          }
+          if (prDeliveryFailed) {
+            continue;
           }
           if (entry.action === "issueComment" && entry.targetId) {
             await client.postIssueComment(owner, name, entry.targetId, body);
