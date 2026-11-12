@@ -773,7 +773,20 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
   // below fails with ENOENT.
   await fs.mkdir(runtimeDir, { recursive: true });
   const pluginDir = path.join(runtimeDir, "node_modules", "@teamclaws", "teamclaw");
-  const res = await runShellCommand(`"${openclawBin}" plugins list 2>/dev/null || true`, { cwd: runtimeDir, env: sandboxEnv });
+  // Probe only - a failed plugins-list is a valid "not installed" state.
+  // Keep it shell-portable: `|| true` and 2>/dev/null are POSIX-isms that
+  // cmd.exe parses as commands (the v4 wizard died on `'true' is not
+  // recognized`, user-found 2026-11-12). Windows gets 2>nul; both sides
+  // tolerate a non-zero exit via the catch.
+  let res = { stdout: "" };
+  try {
+    const listCmd = process.platform === "win32"
+      ? `"${openclawBin}" plugins list 2>nul`
+      : `"${openclawBin}" plugins list 2>/dev/null || true`;
+    res = await runShellCommand(listCmd, { cwd: runtimeDir, env: sandboxEnv });
+  } catch {
+    /* probe-only */
+  }
   // Precise: match the plugins-list TABLE row (│ TeamClaw │), not any
   // teamclaw substring - the stock-extensions path line also contains it.
   if (/│\s*TeamClaw\s*│/.test(res.stdout || "")) {
