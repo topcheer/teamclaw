@@ -452,6 +452,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
               recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "sweep", text: `dead-lettered after ${TEAMAUTO_DEAD_LETTER_ATTEMPTS} failed attempts: ${candidate.kind}: ${candidate.title}` });
             } else if (taskId) {
               recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "task", text: `${candidate.kind}: ${candidate.title}` });
+              claimIssue(repo, candidate); // #268: visible claim at enqueue time
               const action = candidate.kind === "prReview"
                 ? ("prComment" as const)
                 : candidate.kind === "fullReview"
@@ -827,6 +828,61 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       s.writebacks.push({ taskId, action, repoId, targetId, doneAt: null, prUrl: null, error: null, cycleKey });
       void saveTeamAutoStore(s);
     }).catch(() => {});
+  }
+
+  /** #268: make a takeOwnership claim VISIBLE on the issue itself. Until now
+   * assignIssue was dead code and registerWriteback had no assign action, so
+   * claims existed only in internal state - humans could not see the bot had
+   * picked an issue up (collision risk), contradicting the design decision
+   * that identity presents as the logged-in account's activity.
+   * Fired at ENQUEUE time: a claim is a placeholder declaration; posting it
+   * at completion would leave the whole execution window claim-invisible.
+   * Best-effort, never blocks the task. Review notes (#268):
+   *  (a) re-check assignees at claim time (the scan snapshot is seconds
+   *      stale - a human may have self-assigned in between);
+   *  (b) stamp cursors.seen with NOW + 60s on BOTH success paths (assign
+   *      AND fallback comment) because our own write bumps the issue's
+   *      updated_at - a bare-assign stamp would lose the scanner's
+   *      `seen >= updatedAt` comparison next sweep and re-candidate the
+   *      issue we just claimed (self-triggering loop). */
+  function claimIssue(repo: TeamAutoRepo, candidate: { key: string; number: number; kind: string; title: string }): void {
+    if (candidate.kind !== "takeOwnership" || !candidate.number) {
+      return;
+    }
+    void (async () => {
+      const [owner, name] = repo.id.split("/");
+      const client = createGithubClient(auth);
+      try {
+        const fresh = await client.getIssue(owner, name, candidate.number);
+        if (fresh.state !== "open") {
+          return;
+        }
+        if (repo.policy.skipAssignedToHumans && fresh.assignees.length > 0) {
+          recordActivity(await ensureStore(), { at: Date.now(), repoId: repo.id, kind: "claim", text: `claim skipped: issue #${candidate.number} gained an assignee since scan` });
+          return;
+        }
+        const { login } = await client.getAuthenticatedUser();
+        try {
+          await client.assignIssue(owner, name, candidate.number, login);
+          recordActivity(await ensureStore(), { at: Date.now(), repoId: repo.id, kind: "claim", text: `claimed issue #${candidate.number} as @${login}` });
+        } catch {
+          // Fallback: a visible claim comment carries the same placeholder
+          // semantics when the App lacks the assignees write surface.
+          await client.postIssueComment(owner, name, candidate.number, `TeamClaw (teamclaw/developer, @${login}) has taken ownership of this issue and is implementing it autonomously - a PR will follow.`);
+          recordActivity(await ensureStore(), { at: Date.now(), repoId: repo.id, kind: "claim", text: `claimed issue #${candidate.number} via comment (assign unavailable)` });
+        }
+        const s = await ensureStore();
+        const freshRepo = s.repos.find((r) => r.id === repo.id);
+        if (freshRepo) {
+          // +60s guard: our own write (assign or comment) bumps updated_at;
+          // see helper doc.
+          freshRepo.cursors.seen[candidate.key] = Date.now() + 60_000;
+          await saveTeamAutoStore(s);
+        }
+      } catch (err) {
+        logger.warn(`TeamAuto: claim for ${repo.id}#${candidate.number} failed (task continues unclaimed): ${err instanceof Error ? err.message : String(err)}`);
+      }
+    })();
   }
 
   // ---------- scheduling loop ----------

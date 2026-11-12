@@ -110,6 +110,18 @@ async function sourceContracts() {
   assert.match(scheduler, /if \(dryRun\) \{[\s\S]{0,400}?repo\.dryRunDone = true;/u, "a completed dry-run sweep must flip dryRunDone even with zero candidates");
   assert.doesNotMatch(scheduler, /repo\.dryRunDone = true;\s*\n\s*repo\.lastSweepSummary = `dry-run/u, "dryRunDone must not depend on candidates existing");
 
+  // #268: takeOwnership claims must be visible on the issue itself.
+  assert.match(scheduler, /claimIssue\(repo, candidate\); \/\/ #268: visible claim at enqueue time/,
+    "takeOwnership tasks fire claimIssue at enqueue (claim = placeholder declaration, not completion artifact)");
+  assert.match(scheduler, /const fresh = await client\.getIssue\(owner, name, candidate\.number\);/,
+    "claim re-checks fresh issue state (scan-time assignee snapshot is stale by enqueue)");
+  assert.match(scheduler, /repo\.policy\.skipAssignedToHumans && fresh\.assignees\.length > 0/,
+    "claim is skipped when the issue gained an assignee since scan (never claim over humans)");
+  assert.match(scheduler, /freshRepo\.cursors\.seen\[candidate\.key\] = Date\.now\(\) \+ 60_000;/,
+    "claim stamps seen with a +60s guard (our own write bumps updated_at; bare stamp re-candidates the claimed issue)");
+  assert.match(scheduler, /await client\.postIssueComment\(owner, name, candidate\.number, `TeamClaw \(teamclaw\/developer/,
+    "claim falls back to a visible marker comment when the assign surface fails");
+
   // #266: both sweep outcomes must stamp lastAttemptAt so success-scoped
   // fields (lastSweepAt/lastSweepSummary) never have to be read as attempt
   // evidence next to pausedReason.

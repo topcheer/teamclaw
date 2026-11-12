@@ -224,6 +224,28 @@ export function createGithubClient(auth: GithubAuthManager) {
       await request("POST", `/repos/${owner}/${repo}/issues/${issueNumber}/assignees`, { body: { assignees: [assignee] } });
     },
 
+    /** Fresh issue state for claim-time re-checks (#268): the scan-time
+     * assignee snapshot is seconds stale by enqueue time - a human may have
+     * self-assigned in between, and claiming over a human is worse than not
+     * claiming. */
+    async getIssue(owner: string, repo: string, issueNumber: number): Promise<{ assignees: string[]; state: string; updatedAt: string }> {
+      const { data } = await request("GET", `/repos/${owner}/${repo}/issues/${issueNumber}`);
+      const raw = data as Record<string, unknown>;
+      return {
+        assignees: Array.isArray(raw.assignees) ? raw.assignees.map((a) => String((a as { login?: string }).login ?? "")).filter(Boolean) : [],
+        state: String(raw.state ?? "open"),
+        updatedAt: String(raw.updated_at ?? ""),
+      };
+    },
+
+    /** Login of the authenticated account (#268): the assignee string for
+     * self-claiming. Kept here (not on the auth manager) so the claim path
+     * stays client-only. */
+    async getAuthenticatedUser(): Promise<{ login: string }> {
+      const { data } = await request("GET", "/user");
+      return { login: String((data as { login?: string }).login ?? "") };
+    },
+
     /** Open a PR from a task worktree branch (collaboration contract delivery). */
     async createPullRequest(owner: string, repo: string, head: string, base: string, title: string, body: string): Promise<{ number: number; url: string }> {
       const { data } = await request("POST", `/repos/${owner}/${repo}/pulls`, {

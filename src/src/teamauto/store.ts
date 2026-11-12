@@ -107,7 +107,7 @@ export type TeamAutoWriteBack = {
   failedAt?: number | null;
 };
 
-export type TeamAutoActivityKind = "bind" | "provision" | "sweep" | "task" | "writeback";
+export type TeamAutoActivityKind = "bind" | "provision" | "sweep" | "task" | "writeback" | "claim";
 
 export type TeamAutoActivityEntry = {
   at: number;
