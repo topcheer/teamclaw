@@ -107,7 +107,13 @@ export async function ensureBundledRuntime(opts) {
     if (prev === fp) return dest; // cached, same tar
   }
   emit("Preparing the bundled runtime (first launch, one-time extraction)...");
-  fs.rmSync(destRoot, { recursive: true, force: true });
+  // Windows: deleting the previous extraction often hits ENOTEMPTY/EBUSY -
+  // antivirus or the search indexer briefly holds handles inside the tree
+  // right after the upgrade's file churn, and a plain recursive rmSync
+  // throws (user-found on v4: extraction aborted and the wizard degraded
+  // to a slow online npm install). Node's rmSync natively retries the
+  // transient Windows error codes when asked - give it 10 tries / 500ms.
+  fs.rmSync(destRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
   fs.mkdirSync(destRoot, { recursive: true });
   // Archive's top level is `runtime/` - extract into destRoot.
   await runTar(["-xzf", tarPath], destRoot);
