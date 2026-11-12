@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026.11.2
+
+Released 2026-11-12. Patch release over 2026.11.1: installer hardening,
+hot-reloadable provisioning config, and teamauto observability.
+
+### Added
+- Hot worker-provisioning config (#hot-config): GET/PATCH
+  /api/v1/team/config applies max/min per-role and idle-TTL changes
+  in memory (no gateway restart), persists to the host openclaw.json
+  where the deployment shape allows (k8s-shaped controllers degrade
+  to declared memory-only), pokes the provisioner reconcile, and
+  broadcasts team:config_updated. Scale-down never kills busy workers.
+- Web UI Settings tab: models entry (moved out of the workspace tree)
+  plus the hot worker-scaling form, bilingual.
+- 24h recency windows on Planning/Tasks/Clarifications/Messages with
+  a lazy "Show older (N)" toggle.
+- Desktop Controller tab gains the same worker scaling card.
+- teamauto #265: the commits leg is wired into the sweep pipeline as
+  an observation-only feed (delta surfaced in sweep summaries;
+  lastCommitSha advances on acting sweeps; no task candidates).
+
+### Fixed
+- #261 installer deadlock on openclaw 2026.10.x hosts: retired
+  ownerDisplay key is pruned and 2026.10+ consent gates retried
+  (PR #264).
+- #253 ride-along: layout-adaptive role loading (1af1c69) now ships
+  in a published artifact, unblocking the Docker image repro (#263).
+- #266: lastAttemptAt is stamped on both sweep outcomes so paused /
+  stale repos are visible without inferring from error fields.
+- CI: push-triggered NPM Release runs skip green when the version is
+  already published (only explicit dispatch releases hard-fail).
+
+### Changed
+- openclaw submodule at upstream 7f5697b (154 commits since aed2383's
+  follow-up; worker-owned DB close SQL fix, session import newline
+  fix, sandbox guest keepalive during fetches).
+- Desktop bumped to 0.1.4.
+
 ## 2026.11.1
 
 Released 2026-11-11. Patch release over 2026.11.0: workflows, knowledge
