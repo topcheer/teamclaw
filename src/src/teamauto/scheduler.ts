@@ -144,9 +144,15 @@ export function classifySweepError(err: unknown): "auth" | "ratelimited" | "netw
   return "network";
 }
 
-/** Auto-pauses (set by the sweep catch block) are cooldowns; user pauses are not. */
+/** Auto-pauses (set by the sweep catch block) are cooldowns; user pauses are not.
+ * Accept BOTH the legacy prefix ("sweep failed: ...") and the #267 classified
+ * format ("sweep failed[network]: ...") - the classified format broke the old
+ * startsWith("sweep failed:") check, so successful sweeps could never clear
+ * the pause and the retry timer never re-armed (all four repos stuck paused
+ * after the 12:30 restart-window failures; found 2026-11-12). */
 export function isAutoPause(reason: string | null | undefined): boolean {
-  return !!reason && reason.startsWith("sweep failed:");
+  if (!reason) return false;
+  return /^sweep failed(\[[^\]]*\])?:/.test(reason);
 }
 
 export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
