@@ -304,6 +304,23 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
     logger.warn(`TeamClaw tunnel: boot recovery failed: ${String(err)}`);
   });
 
+  // Shutdown counterpart of the boot recover above: when the gateway process
+  // stops (SIGTERM/SIGINT - e.g. a config change restarting the plugin, or
+  // launchctl kickstart), detach() kills ONLY the local connector and keeps
+  // both tunnel-state.json and the remote relay tunnel alive, so the next
+  // boot's recover() reconnects the SAME tunnel. Without this, the
+  // connector's exit handler ran mid-shutdown, cleared the state file and
+  // DELETEd the relay tunnel - after which nothing could recover and the
+  // hostname served 530 (issue timeline: 2026-11-12, two consecutive
+  // restarts). Idempotent and safe to register repeatedly per http server.
+  for (const signal of ["SIGTERM", "SIGINT"] as const) {
+    process.on(signal, () => {
+      try {
+        tunnelManagerSingleton?.detach();
+      } catch { /* best effort during shutdown */ }
+    });
+  }
+
   setTimeout(() => {
     const state = deps.getTeamState();
     const pendingCount = state

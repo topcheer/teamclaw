@@ -203,6 +203,9 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
   // an unexpected crash (which must clear the active state so /tunnel/status
   // never reports a dead tunnel as live).
   let userStopping = false;
+  // True while the gateway process itself is shutting down (detach()): the
+  // connector's death then is EXPECTED and must not tear down tunnel state.
+  let processShuttingDown = false;
   let startOp: { running: boolean; phase: string; detail: string | null } = { running: false, phase: "idle", detail: null };
   let installState: { running: boolean; phase: string; percent: number | null; detail: string | null } = { running: false, phase: "idle", percent: null, detail: null };
 
@@ -359,6 +362,14 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
       logger.warn(`TeamClaw tunnel: cloudflared exited (code ${code})`);
       if (child !== proc) return;
       child = null;
+      // During process shutdown (detach()) the connector dies WITH the
+      // gateway; that is expected, and tunnel-state.json must survive so the
+      // next boot's recover() can reconnect the SAME tunnel (gate cookies
+      // stay valid). Only a genuine mid-run crash clears state.
+      if (processShuttingDown) {
+        logger.info("TeamClaw tunnel: connector exited during process shutdown; state retained for recovery");
+        return;
+      }
       if (!userStopping && handle) {
         handle = null;
         lastError = `tunnel connector exited unexpectedly (code ${code ?? "null"})`;
@@ -386,6 +397,16 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
       // Unexpected exit (crash, network loss, cloudflared auto-kill): tear
       // the logical state down too, otherwise status() keeps reporting
       // active=true and the UI shows a dead tunnel as live forever.
+      // EXCEPTION - process shutdown: when the gateway itself is stopping,
+      // the connector dies by design (SIGTERM cascade). Clearing state (and
+      // worse, DELETE-ing the relay tunnel) at that moment destroyed the
+      // recovery chain: the next boot found no tunnel-state.json and never
+      // reconnected, leaving the CNAME live but 530. Keep both state and the
+      // relay tunnel; recover() owns them next boot.
+      if (processShuttingDown) {
+        logger.info("TeamClaw tunnel: connector exited during process shutdown; state retained for recovery");
+        return;
+      }
       if (!userStopping && handle) {
         const gone = handle;
         handle = null;
@@ -410,6 +431,18 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
       child.kill("SIGTERM");
       child = null;
     }
+  }
+
+  // Process-lifecycle teardown: kill ONLY the local connector. The remote
+  // tunnel (relay) and tunnel-state.json both survive, so the next gateway
+  // boot's recover() reconnects the SAME tunnel (id/gate token/cookies all
+  // preserved). This is the shutdown-path counterpart to recover(); stop()
+  // remains the user-facing "turn it off" (full teardown + relay DELETE).
+  function detach(): void {
+    processShuttingDown = true;
+    stopConnector();
+    logger.info(handle ? "TeamClaw tunnel: detached connector for process shutdown (state retained; recover on next boot)" : "TeamClaw tunnel: shutdown detach (no active connector)");
+    handle = null;
   }
 
   async function stop(): Promise<void> {
@@ -584,7 +617,7 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
   }
 
 
-  return { start: launchStart, startSelfHosted, startQuick, stop, recover, status, installCloudflared, isTunnelRequest, gateAllows };
+  return { start: launchStart, startSelfHosted, startQuick, stop, detach, recover, status, installCloudflared, isTunnelRequest, gateAllows };
 }
 
 export type TunnelManager = ReturnType<typeof createTunnelManager>;
