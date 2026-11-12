@@ -102,6 +102,18 @@ export async function handleTeamAutoRepoItemRequest(
     let body: Record<string, unknown> = {};
     try { body = await parseJsonBody(req); } catch { /* empty */ }
     try {
+      // #269 (user report): the enabled flag used to be silently dropped
+      // here - the web UI's disable toggle returned 200 but never reached
+      // setRepoEnabled, so sweeps kept running. Wire it explicitly; the
+      // enable/disable path has different persistence semantics (pausedReason
+      // + timer reschedule) than the plain field patch below.
+      if (typeof body.enabled === "boolean" && Object.keys(body).every((k) => k === "enabled")) {
+        await teamAuto.setRepoEnabled(repoId, body.enabled);
+        const status = await teamAuto.getStatus();
+        const repo = (status?.repos ?? []).find((r: { id: string }) => r.id === repoId);
+        sendJson(res, 200, repo ?? { ok: true });
+        return true;
+      }
       const updated = await teamAuto.updateRepo(repoId, {
         schedule: typeof body.schedule === "string" ? body.schedule : undefined,
         maxTasksPerSweep: typeof body.maxTasksPerSweep === "number" ? body.maxTasksPerSweep : undefined,
