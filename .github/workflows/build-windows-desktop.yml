@@ -24,7 +24,7 @@ jobs:
         shell: pwsh
         run: |
           npm ci --prefix desktop
-          npm --prefix desktop run stage:runtime --if-present
+          npm --prefix desktop run prepare-bundled
       - name: Build NSIS installer + portable
         shell: pwsh
         run: |
