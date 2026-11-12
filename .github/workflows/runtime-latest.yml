@@ -5,8 +5,12 @@ name: Runtime tar (runtime-latest)
 # assets on that release. Desktop "artifact" installs pin this URL:
 #   https://github.com/topcheer/teamclaw/releases/download/runtime-latest/teamclaw-runtime-<plat>.tar.gz
 on:
+  # # Artifact/release lanes run on tags and dispatch only (2026-11-12 CI policy:
+# plain pushes build/test in teamclaw-unit-tests.yml; release artifacts are
+# produced when a release is actually cut).
   push:
-    branches: [main]
+    tags:
+      - "v*"
   workflow_dispatch:
 
 permissions:

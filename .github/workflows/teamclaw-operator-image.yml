@@ -1,11 +1,10 @@
 name: TeamClaw Operator Image
 
 on:
+  # Operator image is a release artifact: tags and dispatch only
+  # (2026-11-12 CI policy; the old main-push + paths trigger rebuilt and
+  # pushed :latest on every operator/** commit).
   push:
-    branches: [main]
-    paths:
-      - "operator/**"
-      - ".github/workflows/teamclaw-operator-image.yml"
     tags:
       - "v*"
   workflow_dispatch:
