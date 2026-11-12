@@ -99,8 +99,12 @@ jobs:
             const fs = require('fs');
             const p = JSON.parse(fs.readFileSync('desktop/package.json', 'utf8'));
             p.build = p.build || {};
+            // identityName is an AppXOptions field (build.appx), NOT
+            // WinConfiguration - injecting it into build.win failed schema
+            // validation ('configuration.win should be one of these: null').
+            // publisher belongs to build.win (code-signing identity).
+            p.build.appx = { ...(p.build.appx || {}), identityName: process.env.MSSTORE_IDENTITY_NAME };
             p.build.win = p.build.win || {};
-            p.build.win.identityName = process.env.MSSTORE_IDENTITY_NAME;
             p.build.win.publisher = process.env.MSSTORE_PUBLISHER;
             delete p.build.win.publish;
             fs.writeFileSync('desktop/package.json', JSON.stringify(p, null, 2) + '\n');
