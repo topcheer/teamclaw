@@ -7,6 +7,7 @@ import type {
   StartupProvisioningReadiness,
   TeamProvisioningState,
   TeamState,
+  TeamMessage,
   WorkerIdentity,
 } from "./types.js";
 import { validateRoleIdList } from "./roles.js";
@@ -296,8 +297,7 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function loadTeamState(teamName: string): Promise<TeamState | null> {
-  // Review fix (Phase 1.6): the instance-scoped team-state.json is the
+async function loadTeamState(teamName: string): Promise<TeamState | null> {  // Review fix (Phase 1.6): the instance-scoped team-state.json is the
   // primary state file, and when it EXISTS it is authoritative. A
   // present-but-corrupt primary is a fatal error, never a silent fallback to
   // the legacy snapshot - falling back would rewind the team to the
@@ -306,6 +306,11 @@ async function loadTeamState(teamName: string): Promise<TeamState | null> {
   let primaryRaw: string | null = null;
   try {
     primaryRaw = await fs.readFile(teamStateFilePath(), "utf8");
+    // #270: baseline the mtime right after reading so a foreign write between
+    // load and our first save is detected (not blindly overwritten).
+    try {
+      teamStateMtime.set(teamStateFilePath(), (await fs.stat(teamStateFilePath())).mtimeMs);
+    } catch { /* stat race - next save re-baselines */ }
   } catch (error) {
     if (!isFileMissing(error)) {
       throw new Error(
@@ -346,6 +351,41 @@ async function loadTeamState(teamName: string): Promise<TeamState | null> {
   }
 }
 
+// #270 lazy merge-on-write: last mtime this process observed for the team
+// state file. A disk file NEWER than this stamp means another process wrote
+// it (multi-gateway sharing one store) - the next save merges instead of
+// blindly overwriting (which is how tasks "evaporated": 155/81 -> 135/72).
+// Single-process cost: one stat() per save; the 24MB re-read+merge only
+// happens when a foreign write is actually detected.
+const teamStateMtime = new Map<string, number>();
+
+/** #270: fold foreign keys back in. Key-level policy - keys present in the
+ * foreign snapshot but missing from OUR in-memory state are re-added (they
+ * were created by another process and a blind full-file write would erase
+ * them). Keys we hold locally always win (this process is the most recent
+ * writer for them). Messages union by id. */
+function mergeForeignTeamState(state: TeamState, disk: Partial<TeamState>): void {
+  const recordKeys = ["workers", "tasks", "controllerRuns", "projects", "clarifications", "previews", "reports"] as const;
+  for (const key of recordKeys) {
+    const foreign = disk[key] as Record<string, unknown> | undefined;
+    if (!foreign || typeof foreign !== "object") continue;
+    const ours = (state[key] ?? {}) as Record<string, unknown>;
+    for (const [k, v] of Object.entries(foreign)) {
+      if (!(k in ours)) ours[k] = v;
+    }
+    (state as Record<string, unknown>)[key] = ours;
+  }
+  const foreignMsgs = Array.isArray(disk.messages) ? disk.messages : [];
+  if (foreignMsgs.length) {
+    const seen = new Set(state.messages.map((m) => m.id));
+    for (const m of foreignMsgs) {
+      if (m && typeof m === "object" && typeof (m as TeamMessage).id === "string" && !seen.has((m as TeamMessage).id)) {
+        state.messages.push(m as TeamMessage);
+      }
+    }
+  }
+}
+
 async function saveTeamState(state: TeamState): Promise<void> {
   await ensureDir(STATE_DIR);
   const filePath = teamStateFilePath();
@@ -364,7 +404,22 @@ async function saveTeamState(state: TeamState): Promise<void> {
   state.projects = state.projects && typeof state.projects === "object"
     ? state.projects
     : {};
+  // #270: if the disk file is newer than what THIS process last observed,
+  // another gateway wrote it - fold its keys back in before overwriting.
+  try {
+    const st = await fs.stat(filePath);
+    const known = teamStateMtime.get(filePath);
+    if (known !== undefined && st.mtimeMs > known) {
+      const disk = JSON.parse(await fs.readFile(filePath, "utf8")) as Partial<TeamState>;
+      mergeForeignTeamState(state, disk);
+    }
+  } catch {
+    /* first save / stat race - proceed with a plain write */
+  }
   await enqueueAtomicWrite(filePath, `${JSON.stringify(state, null, 2)}\n`);
+  try {
+    teamStateMtime.set(filePath, (await fs.stat(filePath)).mtimeMs);
+  } catch { /* renamed away mid-write - next save re-baselines */ }
 }
 
 // ---------------------------------------------------------------------------
