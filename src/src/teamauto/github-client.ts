@@ -54,11 +54,17 @@ export type GithubRepoInfo = {
 };
 
 export function createGithubClient(auth: GithubAuthManager) {
+  // #267-3: cumulative API-call counters; runSweep reads etagStats() before/
+  // after each sweep and stores the DELTA on the repo's sweep record, so the
+  // shared client still yields correct per-repo attribution (sweeps are
+  // serialized by the sweeping set).
+  const etagCounters = { calls: 0, hits: 0 };
   async function request(
     method: string,
     urlPath: string,
     options: { body?: unknown; etagKey?: string; etags?: EtagCache } = {},
   ): Promise<{ status: number; data: unknown; notModified: boolean }> {
+    etagCounters.calls += 1;
     const headers: Record<string, string> = {
       ...(await auth.getAuthHeaders()),
       "User-Agent": USER_AGENT,
@@ -99,6 +105,9 @@ export function createGithubClient(auth: GithubAuthManager) {
       const message = (data as { message?: string } | null)?.message ?? `HTTP ${response.status}`;
       throw new GithubClientError(message, response.status);
     }
+    if (response.status >= 200 && response.status < 300) {
+      etagCounters.hits += 1; // #267-3: "hits" = calls that returned fresh data (non-304 successes)
+    }
     return { status: response.status, data, notModified: false };
   }
 
@@ -109,6 +118,11 @@ export function createGithubClient(auth: GithubAuthManager) {
 
   return {
     request,
+
+    /** #267-3: cumulative etag/API counters (see etagCounters above). */
+    etagStats(): { calls: number; hits: number } {
+      return { ...etagCounters };
+    },
 
     async getRepoInfo(owner: string, repo: string): Promise<GithubRepoInfo> {
       const data = await getJson<Record<string, unknown>>(`/repos/${owner}/${repo}`);

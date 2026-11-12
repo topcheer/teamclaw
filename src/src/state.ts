@@ -240,6 +240,22 @@ async function writeFileAtomically(filePath: string, contents: string): Promise<
     // filesystems (e.g. network mounts) reject explicit chmod.
   }
   await fs.rename(tmpPath, filePath);
+  // #267-4 hygiene: crash/rename failures used to leave *.tmp-* siblings
+  // forever (observed: 16 residue files in the runtime dir). Best-effort
+  // sweep of same-prefix leftovers older than 1h - never throws.
+  try {
+    const dir = path.dirname(filePath);
+    const prefix = path.basename(filePath) + ".tmp-";
+    const stale = Date.now() - 3_600_000;
+    for (const name of await fs.readdir(dir)) {
+      if (!name.startsWith(prefix)) continue;
+      const full = path.join(dir, name);
+      const st = await fs.stat(full).catch(() => null);
+      if (st && st.mtimeMs < stale) await fs.unlink(full).catch(() => {});
+    }
+  } catch {
+    // Hygiene is best-effort: any fs failure here is silently ignored.
+  }
 }
 
 function enqueueAtomicWrite(filePath: string, contents: string): Promise<void> {

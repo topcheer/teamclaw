@@ -122,6 +122,22 @@ async function sourceContracts() {
   assert.match(scheduler, /await client\.postIssueComment\(owner, name, candidate\.number, `TeamClaw \(teamclaw\/developer/,
     "claim falls back to a visible marker comment when the assign surface fails");
 
+  // #267-1: sweep failures carry a root-cause class (auth/ratelimited/network).
+  assert.match(scheduler, /const failClass = classifySweepError\(err\);/,
+    "failure path classifies the error before writing reason/activity");
+  assert.match(scheduler, /repo\.pausedReason = `sweep failed\[\$\{failClass\}\]: /,
+    "pausedReason carries the class while keeping the isAutoPause 'sweep failed:' prefix");
+
+  // #267-2: bounded per-repo sweep ring on both outcomes.
+  assert.match(scheduler, /pushSweepRecord\(repo, \{ at: Date\.now\(\), ok: true,/, "success sweeps are recorded per-repo");
+  assert.match(scheduler, /pushSweepRecord\(repo, \{ at: Date\.now\(\), ok: false,/, "failure sweeps are recorded per-repo (with failClass)");
+  assert.match(store, /repo\.sweeps = repo\.sweeps\.slice\(repo\.sweeps\.length - 20\);/,
+    "sweep ring is capped at 20 (same slice pattern as the activity log)");
+
+  // #267-3: etag counters + per-sweep delta attribution.
+  assert.match(client, /etagStats\(\): \{ calls: number; hits: number \}/, "client exposes cumulative etag counters");
+  assert.match(scheduler, /const etagBefore = client\.etagStats\(\);/, "runSweep snapshots etag counters for delta attribution");
+
   // #266: both sweep outcomes must stamp lastAttemptAt so success-scoped
   // fields (lastSweepAt/lastSweepSummary) never have to be read as attempt
   // evidence next to pausedReason.

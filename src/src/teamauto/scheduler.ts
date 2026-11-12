@@ -20,6 +20,7 @@ import {
   loadTeamAutoStore,
   pushTeamAutoActivity,
   saveTeamAutoStore,
+  pushSweepRecord,
   type TeamAutoActivityEntry,
   type TeamAutoRepo,
   type TeamAutoRepoNorms,
@@ -128,6 +129,19 @@ export function writebackBackoffMs(attempts: number): number {
 /** Epoch ms when a failed write-back becomes due for its next retry. */
 export function writebackRetryDueAt(attempts: number, lastErrorAt: number): number {
   return lastErrorAt + writebackBackoffMs(attempts);
+}
+
+/** #267-1: sweep failures are classified so operators can act on the RIGHT
+ * root cause: 401 -> re-login, 403/429 -> back off harder, network -> the
+ * existing retry ladder. undici wraps HTTP errors; the status rides on
+ * err.cause (fetch failed). Unknown causes stay "network" - the ladder's
+ * existing semantics. */
+export function classifySweepError(err: unknown): "auth" | "ratelimited" | "network" {
+  const cause = (err as { cause?: { status?: number }; status?: number })?.cause ?? (err as { status?: number });
+  const status = Number(cause?.status ?? 0);
+  if (status === 401) return "auth";
+  if (status === 403 || status === 429) return "ratelimited";
+  return "network";
 }
 
 /** Auto-pauses (set by the sweep catch block) are cooldowns; user pauses are not. */
@@ -408,6 +422,8 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       return "sweep already in progress";
     }
     sweeping.add(repo.id);
+    const sweepStartedAt = Date.now();
+    const etagBefore = client.etagStats();
     try {
       const { candidates, issues, pulls, newCommits, commits } = await sweepRepo(repo, client);
       const dryRun = !repo.dryRunDone && s.budget.firstSweepDryRun;
@@ -477,6 +493,8 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       }
       repo.sweepFailures = 0;
       repo.lastAttemptAt = Date.now(); // #266: success is also an attempt
+      const etagAfter = client.etagStats();
+      pushSweepRecord(repo, { at: Date.now(), ok: true, summary: repo.lastSweepSummary ?? "sweep complete", durationMs: Date.now() - sweepStartedAt, etagCalls: Math.max(0, etagAfter.calls - etagBefore.calls), etag304Hits: Math.max(0, etagAfter.hits - etagBefore.hits) });
       recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "sweep", text: repo.lastSweepSummary ?? "sweep complete" });
       await saveTeamAutoStore(s);
       if (created > 0) {
@@ -495,8 +513,11 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       repo.sweepFailures = (repo.sweepFailures ?? 0) + 1;
       repo.lastSweepErrorAt = Date.now();
       repo.lastAttemptAt = repo.lastSweepErrorAt; // #266: failures must be visible without inferring from lastSweepErrorAt
-      repo.pausedReason = `sweep failed: ${message}`;
-      recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "sweep", text: `sweep failed (auto-retry in ~${sweepBackoffMinutes(repo.sweepFailures)}min): ${message}` });
+      const failClass = classifySweepError(err);
+      repo.pausedReason = `sweep failed[${failClass}]: ${message}`;
+      const etagAfter = client.etagStats();
+      pushSweepRecord(repo, { at: Date.now(), ok: false, summary: `sweep failed[${failClass}]: ${message}`, failClass, durationMs: Date.now() - sweepStartedAt, etagCalls: Math.max(0, etagAfter.calls - etagBefore.calls), etag304Hits: Math.max(0, etagAfter.hits - etagBefore.hits) });
+      recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "sweep", text: `sweep failed[${failClass}] (auto-retry in ~${sweepBackoffMinutes(repo.sweepFailures)}min): ${message}` });
       await saveTeamAutoStore(s).catch(() => {});
       logger.warn(`TeamAuto: sweep failed for ${repo.id}: ${message}`);
       return `error: ${message}`;

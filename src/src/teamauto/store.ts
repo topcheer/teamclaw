@@ -75,6 +75,8 @@ export type TeamAutoRepo = {
    * answers "did the scheduler try recently" without the two surfaces
    * contradicting each other when read side by side. */
   lastAttemptAt?: number;
+  /** #267-2: bounded per-repo sweep ring (newest last, cap 20). */
+  sweeps?: TeamAutoSweepRecord[];
   dryRunDone: boolean;
   /** Bind-time provisioning state; ready/undefined means sweepable. */
   provision?: TeamAutoRepoProvision;
@@ -107,7 +109,7 @@ export type TeamAutoWriteBack = {
   failedAt?: number | null;
 };
 
-export type TeamAutoActivityKind = "bind" | "provision" | "sweep" | "task" | "writeback" | "claim";
+export type TeamAutoActivityKind = "bind" | "provision" | "sweep" | "task" | "writeback" | "claim" | "hygiene";
 
 export type TeamAutoActivityEntry = {
   at: number;
@@ -125,6 +127,29 @@ export function pushTeamAutoActivity(store: TeamAutoStore, entry: TeamAutoActivi
     store.activity = store.activity.slice(store.activity.length - TEAMAUTO_ACTIVITY_LIMIT);
   }
 }
+
+/** #267-2: bounded per-repo sweep ring (newest last, cap 20) - same slice
+ * pattern as pushTeamAutoActivity. */
+export function pushSweepRecord(repo: TeamAutoRepo, entry: TeamAutoSweepRecord): void {
+  repo.sweeps = repo.sweeps ?? [];
+  repo.sweeps.push(entry);
+  if (repo.sweeps.length > 20) {
+    repo.sweeps = repo.sweeps.slice(repo.sweeps.length - 20);
+  }
+}
+
+/** #267-2 record type: one bounded per-repo sweep history entry. */
+export type TeamAutoSweepRecord = {
+  at: number;
+  ok: boolean;
+  summary: string;
+  /** #267-1 classification when ok=false: auth | ratelimited | network. */
+  failClass?: "auth" | "ratelimited" | "network";
+  durationMs: number;
+  /** #267-3 per-sweep deltas of the client's cumulative etag counters. */
+  etagCalls: number;
+  etag304Hits: number;
+};
 
 export type TeamAutoStore = {
   version: number;
