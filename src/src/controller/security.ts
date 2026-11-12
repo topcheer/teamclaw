@@ -469,6 +469,20 @@ export function createSecurityMiddleware(deps: SecurityMiddlewareDeps): Security
       return true;
     }
 
+    // Loopback is the controller host itself: the desktop app, the web UI,
+    // provisioned workers registering/heart-beating, and the owner's own
+    // CLI/curl. Requiring device pairing from the SAME MACHINE broke all of
+    // them the moment protection turned on (provisioned workers 401'd their
+    // registration and the worker pool starved; the local desktop could not
+    // talk to its own gateway - reported as a UX defect 2026-11-12). Local
+    // peers stay first-party: tunnel traffic never earns loopback trust
+    // (classifySecurityPeer strips it via viaTunnel) and LAN peers still
+    // need a device token. Sensitive endpoints (/security/reset, pair
+    // management) keep their own confirm/loopback guards.
+    if (peer.loopback) {
+      return true;
+    }
+
     const auth = authenticateDeviceToken(state, extractDeviceToken(req));
     if (!auth) {
       deps.logger.warn(`Controller: rejected unauthenticated ${req.method ?? "?"} ${pathname} from ${peer.ip}${peer.viaTunnel ? " (via tunnel)" : ""}`);
