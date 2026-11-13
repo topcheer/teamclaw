@@ -153,10 +153,13 @@ export function buildProvisionedWorkerConfig(
   if (controllerConfig.workerProvisioningType === "process" || !controllerConfig.workerProvisioningType) {
     const controllerEntryPath = resolveControllerTeamclawEntry();
     if (controllerEntryPath) {
-      const loadList = ensureRecord(plugins).load;
-      const load = Array.isArray(loadList) ? loadList.filter((p) => typeof p === "string") : [];
-      if (!load.includes(controllerEntryPath)) load.push(controllerEntryPath);
-      plugins.load = load;
+      // Host schema: plugins.load = { paths: string[] } (object, not array).
+      const loadObj = ensureRecord(plugins).load;
+      const existing = ensureRecord(loadObj && typeof loadObj === "object" ? loadObj : {});
+      const paths = Array.isArray(existing.paths) ? existing.paths.filter((p) => typeof p === "string") : [];
+      if (!paths.includes(controllerEntryPath)) paths.push(controllerEntryPath);
+      existing.paths = paths;
+      plugins.load = existing;
     }
   }
   const entries = ensureRecord(plugins.entries);
