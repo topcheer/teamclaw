@@ -1,4 +1,11 @@
 #!/usr/bin/env node
+// Watchdog (g4): fail loudly if any await wedges (intermittent env hang
+// - three CI cancels + local 20-minute hangs). unref'd so it never holds
+// the loop open itself; process.exit(0) at the tail clears it on success.
+setTimeout(() => {
+  console.error("test-security-pairing: WATCHDOG fired - suite wedged before completion");
+  process.exit(1);
+}, 240_000).unref();
 // Issue #23 backend wave: controller device-pairing security - dist-level
 // tests against a real HTTP + WebSocket server (same pattern as
 // test-profile-switch.mjs; run `npm --prefix src run build` first).
@@ -430,25 +437,29 @@ const mintedTokens = [];
     const wsMod = await import(pathToFileURL(path.join(projectRoot, "src", "node_modules", "ws", "index.js")).href);
     const WebSocketClient = wsMod.default ?? wsMod.WebSocket;
     const wsPort = new URL(scenario.baseUrl).port;
-    const wsBlocked = await new Promise((resolve) => {
+    // g4/UT-cancelled: these promises only settle on open|error - when the
+    // server occasionally never completes the handshake the suite hung
+    // forever (three CI cancels + local 20min hangs). Race each probe.
+    const wsTimeout = () => new Promise((resolve) => setTimeout(() => resolve(new Error("ws probe timeout")), 5000));
+    const wsBlocked = await Promise.race([new Promise((resolve) => {
       const ws = new WebSocketClient(`ws://127.0.0.1:${wsPort}/ws`);
       ws.on("open", () => resolve("open"));
       ws.on("error", (err) => resolve(err));
-    });
+    }), wsTimeout()]);
     assert.match(String(wsBlocked), /401|Unexpected server response/, "tokenless WS upgrade is rejected while protection is on");
 
-    const wsOpen = await new Promise((resolve) => {
+    const wsOpen = await Promise.race([new Promise((resolve) => {
       const ws = new WebSocketClient(`ws://127.0.0.1:${wsPort}/ws?token=${webToken}`);
       ws.on("open", () => { ws.close(); resolve("open"); });
       ws.on("error", (err) => resolve(err));
-    });
+    }), wsTimeout()]);
     assert.equal(String(wsOpen), "open", "WS upgrade with ?token= succeeds");
 
-    const wsCookie = await new Promise((resolve) => {
+    const wsCookie = await Promise.race([new Promise((resolve) => {
       const ws = new WebSocketClient(`ws://127.0.0.1:${wsPort}/ws`, { headers: { cookie: `teamclaw_session=${webToken}` } });
       ws.on("open", () => { ws.close(); resolve("open"); });
       ws.on("error", (err) => resolve(err));
-    });
+    }), wsTimeout()]);
     assert.equal(String(wsCookie), "open", "WS upgrade with the session cookie succeeds");
 
     // ---- 8. At-rest safety: hashes only, never plaintext --------------------
@@ -686,3 +697,6 @@ const mintedTokens = [];
 }
 
 console.log("Security pairing smoke passed.");
+// g4: exit explicitly - fetch keep-alive sockets can keep the loop alive
+// after all assertions passed (observed locally and as CI cancels).
+process.exit(0);
