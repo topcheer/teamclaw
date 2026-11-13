@@ -1,0 +1,35 @@
+TeamClaw Desktop - App Review Response Notes
+=============================================
+Build: ee43298 (MAS)
+Date: 2026-11-13
+
+1) com.apple.security.network.server entitlement
+------------------------------------------------
+The app's core feature is a local automation gateway that runs ON the
+user's machine and listens on 127.0.0.1 (default port 9627 or 18789).
+The app's own UI connects to this localhost controller API; the wizard
+log shows this plainly ("Global gateway not running - starting it...").
+
+- The listener binds to loopback only. No external inbound connections
+  are accepted.
+- com.apple.security.network.client alone cannot bind a listen socket,
+  so the server entitlement is required for this localhost listener.
+- Requested action: keep the entitlement per your option 2 (reply with
+  a description). This note is also entered in App Review Information.
+
+2) Non-public API symbols (__AXUIElementCreateWithRemoteToken,
+   __AXUIElementGetWindow)
+------------------------------------------------
+Root cause located with the suggested tooling (strings / nm across
+every binary in the package): the ONLY source of both symbols is
+@trycua/cua-driver-darwin-arm64/libcua_driver_sdk.dylib - an OPTIONAL
+computer-use driver declared by the embedded openclaw host runtime.
+Nothing in TeamClaw's own code references it.
+
+Fix shipped in build ee43298: the darwin variants of that driver are
+pruned recursively (top-level and the nested copy inside the plugin
+subtree) during packaging. Verification: re-scan of the packed
+runtime archive reports 0 occurrences of either symbol and 0 copies of
+the dylib.
+
+Request: please re-review the new build.
