@@ -1846,14 +1846,29 @@ ipcMain.handle("instance:install-into-global", async (event, options) => {
   // Resolve THIS instance's controller (pinned or auto-shifted port) from its
   // own config + gateway log - never the process-global 9527 default, which
   // may be another instance entirely.
-  const gStateDir = gHome;
+  // #v11 (user-found, Windows global install): two path gaps made a healthy
+  // install look dead. (a) the config probe read gHome/openclaw.json instead
+  // of gHome/.openclaw/openclaw.json; (b) both log candidates missed the
+  // .openclaw segment. Additionally `gateway restart` can exit 0 on a fresh
+  // Windows machine without actually having a service to restart - so when
+  // resolution fails we now fall back to self-starting the gateway and
+  // re-resolving before giving up.
+  const gStateDir = path.join(gHome, ".openclaw");
   let gCfg = null;
   try { gCfg = JSON.parse(await fs.readFile(path.join(gStateDir, "openclaw.json"), "utf8")); } catch { /* none */ }
-  const controllerUrl = await resolveInstanceControllerUrl(gStateDir, controllerPortFromConfig(gCfg), [
+  const gLogPaths = [
     path.join(app.getPath("userData"), "global-gateway.log"),
     path.join(gStateDir, "gateway.log"),
     path.join(gStateDir, "logs", "gateway.log"),
-  ]);
+  ];
+  let controllerUrl = await resolveInstanceControllerUrl(gStateDir, controllerPortFromConfig(gCfg), gLogPaths);
+  if (!controllerUrl) {
+    onEvent({ phase: "teamclaw", line: "Controller not detected yet - self-starting the global gateway as a fallback..." });
+    let gPort2 = 18789;
+    try { gPort2 = Number(JSON.parse(await fs.readFile(path.join(gStateDir, "openclaw.json"), "utf8"))?.gateway?.port) || 18789; } catch { /* default */ }
+    await globalGatewayStart(gPort2, { ...gEnv, HOME: gHome }, bin);
+    controllerUrl = await resolveInstanceControllerUrl(gStateDir, controllerPortFromConfig(gCfg), gLogPaths);
+  }
   if (!controllerUrl) throw new Error(`Global controller did not come up in ${gStateDir} after install.`);
   onEvent({ phase: "done", line: "Global TeamClaw ready at " + controllerUrl });
   return { ok: true, controllerUrl };
