@@ -35,7 +35,7 @@ export function resolveControllerTeamclawEntryPath(): string | undefined {
     for (const proj of fsSync.readdirSync(projectsDir)) {
       if (!proj.startsWith("teamclaws-teamclaw")) continue;
       candidates.push(
-        path.join(projectsDir, proj, "node_modules", "@teamclaws", "teamclaw", "dist", "index.js"),
+        path.join(projectsDir, proj, "node_modules", "@teamclaws", "teamclaw"),
       );
     }
   } catch { /* no projects dir */ }
