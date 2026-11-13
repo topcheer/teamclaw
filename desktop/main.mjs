@@ -819,13 +819,37 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
     // exit) - same family as the v5 ENOTEMPTY race. One retry with a short
     // settle delay almost always clears the lock.
     const installCmd = `"${openclawBin}" plugins install "file:${bundledPlugin}" --force --accept-capabilities`;
-    try {
-      await runShellStream(installCmd, runtimeDir, (line) => onEvent({ phase: "teamclaw", line }), sandboxEnv);
-    } catch (installErr) {
-      const msg = installErr instanceof Error ? installErr.message : String(installErr);
-      onEvent({ phase: "teamclaw", line: `Install failed once (${msg.slice(0, 120)}) - retrying after handle settle...` });
-      await new Promise((r) => setTimeout(r, 2500));
-      await runShellStream(installCmd, runtimeDir, (line) => onEvent({ phase: "teamclaw", line }), sandboxEnv);
+    const extInstalledDir = path.join(sandboxEnv.OPENCLAW_STATE_DIR, "extensions", "teamclaw");
+    const extInstalled = () => fsSync.existsSync(path.join(extInstalledDir, "openclaw.plugin.json")) || fsSync.existsSync(path.join(extInstalledDir, "package.json"));
+    // #v10/#v12 (user-found twice): the openclaw host retires its sqlite
+    // read-snapshot during this install and on Windows the cleanup can hit
+    // handle locks that persist longer than one retry window ("Shared-state
+    // read snapshot cleanup failed" -> non-zero exit). CRITICAL INSIGHT from
+    // the v10 round: the cleanup is the LAST step - when it fails the plugin
+    // body is already copied into extensions/, so this is NOT a failed
+    // install. Ladder: up to 3 attempts with growing settle delays; then if
+    // the plugin dir exists, treat the install as done (with a warning) and
+    // continue instead of failing the whole bootstrap.
+    let installed = false;
+    const settleDelays = [2500, 5000, 10000];
+    for (let attempt = 0; attempt < settleDelays.length && !installed; attempt++) {
+      try {
+        await runShellStream(installCmd, runtimeDir, (line) => onEvent({ phase: "teamclaw", line }), sandboxEnv);
+        installed = true;
+      } catch (installErr) {
+        const msg = installErr instanceof Error ? installErr.message : String(installErr);
+        if (extInstalled()) {
+          onEvent({ phase: "teamclaw", line: "Install step errored, but the plugin is present in extensions/ - continuing (host cleanup race, not a failed install)." });
+          installed = true;
+          break;
+        }
+        if (attempt < settleDelays.length - 1) {
+          onEvent({ phase: "teamclaw", line: `Install failed once (${msg.slice(0, 120)}) - retrying in ${Math.round(settleDelays[attempt + 1] / 1000)}s...` });
+          await new Promise((r) => setTimeout(r, settleDelays[attempt + 1]));
+        } else {
+          throw installErr;
+        }
+      }
     }
     // #147: openclaw's dependency probe enforces the plugin rootDir BOUNDARY -
     // hoisted deps (npm layout in the runtime tree) resolve OUTSIDE it and
@@ -1612,11 +1636,29 @@ function standaloneStatus() {
   };
 }
 
+// #v12 (user-found screenshot): the sidebar showed a green "Running :9627"
+// while the wizard bootstrap had just failed - "running" was a PROCESS check
+// only. The gateway can be up while the controller API is not (plugin load
+// failure), which misleads users into connecting to a dead instance. The
+// status now also probes the controller health endpoint (1.5s timeout) and
+// reports healthy: true/false so the UI can show an honest tri-state.
+async function standaloneStatusWithHealth() {
+  const st = standaloneStatus();
+  let healthy = false;
+  if (st.running && st.controllerUrl) {
+    try {
+      const r = await fetch(`${st.controllerUrl}/api/v1/health`, { signal: AbortSignal.timeout(1500) });
+      healthy = r.ok;
+    } catch { healthy = false; }
+  }
+  return { ...st, healthy };
+}
+
 ipcMain.handle("standalone:start", async (_e, options) =>
   standaloneStart(options?.preferredVendor, options?.instance || null, options?.teamProfile || null)
 );
 ipcMain.handle("standalone:stop", () => standaloneStop());
-ipcMain.handle("standalone:status", () => standaloneStatus());
+ipcMain.handle("standalone:status", () => standaloneStatusWithHealth());
 
 // App lifecycle: the private instance dies with the app UNLESS the user
 // chose "persistent" (keep it running in the background so the next app

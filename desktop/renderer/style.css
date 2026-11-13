@@ -258,6 +258,7 @@ button, input, textarea { font: inherit; }
   color: var(--text-soft);
 }
 .left-rail .pill-connected { color: var(--ok-text); }
+.left-rail .pill-warn { color: var(--warn-text); }
 .left-rail .pill-connecting,
 .left-rail .pill-running { color: var(--warn-text); }
 .left-rail .pill-disconnected,
@@ -289,6 +290,7 @@ button, input, textarea { font: inherit; }
   color: var(--text-soft);
 }
 .pill-connected { background: var(--ok-bg); color: var(--ok-text); }
+.pill-warn { background: var(--warn-bg); color: var(--warn-text); border: 1px solid var(--warn-border); }
 #connection-pill.is-clickable { cursor: pointer; }
 #connection-pill.is-clickable:hover { filter: brightness(1.15); }
 #connection-pill { min-width: 34px; text-align: center; user-select: none; }

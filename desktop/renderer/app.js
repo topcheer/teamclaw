@@ -4834,8 +4834,11 @@ import { createT as i18nCreateT } from "./i18n.js";
     const refreshStandalone = async () => {
       try {
         const st = await desktop.standaloneStatus();
-        if (pill) pill.className = 'pill ' + (st.running ? 'pill-connected' : 'pill-stopped');
-        if (pill) pill.textContent = st.running ? 'Running :' + st.port : 'Stopped';
+        // #v12 honest tri-state: process-up + API-answering is "Running";
+        // process-up but the controller API is not answering (e.g. plugin
+        // load failed) shows "Starting" instead of a misleading green.
+        if (pill) pill.className = 'pill ' + (!st.running ? 'pill-stopped' : (st.healthy ? 'pill-connected' : 'pill-warn'));
+        if (pill) pill.textContent = !st.running ? 'Stopped' : (st.healthy ? 'Running :' + st.port : 'Starting :' + st.port);
         if (startBtn) startBtn.hidden = st.running;
         if (connectBtn) connectBtn.hidden = !st.running;
         const stopBtn2 = document.getElementById('standalone-stop-btn');
