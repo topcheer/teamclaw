@@ -17,6 +17,41 @@ import {
   TEAMCLAW_AGENT_ID,
 } from "../openclaw-workspace.js";
 import { cloneJson, pathExists, sanitizePathSegment } from "../shared/utils.js";
+import os from "node:os";
+import fsSync from "node:fs";
+
+/**
+ * #task-stuck (13th layer): resolve the teamclaw entry the CONTROLLER is
+ * actually loading, so process workers can plugins.load the same physical
+ * path. Discovery order: openclaw npm projects generation dirs (newest
+ * mtime wins - that is what the host loaded), then the global node_modules
+ * install. Returns undefined when nothing resolvable exists.
+ */
+function resolveControllerTeamclawEntry(): string | undefined {
+  const candidates: string[] = [];
+  const home = process.env.OPENCLAW_HOME?.trim() || process.env.HOME?.trim() || os.homedir();
+  const projectsDir = path.join(home, ".openclaw", "npm", "projects");
+  try {
+    for (const proj of fsSync.readdirSync(projectsDir)) {
+      if (!proj.startsWith("teamclaws-teamclaw")) continue;
+      candidates.push(
+        path.join(projectsDir, proj, "node_modules", "@teamclaws", "teamclaw", "dist", "index.js"),
+      );
+    }
+  } catch { /* no projects dir */ }
+  candidates.push(
+    "/opt/homebrew/lib/node_modules/@teamclaws/teamclaw/dist/index.js",
+    "/usr/local/lib/node_modules/@teamclaws/teamclaw/dist/index.js",
+  );
+  let best: { p: string; m: number } | undefined;
+  for (const p of candidates) {
+    try {
+      const m = fsSync.statSync(p).mtimeMs;
+      if (!best || m > best.m) best = { p, m };
+    } catch { /* candidate absent */ }
+  }
+  return best?.p;
+}
 
 export function buildProvisionedWorkerConfig(
   baseConfig: Record<string, unknown>,
@@ -107,6 +142,22 @@ export function buildProvisionedWorkerConfig(
   plugins.enabled = true;
   if (controllerConfig.workerProvisioningType === "docker" || controllerConfig.workerProvisioningType === "kubernetes") {
     delete plugins.load;
+  }
+  // #task-stuck (2026-11-13, 13th layer): a PROCESS worker sandbox has NO
+  // local teamclaw installation (no extensions dir, no npm registration),
+  // and entries.enabled alone does not make the host resolve the plugin -
+  // the worker gateway booted as bare openclaw (plugins: anthropic,
+  // memory-core) and never registered with the controller, so pending
+  // tasks sat unclaimed forever. Point plugins.load at the CONTROLLER's
+  // teamclaw entry (the npm project dir the controller itself loads from).
+  if (controllerConfig.workerProvisioningType === "process" || !controllerConfig.workerProvisioningType) {
+    const controllerEntryPath = resolveControllerTeamclawEntry();
+    if (controllerEntryPath) {
+      const loadList = ensureRecord(plugins).load;
+      const load = Array.isArray(loadList) ? loadList.filter((p) => typeof p === "string") : [];
+      if (!load.includes(controllerEntryPath)) load.push(controllerEntryPath);
+      plugins.load = load;
+    }
   }
   const entries = ensureRecord(plugins.entries);
   const teamclawEntry = ensureRecord(entries.teamclaw);
