@@ -1738,9 +1738,10 @@ function controllerPortFromConfig(cfg) {
   const p = Number(cfg?.plugins?.entries?.teamclaw?.config?.port);
   return Number.isFinite(p) && p > 0 ? p : 9527;
 }
-async function resolveInstanceControllerUrl(stateDir, cfgPort, logPaths) {
+async function resolveInstanceControllerUrl(stateDir, cfgPort, logPaths, onProgress) {
   const candidates = logPaths || [path.join(stateDir, "gateway.log"), path.join(stateDir, "logs", "gateway.log")];
   for (let i = 0; i < 45; i++) {
+    if (onProgress) onProgress(i);
     for (const lp of candidates) {
       try {
         const log = await fs.readFile(lp, "utf8");
@@ -1767,6 +1768,20 @@ async function resolveInstanceControllerUrl(stateDir, cfgPort, logPaths) {
     // for the caller's own diagnostics.
     await new Promise((r) => setTimeout(r, 2000));
   }
+  // #v13 (user-found: wizard stuck on 'starting it...' forever): the
+  // announce line never appears when the gateway runs but the controller
+  // plugin is silent about it - the loop above then exhausts with NO
+  // feedback. Last-resort: probe the configured port directly ONCE. This is
+  // safe here (unlike the blind-probe ban above) because it happens after
+  // 45 failed log-driven rounds - the risk window of latching onto a
+  // foreign instance is accepted over hanging forever.
+  if (Number.isFinite(cfgPort) && cfgPort > 0) {
+    try {
+      const r = await fetch(`http://127.0.0.1:${cfgPort}/api/v1/health`, { signal: AbortSignal.timeout(1500) });
+      if (r.ok) return `http://127.0.0.1:${cfgPort}`;
+    } catch { /* not answering */ }
+  }
+  return null;
   return null;
 }
 
@@ -1903,13 +1918,14 @@ ipcMain.handle("instance:install-into-global", async (event, options) => {
     path.join(gStateDir, "gateway.log"),
     path.join(gStateDir, "logs", "gateway.log"),
   ];
-  let controllerUrl = await resolveInstanceControllerUrl(gStateDir, controllerPortFromConfig(gCfg), gLogPaths);
+  const gProgress = (i) => { if (i > 0 && i % 5 === 0) onEvent({ phase: "teamclaw", line: `Waiting for the global controller to answer... (${i}/45)` }); };
+  let controllerUrl = await resolveInstanceControllerUrl(gStateDir, controllerPortFromConfig(gCfg), gLogPaths, gProgress);
   if (!controllerUrl) {
     onEvent({ phase: "teamclaw", line: "Controller not detected yet - self-starting the global gateway as a fallback..." });
     let gPort2 = 18789;
     try { gPort2 = Number(JSON.parse(await fs.readFile(path.join(gStateDir, "openclaw.json"), "utf8"))?.gateway?.port) || 18789; } catch { /* default */ }
     await globalGatewayStart(gPort2, { ...gEnv, HOME: gHome }, bin);
-    controllerUrl = await resolveInstanceControllerUrl(gStateDir, controllerPortFromConfig(gCfg), gLogPaths);
+    controllerUrl = await resolveInstanceControllerUrl(gStateDir, controllerPortFromConfig(gCfg), gLogPaths, gProgress);
   }
   if (!controllerUrl) throw new Error(`Global controller did not come up in ${gStateDir} after install.`);
   onEvent({ phase: "done", line: "Global TeamClaw ready at " + controllerUrl });
