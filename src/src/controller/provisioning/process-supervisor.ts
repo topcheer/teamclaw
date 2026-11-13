@@ -28,7 +28,7 @@ export class ProcessProvisioner implements WorkerProvisionerBackend {
   readonly type = "process" as const;
   private readonly logger: PluginLogger;
   private readonly processByWorkerId = new Map<string, ChildProcess>();
-  private readonly baseDirPromise: Promise<string>;
+  private baseDirPromise: Promise<string>; // mutable: ensureBaseDir self-heal swaps it
 
   constructor(logger: PluginLogger) {
     this.logger = logger;
@@ -37,8 +37,32 @@ export class ProcessProvisioner implements WorkerProvisionerBackend {
       .then(() => fs.mkdtemp(path.join(provisionedRoot, "session-")));
   }
 
+  /**
+   * #watchdog (observer-found 2026-11-13, workers starved 2.3h+): the
+   * session baseDir is created ONCE in the constructor and cached - if an
+   * external cleanup removes it (gateway restarts / culling sweeps), every
+   * later launch's mkdtemp hits ENOENT (mkdtemp never creates parents),
+   * the provisioner cools down, and pending tasks starve until process
+   * restart. Self-heal: verify the cached dir still exists on every
+   * launch; on ENOENT, rebuild it and swap the cached promise.
+   */
+  private async ensureBaseDir(): Promise<string> {
+    const dir = await this.baseDirPromise;
+    try {
+      await fs.stat(dir);
+      return dir;
+    } catch {
+      const provisionedRoot = path.join(resolveDefaultTeamClawRuntimeRootDir(), "provisioned-workers");
+      const fresh = fs.mkdir(provisionedRoot, { recursive: true })
+        .then(() => fs.mkdtemp(path.join(provisionedRoot, "session-")));
+      this.baseDirPromise = fresh;
+      this.logger.warn?.(`TeamClaw: provisioner session dir vanished (${dir}) - rebuilt`);
+      return fresh;
+    }
+  }
+
   async launch(spec: LaunchSpec): Promise<LaunchResult> {
-    const baseDir = await this.baseDirPromise;
+    const baseDir = await this.ensureBaseDir();
     const runtimeHomeDir = await fs.mkdtemp(path.join(baseDir, `${sanitizePathSegment(spec.role)}-`));
     const stateDir = path.join(runtimeHomeDir, ".openclaw");
     const configPath = path.join(stateDir, "openclaw.json");
