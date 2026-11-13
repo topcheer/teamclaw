@@ -284,9 +284,27 @@ async function unitTests() {
   assert.equal(schedMod2.sweepBackoffMinutes(2), 60, "second failure backs off to 60 minutes");
   assert.equal(schedMod2.sweepBackoffMinutes(3), 120, "third failure backs off to 120 minutes");
   assert.equal(schedMod2.sweepBackoffMinutes(9), 240, "backoff caps at 240 minutes");
-  assert.equal(schedMod2.sweepRetryDueAt(1, 1_000_000), 1_000_000 + 30 * 60_000, "retry due = last error + backoff");
+  assert.equal(schedMod2.sweepRetryDueAt(1, 1_000_000, "ratelimited"), 1_000_000 + 30 * 60_000, "ratelimited retry due = last error + slow backoff");
   assert.equal(schedMod2.isAutoPause("sweep failed: fetch failed"), true, "sweep failures are auto-pauses");
-  assert.equal(schedMod2.sweepRetryDueAt(2, 1_000_000), 1_000_000 + 60 * 60_000, "failure backoff table stays consistent");
+  assert.equal(schedMod2.sweepRetryDueAt(2, 1_000_000, "ratelimited"), 1_000_000 + 60 * 60_000, "slow ladder table stays consistent");
+  // Network-class failures (transient "fetch failed") get the fast ladder:
+  // 1m, 2m, 4m... capped at 15m - a blip must not cost 30m of repo idle.
+  assert.equal(typeof schedMod2.sweepNetworkBackoffMinutes, "function", "sweepNetworkBackoffMinutes must be exported");
+  assert.equal(schedMod2.sweepNetworkBackoffMinutes(1), 1, "first network failure retries after 1 minute");
+  assert.equal(schedMod2.sweepNetworkBackoffMinutes(2), 2, "second network failure backs off to 2 minutes");
+  assert.equal(schedMod2.sweepNetworkBackoffMinutes(4), 8, "fourth network failure backs off to 8 minutes");
+  assert.equal(schedMod2.sweepNetworkBackoffMinutes(9), 15, "network backoff caps at 15 minutes");
+  assert.equal(schedMod2.sweepBackoffMinutesFor("network", 1), 1, "network class routes to the fast ladder");
+  assert.equal(schedMod2.sweepBackoffMinutesFor("auth", 1), 30, "auth class keeps the slow ladder");
+  assert.equal(schedMod2.sweepBackoffMinutesFor("ratelimited", 1), 30, "ratelimited class keeps the slow ladder");
+  assert.equal(schedMod2.sweepRetryDueAt(1, 1_000_000), 1_000_000 + 60_000, "default class is network (fast ladder)");
+  assert.equal(schedMod2.failClassFromPauseReason("sweep failed[network]: fetch failed"), "network", "pause reason roundtrips the network class");
+  assert.equal(schedMod2.failClassFromPauseReason("sweep failed[auth]: 401"), "auth", "pause reason roundtrips the auth class");
+  assert.equal(schedMod2.failClassFromPauseReason("sweep failed[unknown]: legacy"), "network", "unparsed classes default to network");
+  assert.equal(schedMod2.failClassFromPauseReason("sweep failed: legacy"), "network", "legacy unparsed reasons default to network");
+  assert.equal(schedMod2.failClassFromPauseReason(null), "network", "null reason defaults to network");
+  const schedTxt = await fs.readFile(schedulerSrc, "utf8");
+  assert.match(schedTxt, /isAutoPause\(repo\.pausedReason\) && repo\.lastSweepErrorAt/, "auto-paused repos re-arm the timer on the retry ladder, not the regular schedule");
   assert.equal(schedMod2.isAutoPause("disabled by user"), false, "user pauses are never auto-cleared");
   assert.equal(schedMod2.isAutoPause(null), false, "null pause is healthy");
   // Agent-facing TeamAuto surface: scheduler method + tool contract + prompt injection.

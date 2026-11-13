@@ -96,16 +96,39 @@ export function hardAttemptCount(
   ).length;
 }
 
-/** Auto-pause retry backoff: 30m after the 1st failure, doubling, capped at 4h. */
+/** Auto-pause retry backoff for classes where a fast retry is useless or
+ * harmful: 30m after the 1st failure, doubling, capped at 4h. auth needs a
+ * human re-login; ratelimited retried early just re-triggers the limit. */
 export const SWEEP_RETRY_BASE_MINUTES = 30;
 export const SWEEP_RETRY_MAX_MINUTES = 240;
 export function sweepBackoffMinutes(failures: number): number {
   return Math.min(SWEEP_RETRY_BASE_MINUTES * 2 ** Math.max(0, failures - 1), SWEEP_RETRY_MAX_MINUTES);
 }
 
+/** Sweep-timeout report: a transient "fetch failed" sat a full 30m before
+ * its first retry - a seconds-long network blip cost half an hour of repo
+ * idle time. Network-class failures get a fast ladder: 1m, 2m, 4m... capped
+ * at 15m. The cap means a genuinely-down network converges to one attempt
+ * per 15m (slower than the old ladder's first step, so we never hammer),
+ * but a single blip costs one minute instead of thirty. */
+export const SWEEP_NETWORK_RETRY_BASE_MINUTES = 1;
+export const SWEEP_NETWORK_RETRY_MAX_MINUTES = 15;
+export function sweepNetworkBackoffMinutes(failures: number): number {
+  return Math.min(SWEEP_NETWORK_RETRY_BASE_MINUTES * 2 ** Math.max(0, failures - 1), SWEEP_NETWORK_RETRY_MAX_MINUTES);
+}
+
+/** Class-aware dispatch: the retry ladder a failure class deserves. */
+export function sweepBackoffMinutesFor(failClass: SweepFailClass, failures: number): number {
+  return failClass === "network" ? sweepNetworkBackoffMinutes(failures) : sweepBackoffMinutes(failures);
+}
+
+/** Timer floor when arming the retry ladder: a just-missed due time must not
+ * fire at 0ms (tight failure/retry loop protection). */
+export const SWEEP_RETRY_FLOOR_MS = 5_000;
+
 /** Epoch ms when an auto-paused repo becomes due for its next retry attempt. */
-export function sweepRetryDueAt(failures: number, lastErrorAt: number): number {
-  return lastErrorAt + sweepBackoffMinutes(failures) * 60_000;
+export function sweepRetryDueAt(failures: number, lastErrorAt: number, failClass: SweepFailClass = "network"): number {
+  return lastErrorAt + sweepBackoffMinutesFor(failClass, failures) * 60_000;
 }
 
 /**
@@ -138,7 +161,8 @@ export function writebackRetryDueAt(attempts: number, lastErrorAt: number): numb
  * existing retry ladder. undici wraps HTTP errors; the status rides on
  * err.cause (fetch failed). Unknown causes stay "network" - the ladder's
  * existing semantics. */
-export function classifySweepError(err: unknown): "auth" | "ratelimited" | "network" {
+export type SweepFailClass = "auth" | "ratelimited" | "network";
+export function classifySweepError(err: unknown): SweepFailClass {
   const cause = (err as { cause?: { status?: number }; status?: number })?.cause ?? (err as { status?: number });
   const status = Number(cause?.status ?? 0);
   if (status === 401) return "auth";
@@ -155,6 +179,15 @@ export function classifySweepError(err: unknown): "auth" | "ratelimited" | "netw
 export function isAutoPause(reason: string | null | undefined): boolean {
   if (!reason) return false;
   return /^sweep failed(\[[^\]]*\])?:/.test(reason);
+}
+
+/** Recover the fail class from a persisted auto-pause reason
+ * ("sweep failed[network]: ..."). Legacy/unparsable reasons default to the
+ * fast network ladder - a wrong guess only retries sooner, and the ladder
+ * itself still caps the attempt rate, so the default is safe. */
+export function failClassFromPauseReason(reason: string | null | undefined): SweepFailClass {
+  const m = reason?.match(/^sweep failed\[([^\]]*)\]/);
+  return m && (m[1] === "auth" || m[1] === "ratelimited" || m[1] === "network") ? m[1] : "network";
 }
 
 export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
@@ -526,7 +559,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       repo.pausedReason = `sweep failed[${failClass}]: ${message}`;
       const etagAfter = client.etagStats();
       pushSweepRecord(repo, { at: Date.now(), ok: false, summary: `sweep failed[${failClass}]: ${message}`, failClass, durationMs: Date.now() - sweepStartedAt, etagCalls: Math.max(0, etagAfter.calls - etagBefore.calls), etag304Hits: Math.max(0, etagAfter.hits - etagBefore.hits) });
-      recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "sweep", text: `sweep failed[${failClass}] (auto-retry in ~${sweepBackoffMinutes(repo.sweepFailures)}min): ${message}` });
+      recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "sweep", text: `sweep failed[${failClass}] (auto-retry in ~${sweepBackoffMinutesFor(failClass, repo.sweepFailures)}min): ${message}` });
       await saveTeamAutoStore(s).catch(() => {});
       logger.warn(`TeamAuto: sweep failed for ${repo.id}: ${message}`);
       return `error: ${message}`;
@@ -1038,11 +1071,20 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       return;
     }
     let delay: number;
-    try {
-      delay = nextFireMs(repo.schedule);
-    } catch (err) {
-      logger.error(`TeamAuto: ${repo.id} has an unsupported schedule "${repo.schedule}" and will not be scheduled: ${err instanceof Error ? err.message : String(err)}`);
-      return;
+    // Auto-paused repos arm the RETRY ladder, not the regular schedule: the
+    // retry-due check used to ride the next regular tick, so "auto-retry in
+    // ~1min" for a network blip really meant "at the next hourly tick".
+    // While paused, retry at the class-aware backoff; a successful sweep
+    // clears pausedReason and restores the regular schedule below.
+    if (isAutoPause(repo.pausedReason) && repo.lastSweepErrorAt) {
+      delay = Math.max(SWEEP_RETRY_FLOOR_MS, sweepRetryDueAt(repo.sweepFailures ?? 1, repo.lastSweepErrorAt, failClassFromPauseReason(repo.pausedReason)) - Date.now());
+    } else {
+      try {
+        delay = nextFireMs(repo.schedule);
+      } catch (err) {
+        logger.error(`TeamAuto: ${repo.id} has an unsupported schedule "${repo.schedule}" and will not be scheduled: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
     }
     const timer = setTimeout(() => {
       void (async () => {
@@ -1050,7 +1092,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           const s = await ensureStore();
           const fresh = s.repos.find((r) => r.id === repo.id);
           const retryDue = fresh
-            ? isAutoPause(fresh.pausedReason) && Date.now() >= sweepRetryDueAt(fresh.sweepFailures ?? 1, fresh.lastSweepErrorAt ?? 0)
+            ? isAutoPause(fresh.pausedReason) && Date.now() >= sweepRetryDueAt(fresh.sweepFailures ?? 1, fresh.lastSweepErrorAt ?? 0, failClassFromPauseReason(fresh.pausedReason))
             : false;
           if (fresh?.enabled && (fresh.pausedReason === null || retryDue)) {
             await runSweep(fresh, false);
