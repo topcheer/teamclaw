@@ -834,7 +834,15 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
       // (fast-deep-equal etc.) and openclaw refuses the load on ANY missing
       // one. Per-package try/catch: a single dangling entry must not abort
       // the rest (whole-tree cp died that way).
-      const runtimeNM = path.join(BUNDLED_BIN_DIR(), "runtime", "node_modules");
+      // #v9 (user-found: "Deps sealed: 0 packages" -> plugin died on missing
+      // @sinclair/typebox): seal from the EXTRACTED runtime tree first -
+      // CI packages ship bin/ with ONLY runtime.tgz (1285 entries inside,
+      // zero on disk), so sealing from the bin tree copies nothing. Same
+      // class as the v7 plugin-source fix. The extracted tree is complete
+      // and is what the shim actually runs.
+      const runtimeNM = EXTRACTED_RUNTIME_DIR
+        ? path.join(EXTRACTED_RUNTIME_DIR, "node_modules")
+        : path.join(BUNDLED_BIN_DIR(), "runtime", "node_modules");
       let sealed = 0, skipped = 0;
       const sealDir = async (dir) => {
         for (const entry of await fs.readdir(dir, { withFileTypes: true }).catch(() => [])) {
