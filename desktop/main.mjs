@@ -813,8 +813,20 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
   const bundledPlugin = pluginCandidates.find((p) => fsSync.existsSync(path.join(p, "package.json"))) ?? null;
   if (bundledPlugin && fsSync.existsSync(bundledPlugin)) {
     onEvent({ phase: "teamclaw", line: "Registering the bundled TeamClaw plugin (offline)..." });
-    await runShellStream(`"${openclawBin}" plugins install "file:${bundledPlugin}" --force --accept-capabilities`, runtimeDir, (line) =>
-      onEvent({ phase: "teamclaw", line }), sandboxEnv);
+    // #v10 (user-found): the openclaw host retires its sqlite read-snapshot
+    // during this install and on Windows the cleanup can hit transient
+    // handle locks ("Shared-state read snapshot cleanup failed" -> non-zero
+    // exit) - same family as the v5 ENOTEMPTY race. One retry with a short
+    // settle delay almost always clears the lock.
+    const installCmd = `"${openclawBin}" plugins install "file:${bundledPlugin}" --force --accept-capabilities`;
+    try {
+      await runShellStream(installCmd, runtimeDir, (line) => onEvent({ phase: "teamclaw", line }), sandboxEnv);
+    } catch (installErr) {
+      const msg = installErr instanceof Error ? installErr.message : String(installErr);
+      onEvent({ phase: "teamclaw", line: `Install failed once (${msg.slice(0, 120)}) - retrying after handle settle...` });
+      await new Promise((r) => setTimeout(r, 2500));
+      await runShellStream(installCmd, runtimeDir, (line) => onEvent({ phase: "teamclaw", line }), sandboxEnv);
+    }
     // #147: openclaw's dependency probe enforces the plugin rootDir BOUNDARY -
     // hoisted deps (npm layout in the runtime tree) resolve OUTSIDE it and
     // the plugin lands error-state "required dependencies are missing".
