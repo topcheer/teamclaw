@@ -668,6 +668,35 @@ export class WorkerProvisioningManager {
       journalRecord("provisioner", "launched", `${role} ${workerId} via ${this.backend.type}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      // #stuck-classification: state-library lock family ("another gateway
+      // owns this state directory", "undergoing offline maintenance",
+      // "pending native opener", ENOENT mkdtemp on a vanished session) is
+      // self-healable by retiring the poisoned sandbox and re-launching on
+      // a fresh one. A bare cooldown would retry against the SAME stuck
+      // state forever (observed: hours of starvation, 2026-11-13).
+      const healable = /owns this state directory|undergoing offline maintenance|pending native opener|ENOENT.*mkdtemp/i.test(message);
+      if (healable && this.backend?.type === "process") {
+        this.deps.logger.warn(`Provisioner: state-library failure for ${workerId} - retiring the poisoned sandbox and retrying once on a fresh one...`);
+        try {
+          await this.terminateManagedWorker(workerId, `state-library self-heal: ${message.slice(0, 80)}`, "failed");
+        } catch { /* best-effort */ }
+        try {
+          await this.launchWorker(role);
+          return;
+        } catch (retryErr) {
+          const retryMessage = retryErr instanceof Error ? retryErr.message : String(retryErr);
+          this.deps.updateTeamState((state) => {
+            const record = ensureProvisioningState(state).workers[workerId];
+            if (record) {
+              record.status = "failed";
+              record.updatedAt = Date.now();
+              record.lastError = retryMessage;
+            }
+          });
+          this.deps.logger.warn(`Provisioner: self-heal retry also failed for ${workerId}: ${retryMessage}`);
+          return;
+        }
+      }
       this.deps.updateTeamState((state) => {
         const record = ensureProvisioningState(state).workers[workerId];
         if (!record) {
