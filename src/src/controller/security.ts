@@ -527,6 +527,14 @@ export function createWebSocketUpgradeGuard(deps: WebSocketUpgradeGuardDeps): (r
       recordNonLanPeerSignal(deps, state, peer, "/ws");
       return true;
     }
+    // 8b03ed6 layering (user design ruling): loopback peers are first-party
+    // (the host itself - web UI, desktop, provisioned workers) and NEVER
+    // need a pairing token. The HTTP gate got this exemption; this WS guard
+    // missed it and rejected every loopback UI connection (92362 rejects,
+    // user-found: tasks UI stuck on pending because /ws never upgraded).
+    if (peer.loopback) {
+      return true;
+    }
     let token = extractDeviceToken(req);
     if (!token) {
       const url = new URL(req.url ?? "/ws", `http://${req.headers.host ?? "localhost"}`);
