@@ -6,16 +6,12 @@ Date: 2026-11-13
 1) com.apple.security.network.server entitlement
 ------------------------------------------------
 The app's core feature is a local automation gateway that runs ON the
-user's machine and listens on 127.0.0.1 (default port 9627 or 18789).
-The app's own UI connects to this localhost controller API; the wizard
-log shows this plainly ("Global gateway not running - starting it...").
-
-- The listener binds to loopback only. No external inbound connections
-  are accepted.
-- com.apple.security.network.client alone cannot bind a listen socket,
-  so the server entitlement is required for this localhost listener.
-- Requested action: keep the entitlement per your option 2 (reply with
-  a description). This note is also entered in App Review Information.
+user's machine: it binds a listener on 127.0.0.1 (port configurable)
+and the app's own UI connects to this localhost API to function.
+Loopback only - no external inbound connections are accepted.
+com.apple.security.network.client alone cannot bind a listen socket,
+so the server entitlement is required for this localhost listener.
+This note is also entered in App Review Information.
 
 2) Non-public API symbols (__AXUIElementCreateWithRemoteToken,
    __AXUIElementGetWindow)
