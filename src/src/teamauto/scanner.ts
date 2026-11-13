@@ -151,7 +151,15 @@ export async function sweepRepo(
       role: "qa" as const,
       writeMode: "read-only" as const,
     };
-    if (repo.policy.actions.issueReview) {
+    // #269 6th case (ggcode#4785): an issue eligible for BOTH actions got
+    // two tasks in the same sweep, each delivering its own comment - the
+    // delivery layer correctly treats them as independent entries. Collapse
+    // at the source: when ownership applies (open + enabled) it wins and
+    // subsumes the triage read; issueReview fires only when ownership is
+    // disabled for this repo (or the issue is closed and un-reviewable via
+    // ownership, e.g. follow-up triage on a closed issue).
+    const ownershipApplies = repo.policy.actions.takeOwnership && issue.state === "open";
+    if (repo.policy.actions.issueReview && !ownershipApplies) {
       candidates.push({
         ...base,
         kind: "issueReview",

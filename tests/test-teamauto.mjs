@@ -361,10 +361,10 @@ async function unitTests() {
   // gate deadlocked dry-run repos with zero candidates). Filtering still applies:
   // issue 2 (assigned), 3 (own thread), 4 (label) drop; PR 10 (ours) drops.
   const first = await scannerMod.sweepRepo(repo, stubClient);
-  assert.equal(first.candidates.length, 6, "first sweep surfaces the filtered backlog (issue #1 review+ownership, PR #9 review, plus 3 joint fullReview sections)");
+  assert.equal(first.candidates.length, 5, "first sweep surfaces the filtered backlog (#269 6th case: issue #1 collapses to ownership-only, PR #9 review, plus 3 joint fullReview sections)");
   const firstKinds = first.candidates.map((c) => c.kind).sort().join(",");
-  assert.match(firstKinds, /issueReview/);
-  assert.match(firstKinds, /takeOwnership/);
+  assert.match(firstKinds, /takeOwnership/, "ownership wins over issueReview for the same open issue");
+  assert.doesNotMatch(firstKinds, /issueReview/, "no duplicate triage task for an issue already taken over");
   assert.match(firstKinds, /prReview/);
   const jointRoles = first.candidates.filter((c) => c.kind === "fullReview").map((c) => c.role).sort().join(",");
   assert.equal(jointRoles, "architect,qa,security-engineer", "full review fans out one section per joint role");
@@ -384,7 +384,7 @@ async function unitTests() {
   repo.cursors.lastFullReviewAt = Date.now();
   const second = await scannerMod.sweepRepo(repo, stubClient);
   const kinds = second.candidates.map((c) => `${c.kind}#${c.number}`).sort();
-  assert.deepEqual(kinds, ["issueReview#1", "prReview#9", "takeOwnership#1"], `unexpected candidates: ${kinds.join(",")}`);
+  assert.deepEqual(kinds, ["prReview#9", "takeOwnership#1"], `unexpected candidates: ${kinds.join(",")} (#269 6th case: no issueReview alongside ownership)`);
 
   // Idempotency: advancing cursors again suppresses the same objects.
   scannerMod.advanceCursors(repo, second.issues, second.pulls);
