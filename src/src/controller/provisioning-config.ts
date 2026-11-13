@@ -27,7 +27,7 @@ import fsSync from "node:fs";
  * mtime wins - that is what the host loaded), then the global node_modules
  * install. Returns undefined when nothing resolvable exists.
  */
-function resolveControllerTeamclawEntry(): string | undefined {
+export function resolveControllerTeamclawEntryPath(): string | undefined {
   const candidates: string[] = [];
   const home = process.env.OPENCLAW_HOME?.trim() || process.env.HOME?.trim() || os.homedir();
   const projectsDir = path.join(home, ".openclaw", "npm", "projects");
@@ -151,7 +151,7 @@ export function buildProvisionedWorkerConfig(
   // tasks sat unclaimed forever. Point plugins.load at the CONTROLLER's
   // teamclaw entry (the npm project dir the controller itself loads from).
   if (controllerConfig.workerProvisioningType === "process" || !controllerConfig.workerProvisioningType) {
-    const controllerEntryPath = resolveControllerTeamclawEntry();
+    const controllerEntryPath = resolveControllerTeamclawEntryPath();
     if (controllerEntryPath) {
       // Host schema: plugins.load = { paths: string[] } (object, not array).
       const loadObj = ensureRecord(plugins).load;

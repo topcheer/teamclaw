@@ -9,6 +9,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { spawn, type ChildProcess } from "node:child_process";
 import type { PluginLogger } from "../../../api.js";
+import { resolveControllerTeamclawEntryPath } from "../provisioning-config.js";
 import {
   resolveDefaultOpenClawConfigPath,
   resolveDefaultTeamClawRuntimeRootDir,
@@ -84,6 +85,35 @@ export class ProcessProvisioner implements WorkerProvisionerBackend {
       if (err.code !== "ENOENT") throw err;
     });
     await fs.writeFile(configPath, spec.configJson, { encoding: "utf8", mode: 0o600 });
+
+    // #task-stuck (13th layer, physical half): the worker sandbox has no
+    // teamclaw installation of its own, and entries.enabled does not resolve
+    // the plugin. Symlink the controller's teamclaw package into the
+    // sandbox's extensions/ dir - the host auto-discovers extensions/ - and
+    // mirror it into the config's plugins.load.paths so discovery sees the
+    // same physical path. Idempotent; failures are non-fatal (worker still
+    // boots, just without the plugin).
+    try {
+      const controllerEntry = resolveControllerTeamclawEntryPath();
+      if (controllerEntry) {
+        const pkgDir = path.dirname(path.dirname(controllerEntry)); // dist/index.js -> package root
+        const extDir = path.join(stateDir, "extensions");
+        await fs.mkdir(extDir, { recursive: true });
+        const linkPath = path.join(extDir, "teamclaw");
+        await fs.rm(linkPath, { force: true }).catch(() => undefined);
+        await fs.symlink(pkgDir, linkPath, "dir");
+        // Mirror into the written config (configJson was already serialized).
+        try {
+          const cfg = JSON.parse(await fs.readFile(configPath, "utf8"));
+          const plugins = (cfg.plugins ??= {});
+          const load = (plugins.load ??= { paths: [] });
+          if (Array.isArray(load.paths) && !load.paths.includes(linkPath)) load.paths.push(linkPath);
+          await fs.writeFile(configPath, JSON.stringify(cfg, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+        } catch { /* config mirror best-effort */ }
+      }
+    } catch (e) {
+      this.logger.warn?.(`TeamClaw: could not link teamclaw into worker extensions: ${e instanceof Error ? e.message : String(e)}`);
+    }
 
     const gatewayEntrypoint = resolveGatewayEntrypoint();
     const child = spawn(process.execPath, [
