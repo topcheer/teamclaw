@@ -286,6 +286,7 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
     verifyUpgrade: createWebSocketUpgradeGuard({
       ...deps,
       isTunnelHost: (host) => tunnelManagerSingleton?.isTunnelRequest(host) ?? false,
+      gateAllows: (req) => tunnelManagerSingleton?.gateAllows(req) ?? false,
     }),
   });
 

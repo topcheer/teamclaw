@@ -516,6 +516,7 @@ export function createSecurityMiddleware(deps: SecurityMiddlewareDeps): Security
  */
 export type WebSocketUpgradeGuardDeps = SecurityMiddlewareDeps & {
   isTunnelHost: (host: string | undefined) => boolean;
+  gateAllows?: (req: { headers: Record<string, unknown> }) => boolean;
 };
 
 export function createWebSocketUpgradeGuard(deps: WebSocketUpgradeGuardDeps): (req: IncomingMessage) => boolean {
@@ -533,6 +534,13 @@ export function createWebSocketUpgradeGuard(deps: WebSocketUpgradeGuardDeps): (r
     // missed it and rejected every loopback UI connection (92362 rejects,
     // user-found: tasks UI stuck on pending because /ws never upgraded).
     if (peer.loopback) {
+      return true;
+    }
+    // Tunnel-origin upgrades (cloudflared loopback + tunnel Host): the
+    // visitor holds the GATE token, not a pairing token - same layering
+    // as the HTTP gate (a device token here would be an unanswerable
+    // wall, 8b03ed6). Verify the gate cookie instead.
+    if (peer.viaTunnel && deps.gateAllows && deps.gateAllows(req)) {
       return true;
     }
     let token = extractDeviceToken(req);
