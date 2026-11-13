@@ -9,7 +9,7 @@
 // links. Real files have nothing to break.
 import { execSync } from "node:child_process";
 import {
-  cpSync, mkdirSync, readFileSync, readdirSync, realpathSync,
+  cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync,
   readlinkSync, rmSync, statSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -103,6 +103,19 @@ console.log(`[prepare-bundled] materialized ${fixed} symlinks`);
 // to userData on first launch (main.mjs -> runtime-extract.mjs). Materialize
 // before tar also means the archive contains zero symlinks, so Windows'
 // System32 tar.exe never needs symlink privileges to extract it.
+// MAS rejection fix (App Review 2026-11-13): the ONLY source of the
+// flagged private-AX symbols (__AXUIElementCreateWithRemoteToken /
+// __AXUIElementGetWindow) in the whole package is
+// @trycua/cua-driver-darwin-*/libcua_driver_sdk.dylib - an OPTIONAL
+// computer-use driver declared by the openclaw host. Neither teamclaw nor
+// the desktop app references it, and screen-control drivers are unfit for
+// an App Store build anyway. Prune the darwin variants from the bundle
+// tree BEFORE packing (npm-installed hosts elsewhere are untouched).
+// Recursively prune EVERY copy (top-level AND the sealed duplicate inside
+// the teamclaw plugin subtree) - the first pass missed the nested one.
+// find-based: simple and covers nested copies at any depth.
+execSync(`find "${path.join(out, "runtime")}" -type d -name 'cua-driver-darwin-*' -prune -exec rm -rf {} +`, { stdio: "inherit" });
+console.log("[prepare-bundled] pruned nested+top cua-driver-darwin-* (App Review private-API fix)");
 execSync(`tar -czf "${path.join(out, "runtime.tgz")}" -C "${out}" runtime`, { stdio: "inherit" });
 rmSync(path.join(out, "runtime"), { recursive: true, force: true });
 console.log("[prepare-bundled] bundle archive ready:", path.join(out, "runtime.tgz"));
