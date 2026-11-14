@@ -1262,6 +1262,16 @@ import { createT as i18nCreateT } from "./i18n.js";
       if (mode === "global") {
         const log = document.getElementById("bootstrap-log");
         const wizLine = (s) => { if (log) log.textContent += s + "\n"; };
+        // #global-logs (user report 2026-11-14 night): the install-into-global
+        // chain streams every step via bootstrap:install-event - but this
+        // branch never subscribed, so a failure surfaced as ONE cryptic line
+        // ("Global controller did not come up ...") with zero context.
+        // Subscribe for the whole global branch so every step (runtime
+        // provisioning, plugin install, gateway spawn, announce waits, log
+        // tail) lands in the wizard log in real time.
+        const unsubGlobal = desktop.onBootstrapEvent
+          ? desktop.onBootstrapEvent((e) => { if (e && e.line) wizLine(e.line); })
+          : null;
         try {
           wizLine("[global] Starting global path...");
           if (llm) {
@@ -1290,6 +1300,8 @@ import { createT as i18nCreateT } from "./i18n.js";
           }
         } catch (e) {
           wizLine("[error] " + (e && e.message));
+        } finally {
+          if (unsubGlobal) unsubGlobal();
         }
         return;
       }

@@ -2017,15 +2017,46 @@ ipcMain.handle("instance:install-into-global", async (event, options) => {
     path.join(gStateDir, "logs", "gateway.log"),
   ];
   const gProgress = (i) => { if (i > 0 && i % 5 === 0) onEvent({ phase: "teamclaw", line: `Waiting for the global controller to answer... (${i}/45)` }); };
+  // #global-logs: tail of whichever gateway log exists - attached to every
+  // failure report so the wizard log always explains WHY.
+  const gLogTail = async () => {
+    for (const lp of gLogPaths) {
+      try {
+        const t = await fs.readFile(lp, "utf8");
+        if (t.trim()) return t.split("\n").filter((l) => l.trim()).slice(-15).join(" | ");
+      } catch { /* next candidate */ }
+    }
+    return "(no gateway log written)";
+  };
+  const gGatewayState = () => {
+    const c = GLOBAL_GATEWAY.child;
+    if (!c) return "gateway process: none spawned";
+    if (c.exitCode !== null) return `gateway process: EXITED code=${c.exitCode} signal=${c.signalCode || "none"}`;
+    try { process.kill(c.pid, 0); return `gateway process: alive (pid ${c.pid}, port ${GLOBAL_GATEWAY.port})`; }
+    catch { return `gateway process: dead (pid ${c.pid})`; }
+  };
   let controllerUrl = await resolveInstanceControllerUrl(gStateDir, controllerPortFromConfig(gCfg), gLogPaths, gProgress);
   if (!controllerUrl) {
+    onEvent({ phase: "teamclaw", line: "Controller not detected yet - " + gGatewayState() });
+    onEvent({ phase: "teamclaw", line: "[gw-log] " + (await gLogTail()) });
     onEvent({ phase: "teamclaw", line: "Controller not detected yet - self-starting the global gateway as a fallback..." });
     let gPort2 = 18789;
     try { gPort2 = Number(JSON.parse(await fs.readFile(path.join(gStateDir, "openclaw.json"), "utf8"))?.gateway?.port) || 18789; } catch { /* default */ }
     await globalGatewayStart(gPort2, { ...gEnv, HOME: gHome }, bin);
     controllerUrl = await resolveInstanceControllerUrl(gStateDir, controllerPortFromConfig(gCfg), gLogPaths, gProgress);
   }
-  if (!controllerUrl) throw new Error(`Global controller did not come up in ${gStateDir} after install.`);
+  if (!controllerUrl) {
+    // #global-logs (user report 2026-11-14 night): the old one-liner
+    // ("Global controller did not come up ... after install.") explained
+    // nothing. Collect the full state and stream + attach it.
+    const diag = [
+      gGatewayState(),
+      `plugin config: ${gCfg?.plugins?.entries?.teamclaw ? "controller mode" : "MISSING (controller mode write failed)"}, port hint ${controllerPortFromConfig(gCfg)}`,
+      `[gw-log] ${await gLogTail()}`,
+    ];
+    for (const line of diag) onEvent({ phase: "teamclaw", line: line });
+    throw new Error(`Global controller did not come up in ${gStateDir} after install. ${diag.join(" :: ")}`);
+  }
   onEvent({ phase: "done", line: "Global TeamClaw ready at " + controllerUrl });
   return { ok: true, controllerUrl };
 });
