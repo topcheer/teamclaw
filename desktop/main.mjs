@@ -762,11 +762,31 @@ async function ensureOpenClawRuntime({ source, artifactUrl }, onEvent) {
   return bin;
 }
 
+// #cache-isolation (review 2026-11-14): sandbox envs must isolate not just
+// OPENCLAW_STATE_DIR but also the openclaw SHARED CACHE ROOT - sqlite
+// snapshot staging (openclaw-sqlite-readonly-v2-*) and fs-safe private dirs
+// derive from LOCALAPPDATA (win) / XDG_CACHE_HOME (posix), NOT from the state
+// dir. With only STATE_DIR overridden, every sandboxed CLI/gateway READ AND
+// WROTE the GLOBAL AppData\Local\openclaw (user log 2026-11-14: the wedged
+// sqlite cleanup ran against a global cache copy). Redirect the cache root
+// into the sandbox; child-process scoped, the machine-level instance is
+// untouched.
+function sandboxEnvFor(stateDir) {
+  const cacheDir = path.join(stateDir, "cache");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  if (process.platform === "win32") {
+    env.LOCALAPPDATA = cacheDir;
+  } else {
+    env.XDG_CACHE_HOME = cacheDir;
+  }
+  return env;
+}
+
 async function ensureTeamClawPlugin(openclawBin, onEvent) {
   // FULLY SANDBOXED (user vetoed global writes): registration and runtime
   // both use the desktop state dir; ~/.openclaw is never written. The user's
   // global config is only ever READ (LLM seeding happens elsewhere).
-  const sandboxEnv = { ...process.env, OPENCLAW_STATE_DIR: path.join(app.getPath("userData"), "openclaw-state") };
+  const sandboxEnv = sandboxEnvFor(path.join(app.getPath("userData"), "openclaw-state"));
   const runtimeDir = path.join(app.getPath("userData"), "runtime");
   // The "reusing existing OpenClaw" path skips the runtime install, so the
   // runtime dir may not exist yet - spawn cwd must exist or every command
@@ -1542,7 +1562,7 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
   const logPath = path.join(standaloneStateDir(), "gateway.log");
   const child = spawnGatewayProcess(bin, ["gateway", "--port", String(STANDALONE.port)], {
     cwd: standaloneStateDir(),
-    env: { ...process.env, OPENCLAW_STATE_DIR: standaloneStateDir() },
+    env: sandboxEnvFor(standaloneStateDir()),
     logPath,
   });
   STANDALONE.child = child;
@@ -1580,7 +1600,7 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
       await new Promise((r) => { child.once("exit", r); setTimeout(r, 4000); });
       const child2 = spawnGatewayProcess(bin, ["gateway", "--port", String(STANDALONE.port)], {
         cwd: standaloneStateDir(),
-        env: { ...process.env, OPENCLAW_STATE_DIR: standaloneStateDir() },
+        env: sandboxEnvFor(standaloneStateDir()),
         logPath,
       });
       STANDALONE.child = child2;
@@ -2040,7 +2060,7 @@ ipcMain.handle("bootstrap:install", async (event, options) => {
       try {
         const settlePort = await findFreePort();
         const stateDir = path.join(app.getPath("userData"), "openclaw-state");
-        const settleEnv = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+        const settleEnv = sandboxEnvFor(stateDir);
         const settlePlan = openClawSpawnPlan(openclawBin, ["gateway", "--port", String(settlePort)]);
         const settle = settlePlan
           ? spawn(settlePlan.command, settlePlan.args, {
