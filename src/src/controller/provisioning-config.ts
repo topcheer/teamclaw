@@ -208,6 +208,15 @@ export function buildProvisionedWorkerConfig(
   return config;
 }
 
+/** #rate-limit-999: settings.json content (global settings scope for a
+ * worker instance home) raising provider rate-limit retries. Shared by the
+ * process backend's file write; docker/kubernetes mirror it in the bootstrap
+ * script with the same value baked in from the plugin config. */
+export const TEAMCLAW_RATE_LIMIT_MAX_RETRIES_DEFAULT = 999;
+export function workerRetrySettingsJson(maxRetries: number): string {
+  return JSON.stringify({ retry: { enabled: true, provider: { maxRetries } } }, null, 2) + "\n";
+}
+
 export async function loadOpenClawConfig(configPath: string): Promise<Record<string, unknown>> {
   const raw = await fs.readFile(configPath, "utf8");
   return parseLooseJsonObject(raw, configPath);

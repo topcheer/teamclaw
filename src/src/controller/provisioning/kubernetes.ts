@@ -192,7 +192,7 @@ export class KubernetesProvisioner implements WorkerProvisionerBackend {
             name: "worker",
             image: this.config.workerProvisioningImage,
             command: ["sh", "-lc"],
-            args: [buildContainerBootstrapScript()],
+            args: [buildContainerBootstrapScript(spec.rateLimitMaxRetries)],
             env: Object.entries(env).map(([name, value]) => ({ name, value })),
             volumeMounts: hasPersistentWorkspace
               ? [

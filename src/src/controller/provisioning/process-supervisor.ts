@@ -9,7 +9,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { spawn, type ChildProcess } from "node:child_process";
 import type { PluginLogger } from "../../../api.js";
-import { resolveControllerTeamclawEntryPath } from "../provisioning-config.js";
+import { resolveControllerTeamclawEntryPath, workerRetrySettingsJson } from "../provisioning-config.js";
 import {
   resolveDefaultOpenClawConfigPath,
   resolveDefaultTeamClawRuntimeRootDir,
@@ -85,6 +85,9 @@ export class ProcessProvisioner implements WorkerProvisionerBackend {
       if (err.code !== "ENOENT") throw err;
     });
     await fs.writeFile(configPath, spec.configJson, { encoding: "utf8", mode: 0o600 });
+    // #rate-limit-999: worker settings.json beside the config - raises
+    // provider rate-limit retries for every process worker.
+    await fs.writeFile(path.join(stateDir, "settings.json"), workerRetrySettingsJson(spec.rateLimitMaxRetries), { encoding: "utf8", mode: 0o600 });
 
     // #task-stuck (13th layer, physical half): the worker sandbox has no
     // teamclaw installation of its own, and entries.enabled does not resolve

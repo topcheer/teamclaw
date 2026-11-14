@@ -71,7 +71,7 @@ export class DockerProvisioner implements WorkerProvisionerBackend {
 
     const containerConfig: Record<string, unknown> = {
       Image: this.config.workerProvisioningImage,
-      Cmd: ["sh", "-lc", buildContainerBootstrapScript()],
+      Cmd: ["sh", "-lc", buildContainerBootstrapScript(spec.rateLimitMaxRetries)],
       Env: Object.entries(env).map(([key, value]) => `${key}=${value}`),
       User: "root",
       Labels: {

@@ -614,6 +614,11 @@ export type PluginConfig = {
   workerProvisioningControllerUrl: string;
   workerProvisioningRoles: RoleId[];
   workerProvisioningMinPerRole: number;
+  /** #rate-limit-999: provider rate-limit retries for provisioned workers
+   * (passed through to every provisioner backend and written into the
+   * worker's settings.json). teamclaw workloads are long-running and
+   * unattended - the host default of 9 abandons tasks nobody watches. */
+  workerRateLimitMaxRetries: number;
   workerProvisioningMaxPerRole: number;
   workerProvisioningIdleTtlMs: number;
   workerProvisioningStartupTimeoutMs: number;
@@ -958,6 +963,9 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
     ? Math.floor(raw.workerProvisioningMaxPerRole)
     : 3;
   const workerProvisioningMaxPerRole = Math.max(rawProvisioningMaxPerRole, workerProvisioningMinPerRole);
+  const workerRateLimitMaxRetries = typeof raw.workerRateLimitMaxRetries === "number" && raw.workerRateLimitMaxRetries >= 0
+    ? Math.floor(raw.workerRateLimitMaxRetries)
+    : 999;
   const workerProvisioningIdleTtlMs = typeof raw.workerProvisioningIdleTtlMs === "number" && raw.workerProvisioningIdleTtlMs >= 1000
     ? raw.workerProvisioningIdleTtlMs
     : 120_000;
@@ -1050,6 +1058,7 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
     workerProvisioningMinPerRole,
     workerProvisioningMaxPerRole,
     workerProvisioningIdleTtlMs,
+    workerRateLimitMaxRetries,
     workerProvisioningStartupTimeoutMs,
     workerProvisioningImage,
     workerProvisioningPassEnv,

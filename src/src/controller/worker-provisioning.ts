@@ -651,6 +651,7 @@ export class WorkerProvisioningManager {
         workspaceDir: getConfiguredWorkerWorkspaceDir(workerConfig),
         env: this.buildForwardedEnv(controllerUrl),
         configJson: `${JSON.stringify(workerConfig, null, 2)}\n`,
+        rateLimitMaxRetries: this.deps.config.workerRateLimitMaxRetries,
       });
 
       this.deps.updateTeamState((state) => {

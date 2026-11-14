@@ -21,6 +21,10 @@ export type LaunchSpec = {
   workspaceDir?: string;
   env: Record<string, string>;
   configJson: string;
+  /** #rate-limit-999: provider rate-limit retry budget written into the
+   * worker's settings.json by every backend (process writes the file; docker/
+   * kubernetes embed it in the bootstrap script). */
+  rateLimitMaxRetries: number;
 };
 
 export type LaunchResult = {
