@@ -41,10 +41,45 @@ if (tcOs !== hostOs || (process.env.TC_CPU && process.env.TC_CPU !== process.arc
   cross.push("--os", tcOs, "--cpu", tcCpu);
 }
 console.log(`[prepare-bundle] openclaw@${openclawVersion} + @teamclaws/teamclaw@${teamclawVersion} for ${tcOs}-${tcCpu}${cross.length ? " (cross)" : ""}`);
-execSync(
+// #release-race: desktop/MAS fire on the same tag as the npm release
+// workflow - the runtime install needs @teamclaws/teamclaw@<version> which
+// is often still unpublished (v2026.11.3: desktop started 03:50Z, publish
+// landed 03:59Z) or propagating (dist-tags flipped ~40min after publish).
+// Poll availability, then install with transient retries.
+const npmInstall = () => execSync(
   `npm install --prefix ${JSON.stringify(path.join(out, "runtime"))} ${cross.join(" ")} --ignore-scripts --no-audit --no-fund openclaw@${openclawVersion} @teamclaws/teamclaw@${teamclawVersion}`,
   { stdio: "inherit" },
 );
+const pkgAvailable = (spec) => {
+  try {
+    execSync(`npm view ${spec} version --silent`, { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+};
+const waitDeadline = Date.now() + Number(process.env.RUNTIME_STAGE_WAIT_MS || 45 * 60_000);
+const tcSpec = `@teamclaws/teamclaw@${teamclawVersion}`;
+let attempt = 0;
+// eslint-disable-next-line no-constant-condition
+while (true) {
+  attempt += 1;
+  try {
+    if (!pkgAvailable(tcSpec)) {
+      throw new Error(`package not visible on the registry yet: ${tcSpec}`);
+    }
+    npmInstall();
+    break;
+  } catch (err) {
+    if (Date.now() > waitDeadline) {
+      console.error(`[prepare-bundle] giving up after ${attempt} attempts: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(1);
+    }
+    const backoff = Math.min(60_000, 5_000 * 2 ** Math.min(attempt, 4));
+    console.log(`[prepare-bundle] attempt ${attempt} failed (${err instanceof Error ? err.message : String(err)}); retrying in ${Math.round(backoff / 1000)}s`);
+    execSync(`sleep ${Math.round(backoff / 1000)}`, { stdio: "ignore" });
+  }
+}
 writeFileSync(path.join(out, "runtime", "RUNTIME-VERSION"), `openclaw@${openclawVersion}\nteamclaw@${teamclawVersion}\n`, "utf8");
 
 // Prune foreign-platform packages. The npm tree carries optional native
