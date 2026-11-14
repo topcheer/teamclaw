@@ -242,7 +242,10 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     entry.attempts = (entry.attempts ?? 0) + 1;
     entry.lastErrorAt = Date.now();
     entry.nextAttemptAt = writebackRetryDueAt(entry.attempts, entry.lastErrorAt);
-    const gaveUp = options.terminal === true || entry.attempts >= TEAMAUTO_WRITEBACK_MAX_ATTEMPTS;
+    // #5651: a non-fast-forward push whose rebase self-heal also failed is
+    // deterministic - retrying the same push 6 more times just burns ~25min.
+    // Dead-letter immediately (the next sweep re-claims on a fresh branch).
+    const gaveUp = options.terminal === true || entry.attempts >= TEAMAUTO_WRITEBACK_MAX_ATTEMPTS || /push rejected \(non-fast-forward\) and rebase self-heal failed/.test(message);
     if (gaveUp && !entry.doneAt) {
       entry.failedAt = Date.now();
       recordActivity(store, {

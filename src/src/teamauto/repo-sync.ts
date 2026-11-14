@@ -189,7 +189,33 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
       await run(["push", authed, `HEAD:refs/heads/${branch}`], dir);
       return { alreadyDelivered: false };
     } catch (err) {
-      logger.warn(`TeamAuto: push failed for ${repoId}#${branch}: ${err instanceof Error ? err.message : String(err)}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(`TeamAuto: push failed for ${repoId}#${branch}: ${msg}`);
+      // #5651 (ggcode, 2026-11-15): a NON-FAST-FORWARD rejection is
+      // deterministic - the generic retry ladder burned 6 attempts / ~25min
+      // on it twice (#5268 family). The task branch is exclusively ours, so
+      // rebase onto the fetched remote tip and push ONCE more; if the rebase
+      // conflicts (base rewritten underneath us) give up immediately - the
+      // caller's failure path is the correct terminal state, not 5 more
+      // doomed retries of the same push.
+      const NON_FF = /non-fast-forward|behind its remote counterpart|fetch first|reject/i;
+      if (NON_FF.test(msg)) {
+        try {
+          logger.warn(`TeamAuto: non-fast-forward on ${repoId}#${branch} - rebasing onto remote tip and retrying once`);
+          await run(["rebase", "FETCH_HEAD"], dir);
+          await run(["push", authed, `HEAD:refs/heads/${branch}`], dir);
+          logger.warn(`TeamAuto: ${repoId}#${branch} delivered after rebase`);
+          return { alreadyDelivered: false };
+        } catch (rebaseErr) {
+          // Leave the worktree clean for the next pass: abort a half-done
+          // rebase so the retry (or dead-letter) sees a sane tree.
+          await run(["rebase", "--abort"], dir).catch(() => {});
+          const rmsg = rebaseErr instanceof Error ? rebaseErr.message : String(rebaseErr);
+          logger.warn(`TeamAuto: rebase self-heal failed for ${repoId}#${branch}: ${rmsg}`);
+          const permanent = new Error(`push rejected (non-fast-forward) and rebase self-heal failed: ${rmsg}`);
+          throw permanent;
+        }
+      }
       throw err;
     }
   }
