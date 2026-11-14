@@ -113,9 +113,25 @@ console.log(`[prepare-bundled] materialized ${fixed} symlinks`);
 // tree BEFORE packing (npm-installed hosts elsewhere are untouched).
 // Recursively prune EVERY copy (top-level AND the sealed duplicate inside
 // the teamclaw plugin subtree) - the first pass missed the nested one.
-// find-based: simple and covers nested copies at any depth.
-execSync(`find "${path.join(out, "runtime")}" -type d -name 'cua-driver-darwin-*' -prune -exec rm -rf {} +`, { stdio: "inherit" });
-console.log("[prepare-bundled] pruned nested+top cua-driver-darwin-* (App Review private-API fix)");
+// find-based originally - simple and covers nested copies at any depth.
+// #win-store (2026-11-14): store-submission.yml runs this script on
+// windows-latest, where the POSIX `find -prune -exec` binary does not
+// exist and execSync died with exit 1 before staging anything. Equivalent
+// pure-Node recursive prune keeps the semantics on every platform.
+const pruneCuaDarwin = (dir) => {
+  let hits = 0;
+  let entries;
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return 0; }
+  for (const e of entries) {
+    const p = path.join(dir, e.name);
+    if (!e.isDirectory()) continue;
+    if (/^cua-driver-darwin-/.test(e.name)) { rmSync(p, { recursive: true, force: true }); hits += 1; continue; }
+    hits += pruneCuaDarwin(p);
+  }
+  return hits;
+};
+const cuaPruned = pruneCuaDarwin(path.join(out, "runtime"));
+console.log(`[prepare-bundled] pruned ${cuaPruned} cua-driver-darwin-* dir(s) (App Review private-API fix)`);
 execSync(`tar -czf "${path.join(out, "runtime.tgz")}" -C "${out}" runtime`, { stdio: "inherit" });
 rmSync(path.join(out, "runtime"), { recursive: true, force: true });
 console.log("[prepare-bundled] bundle archive ready:", path.join(out, "runtime.tgz"));
