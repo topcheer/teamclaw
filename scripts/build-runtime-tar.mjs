@@ -21,7 +21,43 @@ const teamclawSpec = process.env.TEAMCLAW_SPEC || `@teamclaws/teamclaw@${teamcla
 
 mkdirSync(path.join(outDir, "runtime"), { recursive: true });
 console.log(`[runtime-tar] openclaw@${openclawVersion} + ${teamclawSpec}`);
-execSync(`npm install --prefix ${path.join(outDir, "runtime")} openclaw@${openclawVersion} ${JSON.stringify(teamclawSpec)}`, { stdio: "inherit" });
+// #release-race (same family as desktop prepare-bundle): this workflow fires
+// on the release tag in parallel with the npm publish - the version may not
+// be on the registry yet (v2026.11.4: ETARGET 8s before the publish job
+// finished). Poll availability, retry with backoff; file: specs skip waiting.
+const npmInstall = () => execSync(`npm install --prefix ${path.join(outDir, "runtime")} openclaw@${openclawVersion} ${JSON.stringify(teamclawSpec)}`, { stdio: "inherit" });
+if (teamclawSpec.startsWith("file:")) {
+  npmInstall();
+} else {
+  const pkgAvailable = (spec) => {
+    try {
+      execSync(`npm view ${spec} version --silent`, { stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const deadline = Date.now() + Number(process.env.RUNTIME_STAGE_WAIT_MS || 45 * 60_000);
+  let attempt = 0;
+  for (;;) {
+    attempt += 1;
+    try {
+      if (!pkgAvailable(teamclawSpec)) {
+        throw new Error(`package not visible on the registry yet: ${teamclawSpec}`);
+      }
+      npmInstall();
+      break;
+    } catch (err) {
+      if (Date.now() > deadline) {
+        console.error(`[runtime-tar] giving up after ${attempt} attempts: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+      const backoff = Math.min(60_000, 5_000 * 2 ** Math.min(attempt, 4));
+      console.log(`[runtime-tar] attempt ${attempt} failed (${err instanceof Error ? err.message : String(err)}); retrying in ${Math.round(backoff / 1000)}s`);
+      execSync(`sleep ${Math.round(backoff / 1000)}`, { stdio: "ignore" });
+    }
+  }
+}
 writeFileSync(path.join(outDir, "runtime", "RUNTIME-VERSION"), `openclaw@${openclawVersion}\nteamclaw@${teamclawVersion}\n`, "utf8");
 const plat = process.platform + "-" + process.arch;
 const tar = `teamclaw-runtime-${plat}.tar.gz`;
