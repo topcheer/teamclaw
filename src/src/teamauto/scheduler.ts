@@ -11,7 +11,7 @@ import { getActiveDefaultRole, validateActiveRoleId } from "../profile-loader.js
 import type { TaskInfo, TeamState } from "../types.js";
 import { createGithubClient } from "./github-client.js";
 import { learnNorms, renderNormsBlock } from "./norms.js";
-import { createRepoSync, teamAutoProjectDir, type TaskDeliveryOracle } from "./repo-sync.js";
+import { createRepoSync, teamAutoProjectDir, type TaskDeliveryOracle, type TaskTargetClosedOracle } from "./repo-sync.js";
 import { nextFireMs } from "./schedule.js";
 import { resolveTeamAutoPaths } from "./store.js";
 import { advanceCursors, sweepRepo, type Candidate } from "./scanner.js";
@@ -323,6 +323,34 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       return await client.prHeadDelivered(owner, name, sync.taskBranchName(taskId), headTip);
     } catch {
       return false;
+    }
+  };
+  // #orphan-gc: is the worktree's TARGET (issue/PR) closed? An issue closed
+  // without our delivery (fixed elsewhere / rejected / the PR superseded)
+  // makes the worktree an orphan no matter how dirty it is - the pre-fix GC
+  // retained such trees forever ("retained: dirty worktree", 42 and
+  // climbing on the live instance). Resolves true only on a POSITIVE closed
+  // state; unknown task / unparsable marker / API failure all resolve null
+  // (fail toward keep).
+  const targetClosedOracle: TaskTargetClosedOracle = async (repoId, taskId) => {
+    const teamState = deps.getTeamState();
+    const task = teamState?.tasks?.[taskId];
+    if (!task || typeof task.description !== "string") {
+      return null;
+    }
+    const parsed = parseClaimMarker(task.description);
+    if (!parsed) {
+      return null;
+    }
+    try {
+      const [owner, name] = parsed.repoId.split("/");
+      if (!owner || !name) {
+        return null;
+      }
+      const fresh = await client.getIssue(owner, name, parsed.number);
+      return fresh.state === "closed";
+    } catch {
+      return null;
     }
   };
   const timers = new Map<string, NodeJS.Timeout>();
@@ -823,7 +851,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       for (const w of deadOnes) {
         const t = state0.tasks[w.taskId];
         if (t && t.writeMode === "write" && t.projectDir?.includes("__task-")) {
-          const r = await sync.safeRemoveTaskWorktree(w.repoId, w.taskId, squashDeliveryOracle);
+          const r = await sync.safeRemoveTaskWorktree(w.repoId, w.taskId, squashDeliveryOracle, targetClosedOracle);
           if (r.removed) {
             // #173 follow-up 4: positive removal line - without it a successful
             // terminal cleanup is invisible in logs (only kept/failed logged).
@@ -911,7 +939,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           // path left - remove it when the worker never produced deliverable
           // commits (safety-checked, undelivered work is retained + logged).
           if (task.writeMode === "write" && task.projectDir?.includes("__task-")) {
-            const r = await sync.safeRemoveTaskWorktree(entry.repoId, task.id, squashDeliveryOracle);
+            const r = await sync.safeRemoveTaskWorktree(entry.repoId, task.id, squashDeliveryOracle, targetClosedOracle);
             if (r.removed) {
               // #173 follow-up 4: positive removal line - symmetric with the
               // boot-GC path which logs both directions.
@@ -1279,7 +1307,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
             // too - safeRemoveTaskWorktree still retains unpushed work.
             return !s.writebacks.some((w) => w.taskId === taskId && !w.doneAt && !w.failedAt);
           };
-          const r = await sync.gcTaskWorktrees(repo.id, isTerminal, squashDeliveryOracle);
+          const r = await sync.gcTaskWorktrees(repo.id, isTerminal, squashDeliveryOracle, targetClosedOracle);
           removed += r.removed.length;
           retained += r.retained.length;
           stale += r.stale;

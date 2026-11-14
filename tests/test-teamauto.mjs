@@ -324,6 +324,15 @@ async function unitTests() {
   assert.match(schedTxt, /failedClaimRecovery\[taskId\] = Date\.now\(\)/, "each failed task is recovered exactly once (per-taskId guard)");
   assert.match(schedTxt, /delete repo\.cursors\.seen\[parsed\.key\]/, "recovery clears the seen stamp so the next sweep re-candidates");
   assert.match(schedTxt, /removeIssueAssignees/, "takeOwnership failure removes the bot self-assignment");
+  // #orphan-gc: a worktree whose target issue/PR is CLOSED is removed even
+  // when dirty - the pre-fix GC retained such orphans forever.
+  assert.match(schedTxt, /targetClosedOracle/, "scheduler wires the target-closed oracle into every GC path");
+  assert.match(schedTxt, /fresh\.state === "closed"/, "the oracle resolves true only on a positive closed state");
+  const repoSyncSrc = path.join(projectRoot, "src", "src", "teamauto", "repo-sync.ts");
+  const repoSyncTxt = await fs.readFile(repoSyncSrc, "utf8");
+  assert.match(repoSyncTxt, /export type TaskTargetClosedOracle/, "TaskTargetClosedOracle type is exported");
+  assert.match(repoSyncTxt, /orphaned: target issue\/PR closed/, "a closed target removes the worktree (overrides the dirty guard)");
+  assert.match(repoSyncTxt, /targetClosedOracle\(repoId, taskId\)\.catch\(\(\) => null\)/, "oracle failures fail toward keep");
   assert.equal(schedMod2.isAutoPause(null), false, "null pause is healthy");
   // Agent-facing TeamAuto surface: scheduler method + tool contract + prompt injection.
   const manifestRaw = await fs.readFile(path.join(projectRoot, "src", "openclaw.plugin.json"), "utf8");

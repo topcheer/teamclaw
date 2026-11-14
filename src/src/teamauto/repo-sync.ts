@@ -26,6 +26,16 @@ export type TaskDeliveryOracle = (
   headTip: string,
 ) => Promise<boolean>;
 
+/**
+ * #orphan-gc oracle: is the worktree's TARGET (issue/PR) closed? true =
+ * positively closed (the worktree is an orphan - even a dirty tree has no
+ * possible delivery), null/false = unknown or still open (fail toward keep).
+ */
+export type TaskTargetClosedOracle = (
+  repoId: string,
+  taskId: string,
+) => Promise<boolean | null>;
+
 /** TaskInfo.projectDir slug for a bound repo (relative to the projects dir). */
 export function teamAutoProjectDir(repoId: string): string {
   return `teamauto/${repoSlugToDirName(repoId)}`;
@@ -283,6 +293,7 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     repoId: string,
     taskId: string,
     deliveryOracle?: TaskDeliveryOracle,
+    targetClosedOracle?: TaskTargetClosedOracle,
   ): Promise<{ removed: boolean; reason: string }> {
     const base = await repoDir(repoId);
     const wtName = taskWorktreeDirName(repoId, taskId);
@@ -309,6 +320,19 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
       const inUsePid = await worktreeInUseBy(wtPath);
       if (inUsePid !== null) {
         return { removed: false, reason: `retained: in use by live process (pid ${inUsePid})` };
+      }
+      // #orphan-gc: the target issue/PR is CLOSED - no delivery this worktree
+      // could ever produce would be wanted (the issue was fixed/rejected
+      // elsewhere, the PR superseded). This is the authoritative orphan
+      // signal: it overrides the dirty guard, because "uncommitted work"
+      // toward a closed target has no future. Placed AFTER the in-use check -
+      // a live foreign controller may still be finishing a delivery race.
+      if (targetClosedOracle) {
+        const closed = await targetClosedOracle(repoId, taskId).catch(() => null);
+        if (closed === true) {
+          await removeTaskWorktree(repoId, taskId);
+          return { removed: true, reason: "orphaned: target issue/PR closed (dirty tree dropped - no possible delivery)" };
+        }
       }
       // #173 follow-up 1: the dirty guard must cover BOTH removal paths. The
       // tip-match branch used to remove without any dirty check, silently
@@ -368,6 +392,7 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     repoId: string,
     isTerminal: (taskId: string) => boolean,
     deliveryOracle?: TaskDeliveryOracle,
+    targetClosedOracle?: TaskTargetClosedOracle,
   ): Promise<{ removed: string[]; retained: { taskId: string; reason: string }[]; stale: number }> {
     const base = await repoDir(repoId);
     const siblings = path.dirname(base);
@@ -379,7 +404,7 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     const retained: { taskId: string; reason: string }[] = [];
     let stale = 0;
     const apply = async (taskId: string): Promise<void> => {
-      const r = await safeRemoveTaskWorktree(repoId, taskId, deliveryOracle);
+      const r = await safeRemoveTaskWorktree(repoId, taskId, deliveryOracle, targetClosedOracle);
       if (r.removed) {
         removed.push(taskId);
         logger.warn(`TeamAuto: worktree GC removed ${taskId} (${r.reason})`);
