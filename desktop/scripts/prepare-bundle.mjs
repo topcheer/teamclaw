@@ -194,4 +194,17 @@ const walk = (dir) => {
 };
 walk(path.join(out, "runtime"));
 console.log(`[prepare-bundle] symlinks: materialized=${fixed + rebuilt} dropped-out-of-tree=${dropped}`);
-console.log(`[prepare-bundle] bundle tree ready: ${out}`);
+
+// #win-tgz (user report 2026-11-14): the compressed-form requirement
+// ("installers must NOT carry the ~1GB unpacked tree" - see
+// prepare-bundled.mjs) was implemented on the darwin host path only. This
+// CI stager - which desktop-release.yml runs for ALL platforms - left the
+// loose tree in build/bundle, so Windows/Linux installers unpacked tens of
+// thousands of node_modules files on install (NSIS per-file decompress +
+// Defender scans on unsigned files = multi-minute installs). Pack to
+// runtime.tgz here too: runtime-extract.mjs already prefers tgz and
+// extracts to userData on first launch; materialization above guarantees
+// zero symlinks, so Windows' System32 tar.exe needs no symlink privileges.
+execSync(`tar -czf ${JSON.stringify(path.join(out, "runtime.tgz"))} -C ${JSON.stringify(out)} runtime`, { stdio: "inherit" });
+rmSync(path.join(out, "runtime"), { recursive: true, force: true });
+console.log("[prepare-bundle] bundle archive ready:", path.join(out, "runtime.tgz"));
