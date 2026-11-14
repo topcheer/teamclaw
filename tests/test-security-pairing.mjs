@@ -209,7 +209,16 @@ async function bootScenario(options = {}) {
     deps, server, baseUrl, call, callViaTunnelHost,
     getTeamState,
     async close() {
-      await new Promise((resolve) => server.close(resolve));
+      await new Promise((resolve) => {
+        server.close(resolve);
+        // g4 root cause: close() waits for every connection to end, but
+        // undici keep-alive sockets and WS clients whose upgrade the server
+        // never answered hold the server open forever - the suite wedged
+        // AFTER all assertions passed (zero output, 240s watchdog fires in
+        // CI, handle probe shows open sockets with NO timers). Destroy
+        // lingering connections so close always resolves.
+        server.closeAllConnections?.();
+      });
       wsServer.close();
     },
   };
@@ -440,16 +449,39 @@ const mintedTokens = [];
     // g4/UT-cancelled: these promises only settle on open|error - when the
     // server occasionally never completes the handshake the suite hung
     // forever (three CI cancels + local 20min hangs). Race each probe.
+    // g4 root cause round 2: every probe client is tracked and HARD-terminated
+    // at scenario close - the server's graceful close handshake waits for the
+    // peer's close frame, which a test client that already lost the race
+    // never sends, so close() wedged after all assertions passed.
+    const wsClients = [];
     const wsTimeout = () => new Promise((resolve) => setTimeout(() => resolve(new Error("ws probe timeout")), 5000));
     const wsBlocked = await Promise.race([new Promise((resolve) => {
       const ws = new WebSocketClient(`ws://127.0.0.1:${wsPort}/ws`);
+      wsClients.push(ws);
       ws.on("open", () => resolve("open"));
       ws.on("error", (err) => resolve(err));
     }), wsTimeout()]);
-    assert.match(String(wsBlocked), /401|Unexpected server response/, "tokenless WS upgrade is rejected while protection is on");
+    // 12f1d09/db7a869: loopback peers are first-party-exempt - a tokenless
+    // upgrade FROM LOOPBACK legitimately opens while protection is on. The
+    // old "tokenless is rejected" contract predates the exemption and made
+    // this assertion throw, wedging close(). The rejection contract now
+    // lives on the via-tunnel probe below (non-loopback origin).
+    assert.equal(String(wsBlocked), "open", "tokenless WS upgrade from loopback opens (first-party exemption)");
+
+    // e822622: tunnel-origin upgrades verify the gate cookie, not a device
+    // token. A spoofed via-tunnel Host with no gate cookie must be rejected
+    // even though the socket peer is loopback.
+    const wsTunnelBlocked = await Promise.race([new Promise((resolve) => {
+      const ws = new WebSocketClient(`ws://127.0.0.1:${wsPort}/ws`, { headers: { host: "attacker.apps.teamclaw.dev" } });
+      wsClients.push(ws);
+      ws.on("open", () => resolve("open"));
+      ws.on("error", (err) => resolve(err));
+    }), wsTimeout()]);
+    assert.match(String(wsTunnelBlocked), /401|Unexpected server response|forbidden|gate/i, "via-tunnel WS upgrade without a gate cookie is rejected");
 
     const wsOpen = await Promise.race([new Promise((resolve) => {
       const ws = new WebSocketClient(`ws://127.0.0.1:${wsPort}/ws?token=${webToken}`);
+      wsClients.push(ws);
       ws.on("open", () => { ws.close(); resolve("open"); });
       ws.on("error", (err) => resolve(err));
     }), wsTimeout()]);
@@ -457,10 +489,16 @@ const mintedTokens = [];
 
     const wsCookie = await Promise.race([new Promise((resolve) => {
       const ws = new WebSocketClient(`ws://127.0.0.1:${wsPort}/ws`, { headers: { cookie: `teamclaw_session=${webToken}` } });
+      wsClients.push(ws);
       ws.on("open", () => { ws.close(); resolve("open"); });
       ws.on("error", (err) => resolve(err));
     }), wsTimeout()]);
     assert.equal(String(wsCookie), "open", "WS upgrade with the session cookie succeeds");
+    // Hard-terminate every probe client NOW: leaving them to the server's
+    // graceful close handshake is what wedged the suite (see wsClients note).
+    for (const ws of wsClients) {
+      try { ws.terminate(); } catch { /* already closed */ }
+    }
 
     // ---- 8. At-rest safety: hashes only, never plaintext --------------------
     // While protection is ON (web console + cli device remain after the
