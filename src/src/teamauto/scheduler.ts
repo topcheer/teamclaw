@@ -600,7 +600,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
                 : candidate.kind === "fullReview"
                   ? ("createIssue" as const)
                   : ("issueComment" as const);
-              registerWriteback(taskId, action, repo.id, candidate.number || null, candidate.cycle !== undefined ? String(candidate.cycle) : undefined);
+              await registerWriteback(taskId, action, repo.id, candidate.number || null, candidate.cycle !== undefined ? String(candidate.cycle) : undefined);
               created++;
             }
           }
@@ -1089,23 +1089,30 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
   }
 
   // Register the write-back intent when a task lands in the task store.
-  function registerWriteback(taskId: string, action: "issueComment" | "prComment" | "createIssue" | "createPR", repoId: string, targetId: number | null, cycleKey?: string): void {
-    void ensureStore().then((s) => {
-      if (s.writebacks.some((w) => w.taskId === taskId)) {
-        return;
-      }
-      // #269 per-target dedupe (enqueue side): a second registration for
-      // the SAME target + action with no doneAt yet is a duplicate in the
-      // making - the delivery pass would fan out two comments onto one
-      // target. Skip it; the pending original still delivers the content.
-      // targetId null (create* actions) cannot be target-deduped pre-delivery
-      // and is excluded by the taskId check above.
-      if (targetId != null && s.writebacks.some((w) => w.targetId === targetId && w.repoId === repoId && w.action === action && !w.doneAt)) {
-        return;
-      }
-      s.writebacks.push({ taskId, action, repoId, targetId, doneAt: null, prUrl: null, error: null, cycleKey });
-      void saveTeamAutoStore(s);
-    }).catch(() => {});
+  // #5643 (user report 2026-11-15): this used to be fire-and-forget
+  // (void ensureStore().then(...).catch(() => {})) - the push+save raced the
+  // sweep's own awaited store save AND swallowed its own errors. The 11-15
+  // 02:00 batch lost ALL THREE fullReview write-back entries that way
+  // (tasks + activity + "created 3/3" persisted; the entries did not), so
+  // completed reviews delivered nothing, silently. Registration is now part
+  // of the sweep transaction: the caller awaits it before the sweep's own
+  // save, and failures propagate instead of vanishing.
+  async function registerWriteback(taskId: string, action: "issueComment" | "prComment" | "createIssue" | "createPR", repoId: string, targetId: number | null, cycleKey?: string): Promise<void> {
+    const s = await ensureStore();
+    if (s.writebacks.some((w) => w.taskId === taskId)) {
+      return;
+    }
+    // #269 per-target dedupe (enqueue side): a second registration for
+    // the SAME target + action with no doneAt yet is a duplicate in the
+    // making - the delivery pass would fan out two comments onto one
+    // target. Skip it; the pending original still delivers the content.
+    // targetId null (create* actions) cannot be target-deduped pre-delivery
+    // and is excluded by the taskId check above.
+    if (targetId != null && s.writebacks.some((w) => w.targetId === targetId && w.repoId === repoId && w.action === action && !w.doneAt)) {
+      return;
+    }
+    s.writebacks.push({ taskId, action, repoId, targetId, doneAt: null, prUrl: null, error: null, cycleKey });
+    await saveTeamAutoStore(s);
   }
 
   /** #268: make a takeOwnership claim VISIBLE on the issue itself. Until now
