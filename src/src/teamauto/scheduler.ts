@@ -131,6 +131,21 @@ export function sweepRetryDueAt(failures: number, lastErrorAt: number, failClass
   return lastErrorAt + sweepBackoffMinutesFor(failClass, failures) * 60_000;
 }
 
+/** In-place network retries: a transient "fetch failed"/"terminated" is
+ * retried immediately INSIDE the sweep invocation (user report 2026-11-14:
+ * "sweep failed[network] (auto-retry in ~30min): fetch failed" - the repo
+ * idled half an hour on a blip that a 5s retry would have survived). 10
+ * attempts with a 3s..30s delay ladder (~2.5min worst case) before the
+ * failure is recorded and the pause/backoff path takes over. Non-network
+ * classes (auth, ratelimited) never retry in place - retrying is useless
+ * or harmful. */
+export const SWEEP_INPLACE_RETRIES = 10;
+export const SWEEP_INPLACE_DELAY_BASE_MS = 3_000;
+export const SWEEP_INPLACE_DELAY_MAX_MS = 30_000;
+export function sweepInplaceDelayMs(attempt: number): number {
+  return Math.min(SWEEP_INPLACE_DELAY_BASE_MS * 2 ** Math.max(0, attempt - 1), SWEEP_INPLACE_DELAY_MAX_MS);
+}
+
 /**
  * Issue #24: max write-back delivery attempts before the entry is marked
  * terminally failed (failedAt) and never retried again.
@@ -467,7 +482,31 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     const sweepStartedAt = Date.now();
     const etagBefore = client.etagStats();
     try {
-      const { candidates, issues, pulls, newCommits, commits } = await sweepRepo(repo, client);
+      // #sweep-inplace: transient network failures retry IN PLACE (see
+      // SWEEP_INPLACE_RETRIES) - only a network blip that survives ~2.5min of
+      // retrying reaches the failure-recording path below.
+      let swept: Awaited<ReturnType<typeof sweepRepo>> | undefined;
+      let lastNetworkErr: unknown;
+      for (let attempt = 1; attempt <= SWEEP_INPLACE_RETRIES; attempt++) {
+        try {
+          swept = await sweepRepo(repo, client);
+          break;
+        } catch (err) {
+          if (classifySweepError(err) !== "network") {
+            throw err;
+          }
+          lastNetworkErr = err;
+          const message0 = err instanceof Error ? err.message : String(err);
+          logger.warn(`TeamAuto: sweep ${repo.id} network error (attempt ${attempt}/${SWEEP_INPLACE_RETRIES}): ${message0}`);
+          if (attempt < SWEEP_INPLACE_RETRIES) {
+            await new Promise((resolve) => setTimeout(resolve, sweepInplaceDelayMs(attempt)));
+          }
+        }
+      }
+      if (!swept) {
+        throw lastNetworkErr;
+      }
+      const { candidates, issues, pulls, newCommits, commits } = swept;
       const dryRun = !repo.dryRunDone && s.budget.firstSweepDryRun;
       if (dryRun) {
         // One observing pass, then act. Flip unconditionally - flipping only

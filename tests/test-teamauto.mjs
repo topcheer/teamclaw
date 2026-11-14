@@ -305,6 +305,14 @@ async function unitTests() {
   assert.equal(schedMod2.failClassFromPauseReason(null), "network", "null reason defaults to network");
   const schedTxt = await fs.readFile(schedulerSrc, "utf8");
   assert.match(schedTxt, /isAutoPause\(repo\.pausedReason\) && repo\.lastSweepErrorAt/, "auto-paused repos re-arm the timer on the retry ladder, not the regular schedule");
+  // In-place network retries: a transient blip retries inside the sweep
+  // invocation 10 times (3s..30s ladder) before the failure path records it.
+  assert.equal(schedMod2.SWEEP_INPLACE_RETRIES, 10, "network failures retry in place 10 times before failing");
+  assert.equal(schedMod2.sweepInplaceDelayMs(1), 3_000, "first in-place retry after 3s");
+  assert.equal(schedMod2.sweepInplaceDelayMs(4), 24_000, "ladder doubles per attempt");
+  assert.equal(schedMod2.sweepInplaceDelayMs(9), 30_000, "in-place delay caps at 30s");
+  assert.match(schedTxt, /for \(let attempt = 1; attempt <= SWEEP_INPLACE_RETRIES; attempt\+\+\)/, "sweepRepo call is wrapped in the in-place retry loop");
+  assert.match(schedTxt, /classifySweepError\(err\) !== "network"[\s\S]{0,80}throw err/, "non-network classes never retry in place");
   assert.equal(schedMod2.isAutoPause("disabled by user"), false, "user pauses are never auto-cleared");
   assert.equal(schedMod2.isAutoPause(null), false, "null pause is healthy");
   // Agent-facing TeamAuto surface: scheduler method + tool contract + prompt injection.
