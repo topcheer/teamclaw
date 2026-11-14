@@ -314,6 +314,16 @@ async function unitTests() {
   assert.match(schedTxt, /for \(let attempt = 1; attempt <= SWEEP_INPLACE_RETRIES; attempt\+\+\)/, "sweepRepo call is wrapped in the in-place retry loop");
   assert.match(schedTxt, /classifySweepError\(err\) !== "network"[\s\S]{0,80}throw err/, "non-network classes never retry in place");
   assert.equal(schedMod2.isAutoPause("disabled by user"), false, "user pauses are never auto-cleared");
+  // #claim-recovery: a failed task that claimed an issue must re-open it for
+  // the next sweep instead of orphaning it (seen stamp cleared + bot
+  // self-assignment removed).
+  assert.equal(typeof schedMod2.parseClaimMarker, "function", "parseClaimMarker must be exported");
+  const cm = schedMod2.parseClaimMarker("desc\nIdempotency-Key: topcheer/ggcode#issue-5403:takeOwnership\nmore");
+  assert.deepEqual(cm, { repoId: "topcheer/ggcode", number: 5403, kind: "takeOwnership", key: "topcheer/ggcode#issue-5403" }, "marker parses repo/number/kind/key");
+  assert.equal(schedMod2.parseClaimMarker("no marker here"), null, "non-marker descriptions parse to null");
+  assert.match(schedTxt, /failedClaimRecovery\[taskId\] = Date\.now\(\)/, "each failed task is recovered exactly once (per-taskId guard)");
+  assert.match(schedTxt, /delete repo\.cursors\.seen\[parsed\.key\]/, "recovery clears the seen stamp so the next sweep re-candidates");
+  assert.match(schedTxt, /removeIssueAssignees/, "takeOwnership failure removes the bot self-assignment");
   assert.equal(schedMod2.isAutoPause(null), false, "null pause is healthy");
   // Agent-facing TeamAuto surface: scheduler method + tool contract + prompt injection.
   const manifestRaw = await fs.readFile(path.join(projectRoot, "src", "openclaw.plugin.json"), "utf8");

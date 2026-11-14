@@ -76,6 +76,21 @@ export function idempotencyMarker(candidate: { key: string; kind: string }): str
   return `Idempotency-Key: ${candidate.key}:${candidate.kind}`;
 }
 
+/** #claim-recovery: parse the marker back out of a (failed) task's
+ * description - `{ repoId, number, kind, key }` or null. Issue candidates
+ * only (PR keys `#pr-` are not claim-bearing). */
+export function parseClaimMarker(description: string): { repoId: string; number: number; kind: string; key: string } | null {
+  const m = /Idempotency-Key: ([^:\s]+)#issue-(\d+):(\w+)/.exec(description);
+  if (!m) {
+    return null;
+  }
+  const number = Number(m[2]);
+  if (!m[1] || !Number.isFinite(number)) {
+    return null;
+  }
+  return { repoId: m[1], number, kind: m[3], key: `${m[1]}#issue-${number}` };
+}
+
 /** Failed task attempts for a candidate (task history is the attempt log). */
 export function failedAttemptCount(
   state: { tasks: Record<string, { description: string; status: string; error?: string }> },
@@ -315,6 +330,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
   let running = false;
   let store: TeamAutoStore | null = null;
   let writebackTimer: NodeJS.Timeout | null = null;
+  let claimRecoveryTimer: NodeJS.Timeout | null = null;
 
   async function ensureStore(): Promise<TeamAutoStore> {
     if (!store) {
@@ -1098,6 +1114,60 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     })();
   }
 
+  /** #claim-recovery: a task that CLAIMED an issue (takeOwnership stamps the
+   * seen cursor AND self-assigns the bot at enqueue time; issueReview stamps
+   * the cursor) locks the issue twice against re-candidacy. When the task
+   * fails, the issue must not be orphaned - nobody (human or bot) would ever
+   * pick it up again. Once per failed taskId: clear the seen stamp so the
+   * next sweep re-candidates naturally, and for takeOwnership remove the
+   * bot's own assignment (human assignees untouched). The existing
+   * dead-letter caps (3 hard / 6 transient) bound how often this can loop. */
+  async function recoverFailedClaims(): Promise<void> {
+    const teamState = deps.getTeamState();
+    if (!teamState) {
+      return;
+    }
+    const s = await ensureStore();
+    s.failedClaimRecovery ??= {};
+    let changed = false;
+    for (const [taskId, task] of Object.entries(teamState.tasks ?? {})) {
+      if (task?.status !== "failed" || typeof task.description !== "string" || !task.description.includes("Idempotency-Key:")) {
+        continue;
+      }
+      if (s.failedClaimRecovery[taskId]) {
+        continue;
+      }
+      const parsed = parseClaimMarker(task.description);
+      const repo = parsed ? s.repos.find((r) => r.id === parsed.repoId) : undefined;
+      if (!parsed || !repo) {
+        continue;
+      }
+      delete repo.cursors.seen[parsed.key];
+      s.failedClaimRecovery[taskId] = Date.now();
+      changed = true;
+      recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "sweep", text: `recovered failed task ${taskId}: issue #${parsed.number} re-opened for the next sweep` });
+      if (parsed.kind === "takeOwnership") {
+        void (async () => {
+          try {
+            const client = createGithubClient(auth);
+            const { login } = await client.getAuthenticatedUser();
+            const [owner, name] = repo.id.split("/");
+            await client.removeIssueAssignees(owner, name, parsed.number, [login]);
+          } catch (err) {
+            logger.warn(`TeamAuto: unassign for failed claim ${repo.id}#${parsed.number} failed (scanner may skip it until a human clears the assignee): ${err instanceof Error ? err.message : String(err)}`);
+          }
+        })();
+      }
+    }
+    if (changed) {
+      const entries = Object.entries(s.failedClaimRecovery).sort((a, b) => a[1] - b[1]);
+      if (entries.length > 200) {
+        s.failedClaimRecovery = Object.fromEntries(entries.slice(entries.length - 200));
+      }
+      await saveTeamAutoStore(s);
+    }
+  }
+
   // ---------- scheduling loop ----------
 
   function scheduleRepo(repo: TeamAutoRepo): void {
@@ -1176,6 +1246,10 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       void reconcileWritebacks();
     }, 20_000);
     writebackTimer.unref?.();
+    claimRecoveryTimer = setInterval(() => {
+      void recoverFailedClaims();
+    }, 60_000);
+    claimRecoveryTimer.unref?.();
     // Boot reconciliation: heal leftover task worktrees whose task is
     // terminal (or gone entirely) - the pre-cleanup backlog never shrinks
     // on its own. Safety-checked: undelivered work is kept and logged.
@@ -1237,6 +1311,9 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     timers.clear();
     if (writebackTimer) {
       clearInterval(writebackTimer);
+      if (claimRecoveryTimer) {
+        clearInterval(claimRecoveryTimer);
+      }
       writebackTimer = null;
     }
   }

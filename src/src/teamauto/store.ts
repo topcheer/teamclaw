@@ -168,6 +168,11 @@ export type TeamAutoStore = {
     tasksToday: number;
     dayStamp: string;
   };
+  /** #claim-recovery: taskId -> recoveredAt. A failed task whose candidate
+   * claimed an issue must not orphan it - the recovery pass clears the seen
+   * stamp (and the bot's self-assignment) once per taskId so the next sweep
+   * re-candidates naturally, while the dead-letter caps bound retries. */
+  failedClaimRecovery?: Record<string, number>;
 };
 
 export function defaultPolicy(): TeamAutoRepoPolicy {
@@ -191,6 +196,7 @@ function emptyStore(): TeamAutoStore {
     repos: [],
     writebacks: [],
     activity: [],
+    failedClaimRecovery: {},
     budget: {
       maxTasksPerDay: 150,
       firstSweepDryRun: true,
@@ -248,6 +254,9 @@ export async function loadTeamAutoStore(): Promise<TeamAutoStore> {
     }
     if (Array.isArray(parsed.activity)) {
       store.activity = parsed.activity.slice(-TEAMAUTO_ACTIVITY_LIMIT);
+    }
+    if (parsed.failedClaimRecovery && typeof parsed.failedClaimRecovery === "object") {
+      store.failedClaimRecovery = parsed.failedClaimRecovery as Record<string, number>;
     }
     store.budget = { ...store.budget, ...(parsed.budget ?? {}) };
     return store;

@@ -238,6 +238,13 @@ export function createGithubClient(auth: GithubAuthManager) {
       await request("POST", `/repos/${owner}/${repo}/issues/${issueNumber}/assignees`, { body: { assignees: [assignee] } });
     },
 
+    /** #claim-recovery: remove the bot's own assignment from an issue whose
+     * ownership task failed, so skipAssignedToHumans does not block the
+     * re-candidate (other human assignees are untouched). */
+    async removeIssueAssignees(owner: string, repo: string, issueNumber: number, assignees: string[]): Promise<void> {
+      await request("DELETE", `/repos/${owner}/${repo}/issues/${issueNumber}/assignees`, { body: { assignees } });
+    },
+
     /** Fresh issue state for claim-time re-checks (#268): the scan-time
      * assignee snapshot is seconds stale by enqueue time - a human may have
      * self-assigned in between, and claiming over a human is worse than not
