@@ -85,9 +85,17 @@ export class ProcessProvisioner implements WorkerProvisionerBackend {
       if (err.code !== "ENOENT") throw err;
     });
     await fs.writeFile(configPath, spec.configJson, { encoding: "utf8", mode: 0o600 });
-    // #rate-limit-999: worker settings.json beside the config - raises
-    // provider rate-limit retries for every process worker.
-    await fs.writeFile(path.join(stateDir, "settings.json"), workerRetrySettingsJson(spec.rateLimitMaxRetries), { encoding: "utf8", mode: 0o600 });
+    // #rate-limit-999 (v2, user report 2026-11-14 night: retries STILL stopped
+    // at 9): openclaw does NOT read stateDir/settings.json - its global scope
+    // is <stateDir>/agents/<agentId>/agent/settings.json (verified live:
+    // agents/teamclaw/agent/ exists in every provisioned worker; settings-
+    // manager reads join(agentDir, "settings.json")). The agent id for our
+    // workers is deterministic ("teamclaw"). Write BOTH layers: the real one
+    // plus the legacy stateDir copy (harmless; future-proofs other layouts).
+    const workerAgentSettingsDir = path.join(stateDir, "agents", "teamclaw", "agent");
+    await fs.mkdir(workerAgentSettingsDir, { recursive: true }).catch(() => { /* exists */ });
+    await fs.writeFile(path.join(workerAgentSettingsDir, "settings.json"), workerRetrySettingsJson(spec.rateLimitMaxRetries), { encoding: "utf8", mode: 0o600 }).catch(() => { /* best effort */ });
+    await fs.writeFile(path.join(stateDir, "settings.json"), workerRetrySettingsJson(spec.rateLimitMaxRetries), { encoding: "utf8", mode: 0o600 }).catch(() => { /* legacy layer */ });
 
     // #task-stuck (13th layer, physical half): the worker sandbox has no
     // teamclaw installation of its own, and entries.enabled does not resolve
