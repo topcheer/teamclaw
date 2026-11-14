@@ -322,9 +322,15 @@ const STUB_TOKEN = "f".repeat(64);
   const wrapperCount = (appSource.match(/controllerHeaders\(/g) ?? []).length;
   assert.ok(wrapperCount >= 8, `all api wrappers route through controllerHeaders (found ${wrapperCount} usages incl. WS/profile echo)`);
   assert.match(appSource, /url\.searchParams\.set\("token", state\.securityToken\)/, "the WS upgrade carries the token via ?token= (browsers cannot set headers)");
+  // #global-ensure (2026-11-14): the global-branch liveness probe moved from
+  // the renderer into the MAIN process health-check chain (global:ensure).
+  // The security invariant is unchanged: liveness is judged via the
+  // security-exempt /api/v1/health, never the authenticated /tunnel/status.
+  assert.match(appSource, /desktop\.globalEnsure\(\)/, "the global branch delegates liveness to the main-process global:ensure chain");
+  const desktopMainSource = fs.readFileSync(path.join(projectRoot, "desktop", "main.mjs"), "utf8");
   assert.match(
-    appSource,
-    /const probe = async \(\) => \{\s*try \{ await fetch\(url \+ "\/api\/v1\/health"/,
+    desktopMainSource,
+    /fetch\(hintUrl \+ "\/api\/v1\/health"/,
     "the global liveness probe uses the security-exempt /api/v1/health (reachable in every protection state), not the authenticated /tunnel/status",
   );
 
