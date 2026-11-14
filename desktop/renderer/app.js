@@ -4314,10 +4314,18 @@ import { createT as i18nCreateT } from "./i18n.js";
           // exists, design 2.3).
           const st = await desktop.standaloneStart({ teamProfile: wizardTeamProfileForInstall() || undefined }, inst || null).catch((e) => { wizLog("start failed: " + (e && e.message)); return null; });
           if (st && st.controllerUrl) {
+            // #ctrl-announce: if the controller never announced, controllerUrl
+            // is the GATEWAY fallback - the poll below can only fail. Say so
+            // up front with the gateway log tail so the failure is diagnosable.
+            if (st.controllerAnnounced === false) {
+              wizLog("WARNING: controller announce not seen - probing anyway (gateway fallback URL). If this fails, gateway log tail:");
+              if (st.gatewayLogTail) wizLog("[gw-log] " + st.gatewayLogTail);
+            }
             wizLog("instance up at " + st.controllerUrl + " - waiting for controller...");
             let ok = false;
             for (let i = 0; i < 45 && !ok; i++) {
               try { const res = await fetch(`${st.controllerUrl}/api/v1/tunnel/status`, { signal: AbortSignal.timeout(1500) }); ok = res.ok; } catch {}
+              if (i > 0 && i % 10 === 0) wizLog("still waiting for controller (" + (i * 3) + "s)...");
               if (!ok) await new Promise((w) => setTimeout(w, 1500));
             }
             if (ok) {
@@ -4328,6 +4336,14 @@ import { createT as i18nCreateT } from "./i18n.js";
               return;
             }
             wizLog("controller never answered on " + st.controllerUrl);
+            // Last-resort diagnostics so the NEXT report shows the real
+            // state: raw health probe + a FRESH gateway log tail (the
+            // controller may have announced after our window closed).
+            try { const h = await fetch(`${st.controllerUrl}/api/v1/health`, { signal: AbortSignal.timeout(2000) }); wizLog("health probe: HTTP " + h.status); } catch (e) { wizLog("health probe: unreachable"); }
+            try {
+              const st2 = await desktop.standaloneStatus().catch(() => null);
+              if (st2 && st2.gatewayLogTail) wizLog("[gw-log-final] " + st2.gatewayLogTail);
+            } catch { /* diagnostics must never throw past the wizard */ }
           } else if (st) {
             wizLog("instance started but no controller URL (announce timeout)");
           }

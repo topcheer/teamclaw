@@ -1577,7 +1577,11 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
   // occupied - e.g. 9537 next to a production controller). Wait for its
   // announce line in the gateway log and surface THAT as the controllerUrl.
   let controllerUrl = null;
-  for (let i = 0; i < 40 && !controllerUrl; i++) {
+  // #ctrl-announce (user log 2026-11-14): 40s was too tight when the
+  // fs-safe native is dead (ERR_DLOPEN_FAILED) - every private-dir check
+  // goes through the packaged .NET helper and the plugin controller can
+  // take well over a minute to announce. 90 rounds before falling back.
+  for (let i = 0; i < 90 && !controllerUrl; i++) {
     try {
       const log = await fs.readFile(logPath, "utf8");
       const m = log.match(/Controller: Web UI available at http:\/\/127\.0\.0\.1:(\d+)/);
@@ -1643,12 +1647,24 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
     await persistInstancePorts({ controllerPort: actualCtrl, controllerUrl });
   }
   const mPort = controllerUrl ? Number(new URL(controllerUrl).port) : null;
+  // #ctrl-announce: NEVER silently pass the GATEWAY port off as the
+  // controller URL - the renderer then polls a controller endpoint on the
+  // gateway, 404s forever, and reports "controller never answered" with
+  // zero diagnostics. Report announce truth + the gateway log tail so the
+  // wizard can show WHY the controller did not come up.
+  let gatewayLogTail = "";
+  try {
+    const t = await fs.readFile(logPath, "utf8");
+    gatewayLogTail = t.split("\n").filter((l) => l.trim()).slice(-15).join(" | ");
+  } catch { /* no log yet */ }
   return {
     ok: true,
     port: STANDALONE.port,
     pid: child.pid ?? null,
+    controllerAnnounced: !!controllerUrl,
     controllerUrl: controllerUrl || `http://127.0.0.1:${STANDALONE.port}`,
     controllerPort: Number.isFinite(mPort) ? mPort : null,
+    gatewayLogTail,
   };
 }
 
@@ -1716,7 +1732,15 @@ async function standaloneStatusWithHealth() {
       healthy = r.ok;
     } catch { healthy = false; }
   }
-  return { ...st, healthy };
+  // #ctrl-announce: expose the gateway log tail here too so the renderer's
+  // failure diagnostics can pull a FRESH tail after its poll window closes
+  // (the controller may have announced late - that would show here).
+  let gatewayLogTail = "";
+  try {
+    const t = await fs.readFile(path.join(standaloneStateDir(), "gateway.log"), "utf8");
+    gatewayLogTail = t.split("\n").filter((l) => l.trim()).slice(-15).join(" | ");
+  } catch { /* no log file yet */ }
+  return { ...st, healthy, gatewayLogTail };
 }
 
 ipcMain.handle("standalone:start", async (_e, options) =>
