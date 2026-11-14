@@ -1802,11 +1802,20 @@ ipcMain.handle("env:detect", async () => {
   const cfgPath = path.join(globalState, "openclaw.json");
   let cfg = null;
   try { cfg = JSON.parse(await fs.readFile(cfgPath, "utf8")); } catch { /* none */ }
-  const openclaw = Boolean(cfg) || (await hasOpenClawInstalled());
-  // teamclaw registered in the GLOBAL state? plugins.entries or extensions dir.
+  // #global-ensure (user report 2026-11-14): a ~/.openclaw config can be
+  // LEFTOVER after node/openclaw were uninstalled. "global install" on such
+  // a machine used to skip every install path and wedge the wizard forever
+  // at "starting it...". The probe result is surfaced so the renderer can
+  // route leftover-config machines to a FRESH install instead of pretending.
+  const binaryProbe = await probeOpenClawInstall();
+  const openclaw = Boolean(cfg) || binaryProbe.installed;
+  const configOnly = Boolean(cfg) && !binaryProbe.installed;
+  // teamclaw registered in the GLOBAL state? plugins.entries, the legacy
+  // plugins/ dir, or the extensions/ dir openclaw actually installs into.
   const teamclawInGlobal = Boolean(
     cfg?.plugins?.entries?.teamclaw ||
-    fsSync.existsSync(path.join(globalState, "plugins", "teamclaw"))
+    fsSync.existsSync(path.join(globalState, "plugins", "teamclaw")) ||
+    fsSync.existsSync(path.join(globalState, "extensions", "teamclaw"))
   );
   // Global controller URL is only inferred from the GLOBAL state, never
   // probed on a fixed port: a sandboxed desktop must not mistake a
@@ -1815,7 +1824,7 @@ ipcMain.handle("env:detect", async () => {
   const globalControllerUrl = teamclawInGlobal
     ? `http://127.0.0.1:${controllerPortFromConfig(cfg)}`
     : null;
-  return { openclaw, teamclawInGlobal, globalControllerUrl, llmConfigured: Boolean(cfg && Object.values(cfg?.models?.providers || {}).some((p) => p && p.apiKey)), llmProviders: cfg ? Object.entries(cfg?.models?.providers || {}).filter(([, p]) => p && p.apiKey).map(([id]) => id) : [], llmDefaultModel: (cfg?.agents?.defaults?.model || "") || null };
+  return { openclaw, teamclawInGlobal, configOnly, binaryHealthy: binaryProbe.installed, binaryWarning: binaryProbe.warning || null, globalControllerUrl, llmConfigured: Boolean(cfg && Object.values(cfg?.models?.providers || {}).some((p) => p && p.apiKey)), llmProviders: cfg ? Object.entries(cfg?.models?.providers || {}).filter(([, p]) => p && p.apiKey).map(([id]) => id) : [], llmDefaultModel: (cfg?.agents?.defaults?.model || "") || null };
 });
 
 
@@ -2022,6 +2031,87 @@ ipcMain.handle("instance:install-into-global", async (event, options) => {
 });
 
 ipcMain.handle("instance:start-global", (_e, port) => globalGatewayStart(port));
+
+// #global-ensure (user report 2026-11-14): "Global gateway not running -
+// starting it..." wedged forever on a machine whose global config was
+// LEFTOVER (no node, no openclaw binary) - a blind spawn-then-poll can
+// never succeed there. Health-check FIRST, start only when the chain
+// proves runnable, and stream every step into the wizard log. The old
+// renderer flow also passed the CONTROLLER port to the GATEWAY spawn
+// (9527 vs gateway port) - that collided with the controller and forced
+// a silent auto-shift; we now read gateway.port from the global config.
+ipcMain.handle("global:ensure", async (event) => {
+  const onEvent = (e) => { try { event.sender.send("bootstrap:install-event", e); } catch { /* window gone */ } };
+  const say = (line) => onEvent({ phase: "global", line });
+  const gHome = process.env.HOME || process.env.USERPROFILE || process.cwd();
+  const gStateDir = path.join(gHome, ".openclaw");
+  const gLogPaths = [
+    path.join(app.getPath("userData"), "global-gateway.log"),
+    path.join(gStateDir, "gateway.log"),
+    path.join(gStateDir, "logs", "gateway.log"),
+  ];
+  // Step 1: config truth.
+  let cfg = null;
+  try { cfg = JSON.parse(await fs.readFile(path.join(gStateDir, "openclaw.json"), "utf8")); say("Global config found (" + gStateDir + ")."); }
+  catch { say("No global config at " + gStateDir + "."); }
+  // Step 2: BINARY health before any start attempt (PATH probe actually RUNS
+  // the binary; a leftover config alone proves nothing).
+  const probe = await probeOpenClawInstall();
+  let bin = null;
+  let usingBundled = false;
+  if (probe.installed && resolvedOpenClawBinary()) {
+    bin = resolvedOpenClawBinary();
+    say("OpenClaw binary on PATH: " + bin);
+    if (probe.warning) say("Binary health warning: " + probe.warning);
+  } else {
+    await warmBundledRuntime(onEvent).catch(() => { /* degrade below */ });
+    const bundled = bundledBinary("openclaw");
+    if (bundled) {
+      bin = bundled;
+      usingBundled = true;
+      say("No usable OpenClaw on PATH - using the desktop's BUNDLED runtime as the gateway binary.");
+    } else {
+      const err = new Error("Global config exists but no OpenClaw binary is installed (and no bundled runtime available). Reinstall OpenClaw or choose the private instance.");
+      say("FATAL: " + err.message);
+      throw err;
+    }
+  }
+  // Step 3: is a controller ALREADY alive? Any completed HTTP response
+  // (incl. 503 starting) proves a live process (#23 rationale).
+  const cfgPort = controllerPortFromConfig(cfg);
+  const hintUrl = "http://127.0.0.1:" + cfgPort;
+  const alive = await (async () => { try { await fetch(hintUrl + "/api/v1/health", { signal: AbortSignal.timeout(1500) }); return true; } catch { return false; } })();
+  if (alive) {
+    say("Global controller already answering on " + hintUrl + ".");
+    return { ok: true, controllerUrl: hintUrl, steps: null, usingBundled, logTail: "" };
+  }
+  say("No controller answering on " + hintUrl + " - starting the global gateway...");
+  // Step 4: start on the CONFIG's gateway port (never the controller port).
+  const gwPort = Number(cfg?.gateway?.port) || 18789;
+  const gEnv = { ...process.env, HOME: gHome, OPENCLAW_HOME: gHome };
+  delete gEnv.OPENCLAW_STATE_DIR;
+  delete gEnv.OPENCLAW_PROFILE;
+  await globalGatewayStart(gwPort, gEnv, bin);
+  say("Gateway spawned on port " + gwPort + " (pid " + (GLOBAL_GATEWAY.child && GLOBAL_GATEWAY.child.pid ? GLOBAL_GATEWAY.child.pid : "?") + ") - waiting for the controller...");
+  // Step 5: announce-log resolution (v11 resolver: config port hint + log
+  // truth, no blind attach), with progress ticks.
+  const gProgress = (i) => { if (i > 0 && i % 5 === 0) say("Waiting for the global controller... (" + i + "/45)"); };
+  const controllerUrl = await resolveInstanceControllerUrl(gStateDir, cfgPort, gLogPaths, gProgress);
+  // Step 6: diagnostics either way.
+  let logTail = "";
+  for (const lp of gLogPaths) {
+    try {
+      const t = await fs.readFile(lp, "utf8");
+      if (t.trim()) { logTail = t.split("\n").filter((l) => l.trim()).slice(-15).join(" | "); break; }
+    } catch { /* next candidate */ }
+  }
+  if (!controllerUrl) {
+    say("Controller did not come up. Gateway log tail: " + (logTail || "(no log written)"));
+    return { ok: false, controllerUrl: null, usingBundled, logTail };
+  }
+  say("Global controller ready at " + controllerUrl);
+  return { ok: true, controllerUrl, usingBundled, logTail };
+});
 
 ipcMain.handle("runtime:is-ready", async () => {
   const stateDir = path.join(app.getPath("userData"), "openclaw-state");

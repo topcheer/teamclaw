@@ -1189,36 +1189,42 @@ import { createT as i18nCreateT } from "./i18n.js";
         //  a) global already HAS teamclaw  -> just connect & remember
         //  b) global openclaw, no teamclaw -> install INTO it (backup first)
         //  c) no openclaw at all           -> full install, LLM step first
+        //  a') LEFTOVER global config, no real installation (user report
+        //      2026-11-14) -> treat as (c): a fresh install. The old flow
+        //      took case (a) on config presence alone and wedged forever at
+        //      "starting it..." when node/openclaw were actually gone.
         const env = state.envDetect || (await desktop.envDetect().catch(() => null));
         const log = document.getElementById("bootstrap-log");
+        const wizLine = (s) => { if (log) log.textContent += "[global] " + s + "\n"; };
+        if (env && env.openclaw && env.teamclawInGlobal && env.configOnly) {
+          if (log) log.textContent = "[global] Leftover global config detected, but no OpenClaw binary is installed - switching to a fresh install.\n";
+          wizardGoStep(3);
+          return;
+        }
         if (env && env.openclaw && env.teamclawInGlobal) {
           wizardGoStep(4);
           if (log) log.textContent = "[global] TeamClaw already present in the global instance.\n";
-          const url = env.globalControllerUrl || "http://127.0.0.1:9527";
-          await desktop.instanceSet({ mode: "global", controllerUrl: url, llmConfigured: true }).catch(() => {});
-          // Plugin registered does NOT mean the gateway is running (fresh
-          // boot, killed process, no service manager on Windows). Probe
-          // liveness; start the gateway ourselves when dead, then wait
-          // bounded for the controller before connecting.
-          // Issue #23 review follow-up: probe the security-EXEMPT /health
-          // endpoint instead of /tunnel/status - a protected global
-          // controller 401s authenticated-less /api calls, but health stays
-          // reachable in every protection state. Any completed HTTP response
-          // (including a 503 "starting" readiness) proves the process is
-          // alive; only a connection failure/timeout means "not running".
-          const probe = async () => {
-            try { await fetch(url + "/api/v1/health", { signal: AbortSignal.timeout(1500) }); return true; } catch { return false; }
-          };
-          if (!(await probe())) {
-            if (log) log.textContent += "[global] Global gateway not running - starting it...\n";
-            const port = Number(new URL(url).port) || 9527;
-            await desktop.instanceStartGlobal(port).catch(() => {});
-            for (let i = 0; i < 45 && !(await probe()); i++) {
-              await new Promise((r) => setTimeout(r, 2000));
+          // #global-ensure: health-check chain in the MAIN process (binary
+          // truth BEFORE any start, bundled-runtime fallback, config-port
+          // gateway start, announce-log controller resolution). Every step
+          // streams back here; failure keeps the wizard open with the
+          // diagnostics instead of blindly unveiling a dead shell.
+          const unsub = desktop.onBootstrapEvent ? desktop.onBootstrapEvent((e) => {
+            if (e && e.phase === "global" && e.line) wizLine(e.line);
+          }) : null;
+          try {
+            const res = await desktop.globalEnsure().catch((e) => { wizLine("ensure failed: " + (e && e.message)); return null; });
+            if (res && res.ok && res.controllerUrl) {
+              await desktop.instanceSet({ mode: "global", controllerUrl: res.controllerUrl, llmConfigured: true }).catch(() => {});
+              await connectController(res.controllerUrl, { skipConversation: true }).catch((e) => wizLine("connect failed: " + (e && e.message)));
+              unveilShell();
+              return;
             }
+            wizLine("Global instance is not available right now. Review the checks and gateway log tail above, then retry or choose another setup mode.");
+            setStatusLine("Global instance not available - see the setup log.");
+          } finally {
+            if (unsub) unsub();
           }
-          await connectController(url, { skipConversation: true }).catch(() => {});
-          unveilShell();
           return;
         }
         if (env && env.openclaw && !env.teamclawInGlobal) {
