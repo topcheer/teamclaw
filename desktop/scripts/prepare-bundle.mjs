@@ -205,6 +205,16 @@ console.log(`[prepare-bundle] symlinks: materialized=${fixed + rebuilt} dropped-
 // runtime.tgz here too: runtime-extract.mjs already prefers tgz and
 // extracts to userData on first launch; materialization above guarantees
 // zero symlinks, so Windows' System32 tar.exe needs no symlink privileges.
-execSync(`tar -czf ${JSON.stringify(path.join(out, "runtime.tgz"))} -C ${JSON.stringify(out)} runtime`, { stdio: "inherit" });
-rmSync(path.join(out, "runtime"), { recursive: true, force: true });
-console.log("[prepare-bundle] bundle archive ready:", path.join(out, "runtime.tgz"));
+// #mac-notarize (same day, run 43581626852): DARWIN MUST NOT PACK. Apple
+// notarization RECURSES INTO ARCHIVES (issues listed
+// "runtime.tgz/runtime.tar/.../*.node: not signed") while electron-builder's
+// osx-sign only signs loose Mach-O files it can walk - the loose tree got
+// every .node/.dylib signed and notarized clean all along (the size cost is
+// the price of a notarizable bundle). tgz for win/linux only.
+if (tcOs !== "darwin") {
+  execSync(`tar -czf ${JSON.stringify(path.join(out, "runtime.tgz"))} -C ${JSON.stringify(out)} runtime`, { stdio: "inherit" });
+  rmSync(path.join(out, "runtime"), { recursive: true, force: true });
+  console.log("[prepare-bundle] bundle archive ready:", path.join(out, "runtime.tgz"));
+} else {
+  console.log("[prepare-bundle] darwin target: keeping the loose runtime tree (notarization signs every binary in place)");
+}
