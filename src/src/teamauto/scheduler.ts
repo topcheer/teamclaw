@@ -359,6 +359,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
   let store: TeamAutoStore | null = null;
   let writebackTimer: NodeJS.Timeout | null = null;
   let claimRecoveryTimer: NodeJS.Timeout | null = null;
+  let gcTimer: NodeJS.Timeout | null = null;
 
   async function ensureStore(): Promise<TeamAutoStore> {
     if (!store) {
@@ -1278,57 +1279,74 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       void recoverFailedClaims();
     }, 60_000);
     claimRecoveryTimer.unref?.();
-    // Boot reconciliation: heal leftover task worktrees whose task is
-    // terminal (or gone entirely) - the pre-cleanup backlog never shrinks
-    // on its own. Safety-checked: undelivered work is kept and logged.
-    void (async () => {
-      try {
-        // #173 follow-up 3: with getTeamState() === null the isTerminal
-        // predicate below classifies EVERY task as terminal - boot GC must
-        // not run blind over an unloaded team state (fails toward skip).
-        if (!deps.getTeamState()) {
-          logger.warn("TeamAuto: worktree GC skipped (team state unavailable)");
-          return;
-        }
-        let removed = 0;
-        let retained = 0;
-        let stale = 0;
-        const retainedDetails: string[] = [];
-        for (const repo of s.repos) {
-          if (!repo.enabled) continue;
-          const isTerminal = (taskId: string): boolean => {
-            const t = deps.getTeamState()?.tasks[taskId];
-            if (t && t.status !== "completed" && t.status !== "failed") return false;
-            // Review F1: a terminal task with a pending write-back (push
-            // ok / PR failed, 20s-retry window) still needs its worktree -
-            // the retry delivers the PR from the surviving branch. Do not
-            // GC until the write-back settles (doneAt or dropped). Issue
-            // #24: terminally failed write-backs (failedAt) count as settled
-            // too - safeRemoveTaskWorktree still retains unpushed work.
-            return !s.writebacks.some((w) => w.taskId === taskId && !w.doneAt && !w.failedAt);
-          };
-          const r = await sync.gcTaskWorktrees(repo.id, isTerminal, squashDeliveryOracle, targetClosedOracle);
-          removed += r.removed.length;
-          retained += r.retained.length;
-          stale += r.stale;
-          retainedDetails.push(...r.retained.map((x) => `${x.taskId}: ${x.reason}`));
-        }
-        if (removed || retained || stale) {
-          // #173 follow-up 4: per-task retain reasons recorded as activity
-          // (PR #167 promised "outcome logged + recorded as activity"); the
-          // stale count surfaces dir-gone-but-branch-kept leaks too.
-          const detail = retainedDetails.length
-            ? `; ${retainedDetails.slice(0, 10).join("; ")}${retainedDetails.length > 10 ? `; +${retainedDetails.length - 10} more` : ""}`
-            : "";
-          const stalePart = stale ? `, stale ${stale}` : "";
-          recordActivity(s, { at: Date.now(), repoId: "*", kind: "task", text: `worktree GC: removed ${removed}, retained ${retained} (undelivered${detail})${stalePart}` });
-          await saveTeamAutoStore(s);
-          logger.warn(`TeamAuto: worktree GC removed ${removed}, retained ${retained}${stalePart}`);
-        }
-      } catch (err) {
-        logger.warn(`TeamAuto: worktree GC failed: ${err instanceof Error ? err.message : String(err)}`);
+    // #gc-periodic: worktree GC used to be boot-only with an enabled-repo
+    // filter - two defects (live-instance audit 2026-11-14): (a) a disabled
+    // repo ("do no NEW work") never got cleaned at all; (b) the single boot
+    // pass ran before the device-flow auth warmed up, so every targetClosed
+    // oracle call failed toward keep and closed-target orphans stayed (4
+    // confirmed misretains). Now a recurring pass: first run delayed 60s
+    // (auth warm), then every 6h - transient oracle failures self-heal on
+    // the next pass.
+    const gcDelay = setTimeout(() => {
+      void runGcPass();
+      gcTimer = setInterval(() => {
+        void runGcPass();
+      }, 6 * 60 * 60_000);
+      gcTimer.unref?.();
+    }, 60_000);
+    gcDelay.unref?.();
+  }
+
+  /** #gc-periodic: one full worktree GC pass over ALL bound repos (enabled
+   * or not - GC is hygiene, not new work). Shared by the boot-delayed first
+   * run and the 6h recurrence. */
+  async function runGcPass(): Promise<void> {
+    try {
+      // #173 follow-up 3: with getTeamState() === null the isTerminal
+      // predicate below classifies EVERY task as terminal - GC must not run
+      // blind over an unloaded team state (fails toward skip).
+      if (!deps.getTeamState()) {
+        logger.warn("TeamAuto: worktree GC skipped (team state unavailable)");
+        return;
       }
-    })();
+      const s = await ensureStore();
+      let removed = 0;
+      let retained = 0;
+      let stale = 0;
+      const retainedDetails: string[] = [];
+      for (const repo of s.repos) {
+        const isTerminal = (taskId: string): boolean => {
+          const t = deps.getTeamState()?.tasks[taskId];
+          if (t && t.status !== "completed" && t.status !== "failed") return false;
+          // Review F1: a terminal task with a pending write-back (push
+          // ok / PR failed, 20s-retry window) still needs its worktree -
+          // the retry delivers the PR from the surviving branch. Do not
+          // GC until the write-back settles (doneAt or dropped). Issue
+          // #24: terminally failed write-backs (failedAt) count as settled
+          // too - safeRemoveTaskWorktree still retains unpushed work.
+          return !s.writebacks.some((w) => w.taskId === taskId && !w.doneAt && !w.failedAt);
+        };
+        const r = await sync.gcTaskWorktrees(repo.id, isTerminal, squashDeliveryOracle, targetClosedOracle);
+        removed += r.removed.length;
+        retained += r.retained.length;
+        stale += r.stale;
+        retainedDetails.push(...r.retained.map((x) => `${x.taskId}: ${x.reason}`));
+      }
+      if (removed || retained || stale) {
+        // #173 follow-up 4: per-task retain reasons recorded as activity
+        // (PR #167 promised "outcome logged + recorded as activity"); the
+        // stale count surfaces dir-gone-but-branch-kept leaks too.
+        const detail = retainedDetails.length
+          ? `; ${retainedDetails.slice(0, 10).join("; ")}${retainedDetails.length > 10 ? `; +${retainedDetails.length - 10} more` : ""}`
+          : "";
+        const stalePart = stale ? `, stale ${stale}` : "";
+        recordActivity(s, { at: Date.now(), repoId: "*", kind: "task", text: `worktree GC: removed ${removed}, retained ${retained} (undelivered${detail})${stalePart}` });
+        await saveTeamAutoStore(s);
+        logger.warn(`TeamAuto: worktree GC removed ${removed}, retained ${retained}${stalePart}`);
+      }
+    } catch (err) {
+      logger.warn(`TeamAuto: worktree GC failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   async function stop(): Promise<void> {
@@ -1341,6 +1359,9 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       clearInterval(writebackTimer);
       if (claimRecoveryTimer) {
         clearInterval(claimRecoveryTimer);
+      }
+      if (gcTimer) {
+        clearInterval(gcTimer);
       }
       writebackTimer = null;
     }
