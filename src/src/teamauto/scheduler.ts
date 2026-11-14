@@ -604,13 +604,17 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
               created++;
             }
           }
-          repo.lastSweepSummary = `created ${created}/${capped.length} task(s)`;
+          const failedSince = repo.failedTasksSinceLastSweep ?? 0;
+          repo.failedTasksSinceLastSweep = 0;
+          repo.lastSweepSummary = `created ${created}/${capped.length} task(s)${failedSince > 0 ? `; FAILED ${failedSince} since last sweep` : ""}`;
           if (capped.some((c) => c.kind === "fullReview")) {
             repo.cursors.lastFullReviewAt = Date.now();
           }
         }
       } else {
-        repo.lastSweepSummary = "no new work";
+        const failedSince0 = repo.failedTasksSinceLastSweep ?? 0;
+        repo.failedTasksSinceLastSweep = 0;
+        repo.lastSweepSummary = failedSince0 > 0 ? `no new work; FAILED ${failedSince0} since last sweep` : "no new work";
       }
       repo.lastSweepAt = Date.now();
       if (isAutoPause(repo.pausedReason)) {
@@ -840,6 +844,14 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         if (dead) {
           logger.warn(`TeamAuto: dropping dead write-back ${w.taskId} (${t ? "task failed without result" : "task missing"})`);
           deadOnes.push(w);
+          // #5641: the 3-day architect-leg outage was invisible because a
+          // failed-without-result task produced NO activity line and the next
+          // sweep summary still said "created 3/3". Record both surfaces.
+          recordActivity(s, { at: Date.now(), repoId: w.repoId, kind: "task", text: `task failed without result, write-back dropped: ${w.taskId}${t?.error ? ` (${String(t.error).slice(0, 120)})` : ""}` });
+          const failedRepo = s.repos.find((r) => r.id === w.repoId);
+          if (failedRepo) {
+            failedRepo.failedTasksSinceLastSweep = (failedRepo.failedTasksSinceLastSweep ?? 0) + 1;
+          }
         }
         return !dead;
       });

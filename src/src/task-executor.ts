@@ -89,7 +89,7 @@ export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
     ? roleDef.systemPrompt
     : `You are a ${role} in a virtual software team. Complete the assigned task.`;
 
-  return async (taskDescription: string, assignment: TaskAssignmentPayload): Promise<TaskExecutorResult> => {
+  const executeOnce = async (taskDescription: string, assignment: TaskAssignmentPayload): Promise<TaskExecutorResult> => {
     const taskId = assignment.taskId;
     const sessionKey = getSessionKey(assignment);
     const idempotencyKey = getIdempotencyKey?.(assignment);
@@ -660,6 +660,31 @@ export function createRoleTaskExecutor(deps: RoleTaskExecutorDeps) {
       });
       logger.error(`TeamClaw: task ${taskId} execution failed for ${role}: ${errorMsg}`);
       throw err;
+    }
+  };
+  // #5641 (user report 2026-11-15): the openclaw host's workspace-state guard
+  // THROWS BY CONTRACT ("retry workspace setup") when the shared workspace
+  // changes mid-preparation - e.g. the 02:00 fullReview batch racing the
+  // sweep's own repo sync. teamclaw used to surface that error straight to a
+  // terminal task failure (architect leg died in seconds, 3 days straight).
+  // Bounded retry honoring the host's retryable contract; the inner run is
+  // idempotent via idempotencyKey.
+  const RETRYABLE_WORKSPACE_GUARD = /Workspace filesystem changed while preparing state|WorkspaceAliasRepointed/;
+  return async (taskDescription: string, assignment: TaskAssignmentPayload): Promise<TaskExecutorResult> => {
+    const MAX_ATTEMPTS = 3;
+    const BACKOFF_MS = [5_000, 15_000];
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await executeOnce(taskDescription, assignment);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (attempt < MAX_ATTEMPTS && RETRYABLE_WORKSPACE_GUARD.test(msg)) {
+          logger.warn(`TeamClaw: retryable workspace-state failure (attempt ${attempt}/${MAX_ATTEMPTS}) for task ${assignment.taskId}: ${msg.slice(0, 140)}`);
+          await delay(BACKOFF_MS[attempt - 1] ?? 15_000);
+          continue;
+        }
+        throw err;
+      }
     }
   };
 }

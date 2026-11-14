@@ -65,6 +65,11 @@ export type TeamAutoRepo = {
   addedAt: number;
   lastSweepAt: number;
   lastSweepSummary: string | null;
+  // #5641: task failures surfaced in the next sweep summary. Incremented
+  // whenever a write-back is dead-lettered because its task failed without
+  // a result; read + reset by the sweep so owners see "failed N" next to
+  // "created N/N" instead of a silently dying leg.
+  failedTasksSinceLastSweep?: number;
   pausedReason: string | null;
   /** Consecutive auto-paused sweep failures; drives retry backoff (0/undefined = healthy). */
   sweepFailures?: number;
