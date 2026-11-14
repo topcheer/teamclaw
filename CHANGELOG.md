@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026.11.4
+
+Released 2026-11-14. Patch release over 2026.11.3, cut with the full
+pre-release contract honored (submodule synced to upstream 0b7cd35
+first, full suite green before tagging).
+
+### Added
+- #claim-recovery: issues orphaned by failed claimed tasks are
+  recovered - the seen cursor stamp is cleared and the bot's own
+  assignment removed so the next sweep re-candidates the issue
+  naturally; dead-letter caps bound the retry loop (118a401).
+
+### Fixed
+- Desktop/MAS release race: runtime staging fired on the same tag as
+  the npm release workflow and died with npm notarget while the
+  package was still publishing/propagating (v2026.11.3: all three
+  platforms red). prepare-bundle now polls package availability and
+  retries with backoff, up to RUNTIME_STAGE_WAIT_MS (default 45min)
+  (b744336).
+
+### Changed
+- openclaw submodule bumped to upstream 0b7cd35: sessions delivery
+  encoding perf (#198610), release pruning deferred until deployment
+  verification (#198624), ownerless cron edit rejection (#198621), UI
+  row-menu visibility tests (#198599), dictation feedback + live voice
+  level (#198424). No Windows fixes in this window.
+
 ## 2026.11.3
 
 Released 2026-11-14. Patch release over 2026.11.2: the #269 writeback
