@@ -1,5 +1,47 @@
 # Changelog
 
+## 2026.11.3
+
+Released 2026-11-14. Patch release over 2026.11.2: the #269 writeback
+double-delivery stack, multi-gateway team-state safety, worker plugin
+loading, and sweep retry robustness.
+
+### Added
+- Controller Activity tab: journal + log tail over the API, with
+  pairing/security layering per the design ruling (8b03ed6).
+- #267 sweep observability trio and tmp hygiene (352c7c1).
+
+### Fixed
+- #269 writeback double-delivery (five layers): serialized reconcile +
+  intent-first dispatch (06def56), local per-target dedupe at enqueue
+  and delivery (6b889cf), cross-process reconcile mutex + store re-read
+  per pass (4879733), atomic abort when the PR step fails (85b4037),
+  and one task per open issue - ownership subsumes triage (8c35bb3).
+- #270 team-state bouncing across gateways: lazy merge-on-write keeps
+  foreign keys alive when multiple gateways share the store (d25736a).
+- Worker plugin loading: process workers now load the controller's
+  teamclaw entry (dc0c6d9), schema-correct {paths:[]} shape (25418e4),
+  sandbox symlinks so workers have the plugin at all (701deb5), and
+  load.paths points at the package root (d6754af).
+- Provisioner self-heal: session baseDir recovery after it vanished
+  (10eab3c, workers starved 2.3h+), state-library failure family now
+  retires the poisoned sandbox and retries once fresh instead of bare
+  cooldown loops (043414c).
+- Sweep robustness: isAutoPause matches the classified failure format
+  (055f8ba, repos stuck paused forever), class-aware retry ladder -
+  network blips retry in 1min not 30min (a84ed0e) - and transient
+  network failures retry IN PLACE 10 times before any failure verdict
+  (b5e1e2b).
+- WebSocket upgrade guard: loopback exemption (db7a869, 12f1d09) and
+  tunnel-origin upgrades verify the gate cookie, not a device token
+  (e822622).
+- Tunnel: recoverable across gateway shutdowns via detach semantics
+  (f691236); every mutating tunnel endpoint audit-logs its caller
+  origin (8881781).
+- teamauto: repo enable/disable toggle actually wires through
+  (02af7aa); takeOwnership claims are visible on the issue (#268,
+  f301719).
+
 ## 2026.11.2
 
 Released 2026-11-12. Patch release over 2026.11.1: installer hardening,
