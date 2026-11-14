@@ -1,5 +1,5 @@
 import { app, BrowserWindow, ipcMain, nativeTheme, Notification, shell } from "electron";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import dns from "node:dns/promises";
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
@@ -834,7 +834,17 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
     const settleDelays = [2500, 5000, 10000];
     for (let attempt = 0; attempt < settleDelays.length && !installed; attempt++) {
       try {
-        await runShellStream(installCmd, runtimeDir, (line) => onEvent({ phase: "teamclaw", line }), sandboxEnv);
+        // #win-hang: the CLI can hang ALIVE after its cleanup-failure line
+        // (fs-safe .NET-helper fallback wedged) - cap each attempt at 3 min
+        // with progress ticks; the ladder then short-circuits via the
+        // installed-dir check or retries instead of awaiting forever.
+        await runShellStream(
+          installCmd, runtimeDir,
+          (line) => onEvent({ phase: "teamclaw", line }),
+          sandboxEnv,
+          180_000,
+          (secs) => onEvent({ phase: "teamclaw", line: `Install still running (${secs}s)...` }),
+        );
         installed = true;
       } catch (installErr) {
         const msg = installErr instanceof Error ? installErr.message : String(installErr);
@@ -1033,7 +1043,7 @@ ipcMain.handle("llm:write-global", async (_e, llm) => {
 
 // Streamed variant: emits every stdout/stderr line through onLine and
 // resolves with the same result shape as runShellCommand.
-async function runShellStream(command, cwd, onLine, envOverride) {
+async function runShellStream(command, cwd, onLine, envOverride, timeoutMs, onTick) {
   const child = spawn(command, {
     cwd,
     env: envOverride || process.env,
@@ -1041,7 +1051,7 @@ async function runShellStream(command, cwd, onLine, envOverride) {
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
-  return await streamChildOutput(child, command, onLine);
+  return await streamChildOutput(child, command, onLine, timeoutMs, onTick);
 }
 
 // Argv-array variant (#223): no shell, no string splicing - for steps where
@@ -1060,7 +1070,7 @@ async function runSpawnStream(command, args, cwd, onLine, envOverride) {
 // to its accumulator EXACTLY once and the line splitter keeps its own buffer
 // (the old pump never wrote stdout - always empty in failure messages - and
 // double-counted stderr partial lines across chunks).
-async function streamChildOutput(child, command, onLine) {
+async function streamChildOutput(child, command, onLine, timeoutMs, onTick) {
   // Watchdog: grandchildren can inherit and hold the stdio pipes, so the
   // child's 'exit' may fire but 'close' never does and callers hang. If the
   // stream goes silent for 20s AFTER the child exits, force-settle.
@@ -1072,6 +1082,39 @@ async function streamChildOutput(child, command, onLine) {
       try { child.kill("SIGKILL"); } catch { /* gone */ }
     }
   }, 5000);
+  // #win-hang (user report 2026-11-14): the exit watchdog only covers
+  // "exited but pipes held". The plugins-install CLI can HANG ALIVE - it
+  // printed its sqlite cleanup failure and never exited (fs-safe native
+  // ERR_DLOPEN_FAILED -> .NET-helper fallback wedged), so the bootstrap
+  // awaited forever with no progress line. Overall deadline for callers
+  // that pass timeoutMs: kill the whole tree (shell:true grandchildren
+  // survive child.kill on Windows; taskkill /T /F gets them) and reject,
+  // letting the caller's retry ladder decide (installed-dir short-circuit
+  // or retry). Ticks keep the wizard honest while alive.
+  let settle = null;
+  let deadlineTimer = null;
+  let tickTimer = null;
+  const clearAuxTimers = () => {
+    if (deadlineTimer) clearTimeout(deadlineTimer);
+    if (tickTimer) clearInterval(tickTimer);
+  };
+  if (timeoutMs && timeoutMs > 0) {
+    deadlineTimer = setTimeout(() => {
+      if (process.platform === "win32" && child.pid) {
+        try { spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" }); } catch { /* best effort */ }
+      }
+      try { child.kill("SIGKILL"); } catch { /* already gone */ }
+      settle?.reject(new Error(`timed out after ${Math.round(timeoutMs / 1000)}s: ${command.slice(0, 120)}`));
+    }, timeoutMs);
+    deadlineTimer.unref?.();
+  }
+  if (onTick) {
+    const startedAt = Date.now();
+    tickTimer = setInterval(() => {
+      try { onTick(Math.round((Date.now() - startedAt) / 1000)); } catch { /* listener gone */ }
+    }, 15_000);
+    tickTimer.unref?.();
+  }
   const bump = () => { lastActivity = Date.now(); };
   let stdout = "";
   let stderr = "";
@@ -1092,9 +1135,11 @@ async function streamChildOutput(child, command, onLine) {
   pump(child.stdout, (text) => { stdout += text; });
   pump(child.stderr, (text) => { stderr += text; });
   return await new Promise((resolve, reject) => {
-    child.on("error", reject);
+    settle = { resolve, reject };
+    child.on("error", (err) => { clearInterval(watchdog); clearAuxTimers(); reject(err); });
     child.on("exit", (code, signal) => {
       clearInterval(watchdog);
+      clearAuxTimers();
       const result = { ok: code === 0, code, signal, stdout: stdout.trim(), stderr: stderr.trim() };
       if (code === 0) return resolve(result);
       const failure = new Error(stderr.trim() || stdout.trim() || `Command failed: ${command}`);
