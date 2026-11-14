@@ -165,10 +165,29 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     return true;
   }
 
-  async function pushBranch(repoId: string, dir: string, cloneUrl: string, branch: string): Promise<void> {
+  async function pushBranch(repoId: string, dir: string, cloneUrl: string, branch: string): Promise<{ alreadyDelivered: boolean }> {
     const authed = await tokenizedUrl(cloneUrl);
+    // #stale-base follow-up: the remote task branch may ALREADY carry the
+    // delivery (previous incarnation pushed it; the PR got merged). Blindly
+    // pushing HEAD again is a permanent non-fast-forward (6x retry spam,
+    // task mwfzy51j 2026-11-14). Fetch the remote tip first: when local
+    // HEAD is an ancestor of it, the work is already on the remote - report
+    // instead of pushing.
+    try {
+      await run(["fetch", authed, `refs/heads/${branch}`], dir);
+      const remoteTip = (await run(["rev-parse", "FETCH_HEAD"], dir)).trim();
+      const localHead = (await run(["rev-parse", "HEAD"], dir)).trim();
+      if (remoteTip && localHead && remoteTip !== localHead) {
+        const ancestor = await run(["merge-base", "--is-ancestor", localHead, remoteTip], dir).then(() => true, () => false);
+        if (ancestor) {
+          logger.warn(`TeamAuto: ${repoId}#${branch} already delivered (remote tip ${remoteTip.slice(0, 8)} contains local ${localHead.slice(0, 8)}) - skipping push`);
+          return { alreadyDelivered: true };
+        }
+      }
+    } catch { /* branch absent remotely or fetch failed - plain push below */ }
     try {
       await run(["push", authed, `HEAD:refs/heads/${branch}`], dir);
+      return { alreadyDelivered: false };
     } catch (err) {
       logger.warn(`TeamAuto: push failed for ${repoId}#${branch}: ${err instanceof Error ? err.message : String(err)}`);
       throw err;
@@ -248,13 +267,28 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
    * branched from HEAD. Reuses an existing worktree (resume-safe) so the
    * checkpoint/retry path lands in the same tree.
    */
-  async function ensureTaskWorktree(repoId: string, taskId: string): Promise<string> {
+  async function ensureTaskWorktree(repoId: string, taskId: string, defaultBranch?: string, cloneUrl?: string): Promise<string> {
     const base = await repoDir(repoId);
     const wtName = taskWorktreeDirName(repoId, taskId);
     // wtName carries the teamauto/ level for the REL path; the physical dir is
     // a SIBLING of the base checkout (path.join would nest teamauto/ twice).
     const wtPath = path.join(path.dirname(base), path.basename(wtName));
     if (!(await fs.access(path.join(wtPath, ".git")).then(() => true, () => false))) {
+      // #stale-base (user report 2026-11-14): ensureCloned (fetch + reset to
+      // the default-branch tip) only ran at BIND time (learnNorms), so the
+      // base checkout's HEAD drifted days behind origin/main and EVERY new
+      // task worktree branched from stale code. Refresh the base right
+      // before creating a new branch off it - same fetch+reset as
+      // ensureCloned. Existing worktrees (resume path) are left untouched.
+      if (defaultBranch && cloneUrl) {
+        try {
+          const authed = await tokenizedUrl(cloneUrl);
+          await run(["fetch", authed, defaultBranch], base);
+          await run(["reset", "--hard", "FETCH_HEAD"], base);
+        } catch (err) {
+          logger.warn(`TeamAuto: base refresh failed for ${repoId} (continuing on current HEAD): ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
       await run(["worktree", "add", "-b", taskBranchName(taskId), wtPath, "HEAD"], base);
       logger.warn(`TeamAuto: worktree ${wtName} (branch ${taskBranchName(taskId)}) for ${taskId}`);
     }

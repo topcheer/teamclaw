@@ -961,7 +961,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           if (isTeamAutoWrite) {
             try {
               const info = await client.getRepoInfo(repoId.split("/")[0]!, repoId.split("/")[1]!);
-              const wtDir = await sync.ensureTaskWorktree(repoId, task.id);
+              const wtDir = await sync.ensureTaskWorktree(repoId, task.id, info.defaultBranch, info.cloneUrl);
               const committed = await sync.commitAll(wtDir, `[teamclaw:${role}] ${task.title.replace(/^\[[^\]]+\]\s*/, "")}`.slice(0, 200), `teamclaw-${role}`, `teamclaw-${role}@users.noreply.github.com`);
               const branch = `teamclaw/task-${task.id.replace(/[^\w-]/g, "")}`;
               // Workers often commit themselves inside the worktree - deliver
@@ -969,11 +969,19 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
               // commitAll just added new ones.
               const deliverable = committed || (await sync.branchHasCommits(wtDir, info.defaultBranch));
               if (deliverable) {
-                await sync.pushBranch(repoId, wtDir, info.cloneUrl, branch);
-                const pr = await client.createPullRequest(repoId.split("/")[0]!, repoId.split("/")[1]!, branch, info.defaultBranch, `[teamclaw:${role}] ${task.title.replace(/^\[[^\]]+\]\s*/, "")}`.slice(0, 120), `${task.result.trim()}\n${MARKER_FOOTER(role)}`);
-                entry.prUrl = pr.url;
-                body = `${body}\n\nDelivered as PR: ${pr.url}`;
-                recordActivity(s, { at: Date.now(), repoId, kind: "writeback", text: `PR opened: ${pr.url}` });
+                const push = await sync.pushBranch(repoId, wtDir, info.cloneUrl, branch);
+                if (push.alreadyDelivered) {
+                  // #stale-base follow-up: a previous incarnation already
+                  // delivered this branch (PR merged). Skip PR creation and
+                  // the retry ladder - the task's work is on the remote.
+                  body = `${body}\n\nWork for this task was already delivered on branch \`${branch}\` (previous delivery).`;
+                  recordActivity(s, { at: Date.now(), repoId, kind: "writeback", text: `already delivered on ${branch} - skipped duplicate push/PR` });
+                } else {
+                  const pr = await client.createPullRequest(repoId.split("/")[0]!, repoId.split("/")[1]!, branch, info.defaultBranch, `[teamclaw:${role}] ${task.title.replace(/^\[[^\]]+\]\s*/, "")}`.slice(0, 120), `${task.result.trim()}\n${MARKER_FOOTER(role)}`);
+                  entry.prUrl = pr.url;
+                  body = `${body}\n\nDelivered as PR: ${pr.url}`;
+                  recordActivity(s, { at: Date.now(), repoId, kind: "writeback", text: `PR opened: ${pr.url}` });
+                }
               }
               await sync.removeTaskWorktree(repoId, task.id);
             } catch (prErr) {
