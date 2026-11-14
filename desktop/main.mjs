@@ -2048,12 +2048,19 @@ ipcMain.handle("instance:install-into-global", async (event, options) => {
   if (!controllerUrl) {
     // #global-logs (user report 2026-11-14 night): the old one-liner
     // ("Global controller did not come up ... after install.") explained
-    // nothing. Collect the full state and stream + attach it.
-    const diag = [
-      gGatewayState(),
-      `plugin config: ${gCfg?.plugins?.entries?.teamclaw ? "controller mode" : "MISSING (controller mode write failed)"}, port hint ${controllerPortFromConfig(gCfg)}`,
-      `[gw-log] ${await gLogTail()}`,
-    ];
+    // nothing. Collect the full state and stream + attach it. The collector
+    // itself must NEVER throw (a broken diagnostic swallowing the real
+    // failure would defeat the point) - degrade to the plain message.
+    let diag;
+    try {
+      diag = [
+        gGatewayState(),
+        `plugin config: ${gCfg?.plugins?.entries?.teamclaw ? "controller mode" : "MISSING (controller mode write failed)"}, port hint ${controllerPortFromConfig(gCfg)}`,
+        `[gw-log] ${await gLogTail()}`,
+      ];
+    } catch {
+      diag = ["(diagnostics collection failed - check gateway log files manually)"];
+    }
     for (const line of diag) onEvent({ phase: "teamclaw", line: line });
     throw new Error(`Global controller did not come up in ${gStateDir} after install. ${diag.join(" :: ")}`);
   }

@@ -1270,7 +1270,7 @@ import { createT as i18nCreateT } from "./i18n.js";
         // provisioning, plugin install, gateway spawn, announce waits, log
         // tail) lands in the wizard log in real time.
         const unsubGlobal = desktop.onBootstrapEvent
-          ? desktop.onBootstrapEvent((e) => { if (e && e.line) wizLine(e.line); })
+          ? desktop.onBootstrapEvent((e) => { if (e && e.line) wizLine("[global] " + e.line); })
           : null;
         try {
           wizLine("[global] Starting global path...");
