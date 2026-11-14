@@ -1326,7 +1326,11 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           // too - safeRemoveTaskWorktree still retains unpushed work.
           return !s.writebacks.some((w) => w.taskId === taskId && !w.doneAt && !w.failedAt);
         };
-        const r = await sync.gcTaskWorktrees(repo.id, isTerminal, squashDeliveryOracle, targetClosedOracle);
+        // #gc3: no task record anywhere in team-state -> the owner ruled
+        // outright deletion (2026-11-14, "全删") - such worktrees can never
+        // be judged by any oracle and were retained forever.
+        const isUnknownTask = (taskId: string): boolean => !deps.getTeamState()?.tasks?.[taskId];
+        const r = await sync.gcTaskWorktrees(repo.id, isTerminal, squashDeliveryOracle, targetClosedOracle, isUnknownTask);
         removed += r.removed.length;
         retained += r.retained.length;
         stale += r.stale;

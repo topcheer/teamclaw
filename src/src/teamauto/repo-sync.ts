@@ -294,6 +294,7 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     taskId: string,
     deliveryOracle?: TaskDeliveryOracle,
     targetClosedOracle?: TaskTargetClosedOracle,
+    isUnknownTask?: (taskId: string) => boolean,
   ): Promise<{ removed: boolean; reason: string }> {
     const base = await repoDir(repoId);
     const wtName = taskWorktreeDirName(repoId, taskId);
@@ -320,6 +321,15 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
       const inUsePid = await worktreeInUseBy(wtPath);
       if (inUsePid !== null) {
         return { removed: false, reason: `retained: in use by live process (pid ${inUsePid})` };
+      }
+      // #gc3 (user policy 2026-11-14: "全删"): a worktree whose task has NO
+      // record left in team-state (task history pruned) can never be judged
+      // by delivery/target oracles and was retained forever. The owner
+      // ruled: delete outright, no archive. Still placed AFTER the in-use
+      // sentinel - a live foreign controller may be finishing work in it.
+      if (isUnknownTask?.(taskId)) {
+        await removeTaskWorktree(repoId, taskId);
+        return { removed: true, reason: "orphaned: no task record (delete policy)" };
       }
       // #orphan-gc: the target issue/PR is CLOSED - no delivery this worktree
       // could ever produce would be wanted (the issue was fixed/rejected
@@ -393,6 +403,7 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     isTerminal: (taskId: string) => boolean,
     deliveryOracle?: TaskDeliveryOracle,
     targetClosedOracle?: TaskTargetClosedOracle,
+    isUnknownTask?: (taskId: string) => boolean,
   ): Promise<{ removed: string[]; retained: { taskId: string; reason: string }[]; stale: number }> {
     const base = await repoDir(repoId);
     const siblings = path.dirname(base);
@@ -404,7 +415,7 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     const retained: { taskId: string; reason: string }[] = [];
     let stale = 0;
     const apply = async (taskId: string): Promise<void> => {
-      const r = await safeRemoveTaskWorktree(repoId, taskId, deliveryOracle, targetClosedOracle);
+      const r = await safeRemoveTaskWorktree(repoId, taskId, deliveryOracle, targetClosedOracle, isUnknownTask);
       if (r.removed) {
         removed.push(taskId);
         logger.warn(`TeamAuto: worktree GC removed ${taskId} (${r.reason})`);
