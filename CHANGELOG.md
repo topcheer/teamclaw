@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026.11.5
+
+Released 2026-11-14. Patch release over 2026.11.4, cut with the full
+pre-release contract (submodule synced to upstream 518ce92, full suite
+59/59 green on that pointer before tagging).
+
+### Added
+- #orphan-gc: worktrees whose target issue/PR is closed are removed
+  even when dirty - the pre-fix GC retained them forever ("retained:
+  dirty worktree", 42 climbing on the live instance). Positive closed
+  state only; unknown task / API failure fail toward keep; the in-use
+  sentinel still wins (a31376d).
+
+### Fixed
+- runtime-tar release race: same availability-poll guard as desktop
+  (4d11793, fixes the v2026.11.4 ETARGET failure).
+
+### Changed
+- openclaw submodule bumped to upstream 518ce92, including a Windows
+  release fix (app-owned harness dependencies, edc6bf9) and gateway
+  crash/shutdown fixes (ce658d, ca2bf9).
+
 ## 2026.11.4
 
 Released 2026-11-14. Patch release over 2026.11.3, cut with the full
