@@ -41,23 +41,58 @@ done
   echo "missing required flags" >&2; exit 2; }
 
 # ---------- JWT (ES256, the only scheme ASC accepts for API keys) ----------
+# Ported from ggcode's battle-tested mas-submit-review.sh (2026-11-15):
+# our simplified version signed the JWT with the DER signature openssl emits
+# verbatim - ES256 requires the RAW 64-byte r||s form, so ASC answered 401
+# "credentials invalid" on EVERY call (run 43687464335: upload fine, first
+# /v1/apps lookup dead 8s later; ggcode run 42224235910 proved the same
+# failure and the fix). Mint a FRESH token per call: signing is a local
+# sub-millisecond op, and per-call minting sidesteps the exp-mid-loop /
+# subshell-refresh traps entirely (poll runs up to MAX_WAIT minutes).
 b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
-NOW=$(date +%s)
-HEADER=$(printf '{"alg":"ES256","kid":"%s","typ":"JWT"}' "$KEY_ID" | b64url)
-# aud is REQUIRED (enforced since 2026): without it ASC answers 401 even
-# with a perfectly signed token (verified against api.appstoreconnect 2026-11-06).
-PAYLOAD=$(printf '{"iss":"%s","iat":%d,"exp":%d,"aud":"appstoreconnect-v1"}' "$ISSUER" "$((NOW))" "$((NOW+1200))" | b64url)
-SIG_INPUT="${HEADER}.${PAYLOAD}"
-SIG=$(printf '%s' "$SIG_INPUT" | openssl dgst -sha256 -sign "$KEY_PATH" -binary | b64url)
-JWT="${SIG_INPUT}.${SIG}"
+# DER ECDSA-Signature (stdin) -> raw 64-byte r||s the JWT needs. Minimal DER
+# walk: SEQUENCE { INTEGER r, INTEGER s } - strip tag/len, drop leading zero
+# bytes, left-pad each integer to exactly 32 bytes.
+der_to_raw() {
+python3 -c '
+import sys
+der = sys.stdin.buffer.read()
+def read_int(i):
+    assert der[i] == 0x02, "expected INTEGER tag"
+    ln = der[i+1]
+    return der[i+2:i+2+ln].lstrip(b"\x00").rjust(32, b"\x00"), i + 2 + ln
+i = 2
+r, i = read_int(i)
+s2, i = read_int(i)
+sys.stdout.buffer.write(r + s2)
+'
+}
 asc() { # asc METHOD PATH [JSON_BODY]
-  local method="$1" path="$2" body="${3:-}"
+  local method="$1" path="$2" body="${3:-}" now hdr payload sig_input jwt resp http_code
+  now=$(date +%s)
+  hdr=$(printf '{"alg":"ES256","kid":"%s","typ":"JWT"}' "$KEY_ID" | b64url)
+  # aud is REQUIRED (enforced since 2026): without it ASC answers 401 even
+  # with a perfectly signed token (verified against api.appstoreconnect 2026-11-06).
+  payload=$(printf '{"iss":"%s","iat":%d,"exp":%d,"aud":"appstoreconnect-v1"}' "$ISSUER" "$now" "$((now+1200))" | b64url)
+  sig_input="${hdr}.${payload}"
+  # DER bytes must NEVER pass through a shell variable - command substitution
+  # strips NUL/newline bytes. Pipe openssl -> der_to_raw -> b64url.
+  jwt="${sig_input}.$(printf '%s' "$sig_input" | openssl dgst -sha256 -sign "$KEY_PATH" -binary | der_to_raw | b64url)"
   if [[ -n "$body" ]]; then
-    curl -sS --max-time 60 -X "$method" "$API_BASE$path" \
-      -H "Authorization: Bearer $JWT" -H "Content-Type: application/json" -d "$body"
+    resp=$(curl -sS --max-time 60 -w '\n__HTTP__%{http_code}' -X "$method" "$API_BASE$path" \
+      -H "Authorization: Bearer $jwt" -H "Content-Type: application/json" -d "$body")
   else
-    curl -sS --max-time 60 "$API_BASE$path" -H "Authorization: Bearer $JWT"
+    resp=$(curl -sS --max-time 60 -w '\n__HTTP__%{http_code}' "$API_BASE$path" -H "Authorization: Bearer $jwt")
   fi
+  http_code="${resp##*__HTTP__}"
+  resp="${resp%__HTTP__*}"
+  printf '%s' "$http_code" > /tmp/asc-last-code
+  if [[ "$http_code" != 2* ]]; then
+    # Soft-warn + return the body: call sites decide (the poll loop treats a
+    # body without processingState as not-yet-visible and keeps waiting).
+    echo "::warning::ASC $method $path -> HTTP $http_code: $(echo "$resp" | head -c 300)" >&2
+  fi
+  printf '%s' "$resp"
 }
 
 # ---------- locate the app ----------
