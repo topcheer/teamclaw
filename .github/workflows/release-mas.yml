@@ -162,6 +162,7 @@ jobs:
       # plist key arrives via mac.extendInfo instead. Assert it landed - a
       # submission without it hits the ASC export-compliance prompt again.
       - name: Verify ITSAppUsesNonExemptEncryption in packed plist
+        working-directory: desktop
         run: |
           PLIST="dist/mas-arm64/TeamClaw Desktop.app/Contents/Info.plist"
           test -f "$PLIST" || { echo "packed plist not found"; exit 1; }
