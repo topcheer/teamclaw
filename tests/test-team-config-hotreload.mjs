@@ -50,13 +50,14 @@ const baseConfig = () => ({
   port: 9527,
 });
 
-// 1) GET returns the snapshot + host-config persistence mode.
+// 1) GET returns the snapshot + plugin-state persistence mode (#hot-reload:
+// host-config writes triggered full plugin reloads; plugin state now).
 {
   const ctx = makeCtx(baseConfig());
   mod.teamConfigGetRoute(ctx);
   const out = JSON.parse(String(ctx.res.body));
   assert.equal(out.workerProvisioningMaxPerRole, 1);
-  assert.equal(out.persistenceMode, "host-config");
+  assert.equal(out.persistenceMode, "plugin-state");
 }
 
 // 2) Unknown field rejected.
@@ -69,11 +70,14 @@ const baseConfig = () => ({
 // 3) Bounds clamping + live in-memory apply + reconcile poke + WS broadcast.
 {
   const cfg = baseConfig();
-  // Redirect persistence at a scratch config so the real home config is untouched.
+  // Redirect persistence at a scratch state dir so the real home is untouched.
+  // #hot-reload: persistence is PLUGIN STATE (provisioning-hot-config.json),
+  // never the host openclaw.json (host writes triggered full plugin reloads).
   const dir = mkdtempSync(path.join(tmpdir(), "tc-hotcfg-"));
   const cfgPath = path.join(dir, "openclaw.json");
-  writeFileSync(cfgPath, JSON.stringify({ plugins: { entries: { teamclaw: { enabled: true, config: { teamName: "x" } } } } }));
-  const saved = { ...process.env, OPENCLAW_CONFIG_PATH: cfgPath };
+  const hostBefore = JSON.stringify({ plugins: { entries: { teamclaw: { enabled: true, config: { teamName: "x" } } } } });
+  writeFileSync(cfgPath, hostBefore);
+  const saved = { ...process.env, OPENCLAW_CONFIG_PATH: cfgPath, OPENCLAW_STATE_DIR: path.join(dir, "state") };
   process.env = saved;
   const r = await run(cfg, { workerProvisioningMaxPerRole: 999, workerProvisioningIdleTtlMs: 500 });
   process.env = saved; // keep during assertions too
@@ -82,14 +86,16 @@ const baseConfig = () => ({
   assert.equal(r.payload.applied.workerProvisioningIdleTtlMs, 1000, "ttl floored at 1000");
   assert.equal(cfg.workerProvisioningMaxPerRole, 50, "deps.config mutated in place");
   assert.equal(cfg.workerProvisioningIdleTtlMs, 1000);
-  assert.equal(r.payload.persisted, true, "host-config write succeeded");
+  assert.equal(r.payload.persisted, true, "plugin-state write succeeded");
   assert.equal(r.ctx.deps.workerProvisioningManager.reconciles.length, 1, "reconcile poked");
   const ws = r.ctx.deps.wsServer.events[0];
   assert.equal(ws.type, "team:config_updated");
-  // Persisted file carries the whitelisted field and preserves unrelated keys.
-  const onDisk = JSON.parse(readFileSync(cfgPath, "utf8"));
-  assert.equal(onDisk.plugins.entries.teamclaw.config.workerProvisioningMaxPerRole, 50);
-  assert.equal(onDisk.plugins.entries.teamclaw.config.teamName, "x", "unrelated plugin config preserved");
+  // Persisted plugin-state file carries the whitelisted fields.
+  const onDisk = JSON.parse(readFileSync(path.join(dir, "state", "plugins", "teamclaw", "provisioning-hot-config.json"), "utf8"));
+  assert.equal(onDisk.workerProvisioningMaxPerRole, 50);
+  assert.equal(onDisk.workerProvisioningIdleTtlMs, 1000);
+  // The HOST config must be byte-identical - never touched by hot updates.
+  assert.equal(readFileSync(cfgPath, "utf8"), hostBefore, "host openclaw.json untouched (no plugin reload trigger)");
 }
 
 // 4) min<=max invariant: raising min above max lifts max.
@@ -115,7 +121,11 @@ const baseConfig = () => ({
 // 6) Persist failure degrades to applied-in-memory, not an error.
 {
   const cfg = baseConfig();
-  process.env = { ...process.env, OPENCLAW_CONFIG_PATH: path.join(tmpdir(), "definitely-missing-", String(Date.now()), "openclaw.json") };
+  // New impl mkdirs recursively, so a missing dir no longer fails - punch the
+  // path through a regular FILE instead (ENOTDIR defeats mkdir -p).
+  const blocker = path.join(tmpdir(), `tc-blocker-${Date.now()}.txt`);
+  writeFileSync(blocker, "x");
+  process.env = { ...process.env, OPENCLAW_STATE_DIR: path.join(blocker, "state") };
   const r = await run(cfg, { workerProvisioningMaxPerRole: 6 });
   assert.equal(r.status, 200, "patch still 200 when disk write fails");
   assert.equal(cfg.workerProvisioningMaxPerRole, 6, "memory applied regardless");

@@ -156,6 +156,18 @@ jobs:
           # true (DMG lane) and APPLE_API_KEY_ID set job-wide, its
           # any-but-not-all env validation aborts after the 22-min sign.
           npx electron-builder --mac mas -c.buildVersion="${MAS_BUILD_VERSION}" -c.mac.notarize=false
+
+      # #itsapp-verify: the afterPack hook does NOT run for the mas target
+      # (verified locally + CI: --mac mas skips it, --mac dir runs it), so the
+      # plist key arrives via mac.extendInfo instead. Assert it landed - a
+      # submission without it hits the ASC export-compliance prompt again.
+      - name: Verify ITSAppUsesNonExemptEncryption in packed plist
+        run: |
+          PLIST="dist/mas-arm64/TeamClaw Desktop.app/Contents/Info.plist"
+          test -f "$PLIST" || { echo "packed plist not found"; exit 1; }
+          VAL=$(/usr/libexec/PlistBuddy -c 'Print :ITSAppUsesNonExemptEncryption' "$PLIST" 2>/dev/null || true)
+          echo "ITSAppUsesNonExemptEncryption = ${VAL:-<missing>}"
+          [ "$VAL" = "false" ] || { echo '::error::encryption key missing/false expected'; exit 1; }
           find dist -name "*.pkg" -maxdepth 2 -exec ls -l {} +
 
       - name: Locate package
