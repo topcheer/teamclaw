@@ -1589,6 +1589,54 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
     } catch { /* log not written yet */ }
     if (!controllerUrl) await new Promise((r) => setTimeout(r, 1000));
   }
+  // Self-heal respawn shared by BOTH failure families below (user log
+  // 2026-11-15 night: the heal was gated inside `if (controllerUrl)` and
+  // therefore NEVER ran for the family that needs it most - a bootstrap
+  // config-guard rejection, where the announce line never appears at all).
+  const logText = async () => { try { return await fs.readFile(logPath, "utf8"); } catch { return ""; } };
+  const announceCount = (t) => (t.match(/Controller: Web UI available at/g) || []).length;
+  const respawn = async () => {
+    const before = announceCount(await logText());
+    killGatewayTree(child);
+    await new Promise((r) => { child.once("exit", r); setTimeout(r, 4000); });
+    const child2 = spawnGatewayProcess(bin, ["gateway", "--port", String(STANDALONE.port)], {
+      cwd: standaloneStateDir(),
+      env: sandboxEnvFor(standaloneStateDir()),
+      logPath,
+    });
+    STANDALONE.child = child2;
+    STANDALONE.pid = child2.pid ?? null;
+    await fs.writeFile(standalonePidFile(), String(child2.pid ?? ""), { mode: 0o600 });
+    child2.on("exit", () => {
+      STANDALONE.child = null;
+      STANDALONE.pid = null;
+      try { fsSync.rmSync(standalonePidFile(), { force: true }); } catch { /* gone */ }
+    });
+    // Wait for a NEW announce line (the old one is still in the log).
+    let url = null;
+    for (let j = 0; j < 90 && !url; j++) {
+      const t = await logText();
+      if (announceCount(t) > before) {
+        const all = t.match(/Controller: Web UI available at http:\/\/127\.0\.0\.1:(\d+)/g) || [];
+        const last = all[all.length - 1] || "";
+        const m2 = last.match(/:(\d+)$/);
+        if (m2) url = `http://127.0.0.1:${m2[1]}`;
+      }
+      if (!url) await new Promise((r) => setTimeout(r, 1000));
+    }
+    return url;
+  };
+  // Family 1 - bootstrap config-guard rejection: the settle pass (headless
+  // boot right after the LLM write) leaves the config journal in a state the
+  // NEXT boot rejects: "Refusing to run gateway state preparation ... Retry
+  // startup so the new config can be validated" - the host TELLS us to retry.
+  // One respawn; the second boot validates the settled config and proceeds.
+  if (!controllerUrl) {
+    const t = await logText();
+    if (/Refusing to run gateway state preparation/.test(t)) {
+      controllerUrl = await respawn();
+    }
+  }
   // First-boot worker race auto-heal (user-found): a provisioned worker can
   // spawn inside the gateway's config-normalization window and die on the
   // config-guard ("config changed during startup - Retry startup"). The
@@ -1596,39 +1644,6 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
   // model ever runs. One bounded respawn fixes it: on the second boot the
   // config journal has settled and the worker passes.
   if (controllerUrl) {
-    const logText = async () => { try { return await fs.readFile(logPath, "utf8"); } catch { return ""; } };
-    const announceCount = (t) => (t.match(/Controller: Web UI available at/g) || []).length;
-    const respawn = async () => {
-      const before = announceCount(await logText());
-      killGatewayTree(child);
-      await new Promise((r) => { child.once("exit", r); setTimeout(r, 4000); });
-      const child2 = spawnGatewayProcess(bin, ["gateway", "--port", String(STANDALONE.port)], {
-        cwd: standaloneStateDir(),
-        env: sandboxEnvFor(standaloneStateDir()),
-        logPath,
-      });
-      STANDALONE.child = child2;
-      STANDALONE.pid = child2.pid ?? null;
-      await fs.writeFile(standalonePidFile(), String(child2.pid ?? ""), { mode: 0o600 });
-      child2.on("exit", () => {
-        STANDALONE.child = null;
-        STANDALONE.pid = null;
-        try { fsSync.rmSync(standalonePidFile(), { force: true }); } catch { /* gone */ }
-      });
-      // Wait for a NEW announce line (the old one is still in the log).
-      let url = null;
-      for (let j = 0; j < 40 && !url; j++) {
-        const t = await logText();
-        if (announceCount(t) > before) {
-          const all = t.match(/Controller: Web UI available at http:\/\/127\.0\.0\.1:(\d+)/g) || [];
-          const last = all[all.length - 1] || "";
-          const m2 = last.match(/:(\d+)$/);
-          if (m2) url = `http://127.0.0.1:${m2[1]}`;
-        }
-        if (!url) await new Promise((r) => setTimeout(r, 1000));
-      }
-      return url;
-    };
     for (let i = 0; i < 15; i++) {
       await new Promise((r) => setTimeout(r, 1000));
       const t = await logText();
