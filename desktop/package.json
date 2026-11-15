@@ -59,7 +59,10 @@
       "icon": "build/icon.ico",
       "target": [
         "nsis"
-      ]
+      ],
+      "nsis": {
+        "include": "build/installer.nsh"
+      }
     },
     "linux": {
       "icon": "build/icon.png",
@@ -73,6 +76,10 @@
       {
         "from": "build/bundle",
         "to": "bin"
+      },
+      {
+        "from": "build/vc_redist.x64.exe",
+        "to": "bin/vc_redist.x64.exe"
       }
     ],
     "mas": {
