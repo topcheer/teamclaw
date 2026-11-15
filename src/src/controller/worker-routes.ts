@@ -147,18 +147,32 @@ export async function handleWorkerListRequest(deps: ControllerTaskDomainDeps, re
 
 // POST /api/v1/workers/:id/heartbeat
 export async function handleWorkerHeartbeatRequest(deps: ControllerTaskDomainDeps, req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {
-  const { updateTeamState } = deps;
+  const { updateTeamState, logger } = deps;
   const workerId = pathname.split("/")[4]!;
   const body = await parseJsonBody(req);
   const status = typeof body.status === "string" ? body.status as WorkerInfo["status"] : "idle";
-  const currentTaskId = typeof body.currentTaskId === "string" ? body.currentTaskId : undefined;
+  const reportedTaskId = typeof body.currentTaskId === "string" ? body.currentTaskId : undefined;
 
+  // #busy-clamp (user report 2026-11-15: one QA worker visibly running TWO
+  // in-progress tasks): the registry must not TRUST a worker-reported idle
+  // while the SERVER has that worker bound to a task. A busy worker's
+  // heartbeat can lag its own truth (double-assigned before this fix, or a
+  // heartbeat fired between task boundaries) - honoring it flipped the
+  // registry to idle and the assigner re-picked the still-busy worker 14s
+  // later. Server-side assignment is the source of truth: busy + bound
+  // currentTaskId survives until the task itself settles (completion/failure
+  // paths clear it) or the worker reports THAT task id as done.
   updateTeamState((s) => {
-    if (s.workers[workerId]) {
-      s.workers[workerId].lastHeartbeat = Date.now();
-      s.workers[workerId].status = status;
-      s.workers[workerId].currentTaskId = currentTaskId;
+    if (!s.workers[workerId]) return;
+    const w = s.workers[workerId];
+    w.lastHeartbeat = Date.now();
+    const serverBusy = w.status === "busy" && Boolean(w.currentTaskId);
+    if (serverBusy && status === "idle" && reportedTaskId !== w.currentTaskId) {
+      logger.warn?.(`Controller: heartbeat from ${workerId} claimed idle while bound to ${w.currentTaskId} - clamping to busy (server truth wins)`);
+      return; // keep busy + currentTaskId; only lastHeartbeat updated
     }
+    w.status = status;
+    w.currentTaskId = reportedTaskId;
   });
   deps.workerProvisioningManager?.onWorkerHeartbeat(workerId, status);
 
