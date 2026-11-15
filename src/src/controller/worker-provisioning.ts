@@ -17,6 +17,7 @@
 // below keep their historical module path and signatures.
 import fs from "node:fs/promises";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import type { PluginLogger } from "../../api.js";
 import { generateId, generateLaunchToken, secretsEqual } from "../protocol.js";
@@ -103,6 +104,39 @@ export class WorkerProvisioningManager {
   constructor(deps: WorkerProvisioningManagerDeps) {
     this.deps = deps;
     this.backend = createProvisionerBackend(deps.config, deps.logger);
+    // #rate-limit-999 terminal fix: EMBEDDED workers (every in-gateway
+    // ProvisionedWorker - the common case) read the CONTROLLER's own agent
+    // scope (~/.openclaw/agents/teamclaw/agent/settings.json), not the
+    // per-worker state dirs the v2 fix stamped. That scope had been left at
+    // maxRetries=999 (the old config default), so embedded workers ground
+    // themselves to death retrying 429s. Heal it at startup - read-modify-
+    // write touching ONLY retry.provider.maxRetries, preserving other keys.
+    void this.healControllerAgentRetrySettings().catch((err) => {
+      deps.logger.warn?.(`Controller: failed to heal controller agent retry settings: ${String(err)}`);
+    });
+  }
+
+  private async healControllerAgentRetrySettings(): Promise<void> {
+    const stateRoot = process.env.OPENCLAW_STATE_DIR
+      ? process.env.OPENCLAW_STATE_DIR
+      : path.join(os.homedir(), ".openclaw");
+    const settingsPath = path.join(stateRoot, "agents", "teamclaw", "agent", "settings.json");
+    let current: Record<string, unknown> = {};
+    try {
+      current = JSON.parse(await fs.readFile(settingsPath, "utf8")) as Record<string, unknown>;
+    } catch { /* absent or unreadable - stamp fresh */ }
+    const retry = (current.retry && typeof current.retry === "object") ? current.retry as Record<string, unknown> : {};
+    const provider = (retry.provider && typeof retry.provider === "object") ? retry.provider as Record<string, unknown> : {};
+    if (provider.maxRetries === this.deps.config.workerRateLimitMaxRetries) {
+      return; // already correct
+    }
+    provider.maxRetries = this.deps.config.workerRateLimitMaxRetries;
+    retry.enabled = retry.enabled !== false;
+    retry.provider = provider;
+    current.retry = retry;
+    await fs.mkdir(path.dirname(settingsPath), { recursive: true }).catch(() => { /* exists */ });
+    await fs.writeFile(settingsPath, JSON.stringify(current, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+    this.deps.logger.info?.(`Controller: healed controller agent retry scope - provider.maxRetries=${this.deps.config.workerRateLimitMaxRetries} (${settingsPath})`);
   }
 
   /** Update the actual controller port after the HTTP server binds. */

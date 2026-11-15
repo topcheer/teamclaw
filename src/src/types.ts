@@ -965,7 +965,8 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
   const workerProvisioningMaxPerRole = Math.max(rawProvisioningMaxPerRole, workerProvisioningMinPerRole);
   const workerRateLimitMaxRetries = typeof raw.workerRateLimitMaxRetries === "number" && raw.workerRateLimitMaxRetries >= 0
     ? Math.floor(raw.workerRateLimitMaxRetries)
-    : 999;
+    : 9; // #rate-limit-999 terminal fix: was 999 - embedded workers read the
+        // controller agent scope and ground themselves to death retrying 429s.
   const workerProvisioningIdleTtlMs = typeof raw.workerProvisioningIdleTtlMs === "number" && raw.workerProvisioningIdleTtlMs >= 1000
     ? raw.workerProvisioningIdleTtlMs
     : 120_000;
