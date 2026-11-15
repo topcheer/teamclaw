@@ -263,10 +263,21 @@ export function projectHasMeaningfulFileChanges(
   // Collaboration contract: write tasks deliver in a dedicated worktree.
   // An mtime scan is the wrong test there (committed files keep old mtimes
   // and the gate may run before the flush) - ask git instead: does HEAD carry
-  // commits beyond the remote refs?
+  // commits beyond the task's BASE branch?
   if (task.projectDir.includes("__task-")) {
+    // #5654 (ggcode, 2026-11-15): the old probe counted UNPUSHED commits
+    // (`HEAD --not --remotes`). A worker that pushes its branch BEFORE
+    // submitting - the encouraged flow since the #5651 rebase-delivery path -
+    // always drained to 0 and got rejected as a no-op (live d4ddd1bd:
+    // delivered + pushed a3638d1da, gate said 0, task failed + issue
+    // reopened). Substantive means HEAD carries commits beyond the BASE
+    // branch (origin/<default>), whether or not they were already pushed.
+    let base = "origin/main";
     try {
-      const out = execFileSync("git", ["rev-list", "--count", "HEAD", "--not", "--remotes"], { cwd: projectRoot }).toString();
+      base = execFileSync("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { cwd: projectRoot }).toString().trim() || base;
+    } catch { /* no origin/HEAD - conventional fallback above */ }
+    try {
+      const out = execFileSync("git", ["rev-list", "--count", "HEAD", "--not", base], { cwd: projectRoot }).toString();
       return Number(out.trim()) > 0;
     } catch {
       return false;
