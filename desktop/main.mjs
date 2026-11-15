@@ -1948,8 +1948,50 @@ ipcMain.handle("instance:install-into-global", async (event, options) => {
     onEvent({ phase: "openclaw", line: "Runtime ready: " + bin });
   }
   onEvent({ phase: "teamclaw", line: "Installing TeamClaw into the global OpenClaw (explicit choice)..." });
-  await runShellStream(`"${bin}" plugins install @teamclaws/teamclaw --force --accept-capabilities`, gHome, (line) =>
-    onEvent({ phase: "teamclaw", line }), gEnv);
+  // #win-cleanup (user report 2026-11-15 night): the sandbox install path has
+  // a v10/v12 ladder for the host's "Shared-state read snapshot cleanup
+  // failed" tail (the plugin body is ALREADY copied when cleanup fails - the
+  // log even shows npm\projects\teamclaws-... created and the peer repaired);
+  // the global path was a bare await and treated that benign tail as a fatal
+  // error. Same ladder here: bounded attempts, and on failure a plugins-list
+  // probe - a registered TeamClaw row means the install survived its own
+  // cleanup race and we continue.
+  {
+    const installCmd = `"${bin}" plugins install @teamclaws/teamclaw --force --accept-capabilities`;
+    const isRegistered = async () => {
+      try {
+        const listCmd = process.platform === "win32"
+          ? `"${bin}" plugins list 2>nul`
+          : `"${bin}" plugins list 2>/dev/null || true`;
+        const r = await runShellCommand(listCmd, { cwd: gHome, env: gEnv });
+        return /│\s*TeamClaw\s*│/.test(r.stdout || "");
+      } catch {
+        return false;
+      }
+    };
+    let installed = false;
+    const settles = [2500, 5000, 10000];
+    for (let attempt = 0; attempt < settles.length && !installed; attempt++) {
+      try {
+        await runShellStream(installCmd, gHome, (line) => onEvent({ phase: "teamclaw", line }), gEnv,
+          180_000, (secs) => onEvent({ phase: "teamclaw", line: `Install still running (${secs}s)...` }));
+        installed = true;
+      } catch (installErr) {
+        const msg = installErr instanceof Error ? installErr.message : String(installErr);
+        if (await isRegistered()) {
+          onEvent({ phase: "teamclaw", line: "Install step errored, but TeamClaw is registered (host cleanup race, not a failed install) - continuing." });
+          installed = true;
+          break;
+        }
+        if (attempt < settles.length - 1) {
+          onEvent({ phase: "teamclaw", line: `Install failed once (${msg.slice(0, 120)}) - retrying in ${Math.round(settles[attempt + 1] / 1000)}s...` });
+          await new Promise((r) => setTimeout(r, settles[attempt + 1]));
+        } else {
+          throw installErr;
+        }
+      }
+    }
+  }
   // The plugin defaults to WORKER mode; the desktop app needs this instance to
   // BE the controller. Without this the global gateway loads teamclaw as a
   // worker ("Identity: no controller found") and no dashboard API ever exists.
