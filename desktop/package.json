@@ -59,10 +59,7 @@
       "icon": "build/icon.ico",
       "target": [
         "nsis"
-      ],
-      "nsis": {
-        "include": "build/installer.nsh"
-      }
+      ]
     },
     "linux": {
       "icon": "build/icon.png",
@@ -96,7 +93,12 @@
         "\\.lproj/locale\\.pak$"
       ]
     },
-    "asar": true
+    "asar": true,
+    "nsis": {
+      "include": "build/installer.nsh",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   },
   "devDependencies": {
     "electron": "^45.2.2",
