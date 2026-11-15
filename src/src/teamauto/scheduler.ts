@@ -953,15 +953,23 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       return;
     }
     for (const entry of pending) {
+      // #5685 (ggcode, 2026-11-16): gate on a TERMINAL task BEFORE touching
+      // the entry. The old order stamped inFlightAt first and `continue`d
+      // for still-running tasks, leaving the sticky intent to wedge the
+      // entry out of pendingAll until the 600s stale reset - a completed
+      // task's write-back was deliverable in exactly one 20s window every
+      // ~10 minutes (live: the 02:30 fullReview legs delivered 8m42s-9m51s
+      // after completion, long misread as deliberate "slow release"). The
+      // intent stamp now happens only when the pass is about to dispatch.
+      const task = state.tasks[entry.taskId];
+      if (!task || (task.status !== "completed" && task.status !== "failed")) {
+        continue;
+      }
       // #269 intent-first: persist the dispatch intent BEFORE any await so
       // an overlapping pass (or a future guard-less caller) filters this
       // entry out instead of re-delivering it.
       entry.inFlightAt = Date.now();
       await saveTeamAutoStore(s);
-      const task = state.tasks[entry.taskId];
-      if (!task || (task.status !== "completed" && task.status !== "failed")) {
-        continue;
-      }
       const repo = s.repos.find((r) => r.id === entry.repoId);
       const [owner, name] = entry.repoId.split("/");
       try {
@@ -1086,11 +1094,29 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
             // (first completed section creates it, the rest post as comments).
             const sectionBody = `### ${role} section\n\n${task.result.trim()}\n${MARKER_FOOTER(role)}`;
             if (entry.cycleKey) {
-              const peers = s.writebacks.filter((w) => w.repoId === entry.repoId && w.cycleKey === entry.cycleKey && w.taskId !== entry.taskId && w.targetId != null && w.doneAt);
-              const umbrella = peers[0];
-              if (umbrella && umbrella.targetId != null) {
-                await client.postIssueComment(owner, name, umbrella.targetId, sectionBody);
-                entry.targetId = umbrella.targetId;
+              // #5685 (ggcode, 2026-11-16): the umbrella pointer must survive
+              // the end-of-pass pruning of done write-back entries (and
+              // process restarts). The old lookup only saw peers delivered
+              // in the SAME pass, so every cross-pass section minted its own
+              // duplicate umbrella - live: cycle 20772 produced issues
+              // #5686/#5687/#5688 (three "Joint full review" umbrellas,
+              // zero section comments). The store map is the durable
+              // pointer; an in-pass done peer remains as a fallback for
+              // stores written before this fix.
+              const cycleKey = `${entry.repoId}|${entry.cycleKey}`;
+              s.fullReviewUmbrellas = s.fullReviewUmbrellas ?? {};
+              const peerEntry = s.writebacks.find((w) => w.repoId === entry.repoId && w.cycleKey === entry.cycleKey && w.taskId !== entry.taskId && w.targetId != null && w.doneAt);
+              const umbrellaNumber = s.fullReviewUmbrellas[cycleKey] ?? peerEntry?.targetId ?? null;
+              if (umbrellaNumber != null) {
+                // Crash-retry guard: this entry may BE the creator whose
+                // createIssue + umbrella-map write persisted but whose doneAt
+                // did not. The umbrella body already carries its section, so
+                // a creator retry completes silently instead of re-posting.
+                if (entry.targetId !== umbrellaNumber) {
+                  await client.postIssueComment(owner, name, umbrellaNumber, sectionBody);
+                }
+                entry.targetId = umbrellaNumber;
+                s.fullReviewUmbrellas[cycleKey] = umbrellaNumber;
                 entry.doneAt = Date.now();
             entry.inFlightAt = undefined;
                 writebackDone = true;
@@ -1103,6 +1129,17 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
                   ["teamclaw", "teamclaw:fullreview"],
                 );
                 entry.targetId = number;
+                s.fullReviewUmbrellas[cycleKey] = number;
+                // Persist the umbrella pointer immediately: done entries are
+                // pruned at end-of-pass, and a crash between create and the
+                // tail save must not lose the only record of the umbrella.
+                const umbrellaKeys = Object.keys(s.fullReviewUmbrellas);
+                if (umbrellaKeys.length > 100) {
+                  for (const staleKey of umbrellaKeys.slice(0, umbrellaKeys.length - 100)) {
+                    delete s.fullReviewUmbrellas[staleKey];
+                  }
+                }
+                await saveTeamAutoStore(s);
                 entry.doneAt = Date.now();
             entry.inFlightAt = undefined;
                 writebackDone = true;
