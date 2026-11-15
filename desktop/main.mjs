@@ -1964,19 +1964,21 @@ ipcMain.handle("instance:install-into-global", async (event, options) => {
     // actually pulled @teamclaws/teamclaw from the registry (the WARNING
     // line in the user log). Bundled-first, same as the sandbox: the runtime
     // tree ships the plugin; npm stays as the fallback when no tree exists.
-    let installCmd = `"${bin}" plugins install @teamclaws/teamclaw --force --accept-capabilities`;
     const pluginCandidates = [];
     if (EXTRACTED_RUNTIME_DIR) {
       pluginCandidates.push(path.join(EXTRACTED_RUNTIME_DIR, "node_modules", "@teamclaws", "teamclaw"));
     }
     pluginCandidates.push(path.join(BUNDLED_BIN_DIR(), "runtime", "node_modules", "@teamclaws", "teamclaw"));
     const bundledPlugin = pluginCandidates.find((p) => fsSync.existsSync(path.join(p, "package.json"))) ?? null;
-    if (bundledPlugin) {
-      installCmd = `"${bin}" plugins install "file:${bundledPlugin}" --force --accept-capabilities`;
-      onEvent({ phase: "teamclaw", line: `Registering the BUNDLED TeamClaw plugin offline: ${bundledPlugin}` });
-    } else {
-      onEvent({ phase: "teamclaw", line: "No bundled plugin tree found - falling back to the npm registry (network required)." });
+    if (!bundledPlugin) {
+      // User ruling (2026-11-15): NO online fallback. The packaged app ships
+      // the plugin inside its runtime tree by construction - a missing tree
+      // means the INSTALLER is broken, and silently reaching for npm would
+      // hide that with a 170s network detour. Fail loudly instead.
+      throw new Error("Bundled TeamClaw plugin tree is missing from this installation - the installer package is broken (no online fallback by design). Re-download the installer.");
     }
+    const installCmd = `"${bin}" plugins install "file:${bundledPlugin}" --force --accept-capabilities`;
+    onEvent({ phase: "teamclaw", line: `Registering the BUNDLED TeamClaw plugin offline: ${bundledPlugin}` });
     const isRegistered = async () => {
       try {
         const listCmd = process.platform === "win32"
