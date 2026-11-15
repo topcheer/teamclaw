@@ -1957,7 +1957,26 @@ ipcMain.handle("instance:install-into-global", async (event, options) => {
   // probe - a registered TeamClaw row means the install survived its own
   // cleanup race and we continue.
   {
-    const installCmd = `"${bin}" plugins install @teamclaws/teamclaw --force --accept-capabilities`;
+    // #offline-global (user challenge 2026-11-15: "fully-offline installer,
+    // why 170s of npm?"): the SANDBOX path registers the plugin from the
+    // bundled runtime tree via file: (zero network), but the global path was
+    // written with the npm package name - so every "offline" global install
+    // actually pulled @teamclaws/teamclaw from the registry (the WARNING
+    // line in the user log). Bundled-first, same as the sandbox: the runtime
+    // tree ships the plugin; npm stays as the fallback when no tree exists.
+    let installCmd = `"${bin}" plugins install @teamclaws/teamclaw --force --accept-capabilities`;
+    const pluginCandidates = [];
+    if (EXTRACTED_RUNTIME_DIR) {
+      pluginCandidates.push(path.join(EXTRACTED_RUNTIME_DIR, "node_modules", "@teamclaws", "teamclaw"));
+    }
+    pluginCandidates.push(path.join(BUNDLED_BIN_DIR(), "runtime", "node_modules", "@teamclaws", "teamclaw"));
+    const bundledPlugin = pluginCandidates.find((p) => fsSync.existsSync(path.join(p, "package.json"))) ?? null;
+    if (bundledPlugin) {
+      installCmd = `"${bin}" plugins install "file:${bundledPlugin}" --force --accept-capabilities`;
+      onEvent({ phase: "teamclaw", line: `Registering the BUNDLED TeamClaw plugin offline: ${bundledPlugin}` });
+    } else {
+      onEvent({ phase: "teamclaw", line: "No bundled plugin tree found - falling back to the npm registry (network required)." });
+    }
     const isRegistered = async () => {
       try {
         const listCmd = process.platform === "win32"
@@ -1974,7 +1993,14 @@ ipcMain.handle("instance:install-into-global", async (event, options) => {
     for (let attempt = 0; attempt < settles.length && !installed; attempt++) {
       try {
         await runShellStream(installCmd, gHome, (line) => onEvent({ phase: "teamclaw", line }), gEnv,
-          180_000, (secs) => onEvent({ phase: "teamclaw", line: `Install still running (${secs}s)...` }));
+          // #watchdog-600 (user log 2026-11-15 19:2x): npm-path plugin install
+          // takes ~170-190s on cold Windows boxes - the 180s watchdog killed
+          // it AT the finish line three times in a row, and each kill left a
+          // plugin-lifecycle lease zombie that blocked the NEXT attempt for
+          // the lease TTL (~5min; attempt 2 spent its whole budget waiting on
+          // attempt 1's lease). 600s headroom; the ladder still catches real
+          // hangs, and ticks keep the wait legible.
+          600_000, (secs) => onEvent({ phase: "teamclaw", line: `Install still running (${secs}s)...` }));
         installed = true;
       } catch (installErr) {
         const msg = installErr instanceof Error ? installErr.message : String(installErr);
