@@ -606,6 +606,11 @@ export async function runAutoAssignRound(
     });
 
     if (updatedTask?.status === "assigned" && updatedTask.assignedWorkerId === nextAssignment.worker.id) {
+      // #claim-dequeue (2026-11-15): the GitHub claim happens HERE, at
+      // dequeue - after the fresh conflict check (assignees / external
+      // comments since enqueue) inside claimTaskAtDequeue. Non-takeOwnership
+      // tasks are a no-op there.
+      void deps.getTeamAutoScheduler?.()?.claimTaskAtDequeue(updatedTask).catch(() => {});
       wsServer.broadcastUpdate({ type: "task:updated", data: serializeTask(updatedTask) });
       logger.info(
         `Controller: auto-assigned pending task ${updatedTask.id} to ${nextAssignment.worker.id}`,

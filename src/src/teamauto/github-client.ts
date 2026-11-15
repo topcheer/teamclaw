@@ -268,6 +268,21 @@ export function createGithubClient(auth: GithubAuthManager) {
       await request("DELETE", `/repos/${owner}/${repo}/issues/${issueNumber}/assignees`, { body: { assignees } });
     },
 
+    /** #claim-dequeue: comments on an issue since a timestamp, for the
+     * dequeue-time external-collaboration check (authors + times only). */
+    async getIssueCommentsSince(owner: string, repo: string, issueNumber: number, sinceIso: string): Promise<Array<{ user: string; createdAt: string }>> {
+      try {
+        const { data } = await request("GET", `/repos/${owner}/${repo}/issues/${issueNumber}/comments?since=${encodeURIComponent(sinceIso)}&per_page=20`);
+        if (!Array.isArray(data)) return [];
+        return (data as Record<string, unknown>[]).map((c) => ({
+          user: String((c.user as { login?: string } | undefined)?.login ?? ""),
+          createdAt: String(c.created_at ?? ""),
+        })).filter((c) => c.user);
+      } catch {
+        return []; // listing failed - degrade to assignee check only
+      }
+    },
+
     /** Fresh issue state for claim-time re-checks (#268): the scan-time
      * assignee snapshot is seconds stale by enqueue time - a human may have
      * self-assigned in between, and claiming over a human is worse than not

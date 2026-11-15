@@ -597,7 +597,12 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
               recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "sweep", text: `dead-lettered after ${TEAMAUTO_DEAD_LETTER_ATTEMPTS} failed attempts: ${candidate.kind}: ${candidate.title}` });
             } else if (taskId) {
               recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "task", text: `${candidate.kind}: ${candidate.title}` });
-              claimIssue(repo, candidate); // #268: visible claim at enqueue time
+              // #claim-dequeue (user 2026-11-15): claiming at ENQUEUE locked a
+              // string of issues behind the one-writer-per-repo queue while
+              // they waited - and blindly claimed issues where external
+              // collaborators had started working in the scan-to-claim gap.
+              // Claiming now happens at DEQUEUE (claimTaskAtDequeue, called
+              // from the task assignment path) after a fresh conflict check.
               const action = candidate.kind === "prReview"
                 ? ("prComment" as const)
                 : candidate.kind === "fullReview"
@@ -1137,6 +1142,76 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     await saveTeamAutoStore(s);
   }
 
+  // #claim-dequeue (user report 2026-11-15): claim at DEQUEUE time, not
+  // enqueue. Enqueue-time claims locked a whole queue of issues behind the
+  // one-writer-per-repo serialization while they waited; and a blind claim
+  // over issues where external collaborators had begun working (comments,
+  // assignees) only produced conflicts. At dequeue we re-check FRESH state:
+  //   - any assignee -> stand down (a human or another bot owns it)
+  //   - any external comment posted after the task was enqueued -> stand
+  //     down (someone is actively working; our own bot's comments excluded)
+  // Only a quiet, unowned issue gets claimed (assign, comment fallback),
+  // with the existing seen+60s self-bump guard.
+  async function claimTaskAtDequeue(task: {
+    id: string;
+    title: string;
+    description: string;
+    createdAt?: number;
+  }): Promise<{ claimed: boolean; reason?: string }> {
+    const kindMatch = /^\[([^\]]+)\]/.exec(task.title);
+    if (!kindMatch || kindMatch[1] !== "takeOwnership") return { claimed: false, reason: "not a takeOwnership task" };
+    const numMatch = /issue #(\d+)/.exec(task.title);
+    if (!numMatch) return { claimed: false, reason: "no issue number" };
+    const issueNumber = Number(numMatch[1]);
+    const repoMatch = /TeamAuto autonomous work for ([\w./-]+)\./.exec(task.description);
+    if (!repoMatch) return { claimed: false, reason: "no repo in description" };
+    const repoId = repoMatch[1];
+    const [owner, name] = repoId.split("/");
+    if (!owner || !name) return { claimed: false, reason: "bad repo id" };
+    const client = createGithubClient(auth);
+    try {
+      const fresh = await client.getIssue(owner, name, issueNumber);
+      if (fresh.state !== "open") {
+        return { claimed: false, reason: "issue closed" };
+      }
+      const s0 = await ensureStore();
+      const repo0 = s0.repos.find((r) => r.id === repoId);
+      if ((repo0?.policy.skipAssignedToHumans ?? true) && fresh.assignees.length > 0) {
+        recordActivity(await ensureStore(), { at: Date.now(), repoId, kind: "claim", text: `deferred claim: issue #${issueNumber} has assignee(s) ${fresh.assignees.join(",")} at dequeue - standing down` });
+        return { claimed: false, reason: "assignees present" };
+      }
+      // External-work check: comments posted after the task was ENQUEUED.
+      const sinceIso = new Date(task.createdAt ?? Date.now()).toISOString();
+      const { login } = await client.getAuthenticatedUser();
+      const comments = await client.getIssueCommentsSince(owner, name, issueNumber, sinceIso);
+      const external = comments.filter((c) => c.user !== login);
+      if (external.length > 0) {
+        recordActivity(await ensureStore(), { at: Date.now(), repoId, kind: "claim", text: `deferred claim: ${external.length} external comment(s) since enqueue on issue #${issueNumber} (latest by @${external[external.length - 1]?.user}) - standing down` });
+        return { claimed: false, reason: "external activity" };
+      }
+      try {
+        await client.assignIssue(owner, name, issueNumber, login);
+        recordActivity(await ensureStore(), { at: Date.now(), repoId, kind: "claim", text: `claimed issue #${issueNumber} as @${login} (at dequeue)` });
+      } catch {
+        // Fallback: a visible claim comment carries the same placeholder
+        // semantics when the App lacks the assignees write surface.
+        await client.postIssueComment(owner, name, issueNumber, `TeamClaw (teamclaw/developer, @${login}) has taken ownership of this issue and is implementing it autonomously - a PR will follow.`);
+        recordActivity(await ensureStore(), { at: Date.now(), repoId, kind: "claim", text: `claimed issue #${issueNumber} via comment (assign unavailable, at dequeue)` });
+      }
+      const s = await ensureStore();
+      const freshRepo = s.repos.find((r) => r.id === repoId);
+      if (freshRepo) {
+        // +60s guard: our own write (assign or comment) bumps updated_at.
+        freshRepo.cursors.seen[`${repoId}#issue-${issueNumber}`] = Date.now() + 60_000;
+        await saveTeamAutoStore(s);
+      }
+      return { claimed: true };
+    } catch (err) {
+      recordActivity(await ensureStore(), { at: Date.now(), repoId, kind: "claim", text: `claim-at-dequeue failed for issue #${issueNumber}: ${err instanceof Error ? err.message.slice(0, 120) : String(err)}` });
+      return { claimed: false, reason: "claim attempt errored" };
+    }
+  }
+
   /** #268: make a takeOwnership claim VISIBLE on the issue itself. Until now
    * assignIssue was dead code and registerWriteback had no assign action, so
    * claims existed only in internal state - humans could not see the bot had
@@ -1438,7 +1513,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     return (s.activity ?? []).slice().reverse();
   }
 
-  return { addRepo, removeRepo, setRepoEnabled, updateRepo, runSweepNow, registerWriteback, reconcileWritebacks, start, stop, getStatus, getActivity, ensureWriteWorktree, removeWriteWorktree, proposeManual };
+  return { addRepo, removeRepo, setRepoEnabled, updateRepo, runSweepNow, registerWriteback, reconcileWritebacks, claimTaskAtDequeue, start, stop, getStatus, getActivity, ensureWriteWorktree, removeWriteWorktree, proposeManual };
 
   /** Collaboration contract: dispatch asks for a task-scoped worktree dir (rel to projects root). */
   async function ensureWriteWorktree(repoId: string, taskId: string): Promise<string> {

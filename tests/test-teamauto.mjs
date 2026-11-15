@@ -110,16 +110,24 @@ async function sourceContracts() {
   assert.match(scheduler, /if \(dryRun\) \{[\s\S]{0,400}?repo\.dryRunDone = true;/u, "a completed dry-run sweep must flip dryRunDone even with zero candidates");
   assert.doesNotMatch(scheduler, /repo\.dryRunDone = true;\s*\n\s*repo\.lastSweepSummary = `dry-run/u, "dryRunDone must not depend on candidates existing");
 
-  // #268: takeOwnership claims must be visible on the issue itself.
-  assert.match(scheduler, /claimIssue\(repo, candidate\); \/\/ #268: visible claim at enqueue time/,
-    "takeOwnership tasks fire claimIssue at enqueue (claim = placeholder declaration, not completion artifact)");
-  assert.match(scheduler, /const fresh = await client\.getIssue\(owner, name, candidate\.number\);/,
-    "claim re-checks fresh issue state (scan-time assignee snapshot is stale by enqueue)");
-  assert.match(scheduler, /repo\.policy\.skipAssignedToHumans && fresh\.assignees\.length > 0/,
+  // #claim-dequeue (2026-11-15): claims fire at DEQUEUE, not enqueue.
+  assert.doesNotMatch(scheduler, /claimIssue\(repo, candidate\); \/\/ #268: visible claim at enqueue time/,
+    "enqueue-time claiming is gone (it locked whole queues behind one-writer-per-repo and claimed over external work)");
+  assert.match(scheduler, /async function claimTaskAtDequeue/,
+    "claimTaskAtDequeue owns the claim at dequeue time");
+  assert.match(taskAssignment, /claimTaskAtDequeue\(updatedTask\)/,
+    "the task-assignment path fires the dequeue-time claim after a task is actually assigned");
+  assert.match(scheduler, /const fresh = await client\.getIssue\(owner, name, issueNumber\);/,
+    "claim re-checks fresh issue state (scan-time assignee snapshot is stale by dequeue)");
+  assert.match(scheduler, /skipAssignedToHumans[^;]*&& fresh\.assignees\.length > 0/,
     "claim is skipped when the issue gained an assignee since scan (never claim over humans)");
-  assert.match(scheduler, /freshRepo\.cursors\.seen\[candidate\.key\] = Date\.now\(\) \+ 60_000;/,
+  assert.match(scheduler, /getIssueCommentsSince\(owner, name, issueNumber, sinceIso\)/,
+    "claim checks for comments posted after enqueue (external collaboration in flight)");
+  assert.match(scheduler, /c\.user !== login/,
+    "the external-comments check excludes our own bot account");
+  assert.match(scheduler, /freshRepo\.cursors\.seen\[`\$\{repoId\}#issue-\$\{issueNumber\}`\] = Date\.now\(\) \+ 60_000;/,
     "claim stamps seen with a +60s guard (our own write bumps updated_at; bare stamp re-candidates the claimed issue)");
-  assert.match(scheduler, /await client\.postIssueComment\(owner, name, candidate\.number, `TeamClaw \(teamclaw\/developer/,
+  assert.match(scheduler, /await client\.postIssueComment\(owner, name, issueNumber, `TeamClaw \(teamclaw\/developer/,
     "claim falls back to a visible marker comment when the assign surface fails");
 
   // #267-1: sweep failures carry a root-cause class (auth/ratelimited/network).
