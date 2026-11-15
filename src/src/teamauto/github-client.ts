@@ -227,6 +227,29 @@ export function createGithubClient(auth: GithubAuthManager) {
       await request("POST", `/repos/${owner}/${repo}/pulls/${pullNumber}/reviews`, { body: { event: "COMMENT", body } });
     },
 
+    /** #5660: normalized feedback bodies already on a PR - review bodies AND
+     * issue-style comments (a worker may post through either surface during
+     * its execution window while the write-back ladder delivers the same
+     * text moments later). Whitespace-collapsed so footer spacing cannot
+     * defeat the comparison. */
+    async getPullFeedbackBodies(owner: string, repo: string, pullNumber: number): Promise<string[]> {
+      const bodies: string[] = [];
+      const norm = (raw: unknown): string => String(raw ?? "").replace(/\s+/g, " ").trim();
+      try {
+        const { data } = await request("GET", `/repos/${owner}/${repo}/pulls/${pullNumber}/reviews?per_page=30`);
+        if (Array.isArray(data)) {
+          for (const r of data as Record<string, unknown>[]) bodies.push(norm(r.body));
+        }
+      } catch { /* reviews listing failed - degrade to comments-only check */ }
+      try {
+        const { data } = await request("GET", `/repos/${owner}/${repo}/issues/${pullNumber}/comments?per_page=30`);
+        if (Array.isArray(data)) {
+          for (const c of data as Record<string, unknown>[]) bodies.push(norm(c.body));
+        }
+      } catch { /* comments listing failed - degrade to reviews-only check */ }
+      return bodies.filter(Boolean);
+    },
+
     async createIssue(owner: string, repo: string, title: string, body: string, labels?: string[]): Promise<number> {
       const { data } = await request("POST", `/repos/${owner}/${repo}/issues`, {
         body: { title, body, ...(labels?.length ? { labels } : {}) },

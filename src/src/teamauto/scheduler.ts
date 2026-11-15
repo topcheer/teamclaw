@@ -1031,10 +1031,27 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
               issueRepo.cursors.seen[`${entry.repoId}#issue-${entry.targetId}`] = Date.now();
             }
           } else if (entry.action === "prComment" && entry.targetId) {
-            await client.postPullReviewComment(owner, name, entry.targetId, body);
-            entry.doneAt = Date.now();
-            entry.inFlightAt = undefined;
-            writebackDone = true;
+            // #5660 (ggcode, 2026-11-15): the worker already posted the same
+            // review body directly during its execution window; the ladder
+            // then delivered the IDENTICAL text 20s later - readers got the
+            // review twice. Before posting, check the target's existing
+            // feedback (reviews + comments, whitespace-normalized): an exact
+            // match means delivery already happened through the other
+            // channel - mark done and record the skip.
+            const normalized = body.replace(/\s+/g, " ").trim();
+            const existing = await client.getPullFeedbackBodies(owner, name, entry.targetId).catch(() => [] as string[]);
+            if (existing.includes(normalized)) {
+              entry.doneAt = Date.now();
+              entry.inFlightAt = undefined;
+              writebackDone = true;
+              recordActivity(s, { at: Date.now(), repoId: entry.repoId, kind: "writeback", text: `dedupe-skipped: identical review body already on PR #${entry.targetId} (worker direct-post) - ladder posting skipped` });
+              logger.info(`TeamAuto: write-back ${entry.taskId} prComment deduped - identical body already on PR #${entry.targetId}`);
+            } else {
+              await client.postPullReviewComment(owner, name, entry.targetId, body);
+              entry.doneAt = Date.now();
+              entry.inFlightAt = undefined;
+              writebackDone = true;
+            }
             const prRepo = s.repos.find((r) => r.id === entry.repoId);
             if (prRepo) {
               prRepo.cursors.seen[`${entry.repoId}#pr-${entry.targetId}`] = Date.now();
