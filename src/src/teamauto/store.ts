@@ -18,6 +18,10 @@ export type TeamAutoActionPolicy = {
   prReview: boolean;
   createPR: boolean;
   fullReview: "off" | "weekly" | "daily";
+  /** #pr-rework: pick up fresh review activity on OUR delivered PRs and
+   * rework them (developer role, write mode). Default true - closing the
+   * loop is the expected behavior for every deployment. */
+  prRework?: boolean;
 };
 
 export type TeamAutoKeywordFilter = {

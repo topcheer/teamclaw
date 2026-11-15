@@ -9,7 +9,7 @@ import type { TeamAutoRepo } from "./store.js";
  * filters, idempotency via the `seen` cursor map).
  */
 
-export type CandidateKind = "issueReview" | "takeOwnership" | "prReview" | "fullReview";
+export type CandidateKind = "issueReview" | "takeOwnership" | "prReview" | "fullReview" | "prRework";
 
 /**
  * Joint full-review section definitions: which review sections exist and
@@ -187,7 +187,28 @@ export async function sweepRepo(
     if ((repo.cursors.seen[key] ?? 0) >= updatedAtMs) {
       continue;
     }
-    // See the issue-loop note: no first-sweep gate (deadlock source).
+    // #pr-rework (user 2026-11-15, live case ggcode#5653): OUR OWN open PRs
+    // were exempted below to avoid self-review loops - but that also made
+    // external review feedback (GO/NO GO, rework requests) DEAD: delivery
+    // write-back completes at PR creation, nothing ever re-picks the thread,
+    // and a NO GO'd PR sat idle 12h+ until a human coordinator intervened.
+    // Same-ecosystem communication IS the GitHub surface - close the loop:
+    // our own PR with fresh activity becomes a prRework task (the worker
+    // reads the review thread and continues in the original branch).
+    if (pull.head.startsWith("teamclaw/") && !pull.draft && repo.policy.actions.prRework) {
+      candidates.push({
+        repoId: repo.id,
+        key,
+        kind: "prRework",
+        number: pull.number,
+        role: "developer" as const,
+        writeMode: "write" as const,
+        title: truncate(`Rework from review: PR #${pull.number}: ${pull.title}`, 120),
+        reason: "our delivered PR received new review activity",
+        context: `Our delivery PR #${pull.number} received new review activity (comments/review/edits at ${pull.updated_at}).\nLink: ${pull.htmlUrl}\nHead branch: ${pull.head}\n\nRead the review thread on the PR, address the feedback, and push follow-up commits to the same branch.\n\nPR description:\n${truncate(pull.body, 2000)}`,
+      });
+      continue;
+    }
     // Skip our own PRs and drafts.
     if (pull.head.startsWith("teamclaw/") || pull.draft || TEAMCLAW_MARKER_RE.test(pull.title)) {
       continue;

@@ -602,7 +602,9 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
                 ? ("prComment" as const)
                 : candidate.kind === "fullReview"
                   ? ("createIssue" as const)
-                  : ("issueComment" as const);
+                  : candidate.kind === "prRework"
+                    ? ("prComment" as const)
+                    : ("issueComment" as const);
               await registerWriteback(taskId, action, repo.id, candidate.number || null, candidate.cycle !== undefined ? String(candidate.cycle) : undefined);
               created++;
             }
