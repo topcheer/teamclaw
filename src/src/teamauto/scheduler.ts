@@ -15,6 +15,7 @@ import { createRepoSync, teamAutoProjectDir, type TaskDeliveryOracle, type TaskT
 import { nextFireMs } from "./schedule.js";
 import { resolveTeamAutoPaths } from "./store.js";
 import { advanceCursors, sweepRepo, type Candidate } from "./scanner.js";
+import { withStoreLock } from "./store.js";
 import {
   consumeDailyBudget,
   defaultCursors,
@@ -835,6 +836,25 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
   }
 
   async function doReconcileWritebacks(): Promise<void> {
+    // #2677: the WHOLE read-modify-write section holds the store lock -
+    // an unlocked reload+save here clobbered a concurrently-registered
+    // write-back entry (see store.ts withStoreLock).
+    await withStoreLock(async () => {
+    await doReconcileWritebacksLocked();
+    }).catch((err) => {
+      // #5677 ask: never swallow a delivery-pass crash silently - a lost
+      // entry with zero trace is invisible; surface it in the log AND the
+      // activity feed so the failure class is diagnosable.
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(`TeamAuto: write-back pass CRASHED (entries may retry next tick): ${msg}`);
+      void ensureStore().then((s) => {
+        recordActivity(s, { at: Date.now(), repoId: "*", kind: "writeback", text: `delivery pass crashed: ${msg.slice(0, 140)}` });
+        return saveTeamAutoStore(s);
+      }).catch(() => {});
+    });
+  }
+
+  async function doReconcileWritebacksLocked(): Promise<void> {
     // #269 recurrence: re-read the store from disk EVERY pass - the
     // closure cache is a startup snapshot that never sees another
     // process's persisted inFlightAt/doneAt, which is exactly how the

@@ -274,6 +274,27 @@ export async function loadTeamAutoStore(): Promise<TeamAutoStore> {
   }
 }
 
+/** #5677 (ggcode, 2026-11-15): store-level async mutex. The 20s write-back
+ * reconcile re-reads the store from disk and saves the whole object; the
+ * sweep transaction (registerWriteback + summary) does the same. Without
+ * serialization their read-modify-write cycles interleave: reconcile reads
+ * BEFORE the sweep's entry save, then its tail-save clobbers the entry the
+ * sweep just persisted (live: b3f688c6/#5676 write-back vanished; 3 earlier
+ * legs survived by timing luck). Every load→mutate→save section must hold
+ * this lock; it is process-local (single controller per state dir). */
+const storeLock: { tail: Promise<void> } = { tail: Promise.resolve() };
+export async function withStoreLock<T>(section: () => Promise<T>): Promise<T> {
+  const prev = storeLock.tail;
+  let release!: () => void;
+  storeLock.tail = new Promise<void>((r) => { release = r; });
+  await prev;
+  try {
+    return await section();
+  } finally {
+    release();
+  }
+}
+
 export async function saveTeamAutoStore(store: TeamAutoStore): Promise<void> {
   const { storeFile } = resolveTeamAutoPaths();
   await fs.mkdir(path.dirname(storeFile), { recursive: true });
