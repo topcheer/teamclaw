@@ -51,7 +51,10 @@ function teamConfigGetRoute(ctx: RouteContext): void {
     workerProvisioningMaxPerRole: c.workerProvisioningMaxPerRole,
     workerProvisioningIdleTtlMs: c.workerProvisioningIdleTtlMs,
     // k8s controllers run on ephemeral container FS: declare it up front.
-    persistenceMode: c.workerProvisioningType === "kubernetes" ? "memory-only" : "host-config",
+    // #hot-reload: persistence is PLUGIN-STATE (beside team-state.json), not
+    // host config - a host-config write made the host reload the whole
+    // plugin on every PATCH (see openclaw-workspace.ts #hot-reload note).
+    persistenceMode: "plugin-state",
   });
 }
 
@@ -105,8 +108,9 @@ async function teamConfigPatchRoute(ctx: RouteContext): Promise<void> {
     applied.workerProvisioningMaxPerRole = minR;
   }
 
-  // 2) Persist (host config) unless the controller itself runs on an
-  //    ephemeral container FS.
+  // 2) Persist to PLUGIN STATE (never the host config - see
+  //    openclaw-workspace.ts #hot-reload: host writes triggered full plugin
+  //    reloads that killed in-flight work and usually failed to apply).
   const memoryOnly = deps.config.workerProvisioningType === "kubernetes";
   let persisted = false;
   if (!memoryOnly) {

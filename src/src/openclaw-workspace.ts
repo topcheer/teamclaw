@@ -813,6 +813,41 @@ export async function updateTeamClawModelConfig(
  * pattern as updateTeamClawModelConfig). Only whitelisted fields are
  * touched; unknown keys in the existing plugin config are preserved.
  */
+// #hot-reload (user report 2026-11-15 13:48): persisting these three
+// numbers into the HOST openclaw.json (plugins.entries.teamclaw.config)
+// made the host CONFIG WATCHER drain+reload the ENTIRE teamclaw plugin on
+// every PATCH - in-flight tasks interrupted, all workers restarted, a 2s
+// main-thread stall, and the reload itself frequently FAILED (controller
+// service stop timeout) which rolled the change back: the update visibly
+// "caused a gateway restart" and then "did not apply". Pure numeric caps
+// never needed host-config semantics - persist to the plugin's OWN state
+// (provisioning-hot-config.json beside team-state.json) and re-apply on
+// controller start. No host file change -> no plugin reload ->真热更新。
+function provisioningHotConfigPath(env: NodeJS.ProcessEnv = process.env, homedir: () => string = os.homedir): string {
+  const explicitStateDir = env.OPENCLAW_STATE_DIR?.trim();
+  const base = explicitStateDir
+    ? path.join(explicitStateDir, "plugins", "teamclaw")
+    : path.join(homedir(), ".openclaw", "plugins", "teamclaw");
+  return path.join(base, "provisioning-hot-config.json");
+}
+
+export async function loadProvisioningHotConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): Promise<Record<string, number> | null> {
+  try {
+    const raw = JSON5.parse(await fs.readFile(provisioningHotConfigPath(env, homedir), "utf8")) as Record<string, unknown>;
+    const out: Record<string, number> = {};
+    for (const key of ["workerProvisioningMinPerRole", "workerProvisioningMaxPerRole", "workerProvisioningIdleTtlMs"]) {
+      const v = raw[key];
+      if (typeof v === "number" && Number.isFinite(v)) out[key] = v;
+    }
+    return Object.keys(out).length > 0 ? out : null;
+  } catch {
+    return null; // absent/first run - host-config defaults stand
+  }
+}
+
 export async function updateTeamClawProvisioningConfig(
   update: {
     workerProvisioningMinPerRole?: number;
@@ -823,34 +858,19 @@ export async function updateTeamClawProvisioningConfig(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): Promise<{ configPath: string }> {
-  const configPath = resolveDefaultOpenClawConfigPath(env, homedir);
-  let parsed: Record<string, unknown>;
+  const configPath = provisioningHotConfigPath(env, homedir);
+  let current: Record<string, unknown> = {};
   try {
-    parsed = JSON5.parse(await fs.readFile(configPath, "utf8")) as Record<string, unknown>;
-    if (!isRecord(parsed)) {
-      throw new Error("host config is not an object");
-    }
-  } catch (err) {
-    throw new Error(`failed to read host config at ${configPath}: ${err instanceof Error ? err.message : String(err)}`);
-  }
-
-  const plugins = isRecord(parsed.plugins) ? parsed.plugins : {};
-  const pluginEntries = isRecord(plugins.entries) ? plugins.entries : {};
-  const teamclawPlugin = isRecord(pluginEntries[TEAMCLAW_AGENT_ID]) ? pluginEntries[TEAMCLAW_AGENT_ID] : { enabled: true };
-  const pluginConfig = isRecord((teamclawPlugin as { config?: unknown }).config)
-    ? { ...(teamclawPlugin as { config: Record<string, unknown> }).config }
-    : {};
+    current = JSON5.parse(await fs.readFile(configPath, "utf8")) as Record<string, unknown>;
+  } catch { /* absent - start fresh */ }
   for (const [key, value] of Object.entries(update)) {
     if (typeof value === "number" && Number.isFinite(value)) {
-      pluginConfig[key] = value;
+      current[key] = value;
     }
   }
-  pluginEntries[TEAMCLAW_AGENT_ID] = { ...teamclawPlugin, config: pluginConfig };
-  plugins.entries = pluginEntries;
-  parsed.plugins = plugins;
-
-  await fs.writeFile(configPath, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
-  logger?.warn?.("TeamClaw: worker provisioning config persisted (hot-reload applies to the running controller)");
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, `${JSON.stringify(current, null, 2)}\n`, "utf8");
+  logger?.warn?.(`TeamClaw: worker provisioning config persisted to plugin state (${configPath}) - no host-config change, no plugin reload`);
   return { configPath };
 }
 

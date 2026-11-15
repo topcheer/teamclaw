@@ -17,7 +17,7 @@ import { resumeTeamProfileSwitch } from "./profile-switch.js";
 import { TaskRouter } from "./task-router.js";
 import { MessageRouter } from "./message-router.js";
 import { TeamWebSocketServer, type WsEvent } from "./websocket.js";
-import { ensureOpenClawWorkspaceMemoryDir, buildTeamClawAgentSessionKey } from "../openclaw-workspace.js";
+import { ensureOpenClawWorkspaceMemoryDir, buildTeamClawAgentSessionKey, loadProvisioningHotConfig } from "../openclaw-workspace.js";
 import { ensureControllerGitRepo } from "../git-collaboration.js";
 import { WorkerProvisioningManager } from "./worker-provisioning.js";
 import { PreviewManager } from "./preview-manager.js";
@@ -135,6 +135,17 @@ export function createControllerService(deps: ControllerServiceDeps): OpenClawPl
     async start(_ctx: OpenClawPluginServiceContext) {
       const serviceStartedAt = Date.now();
       await ensureOpenClawWorkspaceMemoryDir(logger);
+      // #hot-reload: re-apply the persisted hot-config overrides (provisioning
+      // caps) from PLUGIN STATE - they intentionally live outside the host
+      // config so a PATCH never triggers a plugin reload (see
+      // openclaw-workspace.ts #hot-reload for the failure mode this replaces).
+      const hotOverrides = await loadProvisioningHotConfig();
+      if (hotOverrides) {
+        for (const [key, value] of Object.entries(hotOverrides)) {
+          (config as unknown as Record<string, number>)[key] = value;
+        }
+        logger.info(`Controller: provisioning hot-config re-applied from plugin state: ${JSON.stringify(hotOverrides)}`);
+      }
 
       // Load or create team state. The active profile is resolved FIRST (from
       // the restored TeamState.profileId, or the config bootstrap value on
