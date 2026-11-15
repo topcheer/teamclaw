@@ -182,6 +182,13 @@ export type TeamAutoStore = {
    * stamp (and the bot's self-assignment) once per taskId so the next sweep
    * re-candidates naturally, while the dead-letter caps bound retries. */
   failedClaimRecovery?: Record<string, number>;
+  /** #5685 (ggcode, 2026-11-16): "repoId|cycleKey" -> umbrella issue number
+   * for joint full reviews. Done write-back entries are pruned at end-of-pass,
+   * so an in-store peer scan cannot carry the umbrella pointer across passes
+   * (or restarts) and same-cycle sections each minted a duplicate umbrella
+   * (live: cycle 20772 -> ggcode issues #5686/#5687/#5688, zero section
+   * comments). Bounded to the newest 100 cycles. */
+  fullReviewUmbrellas?: Record<string, number>;
 };
 
 export function defaultPolicy(): TeamAutoRepoPolicy {
@@ -206,6 +213,7 @@ function emptyStore(): TeamAutoStore {
     writebacks: [],
     activity: [],
     failedClaimRecovery: {},
+    fullReviewUmbrellas: {},
     budget: {
       maxTasksPerDay: 150,
       firstSweepDryRun: true,
@@ -266,6 +274,9 @@ export async function loadTeamAutoStore(): Promise<TeamAutoStore> {
     }
     if (parsed.failedClaimRecovery && typeof parsed.failedClaimRecovery === "object") {
       store.failedClaimRecovery = parsed.failedClaimRecovery as Record<string, number>;
+    }
+    if (parsed.fullReviewUmbrellas && typeof parsed.fullReviewUmbrellas === "object") {
+      store.fullReviewUmbrellas = parsed.fullReviewUmbrellas as Record<string, number>;
     }
     store.budget = { ...store.budget, ...(parsed.budget ?? {}) };
     return store;
