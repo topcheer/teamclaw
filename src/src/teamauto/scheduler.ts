@@ -912,16 +912,17 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       // Alarm once per task so the observability contract survives entry loss.
       if (state0) {
         s.orphanResultAlarms ??= {};
-        const activityText = (s.activity ?? []).slice(-400).map((x) => String(x.text ?? "")).join("\n");
         for (const task of Object.values(state0.tasks ?? {})) {
           if (!task?.id || task.status !== "completed" || !task.result || !task.id.startsWith("teamauto-")) continue;
           if (task.completedAt && Date.now() - task.completedAt > 24 * 3600_000) continue;
           if (s.orphanResultAlarms[task.id]) continue;
-          const hasEntry = s.writebacks.some((w) => w.taskId === task.id);
-          const hasOkLine = activityText.includes(`${task.id}`) && / ok \(|dedupe-skipped/.test(activityText);
-          if (!hasEntry && !hasOkLine) {
+          // #5736: delivered-source is the DURABLE ledger (entry present OR
+          // recorded at prune time) - never the activity ring, which rolls in
+          // hours and made every normal delivery a false orphan.
+          const hasEntry = s.writebacks.some((w) => w.taskId === task.id) || Boolean(s.deliveredResults?.[task.id]);
+          if (!hasEntry) {
             s.orphanResultAlarms![task.id] = Date.now();
-            recordActivity(s, { at: Date.now(), repoId: "*", kind: "writeback", text: `orphan result alarm: task ${task.id} completed with a result but has NO write-back entry and no delivery line (registration lost - ladder redundancy silently absent)` });
+            recordActivity(s, { at: Date.now(), repoId: "*", kind: "writeback", text: `orphan result alarm: task ${task.id} completed with a result but has NO write-back entry and no delivery record (registration lost - ladder redundancy silently absent)` });
             logger.warn(`TeamAuto: orphan completed task ${task.id} without write-back entry`);
           }
         }
@@ -1251,6 +1252,22 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         });
       }
       void repo;
+    }
+    // #5736 (ggcode): record deliveries into the durable ledger BEFORE the
+    // done-entry prune - the write-back array and the tiny activity ring are
+    // both short-lived, but the orphan audit runs for 24h after completion.
+    // Without this, every normally-delivered task alarms as an orphan once
+    // its entry is pruned and its ok line rolls off the ring.
+    s.deliveredResults ??= {};
+    for (const w of s.writebacks) {
+      if (w.doneAt) {
+        s.deliveredResults[w.taskId] = w.doneAt;
+      }
+    }
+    const deliveredEntries = Object.entries(s.deliveredResults);
+    if (deliveredEntries.length > 2000) {
+      deliveredEntries.sort((a, b) => a[1] - b[1]);
+      for (const [k] of deliveredEntries.slice(0, deliveredEntries.length - 1500)) delete s.deliveredResults[k];
     }
     s.writebacks = s.writebacks.filter((w) => !w.doneAt).slice(-500);
     await saveTeamAutoStore(s);
