@@ -1035,7 +1035,11 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           const repoId = entry.repoId;
           const isTeamAutoWrite = task.writeMode === "write" && task.projectDir?.includes("__task-");
           let prDeliveryFailed = false;
-          if (isTeamAutoWrite) {
+          if (isTeamAutoWrite && task.status !== "failed") {
+            // #5719: a FAILED write task's worktree carries no deliverable by
+            // construction (that is usually WHY it failed) - the PR step just
+            // burns retries against an empty worktree. Deliver the result
+            // comment directly; the worktree is cleaned by the terminal pass.
             try {
               const info = await client.getRepoInfo(repoId.split("/")[0]!, repoId.split("/")[1]!);
               const wtDir = await sync.ensureTaskWorktree(repoId, task.id, info.defaultBranch, info.cloneUrl);
