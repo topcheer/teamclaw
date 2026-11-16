@@ -104,6 +104,8 @@ export type TeamAutoWriteBack = {
   error: string | null;
   /** Joint full-review cycle id: same-cycle sections share one umbrella issue. */
   cycleKey?: string;
+  /** #5735: delivery-shape disambiguation for the ok activity line (umbrella-created vs section-appended-to-umbrella). */
+  deliveryNote?: string;
   /**
    * Issue #24: failed delivery attempts so far. Drives the retry backoff and
    * the terminal give-up marker instead of a sticky error that nothing ever

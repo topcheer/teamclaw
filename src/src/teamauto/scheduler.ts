@@ -1193,6 +1193,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
                 entry.doneAt = Date.now();
             entry.inFlightAt = undefined;
                 writebackDone = true;
+                entry.deliveryNote = "section-appended-to-umbrella";
               } else if (entry.targetId == null) {
                 const number = await client.createIssue(
                   owner,
@@ -1203,6 +1204,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
                 );
                 entry.targetId = number;
                 s.fullReviewUmbrellas[cycleKey] = number;
+                entry.deliveryNote = "umbrella-created";
                 // Persist the umbrella pointer immediately: done entries are
                 // pruned at end-of-pass, and a crash between create and the
                 // tail save must not lose the only record of the umbrella.
@@ -1233,7 +1235,10 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
             // does not linger in the errored/failed stats (issue #24).
             entry.error = null;
             entry.failedAt = null;
-            recordActivity(s, { at: Date.now(), repoId: entry.repoId, kind: "writeback", text: `${entry.action} #${entry.targetId ?? "-"} ok (${task.id}${entry.attempts ? `, after ${entry.attempts} failed attempt(s)` : ""})` });
+            // #5735: distinguish created-vs-appended so umbrella cycles stop
+            // reading as double-creates (two "createIssue #N ok" lines for
+            // one issue is by design: first creates, peers append sections).
+            recordActivity(s, { at: Date.now(), repoId: entry.repoId, kind: "writeback", text: `${entry.action} #${entry.targetId ?? "-"} ok${entry.deliveryNote ? ` [${entry.deliveryNote}]` : ""} (${task.id}${entry.attempts ? `, after ${entry.attempts} failed attempt(s)` : ""})` });
           }
         }
       } catch (err) {
