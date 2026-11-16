@@ -568,6 +568,17 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         // -> still zero candidates -> dryRunDone never set).
         repo.dryRunDone = true;
       }
+      // #5712 (ggcode) / teamclaw#274: the ENTIRE sweep store transaction -
+      // cursor/seen advance, budget consume, task activity, write-back
+      // registrations, summary, sweep record, and the commit save - is one
+      // read-modify-write section. It previously raced the (locked) 20s
+      // write-back reconcile: reconcile's disk reload + tail save clobbered
+      // the sweep's writes (live: 20:30 batch lost summary/budget/activity
+      // while later claim/write-back saves survived). registerWriteback
+      // inside uses the *Unlocked core - the promise-chain mutex is NOT
+      // re-entrant.
+      let created = 0; // #5712: outside the lock scope - read after commit
+      await withStoreLock(async () => {
       if (!dryRun) {
         // Advance only for acting sweeps: a dry-run must leave the cursors
         // untouched so the reported actions are actually performed next time
@@ -581,7 +592,6 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       const fullReviews = candidates.filter((c) => c.kind === "fullReview");
       const regular = candidates.filter((c) => c.kind !== "fullReview").slice(0, Math.max(0, repo.policy.maxTasksPerSweep - fullReviews.length));
       const capped = [...fullReviews, ...regular];
-      let created = 0;
       const summary: string[] = [`found ${candidates.length} candidate(s)`];
       // #265: surface the commits delta so the third signal source is
       // observable in sweep summaries (was silently dead before).
@@ -615,7 +625,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
                   : candidate.kind === "prRework"
                     ? ("prComment" as const)
                     : ("issueComment" as const);
-              await registerWriteback(taskId, action, repo.id, candidate.number || null, candidate.cycle !== undefined ? String(candidate.cycle) : undefined);
+              await registerWritebackUnlocked(taskId, action, repo.id, candidate.number || null, candidate.cycle !== undefined ? String(candidate.cycle) : undefined);
               created++;
             }
           }
@@ -642,6 +652,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       pushSweepRecord(repo, { at: Date.now(), ok: true, summary: repo.lastSweepSummary ?? "sweep complete", durationMs: Date.now() - sweepStartedAt, etagCalls: Math.max(0, etagAfter.calls - etagBefore.calls), etag304Hits: Math.max(0, etagAfter.hits - etagBefore.hits) });
       recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "sweep", text: repo.lastSweepSummary ?? "sweep complete" });
       await saveTeamAutoStore(s);
+      }); // withStoreLock: sweep transaction
       if (created > 0) {
         await deps.onTasksCreated().catch((err) => {
           logger.warn(`TeamAuto: auto-assign trigger failed: ${String(err)}`);
@@ -655,6 +666,8 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       // pause a repo FOREVER - teamclaw sat auto-paused 15h on one "fetch
       // failed". Auto-pauses are cooldowns now: the timer retries after the
       // backoff below, and a success clears the state in the block above.
+      // #5712: failure bookkeeping is a store RMW too - same lock.
+      await withStoreLock(async () => {
       repo.sweepFailures = (repo.sweepFailures ?? 0) + 1;
       repo.lastSweepErrorAt = Date.now();
       repo.lastAttemptAt = repo.lastSweepErrorAt; // #266: failures must be visible without inferring from lastSweepErrorAt
@@ -664,6 +677,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       pushSweepRecord(repo, { at: Date.now(), ok: false, summary: `sweep failed[${failClass}]: ${message}`, failClass, durationMs: Date.now() - sweepStartedAt, etagCalls: Math.max(0, etagAfter.calls - etagBefore.calls), etag304Hits: Math.max(0, etagAfter.hits - etagBefore.hits) });
       recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "sweep", text: `sweep failed[${failClass}] (auto-retry in ~${sweepBackoffMinutesFor(failClass, repo.sweepFailures)}min): ${message}` });
       await saveTeamAutoStore(s).catch(() => {});
+      }); // withStoreLock: failure bookkeeping
       logger.warn(`TeamAuto: sweep failed for ${repo.id}: ${message}`);
       return `error: ${message}`;
     } finally {
@@ -1186,6 +1200,14 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
   // of the sweep transaction: the caller awaits it before the sweep's own
   // save, and failures propagate instead of vanishing.
   async function registerWriteback(taskId: string, action: "issueComment" | "prComment" | "createIssue" | "createPR", repoId: string, targetId: number | null, cycleKey?: string): Promise<void> {
+    // #5712 (ggcode) / teamclaw#274: every store read-modify-write must hold
+    // withStoreLock. Public entry takes the lock; the sweep transaction calls
+    // the *Unlocked core directly because IT already holds the lock (the
+    // promise-chain mutex is NOT re-entrant - nesting would deadlock).
+    await withStoreLock(() => registerWritebackUnlocked(taskId, action, repoId, targetId, cycleKey));
+  }
+
+  async function registerWritebackUnlocked(taskId: string, action: "issueComment" | "prComment" | "createIssue" | "createPR", repoId: string, targetId: number | null, cycleKey?: string): Promise<void> {
     const s = await ensureStore();
     if (s.writebacks.some((w) => w.taskId === taskId)) {
       return;
@@ -1260,12 +1282,14 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         recordActivity(await ensureStore(), { at: Date.now(), repoId, kind: "claim", text: `claimed issue #${issueNumber} via comment (assign unavailable, at dequeue)` });
       }
       const s = await ensureStore();
+      await withStoreLock(async () => {
       const freshRepo = s.repos.find((r) => r.id === repoId);
       if (freshRepo) {
         // +60s guard: our own write (assign or comment) bumps updated_at.
         freshRepo.cursors.seen[`${repoId}#issue-${issueNumber}`] = Date.now() + 60_000;
         await saveTeamAutoStore(s);
       }
+      });
       return { claimed: true };
     } catch (err) {
       recordActivity(await ensureStore(), { at: Date.now(), repoId, kind: "claim", text: `claim-at-dequeue failed for issue #${issueNumber}: ${err instanceof Error ? err.message.slice(0, 120) : String(err)}` });
@@ -1315,6 +1339,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           recordActivity(await ensureStore(), { at: Date.now(), repoId: repo.id, kind: "claim", text: `claimed issue #${candidate.number} via comment (assign unavailable)` });
         }
         const s = await ensureStore();
+        await withStoreLock(async () => {
         const freshRepo = s.repos.find((r) => r.id === repo.id);
         if (freshRepo) {
           // +60s guard: our own write (assign or comment) bumps updated_at;
@@ -1322,6 +1347,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           freshRepo.cursors.seen[candidate.key] = Date.now() + 60_000;
           await saveTeamAutoStore(s);
         }
+        });
       } catch (err) {
         logger.warn(`TeamAuto: claim for ${repo.id}#${candidate.number} failed (task continues unclaimed): ${err instanceof Error ? err.message : String(err)}`);
       }
