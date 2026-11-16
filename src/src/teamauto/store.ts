@@ -290,6 +290,25 @@ export async function loadTeamAutoStore(): Promise<TeamAutoStore> {
     if (parsed.fullReviewUmbrellas && typeof parsed.fullReviewUmbrellas === "object") {
       store.fullReviewUmbrellas = parsed.fullReviewUmbrellas as Record<string, number>;
     }
+    // #5736 (ggcode): the orphan-alarm chain (#5725 -> #5736 -> #5738) learned
+    // this the hard way three times over - loadTeamAutoStore rebuilds the store
+    // field-by-field, so a persistence field missing from this copy list is
+    // dropped on EVERY 20s settle reload even though saveTeamAutoStore writes
+    // it to disk. With all three alarm fields missing, the alarm silently
+    // disarmed: deliveredResultsInit dropped => the one-time migration re-ran
+    // each pass and pardoned every completed in-window task (genuine #5725
+    // registration loss could never alarm again); deliveredResults dropped =>
+    // prune-time delivery records evaporated; orphanResultAlarms dropped =>
+    // the once-per-task gate reset (99 alarm lines in 80s live).
+    if (parsed.orphanResultAlarms && typeof parsed.orphanResultAlarms === "object") {
+      store.orphanResultAlarms = parsed.orphanResultAlarms as Record<string, number>;
+    }
+    if (parsed.deliveredResults && typeof parsed.deliveredResults === "object") {
+      store.deliveredResults = parsed.deliveredResults as Record<string, number>;
+    }
+    if (typeof parsed.deliveredResultsInit === "boolean") {
+      store.deliveredResultsInit = parsed.deliveredResultsInit;
+    }
     store.budget = { ...store.budget, ...(parsed.budget ?? {}) };
     return store;
   } catch {
