@@ -539,6 +539,10 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       for (let attempt = 1; attempt <= SWEEP_INPLACE_RETRIES; attempt++) {
         try {
           swept = await sweepRepo(repo, client);
+          // #5706 (ggcode): sweep observability - "no new work" is ambiguous
+          // between an empty fetch (etag 304 / API silence) and full filter
+          // rejection. Log the funnel so starvation diagnoses itself.
+          logger.info(`TeamAuto: scan funnel ${repo.id}: fetched ${swept.issues.length} issue(s)/${swept.pulls.length} pull(s) -> ${swept.candidates.length} candidate(s) (since=${repo.cursors.lastIssueSince ? new Date(repo.cursors.lastIssueSince).toISOString() : "unset"})`);
           break;
         } catch (err) {
           if (classifySweepError(err) !== "network") {

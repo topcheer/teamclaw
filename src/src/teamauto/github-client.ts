@@ -73,7 +73,16 @@ export function createGithubClient(auth: GithubAuthManager) {
     if (options.body !== undefined) {
       headers["Content-Type"] = "application/json";
     }
-    const etagKey = options.etagKey ? `${method} ${urlPath}` : undefined;
+    const etagKey = options.etagKey && !urlPath.includes("/issues?") ? `${method} ${urlPath}` : undefined;
+    // #5706 (ggcode, 2026-11-16): the ISSUE-SCAN URL must not use conditional
+    // requests. Live evidence: the gateway process received 304 for
+    // state=open&sort=updated&since=<cursor> while the byte-identical request
+    // (same etag, same plugin token) from a shell returned 200 with 13 items -
+    // GitHub's weak-validation on since-filtered, updated-sorted lists can
+    // serve a stale 304 to the long-lived process, starving EVERY sweep to
+    // "fetched 0" (three re-opened issues starved 3h, historical cases 4h20m).
+    // The scan fetches <=50 items; 304 savings are negligible. Pulls/commits
+    // and all write paths keep their etag handling.
     if (etagKey && options.etags?.[etagKey]) {
       headers["If-None-Match"] = options.etags[etagKey];
     }
@@ -90,6 +99,12 @@ export function createGithubClient(auth: GithubAuthManager) {
       }
     }
     if (response.status === 304) {
+      // #5706: a 304 on the ISSUE SCAN URL while the identical request from
+      // a shell (same etag) returns 200/12 items is the live divergence -
+      // log it loudly so the next sweep pins the layer.
+      if (urlPath.includes("/issues?")) {
+        console.warn(`[teamclaw#5706] issues scan 304: ${urlPath.slice(0, 140)}`);
+      }
       return { status: 304, data: null, notModified: true };
     }
     const text = await response.text();
@@ -107,6 +122,11 @@ export function createGithubClient(auth: GithubAuthManager) {
     }
     if (response.status >= 200 && response.status < 300) {
       etagCounters.hits += 1; // #267-3: "hits" = calls that returned fresh data (non-304 successes)
+      // #5706: empty-array 200s on the scan URL are suspicious in exactly
+      // the starvation scenario - make them visible.
+      if (urlPath.includes("/issues?") && Array.isArray(data) && data.length === 0) {
+        console.warn(`[teamclaw#5706] issues scan 200-but-EMPTY: ${urlPath.slice(0, 140)}`);
+      }
     }
     return { status: response.status, data, notModified: false };
   }
