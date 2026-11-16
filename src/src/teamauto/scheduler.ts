@@ -935,7 +935,9 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     for (const w of s.writebacks) {
       if (w.error && !w.doneAt && !w.failedAt && state0) {
         const t = state0.tasks[w.taskId];
-        if (t && t.status === "completed" && t.result && (w.nextAttemptAt ?? 0) <= Date.now()) {
+        // #5719: a FAILED task WITH a result is deliverable too (the result is
+        // the work product - analysis/diagnostic legs). Same backoff reset.
+        if (t && t.result && (t.status === "completed" || t.status === "failed") && (w.nextAttemptAt ?? 0) <= Date.now()) {
           w.error = null;
         }
       }
