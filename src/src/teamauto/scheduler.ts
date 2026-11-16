@@ -12,6 +12,7 @@ import type { TaskInfo, TeamState } from "../types.js";
 import { createGithubClient } from "./github-client.js";
 import { learnNorms, renderNormsBlock } from "./norms.js";
 import { createRepoSync, teamAutoProjectDir, type TaskDeliveryOracle, type TaskTargetClosedOracle } from "./repo-sync.js";
+import { ENVELOPE_LEAK_MARKER } from "./write-payload-guard.js";
 import { nextFireMs } from "./schedule.js";
 import { resolveTeamAutoPaths } from "./store.js";
 import { advanceCursors, sweepRepo, type Candidate } from "./scanner.js";
@@ -1182,7 +1183,13 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           }
         }
       } catch (err) {
-        markWritebackFailure(s, entry, err instanceof Error ? err.message : String(err));
+        const message = err instanceof Error ? err.message : String(err);
+        markWritebackFailure(s, entry, message, {
+          // #5704: an envelope-frame rejection is deterministic corruption -
+          // the payload cannot change between attempts. Fail terminally
+          // instead of burning the retry ladder re-posting the same frame.
+          terminal: message.includes(ENVELOPE_LEAK_MARKER),
+        });
       }
       void repo;
     }

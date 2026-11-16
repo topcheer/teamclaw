@@ -1131,7 +1131,7 @@ function buildAssistantTurnSnapshot(text: string, toolCalls: string[] = []): Ass
   };
 }
 
-function extractLastAssistantTurn(messages: unknown[]): AssistantTurnSnapshot {
+export function extractLastAssistantTurn(messages: unknown[]): AssistantTurnSnapshot {
   const assistantMessages = messages.filter((message): message is { role?: unknown; content?: unknown } => {
     if (!message || typeof message !== "object") {
       return false;
@@ -1168,7 +1168,25 @@ function extractLastAssistantTurn(messages: unknown[]): AssistantTurnSnapshot {
     }
   }
 
-  return buildAssistantTurnSnapshot(JSON.stringify(lastAssistant));
+  // Some transports hand the text block directly as the content object.
+  if (
+    !!lastAssistant.content
+    && typeof lastAssistant.content === "object"
+    && typeof (lastAssistant.content as { text?: unknown }).text === "string"
+  ) {
+    return buildAssistantTurnSnapshot((lastAssistant.content as { text: string }).text);
+  }
+
+  // #5704 (ggcode, 2026-11-16): no recoverable text. The legacy fallback
+  // serialized the whole message object, so an empty transport frame
+  // (content:[] plus api/provider/usage metadata) reached GitHub verbatim
+  // as the worker's "final reply" - comment bodies (ggcode #5699) and even
+  // a whole PR body (#5703). Intended text lives ONLY in content (string,
+  // text blocks, or a direct text object - all handled above); anything
+  // else is frame metadata. Return empty text: the task completes without
+  // a textual result and the write-back ladder surfaces that terminally
+  // instead of posting frame JSON.
+  return buildAssistantTurnSnapshot("");
 }
 
 function isRateLimitMessage(value: string): boolean {
