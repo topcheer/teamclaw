@@ -905,6 +905,31 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         return !dead;
       });
       if (s.writebacks.length !== before) { await saveTeamAutoStore(s); }
+      // #5725 (ggcode): settle self-audit. A COMPLETED teamauto task with a
+      // textual result whose write-back entry is absent AND whose ok line is
+      // missing from the activity feed means the registration (or the whole
+      // entry) was lost - the ladder redundancy channel silently failed.
+      // Alarm once per task so the observability contract survives entry loss.
+      if (state0) {
+        s.orphanResultAlarms ??= {};
+        const activityText = (s.activity ?? []).slice(-400).map((x) => String(x.text ?? "")).join("\n");
+        for (const task of Object.values(state0.tasks ?? {})) {
+          if (!task?.id || task.status !== "completed" || !task.result || !task.id.startsWith("teamauto-")) continue;
+          if (task.completedAt && Date.now() - task.completedAt > 24 * 3600_000) continue;
+          if (s.orphanResultAlarms[task.id]) continue;
+          const hasEntry = s.writebacks.some((w) => w.taskId === task.id);
+          const hasOkLine = activityText.includes(`${task.id}`) && / ok \(|dedupe-skipped/.test(activityText);
+          if (!hasEntry && !hasOkLine) {
+            s.orphanResultAlarms![task.id] = Date.now();
+            recordActivity(s, { at: Date.now(), repoId: "*", kind: "writeback", text: `orphan result alarm: task ${task.id} completed with a result but has NO write-back entry and no delivery line (registration lost - ladder redundancy silently absent)` });
+            logger.warn(`TeamAuto: orphan completed task ${task.id} without write-back entry`);
+          }
+        }
+        if (Object.keys(s.orphanResultAlarms).length > 200) {
+          const entries = Object.entries(s.orphanResultAlarms).sort((a, b) => a[1] - b[1]);
+          for (const [k] of entries.slice(0, entries.length - 100)) delete s.orphanResultAlarms[k];
+        }
+      }
       // Live-verified gap (mw5aun1l, 2026-11-07): this drop path fires for
       // failed-without-result tasks BEFORE the pending loop below, so the
       // terminal worktree cleanup there never ran for them - the single
@@ -1084,10 +1109,25 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
             continue;
           }
           if (entry.action === "issueComment" && entry.targetId) {
+            // #5725 / #5660 parity: the worker may have posted the same body
+            // directly during its execution window (takeOwnership legs deliver
+            // an ownership-wrap comment themselves). Posting again duplicates;
+            // skipping silently breaks the observability contract. Exact
+            // whitespace-normalized match -> mark done + record the skip.
+            const normalizedBody = body.replace(/\s+/g, " ").trim();
+            const existingBodies = await client.getIssueCommentBodies(owner, name, entry.targetId);
+            if (existingBodies.some((b) => b.replace(/\s+/g, " ").trim() === normalizedBody)) {
+              entry.doneAt = Date.now();
+              entry.inFlightAt = undefined;
+              writebackDone = true;
+              recordActivity(s, { at: Date.now(), repoId: entry.repoId, kind: "writeback", text: `dedupe-skipped: identical body already on issue #${entry.targetId} (worker direct-post) - ladder posting skipped` });
+              logger.info(`TeamAuto: write-back ${entry.taskId} issueComment deduped - identical body already on issue #${entry.targetId}`);
+            } else {
             await client.postIssueComment(owner, name, entry.targetId, body);
             entry.doneAt = Date.now();
             entry.inFlightAt = undefined;
             writebackDone = true;
+            }
             // Our own comment bumps the issue's updatedAt, which the scanner
             // treats as new activity - advance the seen cursor so we do not
             // re-trigger a review of an object we just replied to. External

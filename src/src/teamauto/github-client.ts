@@ -310,6 +310,16 @@ export function createGithubClient(auth: GithubAuthManager) {
       }
     },
 
+    async getIssueCommentBodies(owner: string, repo: string, issueNumber: number): Promise<string[]> {
+      try {
+        const { data } = await request("GET", `/repos/${owner}/${repo}/issues/${issueNumber}/comments?per_page=30`);
+        if (!Array.isArray(data)) return [];
+        return (data as Record<string, unknown>[]).map((c) => String(c.body ?? ""));
+      } catch {
+        return []; // listing failed - degrade to posting (duplicate risk < lost delivery)
+      }
+    },
+
     /** Fresh issue state for claim-time re-checks (#268): the scan-time
      * assignee snapshot is seconds stale by enqueue time - a human may have
      * self-assigned in between, and claiming over a human is worse than not

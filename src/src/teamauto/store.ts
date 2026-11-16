@@ -182,6 +182,8 @@ export type TeamAutoStore = {
    * stamp (and the bot's self-assignment) once per taskId so the next sweep
    * re-candidates naturally, while the dead-letter caps bound retries. */
   failedClaimRecovery?: Record<string, number>;
+  /** #5725: once-per-task guard for orphan-result alarms (completed with result, no write-back entry, no delivery line). */
+  orphanResultAlarms?: Record<string, number>;
   /** #5685 (ggcode, 2026-11-16): "repoId|cycleKey" -> umbrella issue number
    * for joint full reviews. Done write-back entries are pruned at end-of-pass,
    * so an in-store peer scan cannot carry the umbrella pointer across passes
@@ -213,6 +215,7 @@ function emptyStore(): TeamAutoStore {
     writebacks: [],
     activity: [],
     failedClaimRecovery: {},
+    orphanResultAlarms: {},
     fullReviewUmbrellas: {},
     budget: {
       maxTasksPerDay: 150,
