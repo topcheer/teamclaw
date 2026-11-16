@@ -910,18 +910,43 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       // missing from the activity feed means the registration (or the whole
       // entry) was lost - the ladder redundancy channel silently failed.
       // Alarm once per task so the observability contract survives entry loss.
+      let auditDirty = false;
       if (state0) {
         s.orphanResultAlarms ??= {};
+        s.deliveredResults ??= {};
+        // #5738 (ggcode, 2026-11-17): ONE-TIME migration. The #5736 backfill
+        // only stamped entries still present in the write-back array at
+        // deploy time - historically delivered legs were already pruned, so
+        // they all re-entered the alarm domain on the first settled pass
+        // (23 tasks, 99 lines in 80s). Seed the ledger once from the task
+        // state itself: everything completed with a result inside the audit
+        // window at init time is treated as delivered (the sentinel verified
+        // those 23 were all normally delivered). Accepted trade-off: any
+        // genuine pre-deploy orphan is pardoned once - signal > archaeology.
+        if (!s.deliveredResultsInit) {
+          s.deliveredResultsInit = true;
+          for (const task of Object.values(state0.tasks ?? {})) {
+            if (task?.id && task.status === "completed" && task.result && task.id.startsWith("teamauto-") && task.completedAt && Date.now() - task.completedAt <= 24 * 3600_000) {
+              s.deliveredResults[task.id] = task.completedAt;
+            }
+          }
+          auditDirty = true;
+        }
         for (const task of Object.values(state0.tasks ?? {})) {
           if (!task?.id || task.status !== "completed" || !task.result || !task.id.startsWith("teamauto-")) continue;
           if (task.completedAt && Date.now() - task.completedAt > 24 * 3600_000) continue;
-          if (s.orphanResultAlarms[task.id]) continue;
+          // #5738: once-per-task gate; the audit now persists its own
+          // mutations in the same pass (auditDirty save below), so the gate
+          // survives the next 20s disk reload instead of re-alarming.
+          const lastAlarmAt = s.orphanResultAlarms[task.id];
+          if (lastAlarmAt) continue;
           // #5736: delivered-source is the DURABLE ledger (entry present OR
           // recorded at prune time) - never the activity ring, which rolls in
           // hours and made every normal delivery a false orphan.
-          const hasEntry = s.writebacks.some((w) => w.taskId === task.id) || Boolean(s.deliveredResults?.[task.id]);
+          const hasEntry = s.writebacks.some((w) => w.taskId === task.id) || Boolean(s.deliveredResults[task.id]);
           if (!hasEntry) {
-            s.orphanResultAlarms![task.id] = Date.now();
+            s.orphanResultAlarms[task.id] = Date.now();
+            auditDirty = true;
             recordActivity(s, { at: Date.now(), repoId: "*", kind: "writeback", text: `orphan result alarm: task ${task.id} completed with a result but has NO write-back entry and no delivery record (registration lost - ladder redundancy silently absent)` });
             logger.warn(`TeamAuto: orphan completed task ${task.id} without write-back entry`);
           }
@@ -930,6 +955,10 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           const entries = Object.entries(s.orphanResultAlarms).sort((a, b) => a[1] - b[1]);
           for (const [k] of entries.slice(0, entries.length - 100)) delete s.orphanResultAlarms[k];
         }
+        // #5738: the gate lives on disk - persist audit mutations in the SAME
+        // pass that makes them, or the next 20s reload resets the gate and
+        // re-alarms everything (99 lines / 23 tasks live).
+        if (auditDirty) { await saveTeamAutoStore(s); }
       }
       // Live-verified gap (mw5aun1l, 2026-11-07): this drop path fires for
       // failed-without-result tasks BEFORE the pending loop below, so the

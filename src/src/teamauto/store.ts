@@ -190,6 +190,8 @@ export type TeamAutoStore = {
    * every pass and the activity ring is tiny - without this ledger every
    * normally-delivered task re-alarms as an orphan hours later. taskId -> deliveredAt. */
   deliveredResults?: Record<string, number>;
+  /** #5738: one-time ledger migration marker (seed from task state, pardoning pre-deploy history once). */
+  deliveredResultsInit?: boolean;
   /** #5685 (ggcode, 2026-11-16): "repoId|cycleKey" -> umbrella issue number
    * for joint full reviews. Done write-back entries are pruned at end-of-pass,
    * so an in-store peer scan cannot carry the umbrella pointer across passes
