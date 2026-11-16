@@ -147,7 +147,23 @@ function resolvedOpenClawBinary() {
   if (OPENCLAW_PATH_CACHE === undefined || OPENCLAW_PATH_CACHE === null) {
     OPENCLAW_PATH_CACHE = resolveExecutableOnPath("openclaw");
   }
-  return OPENCLAW_PATH_CACHE;
+  if (OPENCLAW_PATH_CACHE) return OPENCLAW_PATH_CACHE;
+  // #win-global-loop (user report 2026-11-16): the bundled runtime's shim is
+  // never placed on PATH, so PATH-only resolution reported "not installed" on
+  // every launch (configOnly=true) and the wizard re-ran the full global
+  // install forever. A runtime the app itself provisioned must count as
+  // installed. Prefer the warmed shim, then the deterministic userData
+  // location the extractor writes to.
+  const shimCandidates = [
+    EXTRACTED_OPENCLAW_SHIM,
+    path.join(app.getPath("userData"), "bundled", "shims", process.platform === "win32" ? "openclaw.cmd" : "openclaw"),
+  ];
+  for (const shim of shimCandidates) {
+    try {
+      if (shim && fsSync.existsSync(shim)) return shim;
+    } catch { /* probe each candidate independently */ }
+  }
+  return null;
 }
 
 // Map an openclaw bin reference to a spawnable { command, args, env } plan
@@ -851,6 +867,15 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
     // the plugin dir exists, treat the install as done (with a warning) and
     // continue instead of failing the whole bootstrap.
     let installed = false;
+    // #win-exit-hang (user report 2026-11-16): same Windows CLI exit-hang as
+    // the global path - the 180s watchdog times out runs whose work already
+    // committed to extensions/. If the plugin tree is already present, skip
+    // the install step entirely instead of paying for a guaranteed-timeout
+    // run on every bootstrap.
+    if (extInstalled()) {
+      onEvent({ phase: "teamclaw", line: "Bundled plugin already present in the private instance - skipping the install step." });
+      installed = true;
+    }
     const settleDelays = [2500, 5000, 10000];
     for (let attempt = 0; attempt < settleDelays.length && !installed; attempt++) {
       try {
@@ -2000,12 +2025,26 @@ ipcMain.handle("instance:install-into-global", async (event, options) => {
           ? `"${bin}" plugins list 2>nul`
           : `"${bin}" plugins list 2>/dev/null || true`;
         const r = await runShellCommand(listCmd, { cwd: gHome, env: gEnv });
-        return /│\s*TeamClaw\s*│/.test(r.stdout || "");
+        // #win-ascii-table (user report 2026-11-16): on Windows the table
+        // renders with ASCII pipes "|", not box-drawing "│" - the old
+        // box-only regex never matched, so the post-failure success probe
+        // always returned false and a SUCCEEDED install was retried to death.
+        return /[│|]\s*TeamClaw\s*[│|]/.test(r.stdout || "");
       } catch {
         return false;
       }
     };
     let installed = false;
+    // #win-exit-hang (user report 2026-11-16): `plugins install` registers
+    // the plugin but its process never exits on Windows (the detached gateway
+    // child keeps the inherited stdio pipes open), so the 600s watchdog
+    // records a failure even though registration already committed. If
+    // TeamClaw is ALREADY registered, skip the install step instead of paying
+    // for another guaranteed-timeout run.
+    if (await isRegistered()) {
+      onEvent({ phase: "teamclaw", line: "TeamClaw is already registered in the global instance - skipping the install step." });
+      installed = true;
+    }
     const settles = [2500, 5000, 10000];
     for (let attempt = 0; attempt < settles.length && !installed; attempt++) {
       try {
