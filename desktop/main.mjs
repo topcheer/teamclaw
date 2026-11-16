@@ -2097,6 +2097,16 @@ ipcMain.handle("instance:install-into-global", async (event, options) => {
         ...((teamProfile && !prev.config?.teamProfile) ? { teamProfile } : {}),
       },
     };
+    // #win-gateway-gate (user report 2026-11-16): `gateway start/restart`
+    // REFUSES to boot when the config lacks gateway.mode ("Gateway start
+    // blocked: existing config is missing gateway.mode") - and this flow is
+    // the only writer of a fresh global config, so a config written here
+    // without gateway.mode wedged every later gateway start. The desktop
+    // manages a LOCAL gateway; ensure the mode explicitly (first write wins:
+    // a gateway section that already carries a mode is never overwritten).
+    if (!c.gateway || !c.gateway.mode) {
+      c.gateway = { ...(c.gateway || {}), mode: "local" };
+    }
     await fs.writeFile(gCfgPath, JSON.stringify(c, null, 2), { mode: 0o600 });
     onEvent({ phase: "teamclaw", line: "Global instance set to controller mode." });
   } catch (e) {
