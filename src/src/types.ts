@@ -159,6 +159,16 @@ export type TaskInfo = {
   checkpoint?: TaskCheckpoint;
   resumeAttempt?: number;
   /**
+   * #5740 (ggcode, 2026-11-17): assignment backoff after a claim-at-dequeue
+   * ELIGIBILITY-CHECK failure reverted a dispatched assignment. While
+   * assignmentHoldUntil is in the future, the auto-assign round skips this
+   * pending task; assignmentHoldCount grows the hold exponentially (20s
+   * doubling, 160s cap) across consecutive failures and is reset by any
+   * conclusive claim outcome.
+   */
+  assignmentHoldUntil?: number;
+  assignmentHoldCount?: number;
+  /**
    * Design 2.4 workflow-chain membership: set ONLY by the workflow engine
    * (controller/workflow-routes.ts) when it creates a step task, never by
    * client task creation (the create route builds TaskInfo field-by-field

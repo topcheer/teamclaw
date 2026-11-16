@@ -273,12 +273,26 @@ export async function handleTaskExecutionGetRequest(deps: ControllerTaskDomainDe
 
 // PATCH /api/v1/tasks/:id
 export async function handleTaskPatchRequest(deps: ControllerTaskDomainDeps, req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {
-  const { updateTeamState, wsServer } = deps;
+  const { updateTeamState, wsServer, logger, getTeamState } = deps;
   const taskId = pathname.split("/").pop()!;
   const body = await parseJsonBody(req);
   let statusEvent: TaskExecutionEvent | undefined;
   let progressEvent: TaskExecutionEvent | undefined;
   let progressContract: WorkerProgressContract | undefined;
+
+  // #5740 (ggcode, 2026-11-17): worker progress PATCHes now carry workerId;
+  // when present, the same stale-worker guard as the result routes applies
+  // so a dispatched-but-reverted (orphaned) run cannot keep mutating the
+  // task it no longer owns.
+  const patchWorkerId = typeof body.workerId === "string" ? body.workerId : undefined;
+  if (patchWorkerId) {
+    const currentTask = getTeamState()?.tasks[taskId];
+    if (currentTask && !canAcceptWorkerUpdate(currentTask, patchWorkerId)) {
+      logger.info(`Controller: ignoring stale task patch for ${taskId} from ${patchWorkerId}`);
+      sendJson(res, 202, { status: "ignored", reason: "stale-worker-update" });
+      return;
+    }
+  }
 
   const state = updateTeamState((s) => {
     const task = s.tasks[taskId];
@@ -286,6 +300,16 @@ export async function handleTaskPatchRequest(deps: ControllerTaskDomainDeps, req
     const previousStatus = task.status;
     const previousProgress = task.progress;
     const previousProgressContract = task.progressContract;
+    // #5740: a bare PATCH (no workerId, e.g. WebUI) must not flip a pending,
+    // unassigned task to in_progress - that is exactly the illegal
+    // unclaimed-execution state the claim gate exists to prevent. The
+    // progress text below still applies.
+    if (typeof body.status === "string"
+      && body.status === "in_progress"
+      && task.status === "pending"
+      && !task.assignedWorkerId) {
+      delete body.status;
+    }
     if (typeof body.status === "string") task.status = body.status as TaskStatus;
     if (typeof body.progress === "string") task.progress = body.progress as string;
     if (typeof body.priority === "string") task.priority = body.priority as TaskPriority;
