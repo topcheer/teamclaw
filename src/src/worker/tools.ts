@@ -587,6 +587,11 @@ export function createWorkerTools(deps: WorkerToolsDeps) {
           if (status) {
             patch.status = status;
           }
+          // #5740 (ggcode): identify the reporting worker so the controller
+          // can apply the same stale-worker guard as the result routes.
+          if (typeof identity.workerId === "string" && identity.workerId) {
+            patch.workerId = identity.workerId;
+          }
           if (progressContract) {
             patch.progressContract = progressContract;
           }

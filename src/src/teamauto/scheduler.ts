@@ -1398,7 +1398,13 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       recordActivity(await ensureStore(), { at: Date.now(), repoId, kind: "claim", text: `claim-at-dequeue ELIGIBILITY CHECK failed for issue #${issueNumber}: ${msg.slice(0, 120)} - reverting assignment, will retry` });
       return { claimed: false, reason: "eligibility-check-failed", retryEligibility: true };
     }
+    // #5740 (ggcode, 2026-11-17): the WRITE phase keeps the original
+    // 2026-11-15 "continue unclaimed" semantics when it fails (the
+    // eligibility checks DID pass), but it must not vanish silently - the
+    // caller swallows rejections - so record the audit line here and return
+    // a non-retrying result.
     try {
+      try {
         await client.assignIssue(owner, name, issueNumber, login);
         recordActivity(await ensureStore(), { at: Date.now(), repoId, kind: "claim", text: `claimed issue #${issueNumber} as @${login} (at dequeue)` });
       } catch {
@@ -1409,14 +1415,19 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       }
       const s = await ensureStore();
       await withStoreLock(async () => {
-      const freshRepo = s.repos.find((r) => r.id === repoId);
-      if (freshRepo) {
-        // +60s guard: our own write (assign or comment) bumps updated_at.
-        freshRepo.cursors.seen[`${repoId}#issue-${issueNumber}`] = Date.now() + 60_000;
-        await saveTeamAutoStore(s);
-      }
+        const freshRepo = s.repos.find((r) => r.id === repoId);
+        if (freshRepo) {
+          // +60s guard: our own write (assign or comment) bumps updated_at.
+          freshRepo.cursors.seen[`${repoId}#issue-${issueNumber}`] = Date.now() + 60_000;
+          await saveTeamAutoStore(s);
+        }
       });
       return { claimed: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      recordActivity(await ensureStore(), { at: Date.now(), repoId, kind: "claim", text: `claim-at-dequeue WRITE failed for issue #${issueNumber}: ${msg.slice(0, 120)} - continuing unclaimed` });
+      return { claimed: false, reason: "claim write failed" };
+    }
   }
 
   /** #268: make a takeOwnership claim VISIBLE on the issue itself. Until now

@@ -31,6 +31,7 @@ import {
   appendTaskExecutionEvent,
   broadcastTaskExecutionEvent,
   buildTaskExecutionIdentity,
+  cancelTaskExecution,
   normalizeControllerIntakeSessionKey,
   recordTaskExecutionEvent,
   resetTaskForFreshAttempt,
@@ -268,7 +269,12 @@ export function buildConsolidatedPatternsContext(): string {
   }
 }
 
-export function revertTaskAssignment(taskId: string, workerId: string, deps: ControllerTaskDomainDeps): TaskInfo | undefined {
+export function revertTaskAssignment(
+  taskId: string,
+  workerId: string,
+  deps: ControllerTaskDomainDeps,
+  options?: { holdMs?: number },
+): TaskInfo | undefined {
   const { updateTeamState, wsServer } = deps;
   let revertEvent: TaskExecutionEvent | undefined;
 
@@ -281,6 +287,13 @@ export function revertTaskAssignment(taskId: string, workerId: string, deps: Con
     if (task.assignedWorkerId === workerId) {
       task.status = "pending";
       task.assignedWorkerId = undefined;
+      // #5740 (ggcode, 2026-11-17): optional assignment hold so a reverted
+      // claim-eligibility retry does not immediately re-dispatch (outage
+      // churn); the heartbeat-driven auto-assign passes retry after expiry.
+      if (options?.holdMs && options.holdMs > 0) {
+        task.assignmentHoldCount = (task.assignmentHoldCount ?? 0) + 1;
+        task.assignmentHoldUntil = Date.now() + options.holdMs;
+      }
       task.updatedAt = Date.now();
       revertEvent = appendTaskExecutionEvent(task, {
         type: "error",
@@ -312,6 +325,29 @@ export function revertTaskAssignment(taskId: string, workerId: string, deps: Con
     scheduleProvisioningReconcile(deps, `assignment-reverted:${taskId}`);
   }
   return updatedTask;
+}
+
+/** #5740 (ggcode): assignment hold after a reverted claim-eligibility check -
+ * 20s doubling per consecutive failure, capped at 160s, so a network blip
+ * costs one ~20s wait while a sustained outage retries at a bounded cadence
+ * instead of assign/cancel churn (and never bypasses the conflict gate). */
+export function claimEligibilityHoldMs(consecutiveFailures: number): number {
+  const capped = Math.min(Math.max(consecutiveFailures, 1), 4);
+  return Math.min(20_000 * 2 ** (capped - 1), 160_000);
+}
+
+/** #5740 (ggcode): any conclusive claim outcome (claimed, stood down, or a
+ * WRITE failure that legitimately continues unclaimed) ends the retry cycle -
+ * reset the backoff so a future blip starts at the base hold again. */
+export function clearAssignmentHold(taskId: string, deps: ControllerTaskDomainDeps): void {
+  deps.updateTeamState((s) => {
+    const task = s.tasks[taskId];
+    if (task && (task.assignmentHoldUntil !== undefined || task.assignmentHoldCount !== undefined)) {
+      delete task.assignmentHoldUntil;
+      delete task.assignmentHoldCount;
+      task.updatedAt = Date.now();
+    }
+  });
 }
 
 export async function dispatchTaskToWorker(
@@ -579,6 +615,9 @@ export async function runAutoAssignRound(
     const candidateAssignments = (await taskRouter
       .autoAssignPendingTasks(state.tasks, state.workers))
       .filter(({ task, worker }) => !attemptedPairs.has(`${task.id}:${worker.id}`))
+      // #5740 (ggcode): a task reverted by a failed claim-eligibility check
+      // sits out its exponential assignment hold before re-entering candidacy.
+      .filter(({ task }) => !(typeof task.assignmentHoldUntil === "number" && task.assignmentHoldUntil > Date.now()))
       .filter(({ task }) => {
         const root = taskWriteRoot(task);
         return !(root && busyWriteRoots.has(root));
@@ -619,7 +658,22 @@ export async function runAutoAssignRound(
       deps.getTeamAutoScheduler?.()?.claimTaskAtDequeue(updatedTask).then((claim) => {
         if (claim?.retryEligibility) {
           logger.warn(`Controller: claim eligibility check failed for ${updatedTask.id} - reverting assignment to retry`);
-          revertTaskAssignment(updatedTask.id, nextAssignment.worker.id, deps);
+          // Unlike the #191 dispatch-failure path, the dispatch SUCCEEDED
+          // here: cancel the already-dispatched execution before reverting
+          // so the orphaned run cannot keep executing (and PATCH the task
+          // back to in_progress) while the controller re-queues it. The
+          // exponential assignment hold bounds the outage retry cadence.
+          void (async () => {
+            await cancelTaskExecution(updatedTask.id, nextAssignment.worker.id, "claim eligibility retry (#5740)", deps);
+            const failures = (deps.getTeamState()?.tasks[updatedTask.id]?.assignmentHoldCount ?? 0) + 1;
+            revertTaskAssignment(updatedTask.id, nextAssignment.worker.id, deps, {
+              holdMs: claimEligibilityHoldMs(failures),
+            });
+          })().catch(() => {});
+        } else {
+          // Claim attempt concluded definitively (claimed / stood down /
+          // WRITE failure continuing unclaimed): end the retry cycle.
+          clearAssignmentHold(updatedTask.id, deps);
         }
       }).catch(() => {});
       wsServer.broadcastUpdate({ type: "task:updated", data: serializeTask(updatedTask) });
