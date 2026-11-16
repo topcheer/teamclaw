@@ -133,12 +133,12 @@ async function sourceContracts() {
   // #267-1: sweep failures carry a root-cause class (auth/ratelimited/network).
   assert.match(scheduler, /const failClass = classifySweepError\(err\);/,
     "failure path classifies the error before writing reason/activity");
-  assert.match(scheduler, /repo\.pausedReason = `sweep failed\[\$\{failClass\}\]: /,
+  assert.match(scheduler, /repoFail\.pausedReason = `sweep failed\[\$\{failClass\}\]: /,
     "pausedReason carries the class while keeping the isAutoPause 'sweep failed:' prefix");
 
   // #267-2: bounded per-repo sweep ring on both outcomes.
   assert.match(scheduler, /pushSweepRecord\(repo, \{ at: Date\.now\(\), ok: true,/, "success sweeps are recorded per-repo");
-  assert.match(scheduler, /pushSweepRecord\(repo, \{ at: Date\.now\(\), ok: false,/, "failure sweeps are recorded per-repo (with failClass)");
+  assert.match(scheduler, /pushSweepRecord\(repoFail, \{ at: Date\.now\(\), ok: false,/, "failure sweeps are recorded per-repo (with failClass)");
   assert.match(store, /repo\.sweeps = repo\.sweeps\.slice\(repo\.sweeps\.length - 20\);/,
     "sweep ring is capped at 20 (same slice pattern as the activity log)");
 
@@ -150,7 +150,7 @@ async function sourceContracts() {
   // fields (lastSweepAt/lastSweepSummary) never have to be read as attempt
   // evidence next to pausedReason.
   assert.match(scheduler, /repo\.sweepFailures = 0;\s*\n\s*repo\.lastAttemptAt = Date\.now\(\);/, "success path stamps lastAttemptAt");
-  assert.match(scheduler, /repo\.lastSweepErrorAt = Date\.now\(\);\s*\n\s*repo\.lastAttemptAt = repo\.lastSweepErrorAt;/, "failure path stamps lastAttemptAt");
+  assert.match(scheduler, /repoFail\.lastSweepErrorAt = Date\.now\(\);\s*\n\s*repoFail\.lastAttemptAt = repoFail\.lastSweepErrorAt;/, "failure path stamps lastAttemptAt");
 
   // Activity persistence: bounded log recorded at bind/provision/sweep/task/writeback.
   assert.match(store, /pushTeamAutoActivity/, "store must export the activity recorder");
