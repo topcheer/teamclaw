@@ -992,13 +992,15 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       const repo = s.repos.find((r) => r.id === entry.repoId);
       const [owner, name] = entry.repoId.split("/");
       try {
-        if (task.status === "failed" || !task.result) {
-          // Undeliverable in every future pass: a failed task never gains a
-          // result, and "completed without result" cannot recover either.
-          // Mark terminal (issue #24) so the entry is counted, surfaced via
-          // activity/stats, and never pointlessly retried. Failed-without-
-          // result entries are additionally dropped by the dead-letter pass
-          // on the next reconcile.
+        if (!task.result) {
+          // Undeliverable in every future pass: "completed without result"
+          // cannot recover. #5719 (ggcode, 2026-11-16): a FAILED task WITH a
+          // textual result is NOT in this class - the result is the
+          // deliverable (analysis/diagnostic work products). It now falls
+          // through to normal delivery with an error footer; only
+          // result-less entries (failed or completed) stay terminal.
+          // Failed-without-result entries are additionally dropped by the
+          // dead-letter pass on the next reconcile.
           markWritebackFailure(
             s,
             entry,
@@ -1021,6 +1023,12 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         } else {
           const role = (task.assignedRole ?? "qa") as string;
           let body = `${task.result.trim()}\n${MARKER_FOOTER(role)}`;
+          // #5719: a failed-with-result task delivers its result (the work
+          // product) with the failure context appended - never silently
+          // dropped as before.
+          if (task.status === "failed" && task.error) {
+            body = `${body}\n\n---\n[task reported failed: ${task.error.slice(0, 300)}]`;
+          }
           let writebackDone = false;
           // WRITE TASKS (collaboration contract): commit the task worktree,
           // push its branch, open a PR, and attach the link to the reply.

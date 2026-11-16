@@ -199,6 +199,19 @@ export function taskRequiresMeaningfulProjectChangeGate(task: TaskInfo): boolean
   if (/(审计|审核|验证|复检|复查|确认|测试|检查)/u.test(text)) {
     return false;
   }
+  // #5719 (ggcode, 2026-11-16): analysis-family tasks deliver their product
+  // in the result/comment, not in files - perf forensics, research,
+  // diagnostics, triage. The write-verb regex below matches their issue
+  // CONTEXT ("fix the growth", "add instrumentation") even though the task
+  // itself only investigates; a file-change gate on them is a 100% false
+  // no-op (live: takeOwnership #5701 completed with jsonl evidence in the
+  // claim comment, gate failed it, write-back went terminal, requeue loop).
+  if (/\b(perf|profile|investigat|diagnos|research|analy[sz]|evidence|forensic|triage|observ)\b/u.test(text)) {
+    return false;
+  }
+  if (/(性能|取证|调研|分析|诊断|排查|观察)/u.test(text)) {
+    return false;
+  }
   return /\b(implement|build|fix|rework|update|add|enhanc|deliver|write|create)\b/u.test(text);
 }
 
@@ -342,9 +355,15 @@ export function allowsNoChangeCompletion(
   const noChangeIsExpected =
     /\b(qa|audit|review|verify|verification|validate|test|retest|confirm|check)\b/u.test(taskText)
     || /(审计|审核|验证|复检|复查|确认|测试|检查)/u.test(taskText)
+    // #5719: analysis-family work products live in the result itself.
+    || /\b(perf|profile|investigat|diagnos|research|analy[sz]|evidence|forensic|triage|observ)\b/u.test(taskText)
+    || /(性能|取证|调研|分析|诊断|排查|观察)/u.test(taskText)
     || /\b(already fixed|already resolved|no further changes|no code changes|no file changes|no additional changes|verified existing fix)\b/u.test(evidenceText)
     || /(已修复|已解决|无需改动|无需修改|没有额外修改|无需额外变更|只需验证)/u.test(evidenceText);
-  return hasVerificationEvidence && noChangeIsExpected;
+  // #5719: for analysis-family tasks the substantive result text IS the
+  // verification evidence (metrics, traces, conclusions).
+  const analysisFamily = /\b(perf|profile|investigat|diagnos|research|analy[sz]|evidence|forensic|triage|observ)\b/u.test(taskText) || /(性能|取证|调研|分析|诊断|排查|观察)/u.test(taskText);
+  return (hasVerificationEvidence || (analysisFamily && resultText.trim().length > 200)) && noChangeIsExpected;
 }
 
 export function applyTaskResult(
