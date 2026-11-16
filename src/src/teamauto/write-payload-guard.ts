@@ -127,21 +127,96 @@ export function splitLlmEnvelopeFrame(body: string): string | null | false {
   return envelopeFrameContentText(frame);
 }
 
+/** A whole body line that is exactly one frame object (umbrella section
+ * bodies embed task.result as a block between the section header and the
+ * marker footer, so the leading-object scan alone cannot see them). */
+function parseStandaloneFrameLine(line: string): Record<string, unknown> | null {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const frame = parsed as Record<string, unknown>;
+      return looksLikeLlmEnvelopeFrame(frame) ? frame : null;
+    }
+  } catch {
+    /* not JSON - ordinary prose line */
+  }
+  return null;
+}
+
+/** Structural chrome around a deliverable: section headers, marker footers
+ * (the live footer shape is a bare "---" line followed by a
+ * "[teamclaw:<role>] autonomous via TeamClaw" line). */
+function isNonSubstantiveLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return true;
+  }
+  if (trimmed.startsWith("#")) {
+    return true;
+  }
+  if (trimmed === "---" || trimmed === "***") {
+    return true;
+  }
+  if (/^\[teamclaw:/.test(trimmed)) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Write-channel validator (#5704). Apply to every body GitHub-bound write
  * sends. Ordinary text (including JSON that is not a transport frame) is
  * returned unchanged; frames are repaired or rejected.
+ *
+ * Two detection shapes:
+ *  1. the payload IS a frame (with our footer possibly appended) - repair to
+ *     the recovered content text, or reject when none exists;
+ *  2. the payload EMBEDS standalone frame lines (umbrella section bodies) -
+ *     each is replaced by its recovered text (dropped when textless), and the
+ *     write is rejected when nothing substantive remains besides chrome.
  */
 export function sanitizeGithubWriteBody(body: string, context: string): string {
   const outcome = splitLlmEnvelopeFrame(body);
-  if (outcome === false) {
-    return body;
-  }
   if (typeof outcome === "string") {
     return outcome;
   }
-  throw new EnvelopeLeakError(
-    context +
-      ": payload is a raw LLM transport envelope frame with no recoverable content text - write rejected (#5704)",
-  );
+  if (outcome === null) {
+    throw new EnvelopeLeakError(
+      context +
+        ": payload is a raw LLM transport envelope frame with no recoverable content text - write rejected (#5704)",
+    );
+  }
+
+  const lines = String(body ?? "").split("\n");
+  const mapped: string[] = [];
+  let touched = false;
+  let recoveredAny = false;
+  for (const line of lines) {
+    const frame = parseStandaloneFrameLine(line);
+    if (frame) {
+      touched = true;
+      const recovered = envelopeFrameContentText(frame);
+      if (recovered) {
+        recoveredAny = true;
+        mapped.push(recovered);
+      }
+      continue;
+    }
+    mapped.push(line);
+  }
+  if (!touched) {
+    return body;
+  }
+  const substantive = mapped.filter((line) => !isNonSubstantiveLine(line));
+  if (!recoveredAny && substantive.length === 0) {
+    throw new EnvelopeLeakError(
+      context +
+        ": payload embeds only LLM transport envelope frame lines with no recoverable text - write rejected (#5704)",
+    );
+  }
+  return mapped.join("\n");
 }

@@ -96,6 +96,25 @@ const noopLogger = { info: () => {}, warn: () => {}, error: () => {}, debug: () 
 
   // Pass-through: truncated/garbage leading brace is not a frame.
   assert.equal(splitLlmEnvelopeFrame("{not json at all"), false);
+
+  // Embedded frames (#5685 umbrella section shape): task.result lands between
+  // the section header and the marker footer, so the frame is NOT the leading
+  // object. Line-level detection must still repair/reject it.
+  const sectionWithText = "### qa section\n\n" + withText + FOOTER;
+  const repairedSection = sanitizeGithubWriteBody(sectionWithText, "umbrella");
+  assert.ok(repairedSection.includes("The fix landed; see PR #1234."), "embedded frame text recovered in place");
+  assert.ok(!repairedSection.includes('"role":"assistant"'), "no frame JSON left in the section body");
+  const sectionEmpty = "### qa section\n\n" + FRAME_5699.split("\n\n---")[0] + "\n\n---\n[teamclaw:developer] autonomous via TeamClaw";
+  assert.throws(
+    () => sanitizeGithubWriteBody(sectionEmpty, "umbrella"),
+    (err) => err instanceof EnvelopeLeakError && err.message.includes("embeds only"),
+    "textless embedded frame with only chrome left -> reject",
+  );
+
+  // Multi-line/pretty-printed JSON is not a standalone frame line: ordinary
+  // JSON discussion bodies must pass through untouched.
+  const prettyJson = '{\n  "summary": "x",\n  "usage": "discussed below"\n}';
+  assert.equal(sanitizeGithubWriteBody(prettyJson, "comment"), prettyJson);
 }
 
 // ---------------------------------------------------------------------------
