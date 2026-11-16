@@ -1352,7 +1352,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     title: string;
     description: string;
     createdAt?: number;
-  }): Promise<{ claimed: boolean; reason?: string }> {
+  }): Promise<{ claimed: boolean; reason?: string; retryEligibility?: boolean }> {
     const kindMatch = /^\[([^\]]+)\]/.exec(task.title);
     if (!kindMatch || kindMatch[1] !== "takeOwnership") return { claimed: false, reason: "not a takeOwnership task" };
     const numMatch = /issue #(\d+)/.exec(task.title);
@@ -1364,6 +1364,15 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     const [owner, name] = repoId.split("/");
     if (!owner || !name) return { claimed: false, reason: "bad repo id" };
     const client = createGithubClient(auth);
+    // #5740 (ggcode, 2026-11-17): eligibility CHECK failures (fetch failed on
+    // getIssue/getAuthenticatedUser/getIssueCommentsSince) must NOT let the
+    // task run unclaimed - the conflict check is the core #claim-dequeue
+    // contract. Only the WRITE phase (assign/comment) may continue
+    // unclaimed on failure (original 2026-11-15 semantics). The caller
+    // reverts the assignment on retryEligibility so the next auto-assign
+    // pass re-checks; a network blip delays execution by ~20s, an outage
+    // loops at assignment cadence instead of silently bypassing the gate.
+    let login: string;
     try {
       const fresh = await client.getIssue(owner, name, issueNumber);
       if (fresh.state !== "open") {
@@ -1377,14 +1386,19 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       }
       // External-work check: comments posted after the task was ENQUEUED.
       const sinceIso = new Date(task.createdAt ?? Date.now()).toISOString();
-      const { login } = await client.getAuthenticatedUser();
+      login = (await client.getAuthenticatedUser()).login;
       const comments = await client.getIssueCommentsSince(owner, name, issueNumber, sinceIso);
       const external = comments.filter((c) => c.user !== login);
       if (external.length > 0) {
         recordActivity(await ensureStore(), { at: Date.now(), repoId, kind: "claim", text: `deferred claim: ${external.length} external comment(s) since enqueue on issue #${issueNumber} (latest by @${external[external.length - 1]?.user}) - standing down` });
         return { claimed: false, reason: "external activity" };
       }
-      try {
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      recordActivity(await ensureStore(), { at: Date.now(), repoId, kind: "claim", text: `claim-at-dequeue ELIGIBILITY CHECK failed for issue #${issueNumber}: ${msg.slice(0, 120)} - reverting assignment, will retry` });
+      return { claimed: false, reason: "eligibility-check-failed", retryEligibility: true };
+    }
+    try {
         await client.assignIssue(owner, name, issueNumber, login);
         recordActivity(await ensureStore(), { at: Date.now(), repoId, kind: "claim", text: `claimed issue #${issueNumber} as @${login} (at dequeue)` });
       } catch {
@@ -1403,10 +1417,6 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       }
       });
       return { claimed: true };
-    } catch (err) {
-      recordActivity(await ensureStore(), { at: Date.now(), repoId, kind: "claim", text: `claim-at-dequeue failed for issue #${issueNumber}: ${err instanceof Error ? err.message.slice(0, 120) : String(err)}` });
-      return { claimed: false, reason: "claim attempt errored" };
-    }
   }
 
   /** #268: make a takeOwnership claim VISIBLE on the issue itself. Until now

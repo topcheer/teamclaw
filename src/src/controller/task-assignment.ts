@@ -610,7 +610,18 @@ export async function runAutoAssignRound(
       // dequeue - after the fresh conflict check (assignees / external
       // comments since enqueue) inside claimTaskAtDequeue. Non-takeOwnership
       // tasks are a no-op there.
-      void deps.getTeamAutoScheduler?.()?.claimTaskAtDequeue(updatedTask).catch(() => {});
+      // #5740 (ggcode, 2026-11-17): an ELIGIBILITY-CHECK failure (network)
+      // must revert the assignment - the conflict gate never ran, so the
+      // task may not proceed. Back to pending; the next auto-assign pass
+      // re-checks (a blip costs ~20s, an outage loops at cadence instead of
+      // bypassing the gate). Write-phase claim failures still continue
+      // unclaimed per the original 2026-11-15 semantics.
+      deps.getTeamAutoScheduler?.()?.claimTaskAtDequeue(updatedTask).then((claim) => {
+        if (claim?.retryEligibility) {
+          logger.warn(`Controller: claim eligibility check failed for ${updatedTask.id} - reverting assignment to retry`);
+          revertTaskAssignment(updatedTask.id, nextAssignment.worker.id, deps);
+        }
+      }).catch(() => {});
       wsServer.broadcastUpdate({ type: "task:updated", data: serializeTask(updatedTask) });
       logger.info(
         `Controller: auto-assigned pending task ${updatedTask.id} to ${nextAssignment.worker.id}`,
