@@ -1,5 +1,6 @@
 // Issue #226 W5: cross-subsystem contract lives in the shared layer now.
 import type { GithubAuthManager } from "../shared/github-auth.js";
+import { sanitizeGithubWriteBody } from "./write-payload-guard.js";
 
 /**
  * Minimal GitHub REST client for TeamAuto: ETag-conditional GETs, light
@@ -239,12 +240,16 @@ export function createGithubClient(auth: GithubAuthManager) {
     // ---- write side (require Contents/Issues/PR write on the App) ----
 
     async postIssueComment(owner: string, repo: string, issueNumber: number, body: string): Promise<number> {
-      const { data } = await request("POST", `/repos/${owner}/${repo}/issues/${issueNumber}/comments`, { body: { body } });
+      // #5704: LLM envelope frames must never land as comment bodies.
+      const safeBody = sanitizeGithubWriteBody(body, `issue comment ${owner}/${repo}#${issueNumber}`);
+      const { data } = await request("POST", `/repos/${owner}/${repo}/issues/${issueNumber}/comments`, { body: { body: safeBody } });
       return Number((data as { id?: number }).id ?? 0);
     },
 
     async postPullReviewComment(owner: string, repo: string, pullNumber: number, body: string): Promise<void> {
-      await request("POST", `/repos/${owner}/${repo}/pulls/${pullNumber}/reviews`, { body: { event: "COMMENT", body } });
+      // #5704: same write-channel guard on the PR review surface.
+      const safeBody = sanitizeGithubWriteBody(body, `pull review ${owner}/${repo}#${pullNumber}`);
+      await request("POST", `/repos/${owner}/${repo}/pulls/${pullNumber}/reviews`, { body: { event: "COMMENT", body: safeBody } });
     },
 
     /** #5660: normalized feedback bodies already on a PR - review bodies AND
@@ -271,8 +276,10 @@ export function createGithubClient(auth: GithubAuthManager) {
     },
 
     async createIssue(owner: string, repo: string, title: string, body: string, labels?: string[]): Promise<number> {
+      // #5704: umbrella/section bodies get the same frame guard.
+      const safeBody = sanitizeGithubWriteBody(body, `create issue ${owner}/${repo}`);
       const { data } = await request("POST", `/repos/${owner}/${repo}/issues`, {
-        body: { title, body, ...(labels?.length ? { labels } : {}) },
+        body: { title, body: safeBody, ...(labels?.length ? { labels } : {}) },
       });
       return Number((data as { number?: number }).number ?? 0);
     },
@@ -327,8 +334,11 @@ export function createGithubClient(auth: GithubAuthManager) {
 
     /** Open a PR from a task worktree branch (collaboration contract delivery). */
     async createPullRequest(owner: string, repo: string, head: string, base: string, title: string, body: string): Promise<{ number: number; url: string }> {
+      // #5704 case 3: a bare frame as the whole PR body consumed the deliverable
+      // surface (ggcode #5703) - guard the PR body like every other write.
+      const safeBody = sanitizeGithubWriteBody(body, `create PR ${owner}/${repo} head=${head}`);
       const { data } = await request("POST", `/repos/${owner}/${repo}/pulls`, {
-        body: { title, head, base, body },
+        body: { title, head, base, body: safeBody },
       });
       const item = data as { number?: number; html_url?: string };
       return { number: Number(item.number ?? 0), url: String(item.html_url ?? "") };
