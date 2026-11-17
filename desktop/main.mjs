@@ -815,6 +815,41 @@ function sandboxEnvFor(stateDir) {
   return env;
 }
 
+// #stale-plugin-stage (user report 2026-11-18 night): the plugin index is
+// DERIVED BY SCANNING extensions/ (installRecords is empty) - every dir with
+// an openclaw.plugin.json gets registered, and a watchdog-killed `plugins
+// install` leaves its `.openclaw-install-stage-*` (or `.fs-safe-move-*.tmp`)
+// staging dir behind WITH a manifest. The scanner then registers the STAGE
+// copy (newer ctime wins) over the real extensions/teamclaw dir, and every
+// boot dies on "Plugin dependency @sinclair/typebox is missing" because the
+// stage dir has no node_modules. Detection: any such stray staging dir.
+function strayPluginStageDirs(stateDir) {
+  const extRoot = path.join(stateDir, "extensions");
+  const out = [];
+  try {
+    for (const e of fsSync.readdirSync(extRoot, { withFileTypes: true })) {
+      if (!e.isDirectory()) continue;
+      const stale = (e.name.startsWith(".fs-safe-move-") && e.name.endsWith(".tmp")) || e.name.startsWith(".openclaw-install-stage-");
+      if (!stale) continue;
+      const p = path.join(extRoot, e.name);
+      if (fsSync.existsSync(path.join(p, "openclaw.plugin.json")) || fsSync.existsSync(path.join(p, "package.json"))) out.push(p);
+    }
+  } catch { /* no extensions dir yet */ }
+  return out;
+}
+
+// Remove orphaned staging dirs (best-effort, Windows handle locks are
+// transient). MUST run before the gateway boots so the plugin scanner only
+// ever sees the real extensions/teamclaw dir.
+function sweepStrayPluginStageDirs(stateDir, onEvent) {
+  for (const stray of strayPluginStageDirs(stateDir)) {
+    try {
+      fsSync.rmSync(stray, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      if (onEvent) onEvent({ phase: "teamclaw", line: `Removed orphaned plugin staging dir: ${path.basename(stray)}` });
+    } catch { /* still locked - the next bootstrap retries the sweep */ }
+  }
+}
+
 async function ensureTeamClawPlugin(openclawBin, onEvent) {
   // FULLY SANDBOXED (user vetoed global writes): registration and runtime
   // both use the desktop state dir; ~/.openclaw is never written. The user's
@@ -843,6 +878,14 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
   // Precise: match the plugins-list TABLE row (│ TeamClaw │), not any
   // teamclaw substring - the stock-extensions path line also contains it.
   if (/│\s*TeamClaw\s*│/.test(res.stdout || "")) {
+    // #stale-plugin-stage: the index is scanner-derived, so "installed" plus
+    // stray staging dirs means the scanner is registering the ORPHAN. Sweep
+    // the orphans (the real dir is loadable) - never re-run the install for
+    // this: a fresh install just stages ANOTHER dir and re-poisons the scan.
+    const strays = strayPluginStageDirs(path.join(app.getPath("userData"), "openclaw-state"));
+    if (strays.length > 0) {
+      sweepStrayPluginStageDirs(path.join(app.getPath("userData"), "openclaw-state"), onEvent);
+    }
     onEvent({ phase: "teamclaw", line: "TeamClaw plugin already installed." });
     return;
   }
@@ -889,6 +932,12 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
     // committed to extensions/. If the plugin tree is already present, skip
     // the install step entirely instead of paying for a guaranteed-timeout
     // run on every bootstrap.
+    // #stale-plugin-stage: plugin present + stray staging dirs -> the scanner
+    // is registering the orphan over the real dir. SWEEP the orphans (v3:
+    // re-running the install just created yet another stage dir and re-
+    // poisoned the scan - two full nights of logs prove it). Only pay the
+    // install ladder when the real dir is genuinely absent.
+    sweepStrayPluginStageDirs(sandboxEnv.OPENCLAW_STATE_DIR, onEvent);
     if (extInstalled()) {
       onEvent({ phase: "teamclaw", line: "Bundled plugin already present in the private instance - skipping the install step." });
       installed = true;
@@ -969,6 +1018,10 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
       await sealDir(runtimeNM);
       onEvent({ phase: "teamclaw", line: `Deps sealed: ${sealed} packages (${skipped} skipped).` });
     }
+    // #stale-plugin-stage: final sweep after any install ladder run - a
+    // watchdog-killed attempt leaves its stage dir behind and the scanner
+    // would register it on the next boot.
+    sweepStrayPluginStageDirs(sandboxEnv.OPENCLAW_STATE_DIR, onEvent);
     return;
   }
   await runShellStream(`npm install --prefix "${runtimeDir}" @teamclaws/teamclaw@latest`, runtimeDir, (line) =>
@@ -1463,7 +1516,14 @@ function spawnGatewayProcess(bin, gatewayArgs, { cwd, env, logPath }) {
     child.wasShellSpawned = true;
   }
   child.on("exit", closeLog);
-  child.on("error", closeLog);
+  child.on("error", (err) => {
+    // #etw-graze (user report 2026-11-18 night): a gutted runtime tree made
+    // every spawn fail ENOENT with ZERO log output - the announce loop spun
+    // silently for 10+ minutes. Write the spawn failure into the gateway log
+    // before closing so the next diagnosis sees the real cause.
+    try { fsSync.writeSync(logFd, `\n[gateway-spawn] spawn failed: ${err && err.message}\n`); } catch { /* fd gone */ }
+    closeLog();
+  });
   return child;
 }
 
@@ -1594,6 +1654,15 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
   // Port memory: reuse the ports recorded in settings.instance so restarts
   // land on the SAME gateway/controller ports (probed + persisted below).
   const bin = await standaloneBinary();
+  // #stale-plugin-stage: the AUTO path (plain app launch, no wizard) must
+  // also sweep orphaned install staging dirs before the gateway boots - the
+  // plugin scanner registers them over the real dir and the plugin dies on
+  // missing deps (no controller, no announce). Cheap gate: only when strays
+  // exist (covers both .fs-safe-move-* and .openclaw-install-stage-*).
+  if (strayPluginStageDirs(standaloneStateDir()).length > 0) {
+    sweepStrayPluginStageDirs(standaloneStateDir(), null);
+    try { await ensureTeamClawPlugin(bin, () => {}); } catch { /* repair is best-effort; the boot below still runs */ }
+  }
   // Idempotent seed: a rewrite (even identical) trips the gateway config-guard
   // ("config changed during startup") and kills the spawn. Only seed when the
   // sandbox config is missing or lacks any models.providers entry.
@@ -1636,6 +1705,45 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
       await saveSettings(s);
     } catch { /* settings write failure must not kill the launch */ }
   };
+  // #stale-gateway (user report 2026-11-18 night): a gateway left over from
+  // a previous app session holds the persisted port; the fallback picker
+  // then silently shifts ports - or the old gateway hot-reloads the new
+  // config - and NO fresh announce ever prints, so the renderer waits out
+  // "announce timeout" forever. These ports are OUR convention
+  // (settings.instance): when the preferred gateway port is occupied and we
+  // have no live child of our own, kill the owning process tree and wait for
+  // the port to free so this start is a FRESH boot on the SAME port.
+  if (!STANDALONE.child && remembered?.gatewayPort) {
+    const stalePort = Number(remembered.gatewayPort);
+    if (Number.isFinite(stalePort) && stalePort > 0 && !(await isFreeLocal(stalePort))) {
+      try {
+        const netstatOut = await new Promise((resolve) => {
+          let out = "";
+          const p = spawn("netstat", ["-ano", "-p", "TCP"], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+          p.stdout.on("data", (d) => { out += d; });
+          p.on("error", () => resolve(""));
+          p.on("close", () => resolve(out));
+          setTimeout(() => { try { p.kill(); } catch { /* raced */ } resolve(out); }, 5000);
+        });
+        const pids = new Set();
+        for (const line of netstatOut.split(/\r?\n/)) {
+          const m = line.trim().match(/^TCP\s+\S*?:(\d+)\s+\S+\s+LISTENING\s+(\d+)$/);
+          if (m && Number(m[1]) === stalePort) pids.add(m[2]);
+        }
+        for (const pid of pids) {
+          await new Promise((r) => {
+            try {
+              const k = spawn("taskkill", ["/PID", pid, "/T", "/F"], { stdio: "ignore", windowsHide: true });
+              k.on("close", () => r());
+              k.on("error", () => r());
+              setTimeout(r, 8000);
+            } catch { r(); }
+          });
+        }
+      } catch { /* best effort - the boot below still runs */ }
+      for (let i = 0; i < 15 && !(await isFreeLocal(stalePort)); i++) await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
   const wantCtrl = Number(remembered?.controllerPort) || null;
   const ctrlPort = await pickPortWithFallback(wantCtrl, 9527);
   const gwPort = await pickPortWithFallback(Number(remembered?.gatewayPort) || null, ctrlPort + 100);
@@ -1653,6 +1761,18 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
   }
   STANDALONE.port = gwPort;
   const logPath = path.join(standaloneStateDir(), "gateway.log");
+  // #etw-graze: re-verify/re-extract the runtime tree right before spawning.
+  // The extracted tree can be gutted minutes after extraction; warmBundledRuntime
+  // caches EXTRACTED_RUNTIME_DIR at startup and never re-validates, so a gutted
+  // tree survives until app restart. Reset the cache and re-run the ensure (its
+  // 3-file integrity guard triggers a full re-extract when the tree is dead).
+  const reensureRuntimeTree = async () => {
+    try {
+      EXTRACTED_RUNTIME_DIR = null;
+      return await warmBundledRuntime(() => {});
+    } catch { return null; }
+  };
+  await reensureRuntimeTree();
   const child = spawnGatewayProcess(bin, ["gateway", "--port", String(STANDALONE.port)], {
     cwd: standaloneStateDir(),
     env: sandboxEnvFor(standaloneStateDir()),
@@ -1692,6 +1812,10 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
     const before = announceCount(await logText());
     killGatewayTree(child);
     await new Promise((r) => { child.once("exit", r); setTimeout(r, 4000); });
+    // #etw-graze: same guard as the initial spawn - a gutted tree must be
+    // re-extracted before ANY further gateway boot attempt, or every respawn
+    // fails ENOENT with zero output and the heal loop spins forever.
+    await reensureRuntimeTree();
     // #config-guard-settle (user report 2026-11-16 night): the wizard flow
     // survived this guard ("config validity changed ... Retry startup")
     // because bootstrap runs ONE headless settle boot between the config
