@@ -186,6 +186,7 @@ function openClawSpawnPlan(bin, args) {
   }
   const binDir = path.dirname(bin);
   entryCandidates.push(path.join(binDir, "..", "openclaw", "openclaw.mjs")); // <tree>/node_modules/.bin/<name>
+  entryCandidates.push(path.join(binDir, "..", "runtime", "node_modules", "openclaw", "openclaw.mjs")); // bundled/shims/<name>.cmd (#edr-shim)
   entryCandidates.push(path.join(binDir, "..", "lib", "node_modules", "openclaw", "openclaw.mjs")); // <prefix>/bin + posix npm global
   entryCandidates.push(path.join(binDir, "node_modules", "openclaw", "openclaw.mjs")); // windows npm global <prefix>/<name>.cmd
   for (const entry of entryCandidates) {
@@ -283,13 +284,29 @@ async function getLocalSetupInfo() {
 
 async function runShellCommand(command, options = {}) {
   const cwd = String(options.cwd || "").trim() || process.cwd();
-  const child = spawn(command, {
-    cwd,
-    env: options.env || process.env,
-    shell: true,
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsHide: true,
-  });
+  // #edr-shim: same translation as runShellStream - never hand OUR
+  // `"<abs openclaw bin>" ...` strings to cmd.exe (endpoint security cleans
+  // the openclaw package tree after a cmd-wrapped shim exits). isRegistered
+  // / config-read style calls go through here on every launch.
+  let child;
+  const shimCmd = command.match(/^"([^"]*[\\/]openclaw(?:\.cmd|\.mjs|\.bat)?)"\s*([\s\S]*)$/);
+  const plan = shimCmd ? openClawSpawnPlan(shimCmd[1], splitQuotedArgs(shimCmd[2])) : null;
+  if (plan) {
+    child = spawn(plan.command, plan.args, {
+      cwd,
+      env: { ...(options.env || process.env), ...plan.env },
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+  } else {
+    child = spawn(command, {
+      cwd,
+      env: options.env || process.env,
+      shell: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+  }
 
   let stdout = "";
   let stderr = "";
@@ -1089,6 +1106,28 @@ ipcMain.handle("llm:write-global", async (_e, llm) => {
 // Streamed variant: emits every stdout/stderr line through onLine and
 // resolves with the same result shape as runShellCommand.
 async function runShellStream(command, cwd, onLine, envOverride, timeoutMs, onTick) {
+  // #edr-shim (user report 2026-11-16 night): endpoint security reacts to
+  // the cmd-wrapper -> electron-as-node -> .mjs script chain and deletes the
+  // openclaw package tree AFTER the shim process exits (short-lived probes
+  // like `"<shim>" --help` or `plugins install` gutted the runtime on every
+  // run; long-lived gateways were only cleaned on exit). Direct
+  // electron-as-node spawns (no cmd.exe in the chain) are NOT flagged. So:
+  // when the command string is one of OUR generated `"<abs openclaw bin>"
+  // <args>` invocations, translate it to a shell-free spawn plan instead of
+  // handing it to cmd.exe. Foreign/n PATH-form commands keep the shell path.
+  const shimCmd = command.match(/^"([^"]*[\\/]openclaw(?:\.cmd|\.mjs|\.bat)?)"\s*([\s\S]*)$/);
+  if (shimCmd) {
+    const plan = openClawSpawnPlan(shimCmd[1], splitQuotedArgs(shimCmd[2]));
+    if (plan) {
+      const child = spawn(plan.command, plan.args, {
+        cwd,
+        env: { ...(envOverride || process.env), ...plan.env },
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
+      return await streamChildOutput(child, command, onLine, timeoutMs, onTick);
+    }
+  }
   const child = spawn(command, {
     cwd,
     env: envOverride || process.env,
@@ -1097,6 +1136,25 @@ async function runShellStream(command, cwd, onLine, envOverride, timeoutMs, onTi
     windowsHide: true,
   });
   return await streamChildOutput(child, command, onLine, timeoutMs, onTick);
+}
+
+// Quote-aware argv splitter for the #edr-shim translation above: tokens are
+// split on unquoted whitespace and surrounding double quotes are stripped
+// (spawn argv entries must be bare values - the quotes were cmd.exe syntax).
+function splitQuotedArgs(s) {
+  const out = [];
+  let cur = "";
+  let quoted = false;
+  for (const ch of s) {
+    if (ch === '"') { quoted = !quoted; continue; }
+    if (!quoted && /\s/.test(ch)) {
+      if (cur) { out.push(cur); cur = ""; }
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out;
 }
 
 // Argv-array variant (#223): no shell, no string splicing - for steps where
@@ -1469,6 +1527,16 @@ async function standaloneBinary() {
   // error path.
   const probe = await probeOpenClawInstall();
   if (probe.installed) return "openclaw";
+  // #cold-start-race (user report 2026-11-16 night): on a first launch with
+  // an empty bundled dir, the renderer readiness gate runs BEFORE the
+  // startup extraction finishes and this throw left the app on a dead shell
+  // with no retry. Provision the bundled runtime here (serialized inside)
+  // and resolve again instead of failing the auto-start.
+  try {
+    const provisioned = await ensureOpenClawRuntime({}, () => {});
+    const retry = provisioned || bundledBinary("openclaw");
+    if (retry) return retry;
+  } catch { /* fall through to the error below */ }
   throw new Error("No OpenClaw runtime available - run the one-click install first.");
 }
 
@@ -1624,6 +1692,23 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
     const before = announceCount(await logText());
     killGatewayTree(child);
     await new Promise((r) => { child.once("exit", r); setTimeout(r, 4000); });
+    // #config-guard-settle (user report 2026-11-16 night): the wizard flow
+    // survived this guard ("config validity changed ... Retry startup")
+    // because bootstrap runs ONE headless settle boot between the config
+    // write and the interactive start; the gate path re-spawns the same
+    // wedged journal directly and loops forever. Mirror the wizard: one ~9s
+    // headless boot (its startup normalizes the config journal), kill it,
+    // THEN start the real gateway.
+    try {
+      const settlePort = await findFreePort();
+      const plan = openClawSpawnPlan(bin, ["gateway", "--port", String(settlePort)]);
+      const settle = plan
+        ? spawn(plan.command, plan.args, { cwd: standaloneStateDir(), env: { ...sandboxEnvFor(standaloneStateDir()), ...plan.env }, stdio: "ignore", windowsHide: true })
+        : spawn(`"${bin}" gateway --port ${settlePort}`, { cwd: standaloneStateDir(), env: sandboxEnvFor(standaloneStateDir()), shell: true, stdio: "ignore", windowsHide: true });
+      await new Promise((r) => setTimeout(r, 9000));
+      try { killGatewayTree(settle); } catch { /* already gone */ }
+      await new Promise((r) => { settle.once("exit", r); setTimeout(r, 3000); });
+    } catch { /* best-effort settle; the respawn below still runs */ }
     const child2 = spawnGatewayProcess(bin, ["gateway", "--port", String(STANDALONE.port)], {
       cwd: standaloneStateDir(),
       env: sandboxEnvFor(standaloneStateDir()),
