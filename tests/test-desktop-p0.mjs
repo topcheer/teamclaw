@@ -619,7 +619,17 @@ const resolveExecutableOnPath = evalWithDeps(
 {
   const resolvedOpenClawBinary = evalWithDeps(
     extractFunction(mainSource, "resolvedOpenClawBinary"),
-    { OPENCLAW_PATH_CACHE: undefined, resolveExecutableOnPath },
+    {
+      OPENCLAW_PATH_CACHE: undefined,
+      resolveExecutableOnPath,
+      // #279 shim-fallback bindings (prod main.mjs module scope): no warmed
+      // shim in tests, and an app.getPath stub that resolves to a directory
+      // with no bundled shims - the probes must still behave (null / visible).
+      EXTRACTED_OPENCLAW_SHIM: null,
+      fsSync: await import("node:fs"),
+      path,
+      app: { getPath: () => "/tmp/tc-desktop-p0-nouserdata" },
+    },
   );
   const fsSyncModule = await import("node:fs");
   const os = await import("node:os");
