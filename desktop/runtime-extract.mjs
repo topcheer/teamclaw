@@ -19,8 +19,18 @@ export function unpackedRuntimeDir(resourcesBinDir) {
 }
 
 function openclawEntry(dir) {
+  // #edr-shim (user report 2026-11-16 night): endpoint security deletes
+  // openclaw package files AFTER a cmd-wrapped shim exits, leaving a tree
+  // where openclaw.mjs survives but siblings (package.json,
+  // cli-root-options.mjs) are gone. The gateway then dies on
+  // ERR_MODULE_NOT_FOUND. A single-entry probe cached that broken state as
+  // "ready" forever - require the entry AND its load-critical siblings so
+  // the guard trips a self-healing re-extraction.
   try {
-    fs.accessSync(path.join(dir, "node_modules", "openclaw", "openclaw.mjs"));
+    const pkg = path.join(dir, "node_modules", "openclaw");
+    fs.accessSync(path.join(pkg, "openclaw.mjs"));
+    fs.accessSync(path.join(pkg, "package.json"));
+    fs.accessSync(path.join(pkg, "cli-root-options.mjs"));
     return true;
   } catch {
     return false;
@@ -85,7 +95,21 @@ export function makeOpenclawShim(runtimeDir, electronPath) {
  * @param {{resourcesBinDir: string, userDataDir: string, onEvent?: (e:{phase:string,line:string})=>void}} opts
  * @returns {Promise<string|null>} usable runtime dir (node_modules/openclaw inside), or null when nothing bundled
  */
+let ENSURE_BUNDLED_RUNTIME_CHAIN = Promise.resolve();
+
 export async function ensureBundledRuntime(opts) {
+  // #ensure-race (user report 2026-11-16 night): the startup probe and the
+  // renderer gate's standalone start BOTH call ensure on a cold launch; two
+  // concurrent rmSync+extract passes on the same destRoot tore each other's
+  // trees (marker intact, files gone). Serialize every caller through one
+  // promise chain - later callers await the winner's result and hit the
+  // marker cache instead of re-extracting.
+  const run = ENSURE_BUNDLED_RUNTIME_CHAIN.then(() => ensureBundledRuntimeInner(opts));
+  ENSURE_BUNDLED_RUNTIME_CHAIN = run.catch(() => { /* keep the chain alive for the next caller */ });
+  return await run;
+}
+
+async function ensureBundledRuntimeInner(opts) {
   const { resourcesBinDir, userDataDir, onEvent } = opts || {};
   const emit = (line) => { if (onEvent) onEvent({ phase: "runtime", line }); };
   if (!resourcesBinDir || !userDataDir) return null;
