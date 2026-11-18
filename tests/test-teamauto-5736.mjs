@@ -64,10 +64,18 @@ async function main() {
 
   // #5736 core semantics stay in place: the alarm consults the durable ledger
   // (entry present OR ledger hit) and never the rolling activity ring.
+  // #5770/#5772 evolution: the ledger hit now EXCLUDES migration artifacts
+  // (deliveredAt within 2s of completedAt is a forged stamp, not evidence)
+  // and the entry check is expressed via the deliveredAt variable.
   assert.match(
     schedulerSrc,
-    /Boolean\(s\.deliveredResults\[task\.id\]\)/,
-    "#5736: hasEntry must consult the durable deliveredResults ledger",
+    /const hasEntry = s\.writebacks\.some\(\(w\) => w\.taskId === task\.id\) \|\| \(deliveredAt !== undefined && !ledgerIsArtifact\)/,
+    "#5736: hasEntry must consult the durable deliveredResults ledger (artifact-filtered, #5770)",
+  );
+  assert.match(
+    schedulerSrc,
+    /Math\.abs\(deliveredAt - task\.completedAt\) < 2000/,
+    "#5770: a ledger stamp within 2s of completedAt is a migration artifact and must not count as delivery",
   );
   assert.doesNotMatch(
     schedulerSrc,
@@ -81,8 +89,18 @@ async function main() {
   );
   assert.match(
     schedulerSrc,
-    /if \(!s\.deliveredResultsInit\)/,
-    "#5738: the ledger migration must stay gated one-time via deliveredResultsInit",
+    /!s\.deliveredResultsInit && Object\.keys\(s\.deliveredResults\)\.length === 0/,
+    "#5738/#5770: the ledger migration must stay one-time (flag AND empty table - flag loss alone must not re-run it)",
+  );
+  assert.match(
+    schedulerSrc,
+    /6 \* 3600_000/,
+    "#5772: the audit window is 6h - restart replays over historical tasks are the storm population",
+  );
+  assert.match(
+    schedulerSrc,
+    /alarmedThisPass >= 1/,
+    "#5772: at most ONE orphan alarm per settle pass (storm cap)",
   );
 
   // --- Part 2: behavioral save -> load round-trip (requires the build) ---
