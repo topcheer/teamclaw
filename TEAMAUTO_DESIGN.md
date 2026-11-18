@@ -114,3 +114,4 @@ issue / PR / 评论 / commit，并遵守目标仓库自身的协作规范。
 - **断点续跑**：执行期 assistant 心跳落盘（15s 节流）→ 网关重启后孤儿任务带 checkpoint 续跑（复用原会话键 + 注入 RESUMED 上下文），3 次上限后 fail-fast。
 - **activity 持久化**：bind/provision/sweep/task/writeback/PR 六类事件入 `teamauto.json`（100 条上限），`GET /api/v1/teamauto/activity` + 双端 UI 动态流；load 白名单已含 activity（曾因白名单重建丢字段，PR #56 修复）。
 - **去重与死信**：幂等键升级为 对象+类型（对象级键曾饿死 takeOwnership）；写回条目对"任务缺失/失败无结果"死信自动清账；早提交被拒后完成的条目自愈重试。
+- **settle 自检（#5725→#5785 链）**：完成任务的孤儿结果审计（无写回条目且无投递记录→一次性告警）之上，#5785 增加 undelivered-PR 面——completed WRITE 任务须持有写回条目、持久 PR 面 ledger（prDeliveries，prune 时从 entry.prUrl 落账）或其任务分支上存在任意状态 PR，否则一次性告警（issue 面直发证据不再掩盖 PR 面缺席）；注册侧撤销"同目标+动作即跳过"的入队去重（内容按任务隔离，跨任务吞注册即断 createPR 腿）。
