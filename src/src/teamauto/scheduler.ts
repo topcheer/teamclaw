@@ -984,11 +984,22 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
             // surface ONCE for a teamclaw marker comment (worker direct-send
             // shape) before declaring an orphan. A marker hit back-fills the
             // ledger; only a genuinely bare issue alarms.
-            const numMatch = /issue #(\d+)/.exec(`${task.title}`);
+            // #5781: channel-aware verification - a prReview task's product
+            // lives on the PR review surface (reviews + PR conversation
+            // comments), which getIssueCommentBodies cannot see (live:
+            // d7152fe0 delivered two COMMENTED reviews, issue-surface check
+            // matched zero, false orphan). Route by target type: PR number
+            // -> feedback bodies (reviews + comments), issue number ->
+            // issue comments.
+            const prNumMatch = /(?:PR|pull request) #(\d+)/i.exec(`${task.title}`);
+            const numMatch = prNumMatch ?? /issue #(\d+)/.exec(`${task.title}`);
             const repoMatch = /TeamAuto autonomous work for ([\w./-]+)\./.exec(`${task.description}`);
             if (numMatch && repoMatch) {
               const [o, n] = repoMatch[1].split("/");
-              const bodies = await ghClient.getIssueCommentBodies(o, n, Number(numMatch[1])).catch(() => [] as string[]);
+              const targetNum = Number(numMatch[1]);
+              const bodies = prNumMatch
+                ? await ghClient.getPullFeedbackBodies(o, n, targetNum).catch(() => [] as string[])
+                : await ghClient.getIssueCommentBodies(o, n, targetNum).catch(() => [] as string[]);
               // #5780: workers deliver in more shapes than the ladder marker -
               // narrative bodies ("Fix delivered ... via TeamClaw autonomous")
               // and branch-reference footers carry no [teamclaw:] prefix and
