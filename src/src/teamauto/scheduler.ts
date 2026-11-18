@@ -380,16 +380,32 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     return store;
   }
 
+  /**
+   * #5792 (ggcode, 2026-11-19): one fresh handle per locked transaction.
+   * The 20s reconcile pass reassigns the closure `store` from disk on EVERY
+   * pass; a section that captured `ensureStore()` BEFORE that flip and saves
+   * AFTER it re-writes a stale snapshot, erasing everything persisted in
+   * between. Live shape (the #5792 zero-fire regression): the sweep captured
+   * its handle before the unlocked network phase; registerWritebackUnlocked -
+   * called inside the sweep's locked tx - re-resolved the flipped closure, so
+   * the entry was pushed and saved onto the NEW object while the tx tail
+   * re-saved the OLD handle: "created 2/2" logged, writebacks[] empty on
+   * disk, zero ladder rows, orphan alarms ~10min after completion, 100% of
+   * tasks after the 3b1a175 deploy restart re-based the tick grid onto the
+   * sweep window. Every load->mutate->save section that spans an await
+   * boundary must take its handle UNDER the lock via this helper.
+   */
+  async function reloadStoreUnlocked(): Promise<TeamAutoStore> {
+    store = await loadTeamAutoStore();
+    return store;
+  }
+
   // ---------- public repo management ----------
 
   async function addRepo(repoId: string, options: { schedule?: string; keywordInclude?: string[]; keywordExclude?: string[] } = {}): Promise<TeamAutoRepo> {
-    const s = await ensureStore();
     const normalized = repoId.trim().replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "");
     if (!/^[\w.-]+\/[\w.-]+$/.test(normalized)) {
       throw new Error(`invalid repo id: ${repoId} (expected owner/repo)`);
-    }
-    if (s.repos.some((r) => r.id === normalized)) {
-      throw new Error(`${normalized} is already bound`);
     }
     const [owner, name] = normalized.split("/");
     const info = await client.getRepoInfo(owner, name);
@@ -398,6 +414,13 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     }
     const schedule = options.schedule?.trim() || "*/30 * * * *";
     nextFireMs(schedule); // validates: throws ScheduleParseError for unsupported expressions
+    // #5792: captured AFTER the network await - a capture before
+    // getRepoInfo could be orphaned by a reconcile reload and the bind
+    // save would then erase concurrent writeback registrations.
+    const s = await ensureStore();
+    if (s.repos.some((r) => r.id === normalized)) {
+      throw new Error(`${normalized} is already bound`);
+    }
     const repo: TeamAutoRepo = {
       id: normalized,
       enabled: true,
@@ -536,6 +559,11 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       return "sweep already in progress";
     }
     sweeping.add(repo.id);
+    // #5792: frozen identity for the under-lock rebind below - the repo node
+    // used inside the tx must come from the FRESH store handle, not this
+    // possibly-orphaned snapshot.
+    const repoOuter = repo;
+    const repoOuterId = repo.id;
     const sweepStartedAt = Date.now();
     const etagBefore = client.etagStats();
     try {
@@ -586,7 +614,17 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       // inside uses the *Unlocked core - the promise-chain mutex is NOT
       // re-entrant.
       let created = 0; // #5712: outside the lock scope - read after commit
+      let sweepSummary: string | null = null; // #5792: read after the commit
       await withStoreLock(async () => {
+      // #5792 (ggcode): bind ONE fresh handle (and repo node) under the
+      // lock. The outer `s` was captured before the unlocked network phase;
+      // a 20s reconcile reload during sweepRepo orphaned it, and the tail
+      // save below then erased the writeback registrations that
+      // registerWritebackUnlocked had just persisted onto the reloaded
+      // closure ("created 2/2" logged, writebacks[] empty on disk, zero
+      // ladder rows - the #5792 zero-fire regression).
+      const s = await reloadStoreUnlocked();
+      const repo = s.repos.find((r) => r.id === repoOuterId) ?? repoOuter;
       if (!dryRun) {
         // Advance only for acting sweeps: a dry-run must leave the cursors
         // untouched so the reported actions are actually performed next time
@@ -659,6 +697,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       const etagAfter = client.etagStats();
       pushSweepRecord(repo, { at: Date.now(), ok: true, summary: repo.lastSweepSummary ?? "sweep complete", durationMs: Date.now() - sweepStartedAt, etagCalls: Math.max(0, etagAfter.calls - etagBefore.calls), etag304Hits: Math.max(0, etagAfter.hits - etagBefore.hits) });
       recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "sweep", text: repo.lastSweepSummary ?? "sweep complete" });
+      sweepSummary = repo.lastSweepSummary; // #5792: post-commit readers use the tx-scoped repo
       await saveTeamAutoStore(s);
       }); // withStoreLock: sweep transaction
       if (created > 0) {
@@ -666,8 +705,8 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           logger.warn(`TeamAuto: auto-assign trigger failed: ${String(err)}`);
         });
       }
-      logger.info(`TeamAuto: sweep ${repo.id} -> ${repo.lastSweepSummary}`);
-      return repo.lastSweepSummary ?? "sweep complete";
+      logger.info(`TeamAuto: sweep ${repo.id} -> ${sweepSummary}`);
+      return sweepSummary ?? "sweep complete";
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       // Transient failures (network blips, restart-interrupted sweeps) used to
@@ -676,6 +715,10 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       // backoff below, and a success clears the state in the block above.
       // #5712: failure bookkeeping is a store RMW too - same lock.
       await withStoreLock(async () => {
+      // #5792: fresh handle under the lock (same stale-snapshot class as
+      // the sweep transaction above).
+      const s = await reloadStoreUnlocked();
+      const repo = s.repos.find((r) => r.id === repoOuterId) ?? repoOuter;
       repo.sweepFailures = (repo.sweepFailures ?? 0) + 1;
       repo.lastSweepErrorAt = Date.now();
       repo.lastAttemptAt = repo.lastSweepErrorAt; // #266: failures must be visible without inferring from lastSweepErrorAt
@@ -1036,6 +1079,27 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
                 await saveTeamAutoStore(s).catch(() => {});
                 continue;
               }
+            }
+            // #5792 self-heal (ggcode): the registration was lost in
+            // flight (live: the sweep transaction's stale tail-save erased
+            // it - "created 2/2" logged, zero ladder rows). Re-register from
+            // the already-parsed target so the ladder re-delivers the result
+            // instead of only alarming: prReview bodies have NO direct-send
+            // surface, so without this the review verdict (e.g. a REQUEST
+            // CHANGES on a live PR) is lost forever.
+            if (numMatch && repoMatch) {
+              const healTargetNum = Number(numMatch[1]);
+              await registerWritebackUnlocked(task.id, prNumMatch ? "prComment" : "issueComment", repoMatch[1], healTargetNum);
+              if (s.writebacks.some((w) => w.taskId === task.id)) {
+                recordActivity(s, { at: Date.now(), repoId: repoMatch[1], kind: "writeback", text: `orphan self-heal: re-registered ${prNumMatch ? "prComment" : "issueComment"} #${healTargetNum} for ${task.id} (registration lost in flight - #5792); the ladder will re-deliver` });
+                logger.warn(`TeamAuto: orphan self-heal re-registered ${prNumMatch ? "prComment" : "issueComment"} #${healTargetNum} for ${task.id}`);
+                auditDirty = true;
+                await saveTeamAutoStore(s).catch(() => {});
+                if (++alarmedThisPass >= 1) break; // storm cap: one audit ACTION per pass
+                continue;
+              }
+              // Re-registration was skipped (e.g. another task's OPEN entry
+              // owns this target) - fall through to the alarm below.
             }
             s.orphanResultAlarms[task.id] = Date.now();
             auditDirty = true;
@@ -1448,7 +1512,10 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     // withStoreLock. Public entry takes the lock; the sweep transaction calls
     // the *Unlocked core directly because IT already holds the lock (the
     // promise-chain mutex is NOT re-entrant - nesting would deadlock).
-    await withStoreLock(() => registerWritebackUnlocked(taskId, action, repoId, targetId, cycleKey));
+    await withStoreLock(async () => {
+      await reloadStoreUnlocked(); // #5792: fresh handle under the lock
+      return registerWritebackUnlocked(taskId, action, repoId, targetId, cycleKey);
+    });
   }
 
   async function registerWritebackUnlocked(taskId: string, action: "issueComment" | "prComment" | "createIssue" | "createPR", repoId: string, targetId: number | null, cycleKey?: string): Promise<void> {
@@ -1536,17 +1603,24 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     // caller swallows rejections - so record the audit line here and return
     // a non-retrying result.
     try {
+      let claimNote = "";
       try {
         await client.assignIssue(owner, name, issueNumber, login);
-        recordActivity(await ensureStore(), { at: Date.now(), repoId, kind: "claim", text: `claimed issue #${issueNumber} as @${login} (at dequeue)` });
+        claimNote = `claimed issue #${issueNumber} as @${login} (at dequeue)`;
       } catch {
         // Fallback: a visible claim comment carries the same placeholder
         // semantics when the App lacks the assignees write surface.
         await client.postIssueComment(owner, name, issueNumber, `TeamClaw (teamclaw/developer, @${login}) has taken ownership of this issue and is implementing it autonomously - a PR will follow.`);
-        recordActivity(await ensureStore(), { at: Date.now(), repoId, kind: "claim", text: `claimed issue #${issueNumber} via comment (assign unavailable, at dequeue)` });
+        claimNote = `claimed issue #${issueNumber} via comment (assign unavailable, at dequeue)`;
       }
-      const s = await ensureStore();
       await withStoreLock(async () => {
+        // #5792: one fresh handle under the lock. The old shape captured
+        // `s` before the claim writes (network awaits) and saved it inside
+        // the lock - a reconcile reload in between orphaned the handle and
+        // the save wiped concurrent registrations; the claim activity note
+        // also only persisted when it rode the same (possibly stale) object.
+        const s = await reloadStoreUnlocked();
+        recordActivity(s, { at: Date.now(), repoId, kind: "claim", text: claimNote });
         const freshRepo = s.repos.find((r) => r.id === repoId);
         if (freshRepo) {
           // +60s guard: our own write (assign or comment) bumps updated_at.
@@ -1594,17 +1668,22 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           return;
         }
         const { login } = await client.getAuthenticatedUser();
+        let claimNote = "";
         try {
           await client.assignIssue(owner, name, candidate.number, login);
-          recordActivity(await ensureStore(), { at: Date.now(), repoId: repo.id, kind: "claim", text: `claimed issue #${candidate.number} as @${login}` });
+          claimNote = `claimed issue #${candidate.number} as @${login}`;
         } catch {
           // Fallback: a visible claim comment carries the same placeholder
           // semantics when the App lacks the assignees write surface.
           await client.postIssueComment(owner, name, candidate.number, `TeamClaw (teamclaw/developer, @${login}) has taken ownership of this issue and is implementing it autonomously - a PR will follow.`);
-          recordActivity(await ensureStore(), { at: Date.now(), repoId: repo.id, kind: "claim", text: `claimed issue #${candidate.number} via comment (assign unavailable)` });
+          claimNote = `claimed issue #${candidate.number} via comment (assign unavailable)`;
         }
-        const s = await ensureStore();
         await withStoreLock(async () => {
+        // #5792: one fresh handle under the lock (same stale-snapshot class
+        // as the sweep transaction - the capture used to predate the claim
+        // network writes).
+        const s = await reloadStoreUnlocked();
+        recordActivity(s, { at: Date.now(), repoId: repo.id, kind: "claim", text: claimNote });
         const freshRepo = s.repos.find((r) => r.id === repo.id);
         if (freshRepo) {
           // +60s guard: our own write (assign or comment) bumps updated_at;
@@ -1820,8 +1899,14 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           ? `; ${retainedDetails.slice(0, 10).join("; ")}${retainedDetails.length > 10 ? `; +${retainedDetails.length - 10} more` : ""}`
           : "";
         const stalePart = stale ? `, stale ${stale}` : "";
-        recordActivity(s, { at: Date.now(), repoId: "*", kind: "task", text: `worktree GC: removed ${removed}, retained ${retained} (undelivered${detail})${stalePart}` });
-        await saveTeamAutoStore(s);
+        await withStoreLock(async () => {
+          // #5792: fresh handle under the lock - the capture predates the
+          // (long) gcTaskWorktrees git awaits and could be orphaned by a
+          // reconcile reload; saving it wiped concurrent registrations.
+          const sGc = await reloadStoreUnlocked();
+          recordActivity(sGc, { at: Date.now(), repoId: "*", kind: "task", text: `worktree GC: removed ${removed}, retained ${retained} (undelivered${detail})${stalePart}` });
+          await saveTeamAutoStore(sGc);
+        });
         logger.warn(`TeamAuto: worktree GC removed ${removed}, retained ${retained}${stalePart}`);
       }
     } catch (err) {
