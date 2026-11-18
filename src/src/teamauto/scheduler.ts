@@ -989,7 +989,13 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
             if (numMatch && repoMatch) {
               const [o, n] = repoMatch[1].split("/");
               const bodies = await ghClient.getIssueCommentBodies(o, n, Number(numMatch[1])).catch(() => [] as string[]);
-              const ghEvidence = bodies.some((b) => /\[teamclaw[:\]]/i.test(b));
+              // #5780: workers deliver in more shapes than the ladder marker -
+              // narrative bodies ("Fix delivered ... via TeamClaw autonomous")
+              // and branch-reference footers carry no [teamclaw:] prefix and
+              // zeroed the evidence check (live: 8fdf5efd false-alarmed).
+              // Broaden to the observed family: marker OR teamclaw/teamauto
+              // substring (case-insensitive) OR a teamclaw/task- branch ref.
+              const ghEvidence = bodies.some((b) => /\[teamclaw[:\]]/i.test(b) || /teamclaw|teamauto/i.test(b) || /teamclaw\/task-/.test(b));
               if (ghEvidence) {
                 s.deliveredResults[task.id] = Date.now();
                 auditDirty = true;
