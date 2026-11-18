@@ -945,9 +945,16 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           }
           auditDirty = true;
         }
+        let alarmedThisPass = 0; // #5772: at most ONE orphan alarm per settle pass
         for (const task of Object.values(state0.tasks ?? {})) {
           if (!task?.id || task.status !== "completed" || !task.result || !task.id.startsWith("teamauto-")) continue;
-          if (task.completedAt && Date.now() - task.completedAt > 24 * 3600_000) continue;
+          // #5772: 24h -> 6h audit window. A restart replays the audit over
+          // HISTORICAL completed tasks whose write-back entries are long
+          // pruned and whose ledger truth died in a generation-window clobber
+          // - that population is exactly the false-alarm storm (14 healthy
+          // tasks at once, live). Genuine orphans surface within hours; the
+          // remaining tail is not worth storm-shaped noise.
+          if (task.completedAt && Date.now() - task.completedAt > 6 * 3600_000) continue;
           // #5738: once-per-task gate; the audit now persists its own
           // mutations in the same pass (auditDirty save below), so the gate
           // survives the next 20s disk reload instead of re-alarming.
@@ -968,6 +975,11 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
             auditDirty = true;
             recordActivity(s, { at: Date.now(), repoId: "*", kind: "writeback", text: `orphan result alarm: task ${task.id} completed with a result but has NO write-back entry and no delivery record (registration lost - ladder redundancy silently absent)` });
             logger.warn(`TeamAuto: orphan completed task ${task.id} without write-back entry`);
+            // #5772: persist the gate IMMEDIATELY on the alarming branch -
+            // deferring to the block-tail save lost the write to a
+            // restart-timeline clobber once already (#5738 regression).
+            await saveTeamAutoStore(s).catch(() => {});
+            if (++alarmedThisPass >= 1) break; // storm cap: one per pass
           }
         }
         if (Object.keys(s.orphanResultAlarms).length > 200) {
