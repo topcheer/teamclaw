@@ -807,6 +807,14 @@ async function ensureOpenClawRuntime({ source, artifactUrl }, onEvent) {
 function sandboxEnvFor(stateDir) {
   const cacheDir = path.join(stateDir, "cache");
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  // #runtime-pin (2026-11-18): the desktop bundle OWNS the openclaw runtime
+  // version (OPENCLAW_PIN at build time). When a bundle pins an older
+  // runtime than the one that last wrote this machine's config (e.g. the
+  // 2026.11.5 snapshot-cleanup regression -> pin back to 2026.11.4),
+  // openclaw refuses to boot: "binary is older than the config last written
+  // by...". That downgrade is INTENTIONAL here - the bundled runtime is the
+  // source of truth, not whatever previously ran on PATH. Allow it.
+  env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = "1";
   if (process.platform === "win32") {
     env.LOCALAPPDATA = cacheDir;
   } else {
@@ -1714,6 +1722,36 @@ async function seedStandaloneConfig(preferredVendor, controllerPort, teamProfile
 // failed" -> gateway-run-bootstrap failed -> process exits, no announce).
 // Sweep the corpses right before every spawn, when nothing of ours holds
 // them. Best-effort with Windows retries; survivors keep the old behavior.
+// #stale-owner-lock (E2E case A, 2026-11-18 run 8): openclaw's state
+// ownership locks live under the REAL LocalAppData
+// (OpenClaw/locks/openclaw-state-owners/state.<hash>.lock - the .NET helper
+// resolves LocalAppData via the Windows known-folder API, which IGNORES the
+// LOCALAPPDATA env redirect we use for sandboxing). A lock from a dead
+// process (watchdog kill, crash) makes every later boot's ownership
+// verification fail with "could not be verified" - the plugin registration
+// then retries forever. Sweep locks that point at OUR stateDir whose pid is
+// no longer alive before any boot attempt.
+function sweepStaleStateOwnerLocks(stateDir) {
+  const localApp = process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || "", "AppData", "Local");
+  const ownersDir = path.join(localApp, "OpenClaw", "locks", "openclaw-state-owners");
+  let entries;
+  try { entries = fsSync.readdirSync(ownersDir, { withFileTypes: true }); } catch { return; /* none */ }
+  const norm = (p) => { try { return fsSync.realpathSync(p).toLowerCase(); } catch { return String(p).toLowerCase(); } };
+  const mine = norm(stateDir);
+  for (const e of entries) {
+    if (!e.isFile() || !e.name.endsWith(".lock")) continue;
+    const p = path.join(ownersDir, e.name);
+    try {
+      const info = JSON.parse(fsSync.readFileSync(p, "utf8"));
+      if (!info?.stateDir || norm(info.stateDir) !== mine) continue;
+      if (Number.isFinite(info.pid)) {
+        try { process.kill(info.pid, 0); continue; } catch { /* dead -> sweep */ }
+      }
+      fsSync.rmSync(p, { force: true, maxRetries: 3, retryDelay: 200 });
+    } catch { /* unreadable - leave it */ }
+  }
+}
+
 function sweepSqliteSnapshotCorpses(stateDir) {
   const root = path.join(stateDir, "cache", "openclaw");
   try {
@@ -1747,6 +1785,10 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
     sweepStrayPluginStageDirs(standaloneStateDir(), null);
     try { await ensureTeamClawPlugin(bin, () => {}); } catch { /* repair is best-effort; the boot below still runs */ }
   }
+  // #stale-owner-lock: the plugin registration below verifies state
+  // ownership; a dead-process lock from an earlier session wedges it in a
+  // retry loop. Sweep before ANY plugin/bootstrap step touches state.
+  sweepStaleStateOwnerLocks(standaloneStateDir());
   // Idempotent seed: a rewrite (even identical) trips the gateway config-guard
   // ("config changed during startup") and kills the spawn. Only seed when the
   // sandbox config is missing or lacks any models.providers entry.
@@ -1877,6 +1919,7 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
   // above) and BEFORE the new spawn - corpses from the kill itself are the
   // ones that abort the fresh boot's snapshot cleanup.
   sweepSqliteSnapshotCorpses(standaloneStateDir());
+  sweepStaleStateOwnerLocks(standaloneStateDir());
   // #fresh-announce (E2E case A): the initial announce loop used to regex the
   // WHOLE gateway.log - an announce line from a PREVIOUS boot (dead gateway)
   // matched instantly and masked a failed fresh boot. Baseline the count
