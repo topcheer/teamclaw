@@ -946,6 +946,12 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           auditDirty = true;
         }
         let alarmedThisPass = 0; // #5772: at most ONE orphan alarm per settle pass
+        // #5777: tasks whose direct-send delivery lands AFTER completion
+        // (live: delivered 5m21s post-completed, zero ladder/ledger trail)
+        // would alarm at the first tick. Grace period first; at grace
+        // expiry the audit checks the GitHub surface ONCE for a teamclaw
+        // marker comment and back-fills the ledger when the product exists.
+        const ghClient = createGithubClient(auth);
         for (const task of Object.values(state0.tasks ?? {})) {
           if (!task?.id || task.status !== "completed" || !task.result || !task.id.startsWith("teamauto-")) continue;
           // #5772: 24h -> 6h audit window. A restart replays the audit over
@@ -960,6 +966,9 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           // survives the next 20s disk reload instead of re-alarming.
           const lastAlarmAt = s.orphanResultAlarms[task.id];
           if (lastAlarmAt) continue;
+          // #5777: direct-send grace - do not judge before a slow worker
+          // direct-post has had its chance.
+          if (task.completedAt && Date.now() - task.completedAt < 10 * 60_000) continue;
           // #5736: delivered-source is the DURABLE ledger (entry present OR
           // recorded at prune time) - never the activity ring, which rolls in
           // hours and made every normal delivery a false orphan.
@@ -971,6 +980,24 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           const ledgerIsArtifact = deliveredAt !== undefined && task.completedAt !== undefined && Math.abs(deliveredAt - task.completedAt) < 2000;
           const hasEntry = s.writebacks.some((w) => w.taskId === task.id) || (deliveredAt !== undefined && !ledgerIsArtifact);
           if (!hasEntry) {
+            // #5777: grace expired and still no books - verify the GitHub
+            // surface ONCE for a teamclaw marker comment (worker direct-send
+            // shape) before declaring an orphan. A marker hit back-fills the
+            // ledger; only a genuinely bare issue alarms.
+            const numMatch = /issue #(\d+)/.exec(`${task.title}`);
+            const repoMatch = /TeamAuto autonomous work for ([\w./-]+)\./.exec(`${task.description}`);
+            if (numMatch && repoMatch) {
+              const [o, n] = repoMatch[1].split("/");
+              const bodies = await ghClient.getIssueCommentBodies(o, n, Number(numMatch[1])).catch(() => [] as string[]);
+              const ghEvidence = bodies.some((b) => /\[teamclaw[:\]]/i.test(b));
+              if (ghEvidence) {
+                s.deliveredResults[task.id] = Date.now();
+                auditDirty = true;
+                recordActivity(s, { at: Date.now(), repoId: repoMatch[1], kind: "writeback", text: `ledger back-filled from GitHub evidence: ${task.id} direct-send delivery verified on issue #${numMatch[1]} (no ladder trail - #5777 timing shape)` });
+                await saveTeamAutoStore(s).catch(() => {});
+                continue;
+              }
+            }
             s.orphanResultAlarms[task.id] = Date.now();
             auditDirty = true;
             recordActivity(s, { at: Date.now(), repoId: "*", kind: "writeback", text: `orphan result alarm: task ${task.id} completed with a result but has NO write-back entry and no delivery record (registration lost - ladder redundancy silently absent)` });
