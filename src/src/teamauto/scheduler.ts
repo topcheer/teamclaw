@@ -930,7 +930,13 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
         // window at init time is treated as delivered (the sentinel verified
         // those 23 were all normally delivered). Accepted trade-off: any
         // genuine pre-deploy orphan is pardoned once - signal > archaeology.
-        if (!s.deliveredResultsInit) {
+        // #5770: gate the one-time migration on an EMPTY table, not just the
+        // flag - a generation-window store clobber can wipe the flag while
+        // the table survives (or vice versa), and a re-run re-stamps
+        // completedAt as deliveredAt for the current window, forging delivery
+        // records that mask genuine orphans (live: 57cc2770/e975ddac stamped
+        // at the exact completion millisecond, audit went silent).
+        if (!s.deliveredResultsInit && Object.keys(s.deliveredResults).length === 0) {
           s.deliveredResultsInit = true;
           for (const task of Object.values(state0.tasks ?? {})) {
             if (task?.id && task.status === "completed" && task.result && task.id.startsWith("teamauto-") && task.completedAt && Date.now() - task.completedAt <= 24 * 3600_000) {
@@ -950,7 +956,13 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
           // #5736: delivered-source is the DURABLE ledger (entry present OR
           // recorded at prune time) - never the activity ring, which rolls in
           // hours and made every normal delivery a false orphan.
-          const hasEntry = s.writebacks.some((w) => w.taskId === task.id) || Boolean(s.deliveredResults[task.id]);
+          // #5770: a REAL delivery happens >= one reconcile tick (20s) after
+          // completion; a ledger stamp within 2s of completedAt is a migration
+          // artifact, not evidence of delivery - do not let it silence the
+          // orphan audit.
+          const deliveredAt = s.deliveredResults[task.id];
+          const ledgerIsArtifact = deliveredAt !== undefined && task.completedAt !== undefined && Math.abs(deliveredAt - task.completedAt) < 2000;
+          const hasEntry = s.writebacks.some((w) => w.taskId === task.id) || (deliveredAt !== undefined && !ledgerIsArtifact);
           if (!hasEntry) {
             s.orphanResultAlarms[task.id] = Date.now();
             auditDirty = true;

@@ -688,6 +688,24 @@ export async function handleTaskResultRequest(deps: ControllerTaskDomainDeps, re
     }, deps);
     result = "";
   }
+  // #5770 leg A: a MID-FLIGHT narration is not a final result either (live:
+  // "Tree is clean. Now implementing the fix - first the helper in ...").
+  // Present-progressive openers mean the work has NOT finished; accepting
+  // them completes a task with zero product. Reject like the sentinel -
+  // fresh attempt on the next sweep once the worker actually finishes.
+  if (!error && gatedTask && /\b(?:now|currently|next)\s+(?:implementing|working on|fixing|writing|adding|refactoring|investigating|starting)\b/i.test(result.slice(0, 400))) {
+    error = "Task submitted a mid-flight narration (present-progressive) as its result - the work is still in progress, not complete. Result discarded; the issue will be re-opened for the next sweep.";
+    recordTaskExecutionEvent(taskId, {
+      type: "warning",
+      phase: "completion_gate",
+      source: "controller",
+      status: "failed",
+      message: error,
+      workerId,
+      role: gatedTask.assignedRole,
+    }, deps);
+    result = "";
+  }
   if (
     !error
     && gatedTask
