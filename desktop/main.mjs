@@ -1713,6 +1713,22 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
   // (settings.instance): when the preferred gateway port is occupied and we
   // have no live child of our own, kill the owning process tree and wait for
   // the port to free so this start is a FRESH boot on the SAME port.
+  // #wizard-reentry (user report 2026-11-18 night #2): "re-initialize" in
+  // the wizard calls standaloneStart INSIDE the same app process where the
+  // auto-start already spawned a gateway - the code below only kills FOREIGN
+  // listeners, so the new spawn hit EADDRINUSE against OUR OWN older child
+  // and produced zero log output. An explicit re-init must be a FRESH boot:
+  // kill our own child first (same for a plain app restart where the old
+  // child object is still tracked), wait for its exit AND the port to free.
+  if (STANDALONE.child) {
+    try {
+      killGatewayTree(STANDALONE.child);
+      await new Promise((r) => { STANDALONE.child.once("exit", r); setTimeout(r, 8000); });
+    } catch { /* already gone */ }
+    STANDALONE.child = null;
+    STANDALONE.pid = null;
+    try { fsSync.rmSync(standalonePidFile(), { force: true }); } catch { /* gone */ }
+  }
   if (!STANDALONE.child && remembered?.gatewayPort) {
     const stalePort = Number(remembered.gatewayPort);
     if (Number.isFinite(stalePort) && stalePort > 0 && !(await isFreeLocal(stalePort))) {
