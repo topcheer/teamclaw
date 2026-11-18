@@ -155,6 +155,12 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     await run(["checkout", "-B", name], dir);
   }
 
+  /** #5788: does the branch exist on the remote? (422 disambiguation probe) */
+  async function branchExistsRemotely(dir: string, branch: string): Promise<boolean> {
+    const out = await run(["ls-remote", "origin", `refs/heads/${branch}`], dir).catch(() => "");
+    return out.trim().length > 0;
+  }
+
   async function commitAll(dir: string, message: string, authorName: string, authorEmail: string): Promise<boolean> {
     const status = await run(["status", "--porcelain"], dir);
     if (!status.trim()) {
@@ -165,7 +171,7 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     return true;
   }
 
-  async function pushBranch(repoId: string, dir: string, cloneUrl: string, branch: string): Promise<{ alreadyDelivered: boolean }> {
+  async function pushBranch(repoId: string, dir: string, cloneUrl: string, branch: string, onPushError?: (msg: string) => void): Promise<{ alreadyDelivered: boolean }> {
     const authed = await tokenizedUrl(cloneUrl);
     // #stale-base follow-up: the remote task branch may ALREADY carry the
     // delivery (previous incarnation pushed it; the PR got merged). Blindly
@@ -187,10 +193,25 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     } catch { /* branch absent remotely or fetch failed - plain push below */ }
     try {
       await run(["push", authed, `HEAD:refs/heads/${branch}`], dir);
+      // #5788: verify the push LANDED - a "successful" push whose ref is
+      // missing remotely (auth edge, proxy quirk) strands the branch exactly
+      // like a failed one, and createPR would 422 on the missing head.
+      const ls = await run(["ls-remote", authed, `refs/heads/${branch}`], dir).catch(() => "");
+      const localHead = (await run(["rev-parse", "HEAD"], dir)).trim();
+      if (ls && localHead && !ls.includes(localHead)) {
+        const msg = `post-push ref verification failed: remote refs/heads/${branch} does not contain local HEAD ${localHead.slice(0, 8)}`;
+        logger.warn(`TeamAuto: ${msg}`);
+        try { onPushError?.(msg); } catch { /* observability only */ }
+        throw new Error(msg);
+      }
       return { alreadyDelivered: false };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn(`TeamAuto: push failed for ${repoId}#${branch}: ${msg}`);
+      // #5788: the push leg was the ONLY delivery step with zero activity
+      // surface - its failure only ever showed as downstream createPR 422
+      // noise (two stranded self-fix legs). Surface it via the callback.
+      try { onPushError?.(msg); } catch { /* observability only */ }
       // #5651 (ggcode, 2026-11-15): a NON-FAST-FORWARD rejection is
       // deterministic - the generic retry ladder burned 6 attempts / ~25min
       // on it twice (#5268 family). The task branch is exclusively ours, so
@@ -580,7 +601,7 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     }
   }
 
-  return { ensureCloned, currentSha, recentCommitMessages, readFileIfPresent, safeRepoPath, createWorkBranch, commitAll, pushBranch, ensureTaskWorktree, removeTaskWorktree, safeRemoveTaskWorktree, gcTaskWorktrees, taskWorktreeRelDir, taskBranchName, branchHasCommits, repoDir };
+  return { ensureCloned, currentSha, recentCommitMessages, readFileIfPresent, safeRepoPath, createWorkBranch, commitAll, pushBranch, branchExistsRemotely, ensureTaskWorktree, removeTaskWorktree, safeRemoveTaskWorktree, gcTaskWorktrees, taskWorktreeRelDir, taskBranchName, branchHasCommits, repoDir };
 }
 
 export type TeamAutoRepoSync = ReturnType<typeof createRepoSync>;

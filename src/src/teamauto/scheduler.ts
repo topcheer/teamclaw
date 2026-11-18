@@ -1204,7 +1204,11 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
               // commitAll just added new ones.
               const deliverable = committed || (await sync.branchHasCommits(wtDir, info.defaultBranch));
               if (deliverable) {
-                const push = await sync.pushBranch(repoId, wtDir, info.cloneUrl, branch);
+                const push = await sync.pushBranch(repoId, wtDir, info.cloneUrl, branch, (pushErr) => {
+                  // #5788: dedicated push-failure activity line - symmetric
+                  // with the createPR ladder rows.
+                  recordActivity(s, { at: Date.now(), repoId, kind: "writeback", text: `push failed for ${branch}: ${pushErr.slice(0, 140)} - branch is LOCAL-ONLY until this is resolved` });
+                });
                 if (push.alreadyDelivered) {
                   // #stale-base follow-up: a previous incarnation already
                   // delivered this branch (PR merged). Skip PR creation and
@@ -1212,7 +1216,23 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
                   body = `${body}\n\nWork for this task was already delivered on branch \`${branch}\` (previous delivery).`;
                   recordActivity(s, { at: Date.now(), repoId, kind: "writeback", text: `already delivered on ${branch} - skipped duplicate push/PR` });
                 } else {
-                  const pr = await client.createPullRequest(repoId.split("/")[0]!, repoId.split("/")[1]!, branch, info.defaultBranch, `[teamclaw:${role}] ${task.title.replace(/^\[[^\]]+\]\s*/, "")}`.slice(0, 120), `${task.result.trim()}\n${MARKER_FOOTER(role)}`);
+                  let pr;
+                  try {
+                    pr = await client.createPullRequest(repoId.split("/")[0]!, repoId.split("/")[1]!, branch, info.defaultBranch, `[teamclaw:${role}] ${task.title.replace(/^\[[^\]]+\]\s*/, "")}`.slice(0, 120), `${task.result.trim()}\n${MARKER_FOOTER(role)}`);
+                  } catch (prErr) {
+                    // #5788: a 422 on a freshly-pushed head almost always
+                    // means the push NEVER LANDED (live: two stranded legs,
+                    // generic "Validation Failed" masked it). Probe the head
+                    // and disambiguate the failure text before rethrowing.
+                    const pmsg = prErr instanceof Error ? prErr.message : String(prErr);
+                    if (/422|Validation Failed/i.test(pmsg)) {
+                      const probe = await sync.branchExistsRemotely(wtDir, branch).catch(() => false);
+                      if (!probe) {
+                        throw new Error(`createPR 422 with head branch ABSENT on remote - the PUSH never landed for ${branch} (see push-failure activity; local-only branch)`);
+                      }
+                    }
+                    throw prErr;
+                  }
                   entry.prUrl = pr.url;
                   body = `${body}\n\nDelivered as PR: ${pr.url}`;
                   recordActivity(s, { at: Date.now(), repoId, kind: "writeback", text: `PR opened: ${pr.url}` });
