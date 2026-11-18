@@ -161,7 +161,7 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
       return false;
     }
     await run(["add", "-A"], dir);
-    await run(["-c", `user.name=${authorName}`, "-c", `user.email=${authorEmail}`, "commit", "-m", message], dir);
+    await run(["-c", `user.name=${authorName}`, "-c", `user.email=${authorEmail}`, "-c", "core.hooksPath=", "commit", "-m", message], dir);
     return true;
   }
 

@@ -247,7 +247,14 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     // #5651: a non-fast-forward push whose rebase self-heal also failed is
     // deterministic - retrying the same push 6 more times just burns ~25min.
     // Dead-letter immediately (the next sweep re-claims on a fresh branch).
-    const gaveUp = options.terminal === true || entry.attempts >= TEAMAUTO_WRITEBACK_MAX_ATTEMPTS || /push rejected \(non-fast-forward\) and rebase self-heal failed/.test(message);
+    // #5767 (ggcode, 2026-11-18): deterministic hook/environment failures are
+    // not transient - a repo pre-commit calling bash4+ builtins on a bash3.2
+    // host ("mapfile: command not found") retried 6 times for 33 minutes
+    // before dying. Same fail-fast as the #5651 non-fast-forward signature:
+    // hook-not-found / command-not-found / not-executable signatures are
+    // structural, every retry is a guaranteed repeat.
+    const deterministicHookFailure = /(?:hooks?\/[^:]*: line \d+: \w+: command not found|hook declined|cannot run hook|exited with error before)/.test(message);
+    const gaveUp = options.terminal === true || entry.attempts >= TEAMAUTO_WRITEBACK_MAX_ATTEMPTS || /push rejected \(non-fast-forward\) and rebase self-heal failed/.test(message) || deterministicHookFailure;
     if (gaveUp && !entry.doneAt) {
       entry.failedAt = Date.now();
       recordActivity(store, {
@@ -1132,6 +1139,12 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
               // two comments 2s apart. Fail atomically instead: the entry
               // keeps its failed state + backoff and replays BOTH steps
               // (PR first, then comment) on the next attempt.
+              // #5767: a COMPLETED task whose delivery exhausts is the worst
+              // outcome (work done, product lost, owner unaware) - surface it
+              // as its own alarm line, not just the retry-ladder failure row.
+              if (task.status === "completed") {
+                recordActivity(s, { at: Date.now(), repoId: entry.repoId, kind: "writeback", text: `completed task delivery LOST: ${task.id} finished but its worktree/PR delivery keeps failing (${prErr instanceof Error ? prErr.message.slice(0, 120) : String(prErr)}) - manual delivery may be required` });
+              }
               prDeliveryFailed = true;
             }
           }
