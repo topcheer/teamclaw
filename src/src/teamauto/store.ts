@@ -186,6 +186,8 @@ export type TeamAutoStore = {
   failedClaimRecovery?: Record<string, number>;
   /** #5725: once-per-task guard for orphan-result alarms (completed with result, no write-back entry, no delivery line). */
   orphanResultAlarms?: Record<string, number>;
+  /** #5785: once-per-task guard for undelivered-PR alarms (WRITE tasks accounted as delivered with no PR leg). */
+  undeliveredPrAlarms?: Record<string, number>;
   /** #5736: durable delivered-ledger. doneAt write-back entries are pruned
    * every pass and the activity ring is tiny - without this ledger every
    * normally-delivered task re-alarms as an orphan hours later. taskId -> deliveredAt. */

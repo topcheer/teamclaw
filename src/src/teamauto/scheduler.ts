@@ -1008,7 +1008,29 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
               // substring (case-insensitive) OR a teamclaw/task- branch ref.
               const ghEvidence = bodies.some((b) => /\[teamclaw[:\]]/i.test(b) || /teamclaw|teamauto/i.test(b) || /teamclaw\/task-/.test(b));
               if (ghEvidence) {
-                s.deliveredResults[task.id] = Date.now();
+                // #5785: a WRITE task's canonical product is the PR. An issue
+            // direct-send comment (mk:true) satisfies the issue-surface
+            // evidence and back-fills the ledger - masking that the PR leg
+            // never ran (write-back entry lost to a generation-window
+            // clobber; push sits on a remote branch with no review entry).
+            // Self-check: WRITE + completed + 10min past the ledger stamp +
+            // no createPR write-back row + no PR-opened activity line ->
+            // one-time undelivered-PR alarm.
+            if (task.writeMode === "write" && (deliveredAt !== undefined) && Date.now() - deliveredAt > 10 * 60_000) {
+              s.undeliveredPrAlarms ??= {};
+              if (!s.undeliveredPrAlarms[task.id]) {
+                const hasPrRow = s.writebacks.some((w) => w.taskId === task.id && (w.action === "createPR" || w.action === "prComment"));
+                const prText = (s.activity ?? []).slice(-300).some((x) => String(x.text).includes(task.id) && /PR opened|Delivered as PR/.test(String(x.text)));
+                if (!hasPrRow && !prText) {
+                  s.undeliveredPrAlarms[task.id] = Date.now();
+                  auditDirty = true;
+                  recordActivity(s, { at: Date.now(), repoId: "*", kind: "writeback", text: `undelivered-PR alarm: WRITE task ${task.id} is accounted as delivered (issue surface) but no PR leg ever ran - branch likely stranded on the remote without a review entry (#5785)` });
+                  logger.warn(`TeamAuto: undelivered PR for WRITE task ${task.id}`);
+                  await saveTeamAutoStore(s).catch(() => {});
+                }
+              }
+            }
+            s.deliveredResults[task.id] = Date.now();
                 auditDirty = true;
                 recordActivity(s, { at: Date.now(), repoId: repoMatch[1], kind: "writeback", text: `ledger back-filled from GitHub evidence: ${task.id} direct-send delivery verified on issue #${numMatch[1]} (no ladder trail - #5777 timing shape)` });
                 await saveTeamAutoStore(s).catch(() => {});
