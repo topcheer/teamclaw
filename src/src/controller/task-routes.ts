@@ -69,6 +69,7 @@ import {
 } from "./controller-planning.js";
 import {
   ControllerIntakeSwitchInProgressError,
+  isStillWaitingResponse,
   runControllerIntake,
 } from "./controller-intake.js";
 import {
@@ -579,7 +580,7 @@ export async function handleTaskResultRequest(deps: ControllerTaskDomainDeps, re
   const { logger, getTeamState, updateTeamState } = deps;
   const taskId = pathname.split("/")[4]!;
   const body = await parseJsonBody(req);
-  const result = typeof body.result === "string" ? body.result : "";
+  let result = typeof body.result === "string" ? body.result : "";
   let error = typeof body.error === "string" ? body.error : undefined;
   const workerId = typeof body.workerId === "string" ? body.workerId : undefined;
   const currentTask = getTeamState()?.tasks[taskId];
@@ -668,6 +669,25 @@ export async function handleTaskResultRequest(deps: ControllerTaskDomainDeps, re
   }
 
   const gatedTask = getTeamState()?.tasks[taskId];
+  // #5767 fourth hole: a worker that never produced work can "complete" by
+  // submitting the waiting SENTINEL as its result (live: f12efcdb completed
+  // with `TEAMCLAW_STILL_WAITING`). The sentinel means "not done yet" - it
+  // must never satisfy completion. Reject with an empty stored result so the
+  // failed-without-result semantics apply (terminal write-back, claim
+  // recovery re-opens the issue, the next sweep retries).
+  if (!error && gatedTask && isStillWaitingResponse(result)) {
+    error = "Task submitted the TEAMCLAW_STILL_WAITING placeholder as its result - the task is still waiting, not complete. Result discarded; the issue will be re-opened for the next sweep.";
+    recordTaskExecutionEvent(taskId, {
+      type: "warning",
+      phase: "completion_gate",
+      source: "controller",
+      status: "failed",
+      message: error,
+      workerId,
+      role: gatedTask.assignedRole,
+    }, deps);
+    result = "";
+  }
   if (
     !error
     && gatedTask
