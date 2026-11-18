@@ -1010,7 +1010,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
               if (ghEvidence) {
                 s.deliveredResults[task.id] = Date.now();
                 auditDirty = true;
-                recordActivity(s, { at: Date.now(), repoId: repoMatch[1], kind: "writeback", text: `ledger back-filled from GitHub evidence: ${task.id} direct-send delivery verified on issue #${numMatch[1]} (no ladder trail - #5777 timing shape)` });
+                recordActivity(s, { at: Date.now(), repoId: repoMatch[1], kind: "writeback", text: `ledger back-filled from GitHub evidence: ${task.id} direct-send delivery verified on ${prNumMatch ? "PR" : "issue"} #${numMatch[1]} (no ladder trail - #5777 timing shape)` });
                 await saveTeamAutoStore(s).catch(() => {});
                 continue;
               }
