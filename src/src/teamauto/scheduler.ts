@@ -1444,21 +1444,29 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
             // MARKER_FOOTER - so the evidence predicate (#5777-#5781 chain)
             // never matched its own deliveries and every prReview leg
             // false-alarmed. Append the footer like every other channel.
-            const bodyWithFooter = `${body}\n${MARKER_FOOTER(role)}`;
-            // Dedupe stays shape-agnostic: normalize both sides AFTER
-            // stripping an optional footer, so a worker direct-post (bare)
-            // and the ladder body (footered) compare equal.
-            const stripFooter = (t: string) => t.replace(/\n?---\n\[teamclaw:[^\]]+\][^\n]*$/m, "");
-            const normalized = stripFooter(body).replace(/\s+/g, " ").trim();
+            // #5783 residual (same day): the shared body construction above
+            // ALREADY appends one MARKER_FOOTER for every channel, so the
+            // extra append here shipped the marker TWICE; and
+            // getPullFeedbackBodies returns whitespace-COLLAPSED bodies, so
+            // a "\n---\n[teamclaw:]" strip can never match the existing
+            // side - a footered worker direct-post still double-delivered.
+            // Post exactly ONE footer (stripping any footer blocks the
+            // worker echoed into its result) and dedupe footer-agnostic
+            // AFTER collapsing, so bare, footered and twice-footered shapes
+            // all compare equal on both sides.
+            const collapse = (t: string) => t.replace(/\s+/g, " ").trim();
+            const stripCollapsedFooter = (t: string) => collapse(t).replace(/ ?--- ?\[teamclaw:[^\]]+\].*$/, "").trim();
+            const postBody = `${body.replace(/\n?---\n\[teamclaw:[^\]]+\][^\n]*/g, "").trimEnd()}\n${MARKER_FOOTER(role)}`;
+            const normalized = stripCollapsedFooter(body);
             const existing = await client.getPullFeedbackBodies(owner, name, entry.targetId).catch(() => [] as string[]);
-            if (existing.some((b) => stripFooter(b).replace(/\s+/g, " ").trim() === normalized)) {
+            if (existing.some((b) => stripCollapsedFooter(b) === normalized)) {
               entry.doneAt = Date.now();
               entry.inFlightAt = undefined;
               writebackDone = true;
               recordActivity(s, { at: Date.now(), repoId: entry.repoId, kind: "writeback", text: `dedupe-skipped: identical review body already on PR #${entry.targetId} (worker direct-post) - ladder posting skipped` });
               logger.info(`TeamAuto: write-back ${entry.taskId} prComment deduped - identical body already on PR #${entry.targetId}`);
             } else {
-              await client.postPullReviewComment(owner, name, entry.targetId, bodyWithFooter);
+              await client.postPullReviewComment(owner, name, entry.targetId, postBody);
               entry.doneAt = Date.now();
               entry.inFlightAt = undefined;
               writebackDone = true;
