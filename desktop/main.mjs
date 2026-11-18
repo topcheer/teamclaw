@@ -949,12 +949,39 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
         // (fs-safe .NET-helper fallback wedged) - cap each attempt at 3 min
         // with progress ticks; the ladder then short-circuits via the
         // installed-dir check or retries instead of awaiting forever.
+        // #progress-aware: forward motion = the atomic staging copy under
+        // extensions/ gained files since the last probe. Only file COUNT
+        // (cheap readdir walk, no content reads) - enough to distinguish a
+        // crawling-but-alive EDR-throttled copy from a wedged one.
+        let probeLastCount = -1;
+        const stagingProgress = () => {
+          let n = 0;
+          try {
+            for (const e of fsSync.readdirSync(path.join(sandboxEnv.OPENCLAW_STATE_DIR, "extensions"), { withFileTypes: true })) {
+              if (!e.isDirectory() || !(e.name.startsWith(".fs-safe-move-") || e.name.startsWith(".openclaw-install-stage-"))) continue;
+              const countFiles = (d) => { let c = 0; for (const x of fsSync.readdirSync(d, { withFileTypes: true })) { if (x.isDirectory()) c += countFiles(path.join(d, x.name)); else c++; } return c; };
+              try { n += countFiles(path.join(sandboxEnv.OPENCLAW_STATE_DIR, "extensions", e.name)); } catch { /* mid-delete */ }
+            }
+          } catch { /* no extensions dir */ }
+          const moving = n > probeLastCount;
+          probeLastCount = n;
+          return moving;
+        };
         await runShellStream(
           installCmd, runtimeDir,
           (line) => onEvent({ phase: "teamclaw", line }),
           sandboxEnv,
-          180_000,
+          // #cold-install (E2E case A): a virgin-machine install copies the
+          // full plugin+deps closure (~77k files) into extensions/ - that
+          // took 10+ minutes on the reference machine. The old 180s deadline
+          // was guaranteed to fire mid-copy, and the retry ladder restarted
+          // the whole copy each time. One generous attempt that EXTENDS while
+          // the staging copy is still growing (hard cap 45 min); the
+          // installed-dir short-circuit still catches committed installs on
+          // watchdog fire.
+          600_000,
           (secs) => onEvent({ phase: "teamclaw", line: `Install still running (${secs}s)...` }),
+          stagingProgress,
         );
         installed = true;
       } catch (installErr) {
@@ -1158,7 +1185,7 @@ ipcMain.handle("llm:write-global", async (_e, llm) => {
 
 // Streamed variant: emits every stdout/stderr line through onLine and
 // resolves with the same result shape as runShellCommand.
-async function runShellStream(command, cwd, onLine, envOverride, timeoutMs, onTick) {
+async function runShellStream(command, cwd, onLine, envOverride, timeoutMs, onTick, isProgressing) {
   // #edr-shim (user report 2026-11-16 night): endpoint security reacts to
   // the cmd-wrapper -> electron-as-node -> .mjs script chain and deletes the
   // openclaw package tree AFTER the shim process exits (short-lived probes
@@ -1178,7 +1205,7 @@ async function runShellStream(command, cwd, onLine, envOverride, timeoutMs, onTi
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
       });
-      return await streamChildOutput(child, command, onLine, timeoutMs, onTick);
+      return await streamChildOutput(child, command, onLine, timeoutMs, onTick, isProgressing);
     }
   }
   const child = spawn(command, {
@@ -1188,7 +1215,7 @@ async function runShellStream(command, cwd, onLine, envOverride, timeoutMs, onTi
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
-  return await streamChildOutput(child, command, onLine, timeoutMs, onTick);
+  return await streamChildOutput(child, command, onLine, timeoutMs, onTick, isProgressing);
 }
 
 // Quote-aware argv splitter for the #edr-shim translation above: tokens are
@@ -1226,7 +1253,7 @@ async function runSpawnStream(command, args, cwd, onLine, envOverride) {
 // to its accumulator EXACTLY once and the line splitter keeps its own buffer
 // (the old pump never wrote stdout - always empty in failure messages - and
 // double-counted stderr partial lines across chunks).
-async function streamChildOutput(child, command, onLine, timeoutMs, onTick) {
+async function streamChildOutput(child, command, onLine, timeoutMs, onTick, isProgressing) {
   // Watchdog: grandchildren can inherit and hold the stdio pipes, so the
   // child's 'exit' may fire but 'close' never does and callers hang. If the
   // stream goes silent for 20s AFTER the child exits, force-settle.
@@ -1255,14 +1282,44 @@ async function streamChildOutput(child, command, onLine, timeoutMs, onTick) {
     if (tickTimer) clearInterval(tickTimer);
   };
   if (timeoutMs && timeoutMs > 0) {
-    deadlineTimer = setTimeout(() => {
-      if (process.platform === "win32" && child.pid) {
-        try { spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" }); } catch { /* best effort */ }
-      }
-      try { child.kill("SIGKILL"); } catch { /* already gone */ }
-      settle?.reject(new Error(`timed out after ${Math.round(timeoutMs / 1000)}s: ${command.slice(0, 120)}`));
-    }, timeoutMs);
-    deadlineTimer.unref?.();
+    // #progress-aware (E2E case A, 2026-11-18): endpoint-security throttles
+    // the virgin-machine plugin copy to ~0.4MB/s - the full ~900MB closure
+    // can legitimately take 30+ minutes while ticks keep flowing. A flat
+    // deadline killed it mid-copy and the ladder restarted from scratch
+    // every time. When the caller supplies isProgressing() and it reports
+    // forward motion, PUSH the deadline instead of killing; hard cap at
+    // 45 min so a truly wedged copy still dies.
+    const HARD_CAP_MS = 45 * 60 * 1000;
+    const startedAtMs = Date.now();
+    const armDeadline = () => {
+      deadlineTimer = setTimeout(() => {
+        if (typeof isProgressing === "function") {
+          try {
+            if (isProgressing() && Date.now() - startedAtMs < HARD_CAP_MS) {
+              armDeadline(); // still copying - extend
+              return;
+            }
+          } catch { /* probe error - fall through to kill */ }
+        }
+        // #main-freeze (E2E case A, 2026-11-18): the deadline kill used a
+        // BLOCKING spawnSync(taskkill) - when taskkill itself wedged on the
+        // stuck install tree it froze the ENTIRE main process (no ticks, no
+        // retries, no IPC events; renderer stuck at the WARNING line for
+        // 10+ minutes). Fire-and-forget async kill instead; the reject below
+        // must ALWAYS run so the caller's retry ladder decides.
+        if (process.platform === "win32" && child.pid) {
+          try {
+            const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true, detached: true });
+            killer.unref?.();
+            setTimeout(() => { try { killer.kill(); } catch { /* raced */ } }, 15_000).unref?.();
+          } catch { /* best effort */ }
+        }
+        try { child.kill("SIGKILL"); } catch { /* already gone */ }
+        settle?.reject(new Error(`timed out after ${Math.round(timeoutMs / 1000)}s: ${command.slice(0, 120)}`));
+      }, timeoutMs);
+      deadlineTimer.unref?.();
+    };
+    armDeadline();
   }
   if (onTick) {
     const startedAt = Date.now();
