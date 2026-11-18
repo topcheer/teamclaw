@@ -1048,6 +1048,72 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
             if (++alarmedThisPass >= 1) break; // storm cap: one per pass
           }
         }
+        // #5785 (ggcode, 2026-11-18): undelivered-PR audit - the PR-face
+        // sibling of the orphan-result audit above. A completed WRITE task
+        // delivers on TWO faces: the issue/review comment (verified above)
+        // and the push+createPR leg, which per the WRITE collaboration
+        // contract ONLY the write-back ladder performs. The orphan audit is
+        // comment-shaped: a worker direct-post on the issue face back-fills
+        // deliveredResults and silences it, while the PR face never came
+        // into existence (live: branch pushed, zero PR across a 10m42s
+        // three-probe window, writebacks [] throughout, gate silent - the
+        // issue-face delivery masked the missing PR face entirely).
+        // Contract: a completed WRITE task inside the audit window must
+        // (a) still own a write-back entry (the ladder owns its PR face;
+        // delivery failures surface via the retry ladder and the
+        // "completed task delivery LOST" alarm), or (b) carry a durable
+        // PR-face record (prDeliveries - stamped at prune time from
+        // entry.prUrl), or (c) show a PR (any state) whose head is its task
+        // branch. None of the three => ONE undelivered-PR alarm line.
+        let prAlarmedThisPass = 0;
+        for (const task of Object.values(state0.tasks ?? {})) {
+          if (!task?.id || task.status !== "completed" || !task.result || !task.id.startsWith("teamauto-")) continue;
+          // Same shape predicate as the delivery path's isTeamAutoWrite:
+          // only dispatched WRITE tasks carry the PR-face contract.
+          if (task.writeMode !== "write" || !task.projectDir?.includes("__task-")) continue;
+          // The window math needs completedAt (the task system stamps it on
+          // completion); tasks without it are not judgeable here.
+          if (!task.completedAt) continue;
+          if (Date.now() - task.completedAt > 6 * 3600_000) continue;
+          if (s.undeliveredPrAlarms?.[task.id]) continue;
+          // Same #5777 grace as the orphan audit: a slow ladder delivery (or
+          // a manual push+PR) gets its window before judgement.
+          if (Date.now() - task.completedAt < 10 * 60_000) continue;
+          if (s.writebacks.some((w) => w.taskId === task.id)) continue;
+          if (s.prDeliveries?.[task.id]) continue;
+          const prRepoMatch = /TeamAuto autonomous work for ([\w./-]+)\./.exec(`${task.description}`);
+          const taskBranch = `teamclaw/task-${task.id.replace(/[^\w-]/g, "")}`;
+          let prFaceUrl: string | null = null;
+          if (prRepoMatch) {
+            const [prOwner, prName] = prRepoMatch[1].split("/");
+            // Distinguish fetch FAILURE (null -> retry next settle pass; a
+            // blip must not gate the check permanently) from a definitive
+            // empty list (-> alarm).
+            const pulls = await ghClient.listPullsByHead(prOwner, prName, taskBranch).catch(() => null);
+            if (pulls === null) continue;
+            const hit = pulls.find((p) => p.htmlUrl) ?? pulls[0];
+            if (hit) prFaceUrl = hit.htmlUrl || `#${hit.number}`;
+          }
+          s.undeliveredPrAlarms ??= {};
+          s.undeliveredPrAlarms[task.id] = Date.now();
+          auditDirty = true;
+          if (prFaceUrl) {
+            s.prDeliveries ??= {};
+            s.prDeliveries[task.id] = prFaceUrl;
+            recordActivity(s, { at: Date.now(), repoId: prRepoMatch?.[1] ?? "*", kind: "writeback", text: `PR face verified: ${task.id} has no write-back entry but PR ${prFaceUrl} exists for branch ${taskBranch} - createPR fired through another path (undelivered-PR audit pardon, #5785)` });
+          } else {
+            recordActivity(s, { at: Date.now(), repoId: prRepoMatch?.[1] ?? "*", kind: "writeback", text: `undelivered-PR alarm: task ${task.id} completed (WRITE) with NO write-back entry and no PR from branch ${taskBranch} - the createPR leg never fired (enqueue-side registration skipped; the issue-face delivery masked it - #5785)` });
+            logger.warn(`TeamAuto: undelivered PR for completed WRITE task ${task.id} (branch ${taskBranch})`);
+            // Same #5738 discipline as the orphan alarm: persist the gate on
+            // the alarming branch, not only at the block tail.
+            await saveTeamAutoStore(s).catch(() => {});
+          }
+          if (++prAlarmedThisPass >= 1) break; // storm cap: one per pass
+        }
+        if (s.undeliveredPrAlarms && Object.keys(s.undeliveredPrAlarms).length > 200) {
+          const prGateEntries = Object.entries(s.undeliveredPrAlarms).sort((a, b) => a[1] - b[1]);
+          for (const [k] of prGateEntries.slice(0, prGateEntries.length - 100)) delete s.undeliveredPrAlarms[k];
+        }
         if (Object.keys(s.orphanResultAlarms).length > 200) {
           const entries = Object.entries(s.orphanResultAlarms).sort((a, b) => a[1] - b[1]);
           for (const [k] of entries.slice(0, entries.length - 100)) delete s.orphanResultAlarms[k];
@@ -1211,6 +1277,11 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
                   // the retry ladder - the task's work is on the remote.
                   body = `${body}\n\nWork for this task was already delivered on branch \`${branch}\` (previous delivery).`;
                   recordActivity(s, { at: Date.now(), repoId, kind: "writeback", text: `already delivered on ${branch} - skipped duplicate push/PR` });
+                  // #5785: this shape delivered a PR in a previous
+                  // incarnation - record the PR face so the settle audit
+                  // does not re-verify it against GitHub forever after.
+                  s.prDeliveries ??= {};
+                  s.prDeliveries[task.id] = `branch:${branch} (previous delivery)`;
                 } else {
                   const pr = await client.createPullRequest(repoId.split("/")[0]!, repoId.split("/")[1]!, branch, info.defaultBranch, `[teamclaw:${role}] ${task.title.replace(/^\[[^\]]+\]\s*/, "")}`.slice(0, 120), `${task.result.trim()}\n${MARKER_FOOTER(role)}`);
                   entry.prUrl = pr.url;
@@ -1400,9 +1471,17 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     // Without this, every normally-delivered task alarms as an orphan once
     // its entry is pruned and its ok line rolls off the ring.
     s.deliveredResults ??= {};
+    s.prDeliveries ??= {};
     for (const w of s.writebacks) {
       if (w.doneAt) {
         s.deliveredResults[w.taskId] = w.doneAt;
+        // #5785: PR-face delivery must be durable too - the entry (and its
+        // prUrl) dies at the prune below, and the undelivered-PR audit needs
+        // to tell "PR opened, entry pruned" apart from "registration never
+        // happened" without re-probing GitHub for every healthy task.
+        if (w.prUrl) {
+          s.prDeliveries[w.taskId] = w.prUrl;
+        }
       }
     }
     const deliveredEntries = Object.entries(s.deliveredResults);
@@ -1436,14 +1515,24 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     if (s.writebacks.some((w) => w.taskId === taskId)) {
       return;
     }
-    // #269 per-target dedupe (enqueue side): a second registration for
-    // the SAME target + action with no doneAt yet is a duplicate in the
-    // making - the delivery pass would fan out two comments onto one
-    // target. Skip it; the pending original still delivers the content.
-    // targetId null (create* actions) cannot be target-deduped pre-delivery
-    // and is excluded by the taskId check above.
+    // #5785 (ggcode, 2026-11-18): the enqueue-side per-target dedupe is
+    // REMOVED. It skipped a registration whenever ANY pending entry aimed at
+    // the same target + action, on the assumption "the pending original
+    // still delivers the content" - but write-back content is per-task
+    // (task.result): a different task's entry delivers ITS OWN result,
+    // never this one. Live shape: a later leg on the same issue enrolled
+    // while an earlier leg's entry was still pending; the later task's
+    // registration was silently swallowed, so its completed WRITE result
+    // never entered the ladder - the branch sat on the remote with no PR
+    // (writebacks [] across the whole 10m42s observation window) and only
+    // the worker's issue-face direct-post kept the orphan audit quiet.
+    // Duplicate protection is fully covered by the other three guards:
+    //   (1) same-taskId idempotency above (a re-registration of ONE task),
+    //   (2) the #269 delivery-side per-target cap (ONE entry per target key
+    //       per pass - co-target rows serialize across 20s passes), and
+    //   (3) exact-body dedupe at post time (worker direct-posts).
     if (targetId != null && s.writebacks.some((w) => w.targetId === targetId && w.repoId === repoId && w.action === action && !w.doneAt)) {
-      return;
+      recordActivity(s, { at: Date.now(), repoId, kind: "writeback", text: `co-target write-back registered: ${taskId} joins ${s.writebacks.filter((w) => w.targetId === targetId && w.repoId === repoId && w.action === action && !w.doneAt).length} pending ${action} row(s) on #${targetId} - rows serialize via the delivery-side per-pass cap (#5785)` });
     }
     s.writebacks.push({ taskId, action, repoId, targetId, doneAt: null, prUrl: null, error: null, cycleKey });
     await saveTeamAutoStore(s);

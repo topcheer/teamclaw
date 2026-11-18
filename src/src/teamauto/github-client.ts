@@ -215,6 +215,25 @@ export function createGithubClient(auth: GithubAuthManager) {
       });
     },
 
+    /** #5785: PRs (any state) whose head is exactly this branch - the
+     * PR-face evidence surface. The settle audit asks "did this WRITE task's
+     * PR ever come into existence", which no comment surface can answer (an
+     * issue direct-post masks the missing PR). Mirrors the sentinel's
+     * pulls?head= REST probe. */
+    async listPullsByHead(owner: string, repo: string, branch: string): Promise<Array<{ number: number; state: string; htmlUrl: string }>> {
+      const { data } = await request("GET", `/repos/${owner}/${repo}/pulls?head=${encodeURIComponent(`${owner}:${branch}`)}&state=all&per_page=10`);
+      if (!Array.isArray(data)) {
+        return [];
+      }
+      return (data as Record<string, unknown>[])
+        .map((raw) => ({
+          number: Number(raw.number ?? 0),
+          state: String(raw.state ?? ""),
+          htmlUrl: String(raw.html_url ?? ""),
+        }))
+        .filter((p) => p.number > 0);
+    },
+
     async listCommits(owner: string, repo: string, sinceSha: string): Promise<{ sha: string; message: string }[]> {
       const suffix = sinceSha ? `?sha=${encodeURIComponent(sinceSha)}` : "?per_page=20";
       void suffix;
