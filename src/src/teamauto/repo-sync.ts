@@ -299,13 +299,14 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     // wtName carries the teamauto/ level for the REL path; the physical dir is
     // a SIBLING of the base checkout (path.join would nest teamauto/ twice).
     const wtPath = path.join(path.dirname(base), path.basename(wtName));
-    if (!(await fs.access(path.join(wtPath, ".git")).then(() => true, () => false))) {
+    const wtExists = await fs.access(path.join(wtPath, ".git")).then(() => true, () => false);
+    if (!wtExists) {
       // #stale-base (user report 2026-11-14): ensureCloned (fetch + reset to
       // the default-branch tip) only ran at BIND time (learnNorms), so the
       // base checkout's HEAD drifted days behind origin/main and EVERY new
       // task worktree branched from stale code. Refresh the base right
       // before creating a new branch off it - same fetch+reset as
-      // ensureCloned. Existing worktrees (resume path) are left untouched.
+      // ensureCloned.
       if (defaultBranch && cloneUrl) {
         try {
           const authed = await tokenizedUrl(cloneUrl);
@@ -317,6 +318,36 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
       }
       await run(["worktree", "add", "-b", taskBranchName(taskId), wtPath, "HEAD"], base);
       logger.warn(`TeamAuto: worktree ${wtName} (branch ${taskBranchName(taskId)}) for ${taskId}`);
+    } else {
+      // #resume-sync (user 2026-11-18): a RESUMED task (retry / review
+      // follow-up) used to continue on the ORIGINAL base untouched - the
+      // comment above explicitly left resume paths stale. On repos that
+      // move fast, a worktree alive for hours is guaranteed behind, all
+      // retried work lands on a superseded base, and the divergence only
+      // surfaces at push (single-shot #5651 rebase self-heal or dead
+      // letter). Sync BEFORE resuming: fetch the main tree, count how far
+      // behind this branch is, rebase when behind (dirty trees via
+      // autostash). Best-effort: on any failure we continue on the current
+      // base exactly as before - delivery-time self-heal still applies.
+      try {
+        await run(["fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"], base).catch(async () => {
+          const db = defaultBranch || (await run(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], base).then((o) => o.trim(), () => ""));
+          if (db) await run(["fetch", "origin", `+refs/heads/${db}:refs/remotes/origin/${db}`], base);
+        });
+        const behindOut = await run(["rev-list", "--count", "HEAD..origin/main"], wtPath).catch(() => "");
+        const behind = Number(behindOut.trim()) || 0;
+        if (behind > 0) {
+          logger.warn(`TeamAuto: resume-sync ${repoId}#${taskId}: branch is ${behind} commit(s) behind main - rebasing before work continues`);
+          try {
+            await run(["rebase", "--autostash", "origin/main"], wtPath);
+          } catch (rebaseErr) {
+            await run(["rebase", "--abort"], wtPath).catch(() => {});
+            logger.warn(`TeamAuto: resume-sync rebase failed for ${repoId}#${taskId} (continuing on current base; delivery-time self-heal applies): ${rebaseErr instanceof Error ? rebaseErr.message : String(rebaseErr)}`);
+          }
+        }
+      } catch (err) {
+        logger.warn(`TeamAuto: resume-sync skipped for ${repoId}#${taskId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
     // Refresh the in-use sentinel on create AND resume (#173 follow-up 2).
     await writeTaskLock(wtPath);
