@@ -1255,16 +1255,25 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
             // feedback (reviews + comments, whitespace-normalized): an exact
             // match means delivery already happened through the other
             // channel - mark done and record the skip.
-            const normalized = body.replace(/\s+/g, " ").trim();
+            // #5783: the prComment channel shipped BARE worker results - no
+            // MARKER_FOOTER - so the evidence predicate (#5777-#5781 chain)
+            // never matched its own deliveries and every prReview leg
+            // false-alarmed. Append the footer like every other channel.
+            const bodyWithFooter = `${body}\n${MARKER_FOOTER(role)}`;
+            // Dedupe stays shape-agnostic: normalize both sides AFTER
+            // stripping an optional footer, so a worker direct-post (bare)
+            // and the ladder body (footered) compare equal.
+            const stripFooter = (t: string) => t.replace(/\n?---\n\[teamclaw:[^\]]+\][^\n]*$/m, "");
+            const normalized = stripFooter(body).replace(/\s+/g, " ").trim();
             const existing = await client.getPullFeedbackBodies(owner, name, entry.targetId).catch(() => [] as string[]);
-            if (existing.includes(normalized)) {
+            if (existing.some((b) => stripFooter(b).replace(/\s+/g, " ").trim() === normalized)) {
               entry.doneAt = Date.now();
               entry.inFlightAt = undefined;
               writebackDone = true;
               recordActivity(s, { at: Date.now(), repoId: entry.repoId, kind: "writeback", text: `dedupe-skipped: identical review body already on PR #${entry.targetId} (worker direct-post) - ladder posting skipped` });
               logger.info(`TeamAuto: write-back ${entry.taskId} prComment deduped - identical body already on PR #${entry.targetId}`);
             } else {
-              await client.postPullReviewComment(owner, name, entry.targetId, body);
+              await client.postPullReviewComment(owner, name, entry.targetId, bodyWithFooter);
               entry.doneAt = Date.now();
               entry.inFlightAt = undefined;
               writebackDone = true;
