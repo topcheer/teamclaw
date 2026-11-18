@@ -1706,8 +1706,35 @@ async function seedStandaloneConfig(preferredVendor, controllerPort, teamProfile
   return dst;
 }
 
+// #sqlite-snapshot-corpses (E2E case A, 2026-11-18): every ungraceful exit
+// (watchdog kill, app force-quit) leaves an openclaw-sqlite-readonly-v2-<uuid>
+// snapshot dir under state/cache/openclaw. The NEXT gateway boot runs
+// "shared-state discovery snapshot cleanup" over ALL of them - one locked
+// corpse (EDR holding a handle) aborts the ENTIRE CLI ("snapshot cleanup
+// failed" -> gateway-run-bootstrap failed -> process exits, no announce).
+// Sweep the corpses right before every spawn, when nothing of ours holds
+// them. Best-effort with Windows retries; survivors keep the old behavior.
+function sweepSqliteSnapshotCorpses(stateDir) {
+  const root = path.join(stateDir, "cache", "openclaw");
+  try {
+    for (const e of fsSync.readdirSync(root, { withFileTypes: true })) {
+      if (!e.isDirectory() || !e.name.startsWith("openclaw-sqlite-readonly-")) continue;
+      try {
+        fsSync.rmSync(path.join(root, e.name), { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+      } catch { /* locked corpse - gateway's own cleanup retries */ }
+    }
+  } catch { /* no cache dir yet */ }
+}
+
 async function standaloneStart(preferredVendor, remembered, teamProfile) {
-  if (STANDALONE.child) return { ok: true, alreadyRunning: true, port: STANDALONE.port };
+  // #wizard-reentry (E2E case A, 2026-11-18 run 3): this used to early-return
+  // {ok:true, alreadyRunning:true, port} when a child was live - a BARE object
+  // with NO controllerUrl. The wizard's explicit start then hit app.js's
+  // "no controller URL (announce timeout)" branch INSTANTLY (0s, no announce
+  // wait at all) while the auto-started child was still mid-boot. An explicit
+  // standaloneStart is a request for a FULL fresh boot: fall through - the
+  // #wizard-reentry kill block below reaps our own child, and the flow
+  // returns a proper controllerUrl from the fresh announce.
   // Port memory: reuse the ports recorded in settings.instance so restarts
   // land on the SAME gateway/controller ports (probed + persisted below).
   const bin = await standaloneBinary();
@@ -1846,6 +1873,16 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
     } catch { return null; }
   };
   await reensureRuntimeTree();
+  // #sqlite-snapshot-corpses: must run after the old gateway is DEAD (kill
+  // above) and BEFORE the new spawn - corpses from the kill itself are the
+  // ones that abort the fresh boot's snapshot cleanup.
+  sweepSqliteSnapshotCorpses(standaloneStateDir());
+  // #fresh-announce (E2E case A): the initial announce loop used to regex the
+  // WHOLE gateway.log - an announce line from a PREVIOUS boot (dead gateway)
+  // matched instantly and masked a failed fresh boot. Baseline the count
+  // before spawning (same discipline as respawn below); only NEW lines count.
+  const logText0 = await (async () => { try { return await fs.readFile(logPath, "utf8"); } catch { return ""; } })();
+  const announceBaseline = (logText0.match(/Controller: Web UI available at/g) || []).length;
   const child = spawnGatewayProcess(bin, ["gateway", "--port", String(STANDALONE.port)], {
     cwd: standaloneStateDir(),
     env: sandboxEnvFor(standaloneStateDir()),
@@ -1866,12 +1903,22 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
   // #ctrl-announce (user log 2026-11-14): 40s was too tight when the
   // fs-safe native is dead (ERR_DLOPEN_FAILED) - every private-dir check
   // goes through the packaged .NET helper and the plugin controller can
-  // take well over a minute to announce. 90 rounds before falling back.
-  for (let i = 0; i < 90 && !controllerUrl; i++) {
+  // take well over a minute to announce. #edr-slow (E2E case A, 2026-11-18
+  // run 4): endpoint-security throttling pushes a FULL healthy boot past
+  // 90s (workspace admission + 76-plugin metadata scan alone eat ~60s on
+  // spinning-disk AV machines) - the loop gave up while the controller was
+  // demonstrably mid-boot (admission phases streaming). 240 rounds before
+  // falling back.
+  for (let i = 0; i < 240 && !controllerUrl; i++) {
     try {
       const log = await fs.readFile(logPath, "utf8");
-      const m = log.match(/Controller: Web UI available at http:\/\/127\.0\.0\.1:(\d+)/);
-      if (m) controllerUrl = `http://127.0.0.1:${m[1]}`;
+      const count = (log.match(/Controller: Web UI available at/g) || []).length;
+      if (count > announceBaseline) {
+        const all = log.match(/Controller: Web UI available at http:\/\/127\.0\.0\.1:(\d+)/g) || [];
+        const last = all[all.length - 1] || "";
+        const m = last.match(/:(\d+)$/);
+        if (m) controllerUrl = `http://127.0.0.1:${m[1]}`;
+      }
     } catch { /* log not written yet */ }
     if (!controllerUrl) await new Promise((r) => setTimeout(r, 1000));
   }
@@ -1906,6 +1953,13 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
       try { killGatewayTree(settle); } catch { /* already gone */ }
       await new Promise((r) => { settle.once("exit", r); setTimeout(r, 3000); });
     } catch { /* best-effort settle; the respawn below still runs */ }
+    // #sqlite-snapshot-corpses (E2E case A run 5): the settle boot above is a
+    // CORPSE FACTORY - killed mid-discovery, it leaves a fresh
+    // openclaw-sqlite-readonly snapshot that the NEXT boot's cleanup trips
+    // over (locked by EDR mid-scan). Sweep AFTER the settle (not before):
+    // by now the settle process is dead and its locks are clearing, while
+    // rmSync retries ride out the tail of the AV scan.
+    sweepSqliteSnapshotCorpses(standaloneStateDir());
     const child2 = spawnGatewayProcess(bin, ["gateway", "--port", String(STANDALONE.port)], {
       cwd: standaloneStateDir(),
       env: sandboxEnvFor(standaloneStateDir()),
@@ -1943,6 +1997,41 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
     if (/Refusing to run gateway state preparation/.test(t)) {
       controllerUrl = await respawn();
     }
+  }
+  // Family 3 - snapshot-corpse cleanup abort (E2E case A run 5): the boot's
+  // OWN "Shared-state discovery snapshot cleanup" can fail on a corpse that
+  // a just-killed worker/settle left behind while EDR still holds a handle -
+  // the CLI then aborts with zero announce. Round 0: sweep + respawn (locks
+  // usually clear after process death). Round 1 (NUCLEAR): the corpses can
+  // be held by the boot's OWN live workers, so no amount of sweeping helps
+  // while anything runs - kill the tree, then delete the ENTIRE cache dir
+  // (it is a cache: regenerable by design; the wizard rebuilds state) and
+  // respawn on a pristine discovery.
+  for (let round = 0; round < 2 && !controllerUrl; round++) {
+    const t = await logText();
+    if (!/Shared-state discovery snapshot cleanup failed/.test(t)) break;
+    if (round === 1) {
+      try { killGatewayTree(STANDALONE.child); } catch { /* gone */ }
+      await new Promise((r) => setTimeout(r, 2500));
+      const cacheRoot = path.join(standaloneStateDir(), "cache");
+      for (let a = 0; a < 6; a++) {
+        try { fsSync.rmSync(cacheRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 }); break; }
+        catch { await new Promise((r) => setTimeout(r, 1000)); }
+      }
+    } else {
+      // aggressive re-sweep: locks clear after process death; retry while any
+      // corpse survives (each sweep does 3 rmSync attempts per corpse)
+      for (let a = 0; a < 10; a++) {
+        sweepSqliteSnapshotCorpses(standaloneStateDir());
+        let left = 0;
+        try {
+          left = fsSync.readdirSync(path.join(standaloneStateDir(), "cache", "openclaw")).filter((n) => n.startsWith("openclaw-sqlite-readonly-")).length;
+        } catch { /* dir gone - nothing left */ }
+        if (left === 0) break;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    }
+    controllerUrl = (await respawn()) || null;
   }
   // First-boot worker race auto-heal (user-found): a provisioned worker can
   // spawn inside the gateway's config-normalization window and die on the
