@@ -1732,6 +1732,14 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       if (task?.status !== "failed" || typeof task.description !== "string" || !task.description.includes("Idempotency-Key:")) {
         continue;
       }
+      // #5823-loop: "Cancelled: ..." terminal states (#5818 closed / #5823
+      // stand-down) are VERDICTS, not failures - recovering them re-opens the
+      // issue, the next leg re-verdicts the same way, and the pair loops
+      // forever burning a leg per sweep (live: #5827/#5829 two-loop at
+      // 11:32/11:47). #claim-recovery is for real execution failures only.
+      if (typeof task.error === "string" && task.error.startsWith("Cancelled:")) {
+        continue;
+      }
       if (s.failedClaimRecovery[taskId]) {
         continue;
       }
