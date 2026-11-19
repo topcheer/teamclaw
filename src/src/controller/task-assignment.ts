@@ -673,6 +673,16 @@ export async function runAutoAssignRound(
               t.status = "failed";
               t.error = "Cancelled: target issue was closed before dispatch (#5818) - no work performed.";
               t.updatedAt = Date.now();
+              // #5825: cancelTaskExecution never resets the worker record,
+              // and cancelling also suppresses the worker-side completion
+              // report - so nothing ever flipped the seat idle. Release here
+              // (same shape as the normal completion path) or the worker
+              // stays orphan-busy forever (live: 2 busy, 1 in_progress).
+              const w = s.workers[nextAssignment.worker.id];
+              if (w && w.currentTaskId === updatedTask.id) {
+                w.status = "idle";
+                w.currentTaskId = undefined;
+              }
             });
             wsServer.broadcastUpdate({ type: "task:updated", data: serializeTask(deps.getTeamState()?.tasks[updatedTask.id] ?? updatedTask) });
           })().catch(() => {});
@@ -707,6 +717,12 @@ export async function runAutoAssignRound(
               t.status = "failed";
               t.error = `Cancelled: claim stood down (${claim.reason}) - another seat/owner owns the issue (#5823). No work performed.`;
               t.updatedAt = Date.now();
+              // #5825: same orphan-busy release as the #5818 branch above.
+              const w = s.workers[nextAssignment.worker.id];
+              if (w && w.currentTaskId === updatedTask.id) {
+                w.status = "idle";
+                w.currentTaskId = undefined;
+              }
             });
             clearAssignmentHold(updatedTask.id, deps);
             wsServer.broadcastUpdate({ type: "task:updated", data: serializeTask(deps.getTeamState()?.tasks[updatedTask.id] ?? updatedTask) });
