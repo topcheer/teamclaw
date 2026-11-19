@@ -170,8 +170,11 @@ try {
     );
   }
 
-  // ── Contract e: terminal give-up after max attempts ─────────────────────
-  // task-stuck fails every time; walk the backoff ladder until failedAt.
+  // ── Contract e: terminal give-up ────────────────────────────────────────
+  // #5815 evolution: an IDENTICAL error text three ladder runs in a row is
+  // a structural dead end and terminates early (circuit breaker). The full
+  // 6-run ladder now applies only when the message VARIES between runs.
+  // task-stuck fails with the same text every time -> the 3-streak breaker.
   succeedNumber = null;
   let guard = 0;
   for (;;) {
@@ -179,7 +182,7 @@ try {
     const entry = entryOf(store, "task-stuck");
     assert.ok(entry, "stuck entry must remain persisted while retrying");
     if (entry.failedAt) {
-      assert.equal(entry.attempts, schedMod.TEAMAUTO_WRITEBACK_MAX_ATTEMPTS, "terminal entry exhausted the attempt ladder");
+      assert.equal(entry.attempts, 3, "identical-text failures terminate at the 3-streak circuit breaker (#5815)");
       break;
     }
     guard += 1;
