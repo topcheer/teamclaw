@@ -145,8 +145,6 @@ export class ProcessProvisioner implements WorkerProvisionerBackend {
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_SKIP_CANVAS_HOST: "1",
-        TEAMCLAW_WORKER_ID: spec.workerId,
-        TEAMCLAW_LAUNCH_TOKEN: spec.launchToken,
         // #disk-hygiene (screenshot report 2026-11-19): worker go builds can
         // accumulate gigabytes of go-build/go-link dirs in the HOME tmp when
         // deployments want them on a scratch volume. Opt-in ONLY - hardcoded
@@ -154,9 +152,12 @@ export class ProcessProvisioner implements WorkerProvisionerBackend {
         // operator sets TEAMCLAW_GOCACHE / TEAMCLAW_GOTMPDIR, they are
         // forwarded as GOCACHE / GOTMPDIR (an externally-set GOCACHE already
         // flows through ...process.env untouched and is never overridden);
-        // unset -> Go defaults apply exactly as before.
+        // unset -> Go defaults apply exactly as before. Kept ABOVE the
+        // workspaceDir spread so the contract test's env-tail shape holds.
         ...(process.env.TEAMCLAW_GOCACHE && !process.env.GOCACHE ? { GOCACHE: process.env.TEAMCLAW_GOCACHE } : {}),
         ...(process.env.TEAMCLAW_GOTMPDIR && !process.env.GOTMPDIR ? { GOTMPDIR: process.env.TEAMCLAW_GOTMPDIR } : {}),
+        TEAMCLAW_WORKER_ID: spec.workerId,
+        TEAMCLAW_LAUNCH_TOKEN: spec.launchToken,
         ...(spec.workspaceDir ? { TEAMCLAW_WORKSPACE_DIR: spec.workspaceDir } : {}),
       },
       stdio: ["ignore", "pipe", "pipe"],
