@@ -186,6 +186,7 @@ function openClawSpawnPlan(bin, args) {
   }
   const binDir = path.dirname(bin);
   entryCandidates.push(path.join(binDir, "..", "openclaw", "openclaw.mjs")); // <tree>/node_modules/.bin/<name>
+  entryCandidates.push(path.join(binDir, "..", "runtime", "node_modules", "openclaw", "openclaw.mjs")); // bundled/shims/<name>.cmd (#edr-shim)
   entryCandidates.push(path.join(binDir, "..", "lib", "node_modules", "openclaw", "openclaw.mjs")); // <prefix>/bin + posix npm global
   entryCandidates.push(path.join(binDir, "node_modules", "openclaw", "openclaw.mjs")); // windows npm global <prefix>/<name>.cmd
   for (const entry of entryCandidates) {
@@ -283,13 +284,29 @@ async function getLocalSetupInfo() {
 
 async function runShellCommand(command, options = {}) {
   const cwd = String(options.cwd || "").trim() || process.cwd();
-  const child = spawn(command, {
-    cwd,
-    env: options.env || process.env,
-    shell: true,
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsHide: true,
-  });
+  // #edr-shim: same translation as runShellStream - never hand OUR
+  // `"<abs openclaw bin>" ...` strings to cmd.exe (endpoint security cleans
+  // the openclaw package tree after a cmd-wrapped shim exits). isRegistered
+  // / config-read style calls go through here on every launch.
+  let child;
+  const shimCmd = command.match(/^"([^"]*[\\/]openclaw(?:\.cmd|\.mjs|\.bat)?)"\s*([\s\S]*)$/);
+  const plan = shimCmd ? openClawSpawnPlan(shimCmd[1], splitQuotedArgs(shimCmd[2])) : null;
+  if (plan) {
+    child = spawn(plan.command, plan.args, {
+      cwd,
+      env: { ...(options.env || process.env), ...plan.env },
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+  } else {
+    child = spawn(command, {
+      cwd,
+      env: options.env || process.env,
+      shell: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+  }
 
   let stdout = "";
   let stderr = "";
@@ -790,12 +807,55 @@ async function ensureOpenClawRuntime({ source, artifactUrl }, onEvent) {
 function sandboxEnvFor(stateDir) {
   const cacheDir = path.join(stateDir, "cache");
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  // #runtime-pin (2026-11-18): the desktop bundle OWNS the openclaw runtime
+  // version (OPENCLAW_PIN at build time). When a bundle pins an older
+  // runtime than the one that last wrote this machine's config (e.g. the
+  // 2026.11.5 snapshot-cleanup regression -> pin back to 2026.11.4),
+  // openclaw refuses to boot: "binary is older than the config last written
+  // by...". That downgrade is INTENTIONAL here - the bundled runtime is the
+  // source of truth, not whatever previously ran on PATH. Allow it.
+  env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = "1";
   if (process.platform === "win32") {
     env.LOCALAPPDATA = cacheDir;
   } else {
     env.XDG_CACHE_HOME = cacheDir;
   }
   return env;
+}
+
+// #stale-plugin-stage (user report 2026-11-18 night): the plugin index is
+// DERIVED BY SCANNING extensions/ (installRecords is empty) - every dir with
+// an openclaw.plugin.json gets registered, and a watchdog-killed `plugins
+// install` leaves its `.openclaw-install-stage-*` (or `.fs-safe-move-*.tmp`)
+// staging dir behind WITH a manifest. The scanner then registers the STAGE
+// copy (newer ctime wins) over the real extensions/teamclaw dir, and every
+// boot dies on "Plugin dependency @sinclair/typebox is missing" because the
+// stage dir has no node_modules. Detection: any such stray staging dir.
+function strayPluginStageDirs(stateDir) {
+  const extRoot = path.join(stateDir, "extensions");
+  const out = [];
+  try {
+    for (const e of fsSync.readdirSync(extRoot, { withFileTypes: true })) {
+      if (!e.isDirectory()) continue;
+      const stale = (e.name.startsWith(".fs-safe-move-") && e.name.endsWith(".tmp")) || e.name.startsWith(".openclaw-install-stage-");
+      if (!stale) continue;
+      const p = path.join(extRoot, e.name);
+      if (fsSync.existsSync(path.join(p, "openclaw.plugin.json")) || fsSync.existsSync(path.join(p, "package.json"))) out.push(p);
+    }
+  } catch { /* no extensions dir yet */ }
+  return out;
+}
+
+// Remove orphaned staging dirs (best-effort, Windows handle locks are
+// transient). MUST run before the gateway boots so the plugin scanner only
+// ever sees the real extensions/teamclaw dir.
+function sweepStrayPluginStageDirs(stateDir, onEvent) {
+  for (const stray of strayPluginStageDirs(stateDir)) {
+    try {
+      fsSync.rmSync(stray, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      if (onEvent) onEvent({ phase: "teamclaw", line: `Removed orphaned plugin staging dir: ${path.basename(stray)}` });
+    } catch { /* still locked - the next bootstrap retries the sweep */ }
+  }
 }
 
 async function ensureTeamClawPlugin(openclawBin, onEvent) {
@@ -826,6 +886,14 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
   // Precise: match the plugins-list TABLE row (│ TeamClaw │), not any
   // teamclaw substring - the stock-extensions path line also contains it.
   if (/│\s*TeamClaw\s*│/.test(res.stdout || "")) {
+    // #stale-plugin-stage: the index is scanner-derived, so "installed" plus
+    // stray staging dirs means the scanner is registering the ORPHAN. Sweep
+    // the orphans (the real dir is loadable) - never re-run the install for
+    // this: a fresh install just stages ANOTHER dir and re-poisons the scan.
+    const strays = strayPluginStageDirs(path.join(app.getPath("userData"), "openclaw-state"));
+    if (strays.length > 0) {
+      sweepStrayPluginStageDirs(path.join(app.getPath("userData"), "openclaw-state"), onEvent);
+    }
     onEvent({ phase: "teamclaw", line: "TeamClaw plugin already installed." });
     return;
   }
@@ -872,6 +940,12 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
     // committed to extensions/. If the plugin tree is already present, skip
     // the install step entirely instead of paying for a guaranteed-timeout
     // run on every bootstrap.
+    // #stale-plugin-stage: plugin present + stray staging dirs -> the scanner
+    // is registering the orphan over the real dir. SWEEP the orphans (v3:
+    // re-running the install just created yet another stage dir and re-
+    // poisoned the scan - two full nights of logs prove it). Only pay the
+    // install ladder when the real dir is genuinely absent.
+    sweepStrayPluginStageDirs(sandboxEnv.OPENCLAW_STATE_DIR, onEvent);
     if (extInstalled()) {
       onEvent({ phase: "teamclaw", line: "Bundled plugin already present in the private instance - skipping the install step." });
       installed = true;
@@ -883,12 +957,39 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
         // (fs-safe .NET-helper fallback wedged) - cap each attempt at 3 min
         // with progress ticks; the ladder then short-circuits via the
         // installed-dir check or retries instead of awaiting forever.
+        // #progress-aware: forward motion = the atomic staging copy under
+        // extensions/ gained files since the last probe. Only file COUNT
+        // (cheap readdir walk, no content reads) - enough to distinguish a
+        // crawling-but-alive EDR-throttled copy from a wedged one.
+        let probeLastCount = -1;
+        const stagingProgress = () => {
+          let n = 0;
+          try {
+            for (const e of fsSync.readdirSync(path.join(sandboxEnv.OPENCLAW_STATE_DIR, "extensions"), { withFileTypes: true })) {
+              if (!e.isDirectory() || !(e.name.startsWith(".fs-safe-move-") || e.name.startsWith(".openclaw-install-stage-"))) continue;
+              const countFiles = (d) => { let c = 0; for (const x of fsSync.readdirSync(d, { withFileTypes: true })) { if (x.isDirectory()) c += countFiles(path.join(d, x.name)); else c++; } return c; };
+              try { n += countFiles(path.join(sandboxEnv.OPENCLAW_STATE_DIR, "extensions", e.name)); } catch { /* mid-delete */ }
+            }
+          } catch { /* no extensions dir */ }
+          const moving = n > probeLastCount;
+          probeLastCount = n;
+          return moving;
+        };
         await runShellStream(
           installCmd, runtimeDir,
           (line) => onEvent({ phase: "teamclaw", line }),
           sandboxEnv,
-          180_000,
+          // #cold-install (E2E case A): a virgin-machine install copies the
+          // full plugin+deps closure (~77k files) into extensions/ - that
+          // took 10+ minutes on the reference machine. The old 180s deadline
+          // was guaranteed to fire mid-copy, and the retry ladder restarted
+          // the whole copy each time. One generous attempt that EXTENDS while
+          // the staging copy is still growing (hard cap 45 min); the
+          // installed-dir short-circuit still catches committed installs on
+          // watchdog fire.
+          600_000,
           (secs) => onEvent({ phase: "teamclaw", line: `Install still running (${secs}s)...` }),
+          stagingProgress,
         );
         installed = true;
       } catch (installErr) {
@@ -952,6 +1053,10 @@ async function ensureTeamClawPlugin(openclawBin, onEvent) {
       await sealDir(runtimeNM);
       onEvent({ phase: "teamclaw", line: `Deps sealed: ${sealed} packages (${skipped} skipped).` });
     }
+    // #stale-plugin-stage: final sweep after any install ladder run - a
+    // watchdog-killed attempt leaves its stage dir behind and the scanner
+    // would register it on the next boot.
+    sweepStrayPluginStageDirs(sandboxEnv.OPENCLAW_STATE_DIR, onEvent);
     return;
   }
   await runShellStream(`npm install --prefix "${runtimeDir}" @teamclaws/teamclaw@latest`, runtimeDir, (line) =>
@@ -1088,7 +1193,29 @@ ipcMain.handle("llm:write-global", async (_e, llm) => {
 
 // Streamed variant: emits every stdout/stderr line through onLine and
 // resolves with the same result shape as runShellCommand.
-async function runShellStream(command, cwd, onLine, envOverride, timeoutMs, onTick) {
+async function runShellStream(command, cwd, onLine, envOverride, timeoutMs, onTick, isProgressing) {
+  // #edr-shim (user report 2026-11-16 night): endpoint security reacts to
+  // the cmd-wrapper -> electron-as-node -> .mjs script chain and deletes the
+  // openclaw package tree AFTER the shim process exits (short-lived probes
+  // like `"<shim>" --help` or `plugins install` gutted the runtime on every
+  // run; long-lived gateways were only cleaned on exit). Direct
+  // electron-as-node spawns (no cmd.exe in the chain) are NOT flagged. So:
+  // when the command string is one of OUR generated `"<abs openclaw bin>"
+  // <args>` invocations, translate it to a shell-free spawn plan instead of
+  // handing it to cmd.exe. Foreign/n PATH-form commands keep the shell path.
+  const shimCmd = command.match(/^"([^"]*[\\/]openclaw(?:\.cmd|\.mjs|\.bat)?)"\s*([\s\S]*)$/);
+  if (shimCmd) {
+    const plan = openClawSpawnPlan(shimCmd[1], splitQuotedArgs(shimCmd[2]));
+    if (plan) {
+      const child = spawn(plan.command, plan.args, {
+        cwd,
+        env: { ...(envOverride || process.env), ...plan.env },
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
+      return await streamChildOutput(child, command, onLine, timeoutMs, onTick, isProgressing);
+    }
+  }
   const child = spawn(command, {
     cwd,
     env: envOverride || process.env,
@@ -1096,7 +1223,26 @@ async function runShellStream(command, cwd, onLine, envOverride, timeoutMs, onTi
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
-  return await streamChildOutput(child, command, onLine, timeoutMs, onTick);
+  return await streamChildOutput(child, command, onLine, timeoutMs, onTick, isProgressing);
+}
+
+// Quote-aware argv splitter for the #edr-shim translation above: tokens are
+// split on unquoted whitespace and surrounding double quotes are stripped
+// (spawn argv entries must be bare values - the quotes were cmd.exe syntax).
+function splitQuotedArgs(s) {
+  const out = [];
+  let cur = "";
+  let quoted = false;
+  for (const ch of s) {
+    if (ch === '"') { quoted = !quoted; continue; }
+    if (!quoted && /\s/.test(ch)) {
+      if (cur) { out.push(cur); cur = ""; }
+      continue;
+    }
+    cur += ch;
+  }
+  if (cur) out.push(cur);
+  return out;
 }
 
 // Argv-array variant (#223): no shell, no string splicing - for steps where
@@ -1115,7 +1261,7 @@ async function runSpawnStream(command, args, cwd, onLine, envOverride) {
 // to its accumulator EXACTLY once and the line splitter keeps its own buffer
 // (the old pump never wrote stdout - always empty in failure messages - and
 // double-counted stderr partial lines across chunks).
-async function streamChildOutput(child, command, onLine, timeoutMs, onTick) {
+async function streamChildOutput(child, command, onLine, timeoutMs, onTick, isProgressing) {
   // Watchdog: grandchildren can inherit and hold the stdio pipes, so the
   // child's 'exit' may fire but 'close' never does and callers hang. If the
   // stream goes silent for 20s AFTER the child exits, force-settle.
@@ -1144,14 +1290,44 @@ async function streamChildOutput(child, command, onLine, timeoutMs, onTick) {
     if (tickTimer) clearInterval(tickTimer);
   };
   if (timeoutMs && timeoutMs > 0) {
-    deadlineTimer = setTimeout(() => {
-      if (process.platform === "win32" && child.pid) {
-        try { spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" }); } catch { /* best effort */ }
-      }
-      try { child.kill("SIGKILL"); } catch { /* already gone */ }
-      settle?.reject(new Error(`timed out after ${Math.round(timeoutMs / 1000)}s: ${command.slice(0, 120)}`));
-    }, timeoutMs);
-    deadlineTimer.unref?.();
+    // #progress-aware (E2E case A, 2026-11-18): endpoint-security throttles
+    // the virgin-machine plugin copy to ~0.4MB/s - the full ~900MB closure
+    // can legitimately take 30+ minutes while ticks keep flowing. A flat
+    // deadline killed it mid-copy and the ladder restarted from scratch
+    // every time. When the caller supplies isProgressing() and it reports
+    // forward motion, PUSH the deadline instead of killing; hard cap at
+    // 45 min so a truly wedged copy still dies.
+    const HARD_CAP_MS = 45 * 60 * 1000;
+    const startedAtMs = Date.now();
+    const armDeadline = () => {
+      deadlineTimer = setTimeout(() => {
+        if (typeof isProgressing === "function") {
+          try {
+            if (isProgressing() && Date.now() - startedAtMs < HARD_CAP_MS) {
+              armDeadline(); // still copying - extend
+              return;
+            }
+          } catch { /* probe error - fall through to kill */ }
+        }
+        // #main-freeze (E2E case A, 2026-11-18): the deadline kill used a
+        // BLOCKING spawnSync(taskkill) - when taskkill itself wedged on the
+        // stuck install tree it froze the ENTIRE main process (no ticks, no
+        // retries, no IPC events; renderer stuck at the WARNING line for
+        // 10+ minutes). Fire-and-forget async kill instead; the reject below
+        // must ALWAYS run so the caller's retry ladder decides.
+        if (process.platform === "win32" && child.pid) {
+          try {
+            const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true, detached: true });
+            killer.unref?.();
+            setTimeout(() => { try { killer.kill(); } catch { /* raced */ } }, 15_000).unref?.();
+          } catch { /* best effort */ }
+        }
+        try { child.kill("SIGKILL"); } catch { /* already gone */ }
+        settle?.reject(new Error(`timed out after ${Math.round(timeoutMs / 1000)}s: ${command.slice(0, 120)}`));
+      }, timeoutMs);
+      deadlineTimer.unref?.();
+    };
+    armDeadline();
   }
   if (onTick) {
     const startedAt = Date.now();
@@ -1405,7 +1581,14 @@ function spawnGatewayProcess(bin, gatewayArgs, { cwd, env, logPath }) {
     child.wasShellSpawned = true;
   }
   child.on("exit", closeLog);
-  child.on("error", closeLog);
+  child.on("error", (err) => {
+    // #etw-graze (user report 2026-11-18 night): a gutted runtime tree made
+    // every spawn fail ENOENT with ZERO log output - the announce loop spun
+    // silently for 10+ minutes. Write the spawn failure into the gateway log
+    // before closing so the next diagnosis sees the real cause.
+    try { fsSync.writeSync(logFd, `\n[gateway-spawn] spawn failed: ${err && err.message}\n`); } catch { /* fd gone */ }
+    closeLog();
+  });
   return child;
 }
 
@@ -1469,6 +1652,16 @@ async function standaloneBinary() {
   // error path.
   const probe = await probeOpenClawInstall();
   if (probe.installed) return "openclaw";
+  // #cold-start-race (user report 2026-11-16 night): on a first launch with
+  // an empty bundled dir, the renderer readiness gate runs BEFORE the
+  // startup extraction finishes and this throw left the app on a dead shell
+  // with no retry. Provision the bundled runtime here (serialized inside)
+  // and resolve again instead of failing the auto-start.
+  try {
+    const provisioned = await ensureOpenClawRuntime({}, () => {});
+    const retry = provisioned || bundledBinary("openclaw");
+    if (retry) return retry;
+  } catch { /* fall through to the error below */ }
   throw new Error("No OpenClaw runtime available - run the one-click install first.");
 }
 
@@ -1521,11 +1714,81 @@ async function seedStandaloneConfig(preferredVendor, controllerPort, teamProfile
   return dst;
 }
 
+// #sqlite-snapshot-corpses (E2E case A, 2026-11-18): every ungraceful exit
+// (watchdog kill, app force-quit) leaves an openclaw-sqlite-readonly-v2-<uuid>
+// snapshot dir under state/cache/openclaw. The NEXT gateway boot runs
+// "shared-state discovery snapshot cleanup" over ALL of them - one locked
+// corpse (EDR holding a handle) aborts the ENTIRE CLI ("snapshot cleanup
+// failed" -> gateway-run-bootstrap failed -> process exits, no announce).
+// Sweep the corpses right before every spawn, when nothing of ours holds
+// them. Best-effort with Windows retries; survivors keep the old behavior.
+// #stale-owner-lock (E2E case A, 2026-11-18 run 8): openclaw's state
+// ownership locks live under the REAL LocalAppData
+// (OpenClaw/locks/openclaw-state-owners/state.<hash>.lock - the .NET helper
+// resolves LocalAppData via the Windows known-folder API, which IGNORES the
+// LOCALAPPDATA env redirect we use for sandboxing). A lock from a dead
+// process (watchdog kill, crash) makes every later boot's ownership
+// verification fail with "could not be verified" - the plugin registration
+// then retries forever. Sweep locks that point at OUR stateDir whose pid is
+// no longer alive before any boot attempt.
+function sweepStaleStateOwnerLocks(stateDir) {
+  const localApp = process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || "", "AppData", "Local");
+  const ownersDir = path.join(localApp, "OpenClaw", "locks", "openclaw-state-owners");
+  let entries;
+  try { entries = fsSync.readdirSync(ownersDir, { withFileTypes: true }); } catch { return; /* none */ }
+  const norm = (p) => { try { return fsSync.realpathSync(p).toLowerCase(); } catch { return String(p).toLowerCase(); } };
+  const mine = norm(stateDir);
+  for (const e of entries) {
+    if (!e.isFile() || !e.name.endsWith(".lock")) continue;
+    const p = path.join(ownersDir, e.name);
+    try {
+      const info = JSON.parse(fsSync.readFileSync(p, "utf8"));
+      if (!info?.stateDir || norm(info.stateDir) !== mine) continue;
+      if (Number.isFinite(info.pid)) {
+        try { process.kill(info.pid, 0); continue; } catch { /* dead -> sweep */ }
+      }
+      fsSync.rmSync(p, { force: true, maxRetries: 3, retryDelay: 200 });
+    } catch { /* unreadable - leave it */ }
+  }
+}
+
+function sweepSqliteSnapshotCorpses(stateDir) {
+  const root = path.join(stateDir, "cache", "openclaw");
+  try {
+    for (const e of fsSync.readdirSync(root, { withFileTypes: true })) {
+      if (!e.isDirectory() || !e.name.startsWith("openclaw-sqlite-readonly-")) continue;
+      try {
+        fsSync.rmSync(path.join(root, e.name), { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+      } catch { /* locked corpse - gateway's own cleanup retries */ }
+    }
+  } catch { /* no cache dir yet */ }
+}
+
 async function standaloneStart(preferredVendor, remembered, teamProfile) {
-  if (STANDALONE.child) return { ok: true, alreadyRunning: true, port: STANDALONE.port };
+  // #wizard-reentry (E2E case A, 2026-11-18 run 3): this used to early-return
+  // {ok:true, alreadyRunning:true, port} when a child was live - a BARE object
+  // with NO controllerUrl. The wizard's explicit start then hit app.js's
+  // "no controller URL (announce timeout)" branch INSTANTLY (0s, no announce
+  // wait at all) while the auto-started child was still mid-boot. An explicit
+  // standaloneStart is a request for a FULL fresh boot: fall through - the
+  // #wizard-reentry kill block below reaps our own child, and the flow
+  // returns a proper controllerUrl from the fresh announce.
   // Port memory: reuse the ports recorded in settings.instance so restarts
   // land on the SAME gateway/controller ports (probed + persisted below).
   const bin = await standaloneBinary();
+  // #stale-plugin-stage: the AUTO path (plain app launch, no wizard) must
+  // also sweep orphaned install staging dirs before the gateway boots - the
+  // plugin scanner registers them over the real dir and the plugin dies on
+  // missing deps (no controller, no announce). Cheap gate: only when strays
+  // exist (covers both .fs-safe-move-* and .openclaw-install-stage-*).
+  if (strayPluginStageDirs(standaloneStateDir()).length > 0) {
+    sweepStrayPluginStageDirs(standaloneStateDir(), null);
+    try { await ensureTeamClawPlugin(bin, () => {}); } catch { /* repair is best-effort; the boot below still runs */ }
+  }
+  // #stale-owner-lock: the plugin registration below verifies state
+  // ownership; a dead-process lock from an earlier session wedges it in a
+  // retry loop. Sweep before ANY plugin/bootstrap step touches state.
+  sweepStaleStateOwnerLocks(standaloneStateDir());
   // Idempotent seed: a rewrite (even identical) trips the gateway config-guard
   // ("config changed during startup") and kills the spawn. Only seed when the
   // sandbox config is missing or lacks any models.providers entry.
@@ -1568,6 +1831,61 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
       await saveSettings(s);
     } catch { /* settings write failure must not kill the launch */ }
   };
+  // #stale-gateway (user report 2026-11-18 night): a gateway left over from
+  // a previous app session holds the persisted port; the fallback picker
+  // then silently shifts ports - or the old gateway hot-reloads the new
+  // config - and NO fresh announce ever prints, so the renderer waits out
+  // "announce timeout" forever. These ports are OUR convention
+  // (settings.instance): when the preferred gateway port is occupied and we
+  // have no live child of our own, kill the owning process tree and wait for
+  // the port to free so this start is a FRESH boot on the SAME port.
+  // #wizard-reentry (user report 2026-11-18 night #2): "re-initialize" in
+  // the wizard calls standaloneStart INSIDE the same app process where the
+  // auto-start already spawned a gateway - the code below only kills FOREIGN
+  // listeners, so the new spawn hit EADDRINUSE against OUR OWN older child
+  // and produced zero log output. An explicit re-init must be a FRESH boot:
+  // kill our own child first (same for a plain app restart where the old
+  // child object is still tracked), wait for its exit AND the port to free.
+  if (STANDALONE.child) {
+    try {
+      killGatewayTree(STANDALONE.child);
+      await new Promise((r) => { STANDALONE.child.once("exit", r); setTimeout(r, 8000); });
+    } catch { /* already gone */ }
+    STANDALONE.child = null;
+    STANDALONE.pid = null;
+    try { fsSync.rmSync(standalonePidFile(), { force: true }); } catch { /* gone */ }
+  }
+  if (!STANDALONE.child && remembered?.gatewayPort) {
+    const stalePort = Number(remembered.gatewayPort);
+    if (Number.isFinite(stalePort) && stalePort > 0 && !(await isFreeLocal(stalePort))) {
+      try {
+        const netstatOut = await new Promise((resolve) => {
+          let out = "";
+          const p = spawn("netstat", ["-ano", "-p", "TCP"], { stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
+          p.stdout.on("data", (d) => { out += d; });
+          p.on("error", () => resolve(""));
+          p.on("close", () => resolve(out));
+          setTimeout(() => { try { p.kill(); } catch { /* raced */ } resolve(out); }, 5000);
+        });
+        const pids = new Set();
+        for (const line of netstatOut.split(/\r?\n/)) {
+          const m = line.trim().match(/^TCP\s+\S*?:(\d+)\s+\S+\s+LISTENING\s+(\d+)$/);
+          if (m && Number(m[1]) === stalePort) pids.add(m[2]);
+        }
+        for (const pid of pids) {
+          await new Promise((r) => {
+            try {
+              const k = spawn("taskkill", ["/PID", pid, "/T", "/F"], { stdio: "ignore", windowsHide: true });
+              k.on("close", () => r());
+              k.on("error", () => r());
+              setTimeout(r, 8000);
+            } catch { r(); }
+          });
+        }
+      } catch { /* best effort - the boot below still runs */ }
+      for (let i = 0; i < 15 && !(await isFreeLocal(stalePort)); i++) await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
   const wantCtrl = Number(remembered?.controllerPort) || null;
   const ctrlPort = await pickPortWithFallback(wantCtrl, 9527);
   const gwPort = await pickPortWithFallback(Number(remembered?.gatewayPort) || null, ctrlPort + 100);
@@ -1585,6 +1903,29 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
   }
   STANDALONE.port = gwPort;
   const logPath = path.join(standaloneStateDir(), "gateway.log");
+  // #etw-graze: re-verify/re-extract the runtime tree right before spawning.
+  // The extracted tree can be gutted minutes after extraction; warmBundledRuntime
+  // caches EXTRACTED_RUNTIME_DIR at startup and never re-validates, so a gutted
+  // tree survives until app restart. Reset the cache and re-run the ensure (its
+  // 3-file integrity guard triggers a full re-extract when the tree is dead).
+  const reensureRuntimeTree = async () => {
+    try {
+      EXTRACTED_RUNTIME_DIR = null;
+      return await warmBundledRuntime(() => {});
+    } catch { return null; }
+  };
+  await reensureRuntimeTree();
+  // #sqlite-snapshot-corpses: must run after the old gateway is DEAD (kill
+  // above) and BEFORE the new spawn - corpses from the kill itself are the
+  // ones that abort the fresh boot's snapshot cleanup.
+  sweepSqliteSnapshotCorpses(standaloneStateDir());
+  sweepStaleStateOwnerLocks(standaloneStateDir());
+  // #fresh-announce (E2E case A): the initial announce loop used to regex the
+  // WHOLE gateway.log - an announce line from a PREVIOUS boot (dead gateway)
+  // matched instantly and masked a failed fresh boot. Baseline the count
+  // before spawning (same discipline as respawn below); only NEW lines count.
+  const logText0 = await (async () => { try { return await fs.readFile(logPath, "utf8"); } catch { return ""; } })();
+  const announceBaseline = (logText0.match(/Controller: Web UI available at/g) || []).length;
   const child = spawnGatewayProcess(bin, ["gateway", "--port", String(STANDALONE.port)], {
     cwd: standaloneStateDir(),
     env: sandboxEnvFor(standaloneStateDir()),
@@ -1605,12 +1946,22 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
   // #ctrl-announce (user log 2026-11-14): 40s was too tight when the
   // fs-safe native is dead (ERR_DLOPEN_FAILED) - every private-dir check
   // goes through the packaged .NET helper and the plugin controller can
-  // take well over a minute to announce. 90 rounds before falling back.
-  for (let i = 0; i < 90 && !controllerUrl; i++) {
+  // take well over a minute to announce. #edr-slow (E2E case A, 2026-11-18
+  // run 4): endpoint-security throttling pushes a FULL healthy boot past
+  // 90s (workspace admission + 76-plugin metadata scan alone eat ~60s on
+  // spinning-disk AV machines) - the loop gave up while the controller was
+  // demonstrably mid-boot (admission phases streaming). 240 rounds before
+  // falling back.
+  for (let i = 0; i < 240 && !controllerUrl; i++) {
     try {
       const log = await fs.readFile(logPath, "utf8");
-      const m = log.match(/Controller: Web UI available at http:\/\/127\.0\.0\.1:(\d+)/);
-      if (m) controllerUrl = `http://127.0.0.1:${m[1]}`;
+      const count = (log.match(/Controller: Web UI available at/g) || []).length;
+      if (count > announceBaseline) {
+        const all = log.match(/Controller: Web UI available at http:\/\/127\.0\.0\.1:(\d+)/g) || [];
+        const last = all[all.length - 1] || "";
+        const m = last.match(/:(\d+)$/);
+        if (m) controllerUrl = `http://127.0.0.1:${m[1]}`;
+      }
     } catch { /* log not written yet */ }
     if (!controllerUrl) await new Promise((r) => setTimeout(r, 1000));
   }
@@ -1624,6 +1975,34 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
     const before = announceCount(await logText());
     killGatewayTree(child);
     await new Promise((r) => { child.once("exit", r); setTimeout(r, 4000); });
+    // #etw-graze: same guard as the initial spawn - a gutted tree must be
+    // re-extracted before ANY further gateway boot attempt, or every respawn
+    // fails ENOENT with zero output and the heal loop spins forever.
+    await reensureRuntimeTree();
+    // #config-guard-settle (user report 2026-11-16 night): the wizard flow
+    // survived this guard ("config validity changed ... Retry startup")
+    // because bootstrap runs ONE headless settle boot between the config
+    // write and the interactive start; the gate path re-spawns the same
+    // wedged journal directly and loops forever. Mirror the wizard: one ~9s
+    // headless boot (its startup normalizes the config journal), kill it,
+    // THEN start the real gateway.
+    try {
+      const settlePort = await findFreePort();
+      const plan = openClawSpawnPlan(bin, ["gateway", "--port", String(settlePort)]);
+      const settle = plan
+        ? spawn(plan.command, plan.args, { cwd: standaloneStateDir(), env: { ...sandboxEnvFor(standaloneStateDir()), ...plan.env }, stdio: "ignore", windowsHide: true })
+        : spawn(`"${bin}" gateway --port ${settlePort}`, { cwd: standaloneStateDir(), env: sandboxEnvFor(standaloneStateDir()), shell: true, stdio: "ignore", windowsHide: true });
+      await new Promise((r) => setTimeout(r, 9000));
+      try { killGatewayTree(settle); } catch { /* already gone */ }
+      await new Promise((r) => { settle.once("exit", r); setTimeout(r, 3000); });
+    } catch { /* best-effort settle; the respawn below still runs */ }
+    // #sqlite-snapshot-corpses (E2E case A run 5): the settle boot above is a
+    // CORPSE FACTORY - killed mid-discovery, it leaves a fresh
+    // openclaw-sqlite-readonly snapshot that the NEXT boot's cleanup trips
+    // over (locked by EDR mid-scan). Sweep AFTER the settle (not before):
+    // by now the settle process is dead and its locks are clearing, while
+    // rmSync retries ride out the tail of the AV scan.
+    sweepSqliteSnapshotCorpses(standaloneStateDir());
     const child2 = spawnGatewayProcess(bin, ["gateway", "--port", String(STANDALONE.port)], {
       cwd: standaloneStateDir(),
       env: sandboxEnvFor(standaloneStateDir()),
@@ -1661,6 +2040,41 @@ async function standaloneStart(preferredVendor, remembered, teamProfile) {
     if (/Refusing to run gateway state preparation/.test(t)) {
       controllerUrl = await respawn();
     }
+  }
+  // Family 3 - snapshot-corpse cleanup abort (E2E case A run 5): the boot's
+  // OWN "Shared-state discovery snapshot cleanup" can fail on a corpse that
+  // a just-killed worker/settle left behind while EDR still holds a handle -
+  // the CLI then aborts with zero announce. Round 0: sweep + respawn (locks
+  // usually clear after process death). Round 1 (NUCLEAR): the corpses can
+  // be held by the boot's OWN live workers, so no amount of sweeping helps
+  // while anything runs - kill the tree, then delete the ENTIRE cache dir
+  // (it is a cache: regenerable by design; the wizard rebuilds state) and
+  // respawn on a pristine discovery.
+  for (let round = 0; round < 2 && !controllerUrl; round++) {
+    const t = await logText();
+    if (!/Shared-state discovery snapshot cleanup failed/.test(t)) break;
+    if (round === 1) {
+      try { killGatewayTree(STANDALONE.child); } catch { /* gone */ }
+      await new Promise((r) => setTimeout(r, 2500));
+      const cacheRoot = path.join(standaloneStateDir(), "cache");
+      for (let a = 0; a < 6; a++) {
+        try { fsSync.rmSync(cacheRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 }); break; }
+        catch { await new Promise((r) => setTimeout(r, 1000)); }
+      }
+    } else {
+      // aggressive re-sweep: locks clear after process death; retry while any
+      // corpse survives (each sweep does 3 rmSync attempts per corpse)
+      for (let a = 0; a < 10; a++) {
+        sweepSqliteSnapshotCorpses(standaloneStateDir());
+        let left = 0;
+        try {
+          left = fsSync.readdirSync(path.join(standaloneStateDir(), "cache", "openclaw")).filter((n) => n.startsWith("openclaw-sqlite-readonly-")).length;
+        } catch { /* dir gone - nothing left */ }
+        if (left === 0) break;
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    }
+    controllerUrl = (await respawn()) || null;
   }
   // First-boot worker race auto-heal (user-found): a provisioned worker can
   // spawn inside the gateway's config-normalization window and die on the
