@@ -251,9 +251,13 @@ const shutdownSignals = process.platform === "win32"
   ? ["SIGTERM", "SIGINT", "SIGBREAK"]
   : ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
 const shell = process.platform === "win32" ? "cmd.exe" : "sh";
+// -c, NOT -lc: a LOGIN shell sources the user's profiles in a headless
+// launchd context. Profile init scripts are interactive-session side-effect
+// machines (open/LaunchServices hooks, TTY-needing helpers) and are the
+// plausible amplifier behind intermittent Terminal.app activations.
 const shellArgs = process.platform === "win32"
   ? ["/d", "/s", "/c", command]
-  : ["-lc", command];
+  : ["-c", command];
 
 let shuttingDown = false;
 let parentMonitor = null;
