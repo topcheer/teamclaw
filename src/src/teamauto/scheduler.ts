@@ -242,6 +242,13 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     entry.error = message;
     entry.inFlightAt = undefined; // #269: failed dispatch releases the intent
     entry.attempts = (entry.attempts ?? 0) + 1;
+    // #5815: identical-error-text circuit breaker. The same message three
+    // ladder runs in a row is a structural dead end (zero-diff 422s burned
+    // six runs live) - stop early instead of burning the full ladder.
+    const sameText = entry.lastErrorText !== undefined && message.slice(0, 120) === entry.lastErrorText.slice(0, 120);
+    entry.lastErrorText = message.slice(0, 200);
+    entry.lastErrorStreak = sameText ? (entry.lastErrorStreak ?? 0) + 1 : 1;
+    const deterministicStreak = (entry.lastErrorStreak ?? 0) >= 3;
     entry.lastErrorAt = Date.now();
     entry.nextAttemptAt = writebackRetryDueAt(entry.attempts, entry.lastErrorAt);
     // #5651: a non-fast-forward push whose rebase self-heal also failed is
@@ -254,7 +261,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
     // hook-not-found / command-not-found / not-executable signatures are
     // structural, every retry is a guaranteed repeat.
     const deterministicHookFailure = /(?:hooks?\/[^:]*: line \d+: \w+: command not found|hook declined|cannot run hook|exited with error before)/.test(message);
-    const gaveUp = options.terminal === true || entry.attempts >= TEAMAUTO_WRITEBACK_MAX_ATTEMPTS || /push rejected \(non-fast-forward\) and rebase self-heal failed/.test(message) || deterministicHookFailure;
+    const gaveUp = options.terminal === true || entry.attempts >= TEAMAUTO_WRITEBACK_MAX_ATTEMPTS || deterministicStreak || /push rejected \(non-fast-forward\) and rebase self-heal failed/.test(message) || deterministicHookFailure;
     if (gaveUp && !entry.doneAt) {
       entry.failedAt = Date.now();
       recordActivity(store, {
@@ -1224,7 +1231,11 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
               // Workers often commit themselves inside the worktree - deliver
               // whenever the branch carries commits beyond base, not only when
               // commitAll just added new ones.
-              const deliverable = committed || (await sync.branchHasCommits(wtDir, info.defaultBranch));
+              // #5815: compare against the REMOTE base tip, not the stale
+              // local baseline - a stale checkout makes a zero-commit branch
+              // look deliverable and the PR dies on a deterministic 422
+              // (zero diff) six times in a row.
+              const deliverable = committed || (await sync.branchHasCommits(wtDir, info.defaultBranch, info.cloneUrl));
               if (deliverable) {
                 const push = await sync.pushBranch(repoId, wtDir, info.cloneUrl, branch, (pushErr) => {
                   // #5788: dedicated push-failure activity line - symmetric
@@ -1239,6 +1250,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
                   recordActivity(s, { at: Date.now(), repoId, kind: "writeback", text: `already delivered on ${branch} - skipped duplicate push/PR` });
                 } else {
                   let pr;
+                  let prSkippedForZeroDiff = false;
                   try {
                     pr = await client.createPullRequest(repoId.split("/")[0]!, repoId.split("/")[1]!, branch, info.defaultBranch, `[teamclaw:${role}] ${task.title.replace(/^\[[^\]]+\]\s*/, "")}`.slice(0, 120), `${task.result.trim()}\n${MARKER_FOOTER(role)}`);
                   } catch (prErr) {
@@ -1252,12 +1264,32 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
                       if (!probe) {
                         throw new Error(`createPR 422 with head branch ABSENT on remote - the PUSH never landed for ${branch} (see push-failure activity; local-only branch)`);
                       }
+                      // #5815: branch IS present but PR still 422 - the zero-
+                      // diff shape (head is an ancestor of base: the task
+                      // completed with analysis-only output / misplaced-repo
+                      // verdict). NOT retriable: every ladder run is the same
+                      // 422. Deliver the result as the comment directly with
+                      // an analysis note, like the #5719 failed-write path.
+                      const zeroDiff = await sync.branchIsAncestorOfRemoteBase(wtDir, branch, info.defaultBranch).catch(() => false);
+                      if (zeroDiff) {
+                        body = `${body}\n\nNo code changes (analysis-only completion - no PR needed).`;
+                        recordActivity(s, { at: Date.now(), repoId, kind: "writeback", text: `zero-diff 422 classified: ${task.id} completed with analysis-only output - delivering as comment, PR ladder skipped (#5815)` });
+                        prDeliveryFailed = false;
+                        prSkippedForZeroDiff = true;
+                      }
+                      if (!prSkippedForZeroDiff) throw prErr;
+                    } else {
+                      throw prErr;
                     }
-                    throw prErr;
                   }
+                  if (prSkippedForZeroDiff) {
+                    // fall through to the comment delivery below with the
+                    // analysis-amended body - no PR to attach.
+                  } else if (pr) {
                   entry.prUrl = pr.url;
                   body = `${body}\n\nDelivered as PR: ${pr.url}`;
                   recordActivity(s, { at: Date.now(), repoId, kind: "writeback", text: `PR opened: ${pr.url}` });
+                  }
                 }
               }
               await sync.removeTaskWorktree(repoId, task.id);

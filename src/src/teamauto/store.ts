@@ -97,6 +97,9 @@ export type TeamAutoRepo = {
 export type TeamAutoWriteBack = {
   taskId: string;
   action: "issueComment" | "prComment" | "createIssue" | "createPR";
+  /** #5815: identical-error-text circuit breaker state. */
+  lastErrorText?: string;
+  lastErrorStreak?: number;
   repoId: string;
   targetId: number | null;
   doneAt: number | null;

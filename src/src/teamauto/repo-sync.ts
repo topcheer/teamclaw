@@ -155,6 +155,34 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     await run(["checkout", "-B", name], dir);
   }
 
+  /** #5815: deliverable must mean commits beyond the REMOTE base tip. A
+   * stale local baseline makes a zero-commit branch look deliverable; the
+   * PR then 422s (zero diff) deterministically six times. */
+  async function branchHasCommits(dir: string, defaultBranch?: string, cloneUrl?: string): Promise<boolean> {
+    if (!defaultBranch) return false;
+    try {
+      if (cloneUrl) {
+        const authed = await tokenizedUrl(cloneUrl);
+        await run(["fetch", authed, defaultBranch], dir).catch(() => {});
+      } else {
+        await run(["fetch", "origin", defaultBranch], dir).catch(() => {});
+      }
+      const out = await run(["rev-list", "--count", `origin/${defaultBranch}..HEAD`], dir);
+      return Number(out.trim()) > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /** #5815: is the branch an ancestor of the remote base (zero-diff shape)? */
+  async function branchIsAncestorOfRemoteBase(dir: string, branch: string, defaultBranch: string): Promise<boolean> {
+    await run(["fetch", "origin", defaultBranch], dir).catch(() => {});
+    const head = (await run(["rev-parse", `origin/${branch}`], dir).catch(() => "")).trim();
+    const base = (await run(["rev-parse", `origin/${defaultBranch}`], dir).catch(() => "")).trim();
+    if (!head || !base) return false;
+    return run(["merge-base", "--is-ancestor", head, base], dir).then(() => true, () => false);
+  }
+
   /** #5788: does the branch exist on the remote? (422 disambiguation probe) */
   async function branchExistsRemotely(dir: string, branch: string): Promise<boolean> {
     const out = await run(["ls-remote", "origin", `refs/heads/${branch}`], dir).catch(() => "");
@@ -585,23 +613,7 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     return taskWorktreeDirName(repoId, taskId);
   }
 
-  /** True when HEAD has commits beyond the base branch (worktree delivery). */
-  async function branchHasCommits(dir: string, baseBranch: string): Promise<boolean> {
-    try {
-      const out = await run(["rev-list", "--count", "HEAD", "--not", baseBranch], dir);
-      return Number(out.trim()) > 0;
-    } catch {
-      // Base branch name unknown/unfetched - fall back to diff against first parent chain
-      try {
-        const root = await run(["rev-list", "--max-parents=0", "HEAD"], dir);
-        return root.trim().length > 0;
-      } catch {
-        return false;
-      }
-    }
-  }
-
-  return { ensureCloned, currentSha, recentCommitMessages, readFileIfPresent, safeRepoPath, createWorkBranch, commitAll, pushBranch, branchExistsRemotely, ensureTaskWorktree, removeTaskWorktree, safeRemoveTaskWorktree, gcTaskWorktrees, taskWorktreeRelDir, taskBranchName, branchHasCommits, repoDir };
+  return { ensureCloned, currentSha, recentCommitMessages, readFileIfPresent, safeRepoPath, createWorkBranch, commitAll, pushBranch, branchExistsRemotely, branchIsAncestorOfRemoteBase, ensureTaskWorktree, removeTaskWorktree, safeRemoveTaskWorktree, gcTaskWorktrees, taskWorktreeRelDir, taskBranchName, branchHasCommits, repoDir };
 }
 
 export type TeamAutoRepoSync = ReturnType<typeof createRepoSync>;
