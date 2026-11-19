@@ -34,6 +34,18 @@ export function spawnManagedGatewayProcess(options: ManagedGatewaySpawnOptions):
 }
 
 export function spawnManagedCommandProcess(options: ManagedCommandSpawnOptions): ChildProcess {
+  // #terminal-activation guard: previewCommand is worker-influenced input
+  // (#237 W1) executed through the core sh -c wrapper. A prompt-injected
+  // `open`/osascript command hijacks LaunchServices and activates
+  // Terminal.app from the headless launchd context (reported live: default
+  // Terminal windows intermittently activating). Reject loudly - never
+  // silently - so the attempt is visible in logs.
+  const cmd = options.command.trim();
+  if (/^(open|osascript)\b/i.test(cmd) || /(^|[\s;&|])osascript\b/i.test(cmd) || /(^|\s)-a\s+Terminal\b/.test(cmd)) {
+    const reason = `blocked Terminal-activation command (preview contract violation): ${cmd.slice(0, 120)}`;
+    console.error(`[teamclaw] ${reason}`);
+    throw new Error(`[teamclaw] ${reason}`);
+  }
   const cwd = options.cwd ?? process.cwd();
   const child = spawn(process.execPath, buildManagedCommandWrapperArgs(options.command), {
     ...buildManagedProcessSpawnOptions({
