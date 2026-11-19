@@ -201,11 +201,11 @@ try {
     assert.equal(status.writebacks.failed, 1, "terminal failure visible in getStatus stats");
     assert.equal(status.writebacks.lastError.taskId, "task-stuck", "lastError names the stuck entry");
     assert.equal(status.writebacks.lastError.terminal, true, "lastError flagged terminal");
-    assert.equal(status.writebacks.lastError.attempts, schedMod.TEAMAUTO_WRITEBACK_MAX_ATTEMPTS, "lastError carries full attempt count");
+    assert.equal(status.writebacks.lastError.attempts, 3, "lastError carries the circuit-breaker attempt count (#5815)");
 
     const activity = await scheduler.getActivity();
     assert.ok(
-      activity.some((e) => e.kind === "writeback" && /failed permanently after 6 attempt/.test(e.text)),
+      activity.some((e) => e.kind === "writeback" && /failed permanently after 3 attempt/.test(e.text)),
       "terminal give-up must be exposed in the activity feed",
     );
 
