@@ -1004,9 +1004,13 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
               // narrative bodies ("Fix delivered ... via TeamClaw autonomous")
               // and branch-reference footers carry no [teamclaw:] prefix and
               // zeroed the evidence check (live: 8fdf5efd false-alarmed).
-              // Broaden to the observed family: marker OR teamclaw/teamauto
-              // substring (case-insensitive) OR a teamclaw/task- branch ref.
-              const ghEvidence = bodies.some((b) => /\[teamclaw[:\]]/i.test(b) || /teamclaw|teamauto/i.test(b) || /teamclaw\/task-/.test(b));
+              // #5730/23da7606 sharpening: exotic bodies with ZERO teamclaw
+              // references exist too (first wild case, mk:false on all
+              // three predicates). The universal fallback: a direct-send
+              // body IS the task result - fingerprint match on its first
+              // 60 chars catches every shape, marker or not.
+              const resultFingerprint = task.result.replace(/\s+/g, " ").trim().slice(0, 60);
+              const ghEvidence = bodies.some((b) => /\[teamclaw[:\]]/i.test(b) || /teamclaw|teamauto/i.test(b) || /teamclaw\/task-/.test(b) || (resultFingerprint.length >= 40 && b.replace(/\s+/g, " ").includes(resultFingerprint)));
               if (ghEvidence) {
                 // #5785: a WRITE task's canonical product is the PR. An issue
             // direct-send comment (mk:true) satisfies the issue-surface
@@ -1016,12 +1020,30 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
             // Self-check: WRITE + completed + 10min past the ledger stamp +
             // no createPR write-back row + no PR-opened activity line ->
             // one-time undelivered-PR alarm.
-            if (task.writeMode === "write" && (deliveredAt !== undefined) && Date.now() - deliveredAt > 10 * 60_000) {
+            if (task.writeMode === "write" && task.completedAt && Date.now() - task.completedAt > 10 * 60_000) {
               s.undeliveredPrAlarms ??= {};
               if (!s.undeliveredPrAlarms[task.id]) {
+                // #5730/23da7606 sharpening: bookkeeping (wb rows / PR-opened
+                // activity) is BLIND when the registration itself was lost to
+                // a stale clobber - the exact failure this alarm exists for.
+                // Anchor on the GitHub surface instead: does a PR exist whose
+                // head is this task's branch? Bookkeeping hits stay a cheap
+                // early-exit; a miss goes to the wire (once per task).
+                const branchSuffix = task.id.replace(/[^\w-]/g, "");
+                let prExists = false;
+                let prChecked = false;
+                const repoMatch2 = /TeamAuto autonomous work for ([\w./-]+)\./.exec(`${task.description}`);
+                if (repoMatch2) {
+                  const [o2, n2] = repoMatch2[1].split("/");
+                  try {
+                    const prs = await ghClient.listPullRequestsForHead?.(o2, n2, `teamclaw/task-${branchSuffix}`);
+                    prExists = Array.isArray(prs) && prs.length > 0;
+                    prChecked = true;
+                  } catch { /* wire failure - fall back to bookkeeping */ }
+                }
                 const hasPrRow = s.writebacks.some((w) => w.taskId === task.id && (w.action === "createPR" || w.action === "prComment"));
                 const prText = (s.activity ?? []).slice(-300).some((x) => String(x.text).includes(task.id) && /PR opened|Delivered as PR/.test(String(x.text)));
-                if (!hasPrRow && !prText) {
+                if (prChecked ? !prExists : (!hasPrRow && !prText)) {
                   s.undeliveredPrAlarms[task.id] = Date.now();
                   auditDirty = true;
                   recordActivity(s, { at: Date.now(), repoId: "*", kind: "writeback", text: `undelivered-PR alarm: WRITE task ${task.id} is accounted as delivered (issue surface) but no PR leg ever ran - branch likely stranded on the remote without a review entry (#5785)` });

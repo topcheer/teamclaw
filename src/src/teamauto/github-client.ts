@@ -145,6 +145,18 @@ export function createGithubClient(auth: GithubAuthManager) {
       return { ...etagCounters };
     },
 
+    /** #5730 sharpening: list PRs whose head is exactly this branch (the
+     * undelivered-PR self-check anchors on GitHub truth, not bookkeeping). */
+    async listPullRequestsForHead(owner: string, repo: string, branch: string): Promise<Array<{ number: number; url: string }>> {
+      try {
+        const { data } = await request("GET", `/repos/${owner}/${repo}/pulls?head=${owner}:${branch}&state=all&per_page=5`);
+        if (!Array.isArray(data)) return [];
+        return (data as Record<string, unknown>[]).map((p) => ({ number: Number(p.number ?? 0), url: String(p.html_url ?? "") }));
+      } catch {
+        throw new Error("head PR listing failed");
+      }
+    },
+
     async getRepoInfo(owner: string, repo: string): Promise<GithubRepoInfo> {
       const data = await getJson<Record<string, unknown>>(`/repos/${owner}/${repo}`);
       if (!data) {
