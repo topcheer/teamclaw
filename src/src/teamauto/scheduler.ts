@@ -1316,6 +1316,23 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
             continue;
           }
           if (entry.action === "issueComment" && entry.targetId) {
+            // #5818 defense-in-depth: the target may have been closed since
+            // enqueue/dequeue - commenting on a closed issue pollutes the
+            // resolution record. Re-check state first; closed -> skip with a
+            // visible line (the result stays in the task record for manual
+            // retrieval if ever needed).
+            try {
+              const targetIssue = await client.getIssue(owner, name, entry.targetId);
+              if (targetIssue.state !== "open") {
+                entry.doneAt = Date.now();
+                entry.inFlightAt = undefined;
+                writebackDone = true;
+                recordActivity(s, { at: Date.now(), repoId: entry.repoId, kind: "writeback", text: `issueComment #${entry.targetId} skipped: issue CLOSED at delivery time - result retained in task record (#5818)` });
+                logger.info(`TeamAuto: write-back ${entry.taskId} skipped - target issue #${entry.targetId} closed`);
+              }
+            } catch { /* state check failed - attempt delivery anyway */ }
+          }
+          if (entry.action === "issueComment" && entry.targetId && !writebackDone) {
             // #5725 / #5660 parity: the worker may have posted the same body
             // directly during its execution window (takeOwnership legs deliver
             // an ownership-wrap comment themselves). Posting again duplicates;
@@ -1574,7 +1591,21 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
       const sinceIso = new Date(task.createdAt ?? Date.now()).toISOString();
       login = (await client.getAuthenticatedUser()).login;
       const comments = await client.getIssueCommentsSince(owner, name, issueNumber, sinceIso);
-      const external = comments.filter((c) => c.user !== login);
+      // #5819: same-account multi-seat blindness. Filtering purely by
+      // account excludes ALL seats sharing the bot account - a sibling seat
+      // claiming the same issue ([claim master_coordinator] ...) was
+      // invisible and both seats implemented it (live: #5812 double
+      // delivery). Content-aware: same-account comments carrying a SEAT
+      // declaration ([claim X]/[done X]) count as external UNLESS X is one
+      // of teamauto's own roles (those are this pipeline's own prior legs -
+      // retry legs must not stand down on their own history).
+      const seatDecl = /\[(claim|done)\s+([a-z_-]+)\s*\]/i;
+      const teamautoRoles = new Set(["developer", "qa", "architect", "security-engineer", "security-engineer-role"]);
+      const external = comments.filter((c) => {
+        if (c.user !== login) return true;
+        const m = seatDecl.exec(String((c as { body?: string }).body ?? ""));
+        return Boolean(m && !teamautoRoles.has(m[2]!.toLowerCase()));
+      });
       if (external.length > 0) {
         recordActivity(await ensureStore(), { at: Date.now(), repoId, kind: "claim", text: `deferred claim: ${external.length} external comment(s) since enqueue on issue #${issueNumber} (latest by @${external[external.length - 1]?.user}) - standing down` });
         return { claimed: false, reason: "external activity" };

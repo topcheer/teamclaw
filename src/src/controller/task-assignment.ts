@@ -656,7 +656,27 @@ export async function runAutoAssignRound(
       // bypassing the gate). Write-phase claim failures still continue
       // unclaimed per the original 2026-11-15 semantics.
       deps.getTeamAutoScheduler?.()?.claimTaskAtDequeue(updatedTask).then((claim) => {
-        if (claim?.retryEligibility) {
+        if (claim?.reason === "issue closed") {
+          // #5818: the claim check VERDICTED against the task - the issue was
+          // closed between enqueue and dequeue. That is terminal (no retry
+          // helps); running the leg anyway burned a full 8-minute worker on
+          // a closed issue (live: 952e7471). Cancel the dispatched execution
+          // and terminalize the task as cancelled - NOT back to pending (a
+          // pending task would redispatch; the sweep will not re-candidate a
+          // closed issue, but the queue entry would keep firing).
+          logger.warn(`Controller: issue closed before dispatch for ${updatedTask.id} - cancelling task`);
+          void (async () => {
+            await cancelTaskExecution(updatedTask.id, nextAssignment.worker.id, "target issue closed (#5818)", deps);
+            deps.updateTeamState((s) => {
+              const t = s.tasks[updatedTask.id];
+              if (!t) return;
+              t.status = "failed";
+              t.error = "Cancelled: target issue was closed before dispatch (#5818) - no work performed.";
+              t.updatedAt = Date.now();
+            });
+            wsServer.broadcastUpdate({ type: "task:updated", data: serializeTask(deps.getTeamState()?.tasks[updatedTask.id] ?? updatedTask) });
+          })().catch(() => {});
+        } else if (claim?.retryEligibility) {
           logger.warn(`Controller: claim eligibility check failed for ${updatedTask.id} - reverting assignment to retry`);
           // Unlike the #191 dispatch-failure path, the dispatch SUCCEEDED
           // here: cancel the already-dispatched execution before reverting
