@@ -644,6 +644,14 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
               created++;
             }
           }
+          // #5824: the admission check consumed capped.length UP FRONT,
+          // but duplicate-active (or dead-letter) skips never enqueue - the
+          // budget burned on nothing (live: created 0/2, budget 11->13).
+          // Refund the difference so the ledger tracks CREATED tasks only;
+          // the capped.length admission gate above still bounds the batch.
+          if (created < capped.length) {
+            s.budget.tasksToday = Math.max(0, s.budget.tasksToday - (capped.length - created));
+          }
           const failedSince = repo.failedTasksSinceLastSweep ?? 0;
           repo.failedTasksSinceLastSweep = 0;
           repo.lastSweepSummary = `created ${created}/${capped.length} task(s)${failedSince > 0 ? `; FAILED ${failedSince} since last sweep` : ""}`;

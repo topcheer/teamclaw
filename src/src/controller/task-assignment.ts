@@ -690,6 +690,27 @@ export async function runAutoAssignRound(
               holdMs: claimEligibilityHoldMs(failures),
             });
           })().catch(() => {});
+        } else if (claim?.reason === "external activity" || claim?.reason === "assignees present") {
+          // #5823: stand-down verdicts are TERMINAL like issue-closed (the
+          // seat/owner is not going away; retrying cannot help) - the old
+          // else-branch only cleared the hold and the leg ran to completion
+          // on an issue another seat owns (live: the #5819 self-fix leg
+          // stood down at 21:24 yet kept executing at 21:38). Same treatment
+          // as #5818: cancel the dispatched execution, terminalize with the
+          // stand-down reason, no dead-letter count.
+          logger.warn(`Controller: claim stood down (${claim.reason}) for ${updatedTask.id} - cancelling task`);
+          void (async () => {
+            await cancelTaskExecution(updatedTask.id, nextAssignment.worker.id, `claim stand-down: ${claim.reason} (#5823)`, deps);
+            deps.updateTeamState((s) => {
+              const t = s.tasks[updatedTask.id];
+              if (!t) return;
+              t.status = "failed";
+              t.error = `Cancelled: claim stood down (${claim.reason}) - another seat/owner owns the issue (#5823). No work performed.`;
+              t.updatedAt = Date.now();
+            });
+            clearAssignmentHold(updatedTask.id, deps);
+            wsServer.broadcastUpdate({ type: "task:updated", data: serializeTask(deps.getTeamState()?.tasks[updatedTask.id] ?? updatedTask) });
+          })().catch(() => {});
         } else {
           // Claim attempt concluded definitively (claimed / stood down /
           // WRITE failure continuing unclaimed): end the retry cycle.
