@@ -267,8 +267,10 @@ const writeQueue: Promise<void>[] = [];
 
 export async function loadTeamAutoStore(): Promise<TeamAutoStore> {
   const { storeFile } = resolveTeamAutoPaths();
+  let baseFingerprint = "";
   try {
     const raw = await fs.readFile(storeFile, "utf8");
+    baseFingerprint = staleWriteFingerprint(raw);
     const parsed = JSON.parse(raw) as Partial<TeamAutoStore>;
     const store = emptyStore();
     if (Array.isArray(parsed.repos)) {
@@ -312,10 +314,85 @@ export async function loadTeamAutoStore(): Promise<TeamAutoStore> {
       store.deliveredResultsInit = parsed.deliveredResultsInit;
     }
     store.budget = { ...store.budget, ...(parsed.budget ?? {}) };
+    (store as TeamAutoStore & { __baseFp?: string }).__baseFp = baseFingerprint;
     return store;
   } catch {
     return emptyStore();
   }
+}
+
+/** #5810/#5730 short-path guard helpers (cross-process stale-write protection). */
+function staleWriteFingerprint(raw: string): string {
+  let h = 5381;
+  for (let i = 0; i < raw.length; i++) h = ((h * 33) ^ raw.charCodeAt(i)) >>> 0;
+  return `${raw.length}:${h.toString(36)}`;
+}
+
+function mergeStoresOnConflict(disk: TeamAutoStore, saver: TeamAutoStore): TeamAutoStore {
+  const maxKey = <T extends Record<string, number>>(a: T | undefined, b: T | undefined): T => {
+    const out: Record<string, number> = { ...(a ?? {}) };
+    for (const [k, v] of Object.entries(b ?? {})) out[k] = Math.max(out[k] ?? 0, v);
+    return out as T;
+  };
+  const unionBy = <T>(a: T[] | undefined, b: T[] | undefined, key: (x: T) => string, cap = 600): T[] => {
+    const seen = new Set<string>();
+    const out: T[] = [];
+    for (const x of [...(a ?? []), ...(b ?? [])]) {
+      const k = key(x);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(x);
+    }
+    return out.slice(-cap);
+  };
+  const merged: TeamAutoStore = { ...saver };
+  const dayOf = (s: TeamAutoStore["budget"] | undefined) => s?.dayStamp ?? "";
+  const diskToday = disk.budget?.tasksToday ?? 0;
+  const saverToday = saver.budget?.tasksToday ?? 0;
+  merged.budget = {
+    ...(disk.budget ?? saver.budget),
+    dayStamp: dayOf(disk.budget) !== dayOf(saver.budget) && diskToday > saverToday ? dayOf(disk.budget) : (dayOf(saver.budget) || dayOf(disk.budget)),
+    tasksToday: dayOf(disk.budget) === dayOf(saver.budget) ? Math.max(diskToday, saverToday) : saverToday,
+    maxTasksPerDay: disk.budget?.maxTasksPerDay ?? saver.budget?.maxTasksPerDay ?? 150,
+  } as TeamAutoStore["budget"];
+  merged.deliveredResults = maxKey(disk.deliveredResults, saver.deliveredResults);
+  merged.orphanResultAlarms = maxKey(disk.orphanResultAlarms, saver.orphanResultAlarms);
+  merged.undeliveredPrAlarms = maxKey(disk.undeliveredPrAlarms, saver.undeliveredPrAlarms);
+  merged.failedClaimRecovery = maxKey(disk.failedClaimRecovery, saver.failedClaimRecovery);
+  merged.fullReviewUmbrellas = maxKey(disk.fullReviewUmbrellas, saver.fullReviewUmbrellas);
+  merged.activity = unionBy(disk.activity, saver.activity, (x) => `${x.at}:${String(x.text).slice(0, 60)}`);
+  merged.writebacks = unionBy(disk.writebacks, saver.writebacks, (w) => w.taskId, 600).map((w) => {
+    const d = (disk.writebacks ?? []).find((x) => x.taskId === w.taskId);
+    if (!d) return w;
+    return { ...w, doneAt: w.doneAt ?? d.doneAt, failedAt: w.failedAt ?? d.failedAt, attempts: Math.max(w.attempts ?? 0, d.attempts ?? 0), targetId: w.targetId ?? d.targetId };
+  });
+  const repoMap = new Map<string, TeamAutoRepo>();
+  for (const r of [...(disk.repos ?? []), ...(saver.repos ?? [])]) {
+    const prev = repoMap.get(r.id);
+    if (!prev) { repoMap.set(r.id, r); continue; }
+    const diskSide = disk.repos?.includes(prev) ? prev : r;
+    const otherSide = diskSide === prev ? r : prev;
+    repoMap.set(r.id, {
+      ...diskSide,
+      lastSweepAt: Math.max(prev.lastSweepAt ?? 0, r.lastSweepAt ?? 0),
+      lastAttemptAt: Math.max(prev.lastAttemptAt ?? 0, r.lastAttemptAt ?? 0),
+      lastSweepErrorAt: Math.max(prev.lastSweepErrorAt ?? 0, r.lastSweepErrorAt ?? 0),
+      sweepFailures: Math.max(prev.sweepFailures ?? 0, r.sweepFailures ?? 0),
+      failedTasksSinceLastSweep: Math.max(prev.failedTasksSinceLastSweep ?? 0, r.failedTasksSinceLastSweep ?? 0),
+      lastSweepSummary: (prev.lastSweepAt ?? 0) >= (r.lastSweepAt ?? 0) ? prev.lastSweepSummary : r.lastSweepSummary,
+      sweeps: unionBy<TeamAutoSweepRecord>(prev.sweeps, r.sweeps, (x) => `${x.at}:${String(x.summary).slice(0, 40)}`, 40),
+      cursors: {
+        ...diskSide.cursors,
+        seen: maxKey(prev.cursors?.seen, otherSide.cursors?.seen) as TeamAutoRepo["cursors"]["seen"],
+        etags: { ...(otherSide.cursors?.etags ?? {}), ...(diskSide.cursors?.etags ?? {}) },
+        lastIssueSince: Math.max(prev.cursors?.lastIssueSince ?? 0, r.cursors?.lastIssueSince ?? 0),
+        lastPrSince: Math.max(prev.cursors?.lastPrSince ?? 0, r.cursors?.lastPrSince ?? 0),
+        lastCommitSha: prev.cursors?.lastCommitSha ?? r.cursors?.lastCommitSha,
+      } as TeamAutoRepo["cursors"],
+    });
+  }
+  merged.repos = [...repoMap.values()];
+  return merged;
 }
 
 /** #5677 (ggcode, 2026-11-15): store-level async mutex. The 20s write-back
@@ -342,11 +419,32 @@ export async function withStoreLock<T>(section: () => Promise<T>): Promise<T> {
 export async function saveTeamAutoStore(store: TeamAutoStore): Promise<void> {
   const { storeFile } = resolveTeamAutoPaths();
   await fs.mkdir(path.dirname(storeFile), { recursive: true });
-  const tmp = `${storeFile}.tmp-${process.pid}-${Date.now()}`;
   const next = writeQueue.length ? writeQueue[writeQueue.length - 1].catch(() => {}) : Promise.resolve();
   const job = next.then(async () => {
-    await fs.writeFile(tmp, JSON.stringify(store, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
-    await fs.rename(tmp, storeFile);
+    let toWrite: TeamAutoStore = store;
+    const guardDir = `${storeFile}.guard-lock`;
+    let tookLock = false;
+    try {
+      await fs.mkdir(guardDir, { recursive: true }).then(() => { tookLock = true; }, () => {});
+      if (tookLock) {
+        const diskRaw = await fs.readFile(storeFile, "utf8").catch(() => null);
+        const baseFp = (store as TeamAutoStore & { __baseFp?: string }).__baseFp;
+        if (diskRaw !== null && baseFp && staleWriteFingerprint(diskRaw) !== baseFp) {
+          const diskParsed = JSON.parse(diskRaw) as Partial<TeamAutoStore>;
+          const diskStore = { ...emptyStore(), ...diskParsed } as TeamAutoStore;
+          toWrite = mergeStoresOnConflict(diskStore, store);
+        }
+      }
+    } catch { /* guard degraded - plain write */ }
+    try {
+      const tmp = `${storeFile}.tmp-${process.pid}-${Date.now()}`;
+      const raw = JSON.stringify(toWrite, (k, v) => (k === "__baseFp" ? undefined : v), 2) + "\n";
+      await fs.writeFile(tmp, raw, { encoding: "utf8", mode: 0o600 });
+      await fs.rename(tmp, storeFile);
+      (store as TeamAutoStore & { __baseFp?: string }).__baseFp = staleWriteFingerprint(raw);
+    } finally {
+      if (tookLock) await fs.rm(guardDir, { recursive: true, force: true }).catch(() => {});
+    }
   });
   writeQueue.push(job);
   writeQueue.splice(0, Math.max(0, writeQueue.length - 20));
