@@ -147,6 +147,12 @@ export class ProcessProvisioner implements WorkerProvisionerBackend {
         OPENCLAW_SKIP_CANVAS_HOST: "1",
         TEAMCLAW_WORKER_ID: spec.workerId,
         TEAMCLAW_LAUNCH_TOKEN: spec.launchToken,
+        // #disk-hygiene (screenshot report 2026-11-19): worker go builds
+        // accumulated 15G+ of go-build/go-link dirs under ~/.openclaw/tmp
+        // (home-dir tmp); point GOCACHE/GOTMPDIR at the scratch volume so
+        // build caches land outside the home tree and are disposable.
+        GOCACHE: process.env.TEAMCLAW_GOCACHE || "/Volumes/new/gocache",
+        GOTMPDIR: process.env.TEAMCLAW_GOTMPDIR || "/Volumes/new/gotmp",
         ...(spec.workspaceDir ? { TEAMCLAW_WORKSPACE_DIR: spec.workspaceDir } : {}),
       },
       stdio: ["ignore", "pipe", "pipe"],
