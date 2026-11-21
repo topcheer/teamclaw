@@ -121,16 +121,21 @@ try {
   assert.equal(postCalls, 1, "the deferred row delivers on the NEXT pass");
   assert.equal((await readStore()).writebacks.length, 0, "queue drains after the second pass");
 
-  // ── Contract 4 (per-target dedupe, enqueue side, #269): re-registering
-  // the same target+action while undelivered is skipped; a different target
-  // still enqueues.
+  // ── Contract 4 (enqueue-side registration, #269 -> #5785): same-taskId
+  // re-registration stays idempotent, but a DIFFERENT task aiming at the
+  // same target+action now REGISTERS too. The old per-target skip silently
+  // swallowed the second task's ladder delivery (live: completed WRITE
+  // task with no entry, branch pushed, no PR - ggcode #5785). Co-target
+  // rows serialize via the delivery-side per-pass cap (Contract 3) and the
+  // post-time exact-body dedupe catches worker direct-posts.
   scheduler2.registerWriteback("task-enq-a", "issueComment", "acme/widget", 42);
-  scheduler2.registerWriteback("task-enq-b", "issueComment", "acme/widget", 42); // duplicate target+action
+  scheduler2.registerWriteback("task-enq-a", "issueComment", "acme/widget", 42); // same task: idempotent
+  scheduler2.registerWriteback("task-enq-b", "issueComment", "acme/widget", 42); // co-target, different task: registers (#5785)
   scheduler2.registerWriteback("task-enq-c", "issueComment", "acme/widget", 43); // distinct target
   await new Promise((r) => setTimeout(r, 150)); // registerWriteback persists async
   const enq = await readStore();
   const enqTaskIds = enq.writebacks.map((w) => w.taskId).sort();
-  assert.deepEqual(enqTaskIds, ["task-enq-a", "task-enq-c"], "enqueue dedupes same target+action; distinct target enqueues");
+  assert.deepEqual(enqTaskIds, ["task-enq-a", "task-enq-b", "task-enq-c"], "same-task idempotent; different-task co-target registers (#5785); distinct target enqueues");
 
   // ── Contract 5 (cross-process re-read, #269 23:40 recurrence): a second
   // scheduler "process" holding a STALE in-memory snapshot must not deliver

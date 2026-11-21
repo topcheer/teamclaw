@@ -189,14 +189,25 @@ export type TeamAutoStore = {
   failedClaimRecovery?: Record<string, number>;
   /** #5725: once-per-task guard for orphan-result alarms (completed with result, no write-back entry, no delivery line). */
   orphanResultAlarms?: Record<string, number>;
-  /** #5785: once-per-task guard for undelivered-PR alarms (WRITE tasks accounted as delivered with no PR leg). */
-  undeliveredPrAlarms?: Record<string, number>;
   /** #5736: durable delivered-ledger. doneAt write-back entries are pruned
    * every pass and the activity ring is tiny - without this ledger every
    * normally-delivered task re-alarms as an orphan hours later. taskId -> deliveredAt. */
   deliveredResults?: Record<string, number>;
   /** #5738: one-time ledger migration marker (seed from task state, pardoning pre-deploy history once). */
   deliveredResultsInit?: boolean;
+  /** #5785: durable PR-face ledger. taskId -> PR url (or delivery marker).
+   * deliveredResults is comment-shaped: a worker direct-post on the issue
+   * face stamps it while the WRITE task's PR face (push + createPR, driven
+   * only by the write-back ladder) may never have come into existence.
+   * This table records PR-face delivery durably (prune-time stamp from
+   * entry.prUrl) so the undelivered-PR audit can tell "PR opened, entry
+   * pruned" apart from "registration never happened". */
+  prDeliveries?: Record<string, string>;
+  /** #5785: once-per-task gate for undelivered-PR alarms (completed WRITE
+   * task, no write-back entry, no PR-face record, no PR on its task branch).
+   * Also stamped when the branch's PR surface verifies the face through
+   * another path, so the surface check runs at most once per task. */
+  undeliveredPrAlarms?: Record<string, number>;
   /** #5685 (ggcode, 2026-11-16): "repoId|cycleKey" -> umbrella issue number
    * for joint full reviews. Done write-back entries are pruned at end-of-pass,
    * so an in-store peer scan cannot carry the umbrella pointer across passes
@@ -230,6 +241,8 @@ function emptyStore(): TeamAutoStore {
     failedClaimRecovery: {},
     orphanResultAlarms: {},
     deliveredResults: {},
+    prDeliveries: {},
+    undeliveredPrAlarms: {},
     fullReviewUmbrellas: {},
     budget: {
       maxTasksPerDay: 150,
@@ -316,6 +329,17 @@ export async function loadTeamAutoStore(): Promise<TeamAutoStore> {
     if (typeof parsed.deliveredResultsInit === "boolean") {
       store.deliveredResultsInit = parsed.deliveredResultsInit;
     }
+    // #5785: same loader-copy discipline as the #5736 chain above - a field
+    // missing from this list is dropped on EVERY 20s settle reload even
+    // though saveTeamAutoStore writes it to disk (dropped prDeliveries =>
+    // healthy pruned tasks re-probe GitHub; dropped undeliveredPrAlarms =>
+    // the once-per-task gate resets and one incident re-alarms every pass).
+    if (parsed.prDeliveries && typeof parsed.prDeliveries === "object") {
+      store.prDeliveries = parsed.prDeliveries as Record<string, string>;
+    }
+    if (parsed.undeliveredPrAlarms && typeof parsed.undeliveredPrAlarms === "object") {
+      store.undeliveredPrAlarms = parsed.undeliveredPrAlarms as Record<string, number>;
+    }
     store.budget = { ...store.budget, ...(parsed.budget ?? {}) };
     (store as TeamAutoStore & { __baseFp?: string }).__baseFp = baseFingerprint;
     return store;
@@ -361,6 +385,9 @@ function mergeStoresOnConflict(disk: TeamAutoStore, saver: TeamAutoStore): TeamA
   merged.deliveredResults = maxKey(disk.deliveredResults, saver.deliveredResults);
   merged.orphanResultAlarms = maxKey(disk.orphanResultAlarms, saver.orphanResultAlarms);
   merged.undeliveredPrAlarms = maxKey(disk.undeliveredPrAlarms, saver.undeliveredPrAlarms);
+  // #5785: PR-face records are durable facts - either side's stamp is
+  // evidence of delivery, so union with disk winning key collisions.
+  merged.prDeliveries = { ...(saver.prDeliveries ?? {}), ...(disk.prDeliveries ?? {}) };
   merged.failedClaimRecovery = maxKey(disk.failedClaimRecovery, saver.failedClaimRecovery);
   merged.fullReviewUmbrellas = maxKey(disk.fullReviewUmbrellas, saver.fullReviewUmbrellas);
   merged.activity = unionBy(disk.activity, saver.activity, (x) => `${x.at}:${String(x.text).slice(0, 60)}`);
