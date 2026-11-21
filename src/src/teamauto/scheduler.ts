@@ -1103,7 +1103,14 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
             // evidence predicate hands it - the alarm. Re-registering there
             // swallowed the alarm (5b regression after bb09e1e) and would
             // re-post a duplicate beside the unverified body.
-            if (numMatch && repoMatch && targetBodies.length === 0) {
+            // #5785 reconciliation: WRITE tasks are ALSO out of scope - their
+            // lost registration is the PR-face settle audit's jurisdiction
+            // (listPullsByHead probe + prDeliveries ledger below). A healed
+            // issueComment entry here would sit in s.writebacks and mask
+            // that audit exactly like the live incident's comment-shaped
+            // evidence did, or re-deliver a comment beside an unknown
+            // push/PR state - the double-delivery hazard #5785 documents.
+            if (numMatch && repoMatch && targetBodies.length === 0 && task.writeMode !== "write") {
               const healTargetNum = Number(numMatch[1]);
               await registerWritebackUnlocked(task.id, prNumMatch ? "prComment" : "issueComment", repoMatch[1], healTargetNum);
               if (s.writebacks.some((w) => w.taskId === task.id)) {
