@@ -1052,10 +1052,15 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
             const prNumMatch = /(?:PR|pull request) #(\d+)/i.exec(`${task.title}`);
             const numMatch = prNumMatch ?? /issue #(\d+)/.exec(`${task.title}`);
             const repoMatch = /TeamAuto autonomous work for ([\w./-]+)\./.exec(`${task.description}`);
+            // #5783 contract 5b: the fetched bodies must stay visible BELOW the
+            // evidence check - the self-heal gate distinguishes "surface
+            // completely silent" (rescue re-delivery) from "surface carries
+            // bare/foreign bodies that match no evidence" (orphan alarm).
+            let targetBodies: string[] = [];
             if (numMatch && repoMatch) {
               const [o, n] = repoMatch[1].split("/");
               const targetNum = Number(numMatch[1]);
-              const bodies = prNumMatch
+              targetBodies = prNumMatch
                 ? await ghClient.getPullFeedbackBodies(o, n, targetNum).catch(() => [] as string[])
                 : await ghClient.getIssueCommentBodies(o, n, targetNum).catch(() => [] as string[]);
               // #5780: workers deliver in more shapes than the ladder marker -
@@ -1068,7 +1073,7 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
               // body IS the task result - fingerprint match on its first
               // 60 chars catches every shape, marker or not.
               const resultFingerprint = task.result.replace(/\s+/g, " ").trim().slice(0, 60);
-              const ghEvidence = bodies.some((b) => /\[teamclaw[:\]]/i.test(b) || /teamclaw|teamauto/i.test(b) || /teamclaw\/task-/.test(b) || (resultFingerprint.length >= 40 && b.replace(/\s+/g, " ").includes(resultFingerprint)));
+              const ghEvidence = targetBodies.some((b) => /\[teamclaw[:\]]/i.test(b) || /teamclaw|teamauto/i.test(b) || /teamclaw\/task-/.test(b) || (resultFingerprint.length >= 40 && b.replace(/\s+/g, " ").includes(resultFingerprint)));
               if (ghEvidence) {
                 // #5785: a WRITE task's canonical product is the PR. An issue
             // direct-send comment (mk:true) satisfies the issue-surface
@@ -1124,7 +1129,14 @@ export function createTeamAutoScheduler(deps: TeamAutoSchedulerDeps) {
             // instead of only alarming: prReview bodies have NO direct-send
             // surface, so without this the review verdict (e.g. a REQUEST
             // CHANGES on a live PR) is lost forever.
-            if (numMatch && repoMatch) {
+            // #5783 contract 5b gate: the rescue is for a COMPLETELY SILENT
+            // surface only. When the surface already carries bodies that
+            // match no evidence (live shape: a bare worker direct-post or a
+            // foreign/human review), the audit must take the verdict the
+            // evidence predicate hands it - the alarm. Re-registering there
+            // swallowed the alarm (5b regression after bb09e1e) and would
+            // re-post a duplicate beside the unverified body.
+            if (numMatch && repoMatch && targetBodies.length === 0) {
               const healTargetNum = Number(numMatch[1]);
               await registerWritebackUnlocked(task.id, prNumMatch ? "prComment" : "issueComment", repoMatch[1], healTargetNum);
               if (s.writebacks.some((w) => w.taskId === task.id)) {
