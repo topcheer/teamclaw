@@ -15,7 +15,21 @@ It supports:
 
 ## Install
 
-For the easiest guided setup, run:
+The recommended install is the official ClawHub registry (the default source for `openclaw plugins install` on OpenClaw 2026.10+ - no extra flags or source prefixes needed):
+
+```bash
+openclaw plugins install @teamclaws/teamclaw
+```
+
+OpenClaw walks you through the capability consent prompt; for scripts/CI, accept the declared capabilities non-interactively:
+
+```bash
+openclaw plugins install --accept-capabilities @teamclaws/teamclaw
+```
+
+> Note: the freshly published 2026.11.x builds ship compiled runtime output (`dist/index.js`). Until a pending package clears ClawHub's security scan, `latest` may still resolve to the legacy 2026.3.x artifact, which predates compiled entries - retry after the scan completes.
+
+For a guided setup that also configures workspaces, workers, and auth, run:
 
 ```bash
 npx -y @teamclaws/teamclaw install
@@ -52,18 +66,10 @@ npx -y @teamclaws/teamclaw install --agent-mode main
 
 If you only want to install the plugin manually, use:
 
-```bash
-# OpenClaw 2026.10+
-openclaw plugins install --accept-capabilities @teamclaws/teamclaw
-
-# Legacy hosts (<2026.10)
-openclaw plugins install --dangerously-force-unsafe-install @teamclaws/teamclaw
-```
-
-If you want to force the ClawHub package path, use:
+Legacy hosts (<2026.10) that predate the ClawHub-by-default registry can still install from npm, forcing the legacy consent flag:
 
 ```bash
-openclaw plugins install --accept-capabilities clawhub:@teamclaws/teamclaw
+openclaw plugins install --dangerously-force-unsafe-install npm:@teamclaws/teamclaw
 ```
 
 Then enable and configure TeamClaw in your `openclaw.json`.
