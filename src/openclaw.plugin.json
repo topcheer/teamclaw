@@ -75,7 +75,7 @@
     "maxConcurrentTasks": {
       "label": "Max Concurrent Tasks",
       "hint": "number",
-      "help": "Maximum number of tasks that can be in 'in_progress' status at the same time (1–50)"
+      "help": "Maximum number of tasks that can be in 'in_progress' status at the same time (1\u201350)"
     },
     "gitEnabled": {
       "label": "Git Collaboration",

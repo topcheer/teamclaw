@@ -86,8 +86,9 @@ clawhub whoami >/dev/null
   cd "${repo_root}"
   "${publish_package_cmd[@]}"
   for skill_file in "${skill_files[@]}"; do
-    skill_dir="${skill_file%/SKILL.md}"
-    skill_rel="${skill_dir#"${repo_root}/"}"
-    clawhub publish "${skill_rel}" --changelog "${changelog}" --tags "${tags}"
+    # clawhub's legacy `publish` resolves the path against its own opts.workdir
+    # (not the shell cwd), so a repo-relative path fails its stat check - pass
+    # the absolute skill folder (skill_file is already absolute from find).
+    clawhub publish "${skill_file%/SKILL.md}" --changelog "${changelog}" --tags "${tags}"
   done
 )
