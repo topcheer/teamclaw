@@ -268,5 +268,90 @@ function middlewareDeps(state, tunnelMode) {
   assert.ok(staleGuardIdx > buildIdx && staleGuardIdx < publishIdx, "the staleness guard sits between build and publish");
 }
 
-console.log("test-security-clawhub-r2: ok (self-hosted device auth, WS origin policy, preview credential stripping + CSP on every response, release script builds before publish)");
+// ---------------------------------------------------------------------------
+// 7. ClawHub rescan 2026.11.9 (R4): cross-site mutations, last-device rule,
+//    bounded request bodies.
+// ---------------------------------------------------------------------------
+{
+  // 7a. Sec-Fetch-Site: cross-site mutations are refused at the device gate
+  //     regardless of protection level (a cross-site page in the OWNER's
+  //     browser arrives as a loopback peer; L0 wildcard CORS would let the
+  //     JSON POST through to the loopback-only reset hatch).
+  const protocolMod = await dist("protocol.js");
+  for (const [label, state] of [["L0", { ...stateWithDevice(), security: undefined }], ["protected", stateWithDevice()]]) {
+    const gate = securityMod.createSecurityMiddleware(middlewareDeps(state, null));
+    const peer = { ip: "127.0.0.1", viaTunnel: false, loopback: true, lan: true };
+    const mk = (method, secFetchSite, tok) => ({
+      method, url: "/api/v1/security/reset",
+      headers: { host: "127.0.0.1:9527", ...(secFetchSite ? { "sec-fetch-site": secFetchSite } : {}), ...(tok ? { authorization: `Bearer ${tok}` } : {}) },
+      socket: { remoteAddress: "127.0.0.1" },
+    });
+    const token = "d".repeat(64);
+    if (state.security) state.security.devices[0].tokenHash = securityMod.hashToken(token);
+    for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+      const denied = fakeRes();
+      assert.equal(gate(mk(method, "cross-site", token), denied, "/api/v1/security/reset", peer), false, `${label}: cross-site ${method} is refused`);
+      assert.equal(denied.out.status, 403, `${label}: cross-site ${method} answers 403`);
+    }
+    const sameOrigin = fakeRes();
+    assert.equal(gate(mk("POST", "same-origin", token), sameOrigin, "/api/v1/tasks", peer), true, `${label}: same-origin POST passes the gate`);
+    const noHeader = fakeRes();
+    assert.equal(gate(mk("POST", undefined, token), noHeader, "/api/v1/tasks", peer), true, `${label}: non-browser clients (no Sec-Fetch-Site) are unaffected`);
+    const read = fakeRes();
+    assert.equal(gate(mk("GET", "cross-site"), read, "/api/v1/tasks", peer), true, `${label}: cross-site GET is not a state change (CORS already blocks reading the response)`);
+  }
+
+  // 7b. Deleting the LAST paired device is a controller-host action.
+  {
+    const token = "e".repeat(64);
+    const oneDevice = stateWithDevice(securityMod.hashToken(token));
+    const twoDevices = stateWithDevice(securityMod.hashToken(token));
+    twoDevices.security.devices.push({ id: "dev-2", name: "CLI", kind: "cli", tokenHash: "f".repeat(64), createdAt: Date.now() });
+    const mkCtx = (state, peerLoopback, targetId) => ({
+      req: { headers: { authorization: `Bearer ${token}` } },
+      res: fakeRes(),
+      peer: peerLoopback ? { ip: "127.0.0.1", loopback: true } : { ip: "192.168.1.9", lan: true },
+      pathname: `/api/v1/security/devices/${targetId}`,
+      deps: { ...middlewareDeps(state, null), config: { security: { autoPair: false } } },
+      deps_state: state,
+    });
+    const remoteLast = mkCtx(oneDevice, false, "dev-1");
+    await securityMod.handleSecurityDeviceDeleteRequest(remoteLast);
+    assert.equal(remoteLast.res.out.status, 403, "a remote device cannot delete the LAST paired device (would drop protection for everyone)");
+    assert.equal(remoteLast.deps.getTeamState().security.devices.length, 1, "the refusal leaves the device in place");
+    const localLast = mkCtx(oneDevice, true, "dev-1");
+    await securityMod.handleSecurityDeviceDeleteRequest(localLast);
+    assert.equal(localLast.res.out.status, 200, "the controller host may still remove the last device (anti-lockout symmetry with reset)");
+    assert.equal(securityMod.isProtectionOn(localLast.deps.getTeamState()), false, "which returns the controller to L0");
+    const remoteOther = mkCtx(twoDevices, false, "dev-2");
+    await securityMod.handleSecurityDeviceDeleteRequest(remoteOther);
+    assert.equal(remoteOther.res.out.status, 200, "a remote device may still revoke ANOTHER device while at least one remains");
+    assert.equal(remoteOther.deps.getTeamState().security.devices.length, 1, "exactly the targeted device was removed");
+  }
+
+  // 7c. Request bodies are bounded.
+  {
+    const { PassThrough } = await import("node:stream");
+    const feed = async (totalBytes, limit) => {
+      const req = new PassThrough();
+      const p = protocolMod.readRequestBody(req, limit);
+      const chunk = Buffer.alloc(64 * 1024, 0x61);
+      for (let sent = 0; sent < totalBytes; sent += chunk.length) req.write(chunk.subarray(0, Math.min(chunk.length, totalBytes - sent)));
+      req.end();
+      return p;
+    };
+    const ok = await feed(200 * 1024, 1024 * 1024);
+    assert.equal(ok.length, 200 * 1024, "a body under the limit is returned intact");
+    await assert.rejects(feed(3 * 1024 * 1024, 1024 * 1024), (err) => err instanceof protocolMod.BodyTooLargeError && err.limitBytes === 1024 * 1024, "a body over the limit rejects with BodyTooLargeError carrying the limit");
+    assert.equal(protocolMod.MAX_JSON_BODY_BYTES, 8 * 1024 * 1024, "JSON bodies are capped at 8 MiB");
+    assert.equal(protocolMod.MAX_BUNDLE_BODY_BYTES, 256 * 1024 * 1024, "bundle imports are capped at 256 MiB");
+    const repoSrc = fs.readFileSync(path.join(projectRoot, "src", "src", "controller", "repo-routes.ts"), "utf8");
+    assert.match(repoSrc, /readRequestBody\(req, MAX_BUNDLE_BODY_BYTES\)/, "the bundle import uses the bundle limit, not the JSON limit");
+    assert.match(repoSrc, /sendError\(res, 413,/, "an oversized bundle answers 413");
+    const httpSrc = fs.readFileSync(path.join(projectRoot, "src", "src", "controller", "http-server.ts"), "utf8");
+    assert.match(httpSrc, /err instanceof BodyTooLargeError[\s\S]{0,80}sendError\(res, 413,/, "the top-level handler maps BodyTooLargeError to 413");
+  }
+}
+
+console.log("test-security-clawhub-r2: ok (R2 self-hosted/WS origin/preview stripping, R3 CSP + release build, R4 cross-site mutation guard, last-device rule, bounded bodies)");
 process.exit(0);

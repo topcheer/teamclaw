@@ -410,6 +410,8 @@ export type SecurityMiddlewareDeps = {
 
 export type SecurityMiddleware = (req: IncomingMessage, res: ServerResponse, pathname: string, peer: SecurityPeer) => boolean;
 
+const MUTATING_HTTP_METHODS: ReadonlySet<string> = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
 /**
  * True when the request path must NOT be blocked by the device gate:
  * health (liveness probes), UI static assets and the tunnel gate pages
@@ -495,6 +497,23 @@ export function createSecurityMiddleware(deps: SecurityMiddlewareDeps): Security
     const protectionOn = isProtectionOn(state);
 
     applyResponseCorsPolicy(req, res, protectionOn);
+
+    // ClawHub security review 2026.11.9 (finding 3): a cross-site page in the
+    // OWNER's own browser reaches this controller as a loopback peer, so the
+    // loopback-only reset hatch would honour it (JSON POST + wildcard CORS in
+    // L0). Chromium / Firefox / Safari 16.4+ label such requests
+    // Sec-Fetch-Site: cross-site; refuse every mutating method carrying that
+    // label regardless of protection level. Non-browser clients omit the
+    // header and are unaffected; same-origin UI traffic is same-origin.
+    const method = (req.method ?? "GET").toUpperCase();
+    if (MUTATING_HTTP_METHODS.has(method) && req.headers["sec-fetch-site"] === "cross-site") {
+      deps.logger.warn(`Controller: rejected cross-site ${method} ${pathname} from ${peer.ip} (Sec-Fetch-Site: cross-site)`);
+      sendJson(res, 403, {
+        error: "forbidden",
+        hint: "Cross-site requests cannot change controller state; load the controller UI from its own origin.",
+      });
+      return false;
+    }
 
     if (!protectionOn) {
       recordNonLanPeerSignal(deps, state, peer, pathname);
@@ -912,6 +931,18 @@ export async function handleSecurityDeviceDeleteRequest(ctx: RouteContext): Prom
     return;
   }
   const caller = authenticateDeviceToken(state, extractDeviceToken(req));
+  // ClawHub security review 2026.11.9 (finding 2): deleting the LAST paired
+  // device drops protection to L0 for everyone - exactly what /security/reset
+  // does - so it is a controller-host action too. Remote devices may revoke
+  // other devices, but the final one must be removed (or reset) from the host.
+  const isLastDevice = devices.length === 1;
+  if (isLastDevice && !(ctx.peer?.loopback ?? false)) {
+    sendJson(res, 403, {
+      error: "forbidden",
+      hint: "This is the last paired device; removing it would disable protection for everyone. Run the removal or POST /api/v1/security/reset from the controller host.",
+    });
+    return;
+  }
   deps.updateTeamState((s) => {
     if (!s.security) {
       return;

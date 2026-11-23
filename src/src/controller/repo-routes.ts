@@ -11,7 +11,7 @@
 import type { ServerResponse } from "node:http";
 import type { PluginLogger } from "../../api.js";
 import type { GitRepoState, PluginConfig, TeamState } from "../types.js";
-import { sendJson, sendError, pinnedCorsAllowOrigin, readRequestBody } from "../protocol.js";
+import { sendJson, sendError, pinnedCorsAllowOrigin, readRequestBody, MAX_BUNDLE_BODY_BYTES, BodyTooLargeError } from "../protocol.js";
 import { getActiveProfile, validateActiveRoleId } from "../profile-loader.js";
 import { ensureControllerGitRepo, exportControllerGitBundle, importControllerGitBundle } from "../git-collaboration.js";
 import { recordTaskExecutionEvent } from "./task-execution.js";
@@ -104,7 +104,18 @@ export async function handleRepoBundleRequest(deps: RepoRouteDeps, res: ServerRe
 export async function repoImportRoute(ctx: RouteContext): Promise<void> {
   const { req, res, requestUrl, deps } = ctx;
   const { config, logger, updateTeamState } = deps;
-  const body = await readRequestBody(req);
+  let body: Buffer;
+  try {
+    // Repo bundles are binary git bundles - bounded by the bundle limit, not
+    // the JSON limit (2026.11.9 review: request bodies are capped everywhere).
+    body = await readRequestBody(req, MAX_BUNDLE_BODY_BYTES);
+  } catch (err) {
+    if (err instanceof BodyTooLargeError) {
+      sendError(res, 413, `bundle body exceeds the ${err.limitBytes}-byte limit`);
+      return;
+    }
+    throw err;
+  }
   if (!body.length) {
     sendError(res, 400, "bundle body is required");
     return;

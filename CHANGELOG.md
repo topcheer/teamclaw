@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026.11.10
+
+Released 2026-11-24. Security release over 2026.11.9: three of the four findings
+from the ClawHub rescan of 2026.11.9 closed; the fourth is a design decision
+listed under Known limitations.
+
+### Security (ClawHub rescan of 2026.11.9)
+
+- **Cross-site mutations refused (High)**: a malicious page in the owner's own
+  browser reaches the controller as a *loopback* peer, so the loopback-only
+  reset hatch would honour its JSON POST (L0 answers CORS with `*`). Requests
+  labelled `Sec-Fetch-Site: cross-site` (Chromium / Firefox / Safari 16.4+) are
+  now refused for every mutating method at the device gate, regardless of
+  protection level. Same-origin UI traffic and non-browser clients are
+  unaffected.
+- **Last-device removal is a controller-host action (High)**: deleting the
+  final paired device used to drop protection to L0 for everyone from any
+  paired remote device - equivalent to the (already loopback-only) reset. A
+  remote device may still revoke *other* devices; removing the last one (or
+  resetting) must happen from the controller host.
+- **Request bodies are bounded (Medium)**: the shared body reader buffered
+  whatever the peer sent before any route inspected it. JSON bodies are now
+  capped at 8 MiB and repo-bundle imports at 256 MiB; oversized requests are
+  aborted and answered with `413`.
+
+### Known limitations
+
+- **Unpaired container controllers (design)**: with device protection off (the
+  zero-config L0 default) a controller running in a container exposes its API
+  to whoever can reach the published port. This is the documented
+  zero-friction default, surfaced by the `security.suggested` status signal
+  after the first non-LAN peer; hardening it (pairing required in containers,
+  or a printed one-time pairing code) changes the first-run UX and is left to
+  a product decision.
+
 ## 2026.11.9
 
 Released 2026-11-24. Security release over 2026.11.8.
