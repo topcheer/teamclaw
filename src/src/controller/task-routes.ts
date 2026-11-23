@@ -18,6 +18,7 @@ import type {
   WorkerProgressContract,
 } from "../types.js";
 import { generateId, parseJsonBody, sendError, sendJson } from "../protocol.js";
+import { isProtectionOn, type SecurityPeer } from "./security.js";
 import { normalizeRecommendedSkills, validateActiveRoleId } from "../profile-loader.js";
 import { deriveProjectSlug, deriveStableProjectKey } from "../openclaw-workspace.js";
 import {
@@ -522,11 +523,47 @@ export async function handleTaskCheckpointRequest(deps: ControllerTaskDomainDeps
   sendJson(res, 200, { ok: true, updatedAt: task.checkpoint?.updatedAt });
 }
 
+/**
+ * ClawHub security review 2026.11.11: a submitted previewCommand is run by
+ * the controller as a shell process (restricted env, confined cwd - but still
+ * arbitrary code as the controller user). While device protection is off,
+ * only loopback / LAN peers (the owner's own workers) may supply one; a
+ * remote unpaired caller's contract is recorded WITHOUT preview fields so it
+ * can never trigger a process. Protection on: the device gate authenticated
+ * the caller, so nothing is stripped.
+ */
+export function stripPreviewCommandsForUntrustedPeer(
+  body: Record<string, unknown>,
+  peer: SecurityPeer | undefined,
+  protectionOn: boolean,
+): void {
+  if (protectionOn || !peer || peer.loopback || peer.lan) {
+    return;
+  }
+  for (const key of ["contract", "resultContract"]) {
+    const raw = body[key];
+    if (!raw || typeof raw !== "object") {
+      continue;
+    }
+    const deliverables = (raw as { deliverables?: unknown }).deliverables;
+    if (!Array.isArray(deliverables)) {
+      continue;
+    }
+    for (const deliverable of deliverables) {
+      if (deliverable && typeof deliverable === "object") {
+        delete (deliverable as Record<string, unknown>).previewCommand;
+        delete (deliverable as Record<string, unknown>).previewCwd;
+      }
+    }
+  }
+}
+
 // POST /api/v1/tasks/:id/result-contract
-export async function handleTaskResultContractRequest(deps: ControllerTaskDomainDeps, req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {
+export async function handleTaskResultContractRequest(deps: ControllerTaskDomainDeps, req: IncomingMessage, res: ServerResponse, pathname: string, peer?: SecurityPeer): Promise<void> {
   const { logger, getTeamState, updateTeamState } = deps;
   const taskId = pathname.split("/")[4]!;
   const body = await parseJsonBody(req);
+  stripPreviewCommandsForUntrustedPeer(body, peer, isProtectionOn(getTeamState()));
   const contract = normalizeWorkerTaskResultContract(body.contract ?? body.resultContract);
   const workerId = typeof body.workerId === "string" ? body.workerId : undefined;
   const currentTask = getTeamState()?.tasks[taskId];
@@ -576,10 +613,11 @@ export async function handleTaskResultContractRequest(deps: ControllerTaskDomain
 }
 
 // POST /api/v1/tasks/:id/result
-export async function handleTaskResultRequest(deps: ControllerTaskDomainDeps, req: IncomingMessage, res: ServerResponse, pathname: string): Promise<void> {
+export async function handleTaskResultRequest(deps: ControllerTaskDomainDeps, req: IncomingMessage, res: ServerResponse, pathname: string, peer?: SecurityPeer): Promise<void> {
   const { logger, getTeamState, updateTeamState } = deps;
   const taskId = pathname.split("/")[4]!;
   const body = await parseJsonBody(req);
+  stripPreviewCommandsForUntrustedPeer(body, peer, isProtectionOn(getTeamState()));
   let result = typeof body.result === "string" ? body.result : "";
   let error = typeof body.error === "string" ? body.error : undefined;
   const workerId = typeof body.workerId === "string" ? body.workerId : undefined;
