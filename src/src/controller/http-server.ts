@@ -83,6 +83,7 @@ import {
   corsPreflightDecision,
   createSecurityMiddleware,
   createWebSocketUpgradeGuard,
+  hasCloudflareEdgeHeaders,
   isProtectionOn,
   type SecurityPeer,
 } from "./security.js";
@@ -210,7 +211,16 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
   // paired (protection off) this is a no-op passthrough (L0, the exact
   // pre-issue behavior); once devices exist it enforces per-device tokens
   // on every non-exempt /api route (exemptions and 401 shape in security.ts).
-  const securityGate = createSecurityMiddleware(deps);
+  // ClawHub security review 2026.11.7 (finding 1): self-hosted tunnels serve
+  // a custom hostname, so the active tunnel mode decides whether tunnel
+  // visitors authenticate with the gate cookie (managed/quick) or a device
+  // token (self-hosted). Both gates read it through this accessor; the
+  // Cloudflare edge headers classify traffic the Host suffix cannot.
+  const tunnelMode = (): "managed" | "self-hosted" | "quick" | null => tunnelManagerSingleton?.status().mode ?? null;
+  const viaTunnelRequest = (req: { headers: Record<string, unknown> }): boolean =>
+    (tunnelManagerSingleton?.isTunnelRequest(typeof req.headers.host === "string" ? req.headers.host : undefined) ?? false)
+    || hasCloudflareEdgeHeaders(req);
+  const securityGate = createSecurityMiddleware({ ...deps, tunnelMode });
 
   const server = http.createServer(async (req: IncomingMessage, res: ServerResponse) => {
     // CORS preflight (issue #23: wildcard while protection is off - the
@@ -242,7 +252,7 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
     const tunnelCtx: RouteContext = {
       req, res, requestUrl: url, pathname, deps, currentState: null,
     };
-    const viaTunnel = tunnelManager.isTunnelRequest(typeof req.headers.host === "string" ? req.headers.host : undefined);
+    const viaTunnel = viaTunnelRequest(req);
 
     // ==================== Device auth gate (issue #23) ====================
     // Runs BEFORE the tunnel gate tables, the transition matrix and the
@@ -260,7 +270,9 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
       if (await dispatchRoutes(tunnelRoutesSingleton.gate, tunnelCtx)) {
         return;
       }
-      if (!tunnelManager.gateAllows(req)) {
+      // Self-hosted tunnels have no gate token: their visitors were already
+      // authenticated by the device gate above (2026.11.7 finding 1).
+      if (tunnelMode() !== "self-hosted" && !tunnelManager.gateAllows(req)) {
         res.writeHead(403, { "Content-Type": "text/html; charset=utf-8" });
         res.end(gatePageHtml(String(req.headers.host), false));
         return;
@@ -286,7 +298,9 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
     verifyUpgrade: createWebSocketUpgradeGuard({
       ...deps,
       isTunnelHost: (host) => tunnelManagerSingleton?.isTunnelRequest(host) ?? false,
+      viaTunnelRequest,
       gateAllows: (req) => tunnelManagerSingleton?.gateAllows(req) ?? false,
+      tunnelMode,
     }),
   });
 
