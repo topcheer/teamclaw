@@ -14,6 +14,31 @@ import type { TeamState } from "../types.js";
 import { sendJson } from "../protocol.js";
 
 /**
+ * Headers the preview proxy never forwards to the untrusted preview
+ * subprocess (ClawHub security review 2026.11.7 finding 2): every
+ * credential channel the controller itself accepts, plus routing headers
+ * the proxy re-derives below.
+ */
+export const STRIPPED_PREVIEW_REQUEST_HEADERS: ReadonlySet<string> = new Set([
+  "cookie",
+  "authorization",
+  "x-teamclaw-token",
+  "host",
+  "connection",
+  "keep-alive",
+  "proxy-authorization",
+  "proxy-connection",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+  "accept-encoding",
+  "x-forwarded-for",
+  "x-forwarded-host",
+  "x-forwarded-proto",
+]);
+
+/**
  * Structural slice of ControllerHttpDeps (http-server.ts) covering exactly
  * the fields the preview proxy reads. http-server keeps passing its full
  * ControllerHttpDeps object; TypeScript structural typing accepts it, so no
@@ -52,22 +77,38 @@ export function handlePreviewProxyRequest(
   }
 
   const proxyPathPrefix = `/api/v1/previews/${encodeURIComponent(previewId)}`;
+  // ClawHub security review 2026.11.7 (finding 2): the preview subprocess runs
+  // UNTRUSTED project code, yet the proxy used to forward every incoming
+  // header - including the controller session cookie, Authorization bearer
+  // and X-TeamClaw-Token - so a preview page could read the owner's device
+  // credential and replay it against the controller API. Strip every
+  // credential-bearing header (and hop-by-hop / host-routing headers that
+  // the proxy re-derives) before the request leaves this process. Preview
+  // apps that need their own cookies must set them on their own origin.
+  const forwardedHeaders: http.OutgoingHttpHeaders = {};
+  for (const [name, value] of Object.entries(req.headers)) {
+    if (value === undefined) continue;
+    if (STRIPPED_PREVIEW_REQUEST_HEADERS.has(name.toLowerCase())) continue;
+    forwardedHeaders[name] = value;
+  }
+  Object.assign(forwardedHeaders, {
+    host: `127.0.0.1:${preview.targetPort}`,
+    "accept-encoding": "identity",
+    "x-forwarded-for": req.socket.remoteAddress ?? "",
+    "x-forwarded-host": req.headers.host ?? "",
+    "x-forwarded-proto": "http",
+  });
   const proxyReq = http.request(
     {
       hostname: "127.0.0.1",
       port: preview.targetPort,
       path: subPath + (requestUrl.search || ""),
       method: req.method,
-      headers: {
-        ...req.headers,
-        host: `127.0.0.1:${preview.targetPort}`,
-        "accept-encoding": "identity",
-        "x-forwarded-for": req.socket.remoteAddress ?? "",
-        "x-forwarded-host": req.headers.host ?? "",
-        "x-forwarded-proto": "http",
-      },
+      headers: forwardedHeaders,
     },
     (proxyRes: http.IncomingMessage) => {
+      // Same review: never let the preview plant cookies on the controller origin.
+      delete proxyRes.headers["set-cookie"];
       const contentType = (proxyRes.headers["content-type"] ?? "").toLowerCase();
       if (proxyRes.statusCode !== 200 && proxyRes.statusCode !== 201 && proxyRes.statusCode !== 301 && proxyRes.statusCode !== 302 && proxyRes.statusCode !== 304) {
         res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
@@ -107,6 +148,11 @@ export function handlePreviewProxyRequest(
           // We've decoded and rewritten the body — remove upstream encoding headers.
           delete resHeaders["content-encoding"];
           delete resHeaders["transfer-encoding"];
+          // Preview HTML executes under the controller origin (the proxy path),
+          // so give it the same opaque-origin sandbox the raw workspace route
+          // uses (2026.11.6 finding 6): scripts run, but cannot read the
+          // controller session or call /api/v1/* same-origin.
+          resHeaders["content-security-policy"] = "sandbox allow-scripts allow-forms";
           resHeaders["content-length"] = String(Buffer.byteLength(rewritten, "utf-8"));
           res.writeHead(proxyRes.statusCode ?? 200, resHeaders);
           res.end(rewritten);

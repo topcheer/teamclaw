@@ -195,7 +195,10 @@ with Cloudflare Access if the dashboard should not be public. Because that
 hostname bypasses the gate entirely, the controller refuses to start (or
 recover) a self-hosted tunnel while device protection is off: enable device
 pairing first (`POST /api/v1/security/enable` from the controller host, or the
-Security panel in the web UI), then start the tunnel.
+Security panel in the web UI), then start the tunnel. Because there is no gate
+token for a custom hostname, **every visitor of a self-hosted tunnel must pair
+a device** (pairing code, or `security.autoPair` on a trusted LAN) before the
+UI loads - managed `*.teamclaw.dev` tunnels keep the one-time gate page.
 
 **Anonymous one-off tunnels** (web UI only, no config): the settings
 popover also offers zero-account `*.trycloudflare.com` tunnels via the

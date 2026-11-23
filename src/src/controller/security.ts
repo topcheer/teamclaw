@@ -211,6 +211,40 @@ export function classifySecurityPeer(ip: string | undefined, viaTunnel: boolean)
   };
 }
 
+/**
+ * ClawHub security review 2026.11.7 (finding 1): every request that rode
+ * through the Cloudflare edge carries CF-Connecting-IP / CF-Ray (added by
+ * the edge, not by cloudflared or the client). The managed tunnel suffixes
+ * in tunnel-manager catch *.teamclaw.dev / *.trycloudflare.com by Host,
+ * but a SELF-HOSTED tunnel serves a custom hostname, so its traffic used to
+ * classify as a plain loopback peer and inherit trusted-host access even
+ * while device protection was on. Treating edge-marked requests as tunnel
+ * traffic closes that: a forged CF header only ever DOWNGRADES the caller
+ * (tunnel peers are never loopback/LAN), never grants anything.
+ */
+export function hasCloudflareEdgeHeaders(req: { headers: Record<string, unknown> }): boolean {
+  const h = req.headers;
+  return Boolean(h["cf-connecting-ip"] || h["cf-ray"] || h["cf-worker"]);
+}
+
+/** Origin policy for browser WebSocket upgrades (review 2026.11.7 finding 3). */
+export function isAllowedWebSocketOrigin(req: { headers: Record<string, unknown> }): boolean {
+  const origin = req.headers.origin;
+  if (typeof origin !== "string" || !origin.trim()) {
+    return true; // non-browser clients (CLI, workers, curl) send no Origin
+  }
+  const host = typeof req.headers.host === "string" ? req.headers.host : "";
+  if (!host) {
+    return false;
+  }
+  try {
+    const u = new URL(origin);
+    return (u.protocol === "http:" || u.protocol === "https:") && u.host.toLowerCase() === host.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // State helpers
 // ---------------------------------------------------------------------------
@@ -370,6 +404,8 @@ export type SecurityMiddlewareDeps = {
   logger: PluginLogger;
   getTeamState: () => TeamState | null;
   updateTeamState: (updater: (state: TeamState) => void) => TeamState;
+  /** Active tunnel mode ("self-hosted" means tunnel visitors must hold a device token, not a gate cookie). */
+  tunnelMode?: () => "managed" | "self-hosted" | "quick" | null;
 };
 
 export type SecurityMiddleware = (req: IncomingMessage, res: ServerResponse, pathname: string, peer: SecurityPeer) => boolean;
@@ -487,7 +523,13 @@ export function createSecurityMiddleware(deps: SecurityMiddlewareDeps): Security
     // visitor can never obtain a pairing code, so protection-on would just
     // kill the tunnel with an unanswerable 401 (user design ruling
     // 2026-11-12). LAN peers remain the pairing boundary.
-    if (peer.loopback || peer.viaTunnel) {
+    // ClawHub security review 2026.11.7 (finding 1): that exemption only
+    // holds for GATED tunnels (*.teamclaw.dev / quick tunnels whose visitors
+    // carry the gate cookie). A SELF-HOSTED tunnel has no gate token and a
+    // custom hostname, so its visitors must authenticate like any other
+    // remote peer - otherwise "protection on" protected nothing there.
+    const selfHostedTunnel = peer.viaTunnel && deps.tunnelMode?.() === "self-hosted";
+    if ((peer.loopback || peer.viaTunnel) && !selfHostedTunnel) {
       const authAny = authenticateDeviceToken(state, extractDeviceToken(req));
       if (authAny) touchDeviceLastSeen(deps, authAny.device.id);
       return true;
@@ -517,13 +559,27 @@ export function createSecurityMiddleware(deps: SecurityMiddlewareDeps): Security
 export type WebSocketUpgradeGuardDeps = SecurityMiddlewareDeps & {
   isTunnelHost: (host: string | undefined) => boolean;
   gateAllows?: (req: { headers: Record<string, unknown> }) => boolean;
+  /** Full-request tunnel classification (Host suffix OR Cloudflare edge headers); wins over isTunnelHost. */
+  viaTunnelRequest?: (req: { headers: Record<string, unknown> }) => boolean;
 };
 
 export function createWebSocketUpgradeGuard(deps: WebSocketUpgradeGuardDeps): (req: IncomingMessage) => boolean {
   return function verifyUpgrade(req: IncomingMessage): boolean {
-    const viaTunnel = deps.isTunnelHost(typeof req.headers.host === "string" ? req.headers.host : undefined);
+    const viaTunnel = deps.viaTunnelRequest
+      ? deps.viaTunnelRequest(req)
+      : deps.isTunnelHost(typeof req.headers.host === "string" ? req.headers.host : undefined);
     const peer = classifySecurityPeer(req.socket.remoteAddress, viaTunnel);
     const state = deps.getTeamState();
+    // ClawHub security review 2026.11.7 (finding 3): browsers always send
+    // Origin on WebSocket upgrades; a cross-site page could otherwise open
+    // /ws with the victim's session cookie and read the live event stream.
+    // Only the controller's own origin (same host) may upgrade; non-browser
+    // clients without an Origin header are unaffected.
+    if (!isAllowedWebSocketOrigin(req)) {
+      deps.logger.warn(`Controller: rejected WebSocket upgrade from ${peer.ip} with cross-site Origin ${String(req.headers.origin)}`);
+      return false;
+    }
+    const selfHostedTunnel = peer.viaTunnel && deps.tunnelMode?.() === "self-hosted";
     // ClawHub security review 2026.11.6 (finding 3): the tunnel gate must
     // run BEFORE the protection-off allowance. The HTTP path enforces
     // gateAllows for every tunnel request regardless of device protection
@@ -531,7 +587,9 @@ export function createWebSocketUpgradeGuard(deps: WebSocketUpgradeGuardDeps): (r
     // surface - but this guard used to return true first, which left /ws as
     // the one tunnel surface a gate-cookie-less visitor could subscribe to
     // (task/message/clarification event stream). Same layering as HTTP now.
-    if (peer.viaTunnel) {
+    // Self-hosted tunnels (2026.11.7 finding 1) have no gate cookie: their
+    // visitors fall through to the device-token check below instead.
+    if (peer.viaTunnel && !selfHostedTunnel) {
       if (!deps.gateAllows || !deps.gateAllows(req)) {
         deps.logger.warn(`Controller: rejected WebSocket upgrade from ${peer.ip} (via tunnel, no gate cookie)`);
         return false;
@@ -550,8 +608,8 @@ export function createWebSocketUpgradeGuard(deps: WebSocketUpgradeGuardDeps): (r
     if (peer.loopback) {
       return true;
     }
-    // Tunnel-origin upgrades were handled above (gate cookie, never a pairing
-    // token - a device token here would be an unanswerable wall, 8b03ed6).
+    // Gated-tunnel upgrades were handled above (gate cookie). Self-hosted
+    // tunnel upgrades land here and authenticate with a device token.
     let token = extractDeviceToken(req);
     if (!token) {
       const url = new URL(req.url ?? "/ws", `http://${req.headers.host ?? "localhost"}`);

@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026.11.8
+
+Released 2026-11-24. Security release over 2026.11.7: the three findings the
+ClawHub rescan of 2026.11.7 still reported are closed (full suite green, CI
+green).
+
+### Security (ClawHub rescan of 2026.11.7 - 3 findings fixed)
+
+- **Self-hosted tunnels no longer inherit loopback trust (High)**: a self-hosted
+  Cloudflare tunnel serves a custom hostname, so its traffic never matched the
+  `*.teamclaw.dev` gate suffix and arrived as a *loopback* peer - which the
+  device gate exempts. Device protection therefore protected nothing there.
+  Requests carrying Cloudflare edge headers (`CF-Connecting-IP` / `CF-Ray`) are
+  now classified as tunnel traffic, and while a self-hosted tunnel is active
+  every such request - HTTP and `/ws` - must present a valid device token
+  (managed / quick tunnels keep the gate cookie). Self-hosted visitors now
+  pair like any other remote device.
+- **Preview proxy no longer forwards controller credentials (High)**: the
+  project-preview subprocess runs untrusted code, yet the proxy forwarded every
+  incoming header including the session cookie, `Authorization` bearer and
+  `X-TeamClaw-Token`. The proxy now strips all credential / hop-by-hop headers
+  before forwarding, drops the preview's `Set-Cookie` on the way back, and
+  serves preview HTML with `Content-Security-Policy: sandbox allow-scripts
+  allow-forms` (opaque origin under the controller host). Preview apps that
+  need cookies must set them on their own origin.
+- **WebSocket upgrades validate Origin (Medium)**: browsers always send
+  `Origin` on a WebSocket upgrade; a cross-site page could open `/ws` with the
+  victim's session cookie and read the live event stream. Upgrades whose
+  `Origin` host differs from the request `Host` are rejected; non-browser
+  clients without an `Origin` header are unaffected.
+
 ## 2026.11.7
 
 Released 2026-11-23. Security release over 2026.11.6: every finding from the
