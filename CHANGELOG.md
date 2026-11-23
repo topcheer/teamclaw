@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 2026.11.7
+
+Released 2026-11-23. Security release over 2026.11.6: every finding from the
+ClawHub scan of 2026.11.6 closed (PR #287, full suite 67/67, CI green).
 
 ### Security (ClawHub scan review of 2026.11.6 - 6 findings fixed)
 All six findings from the ClawHub security scan of `@teamclaws/teamclaw@2026.11.6`
