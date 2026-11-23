@@ -83,6 +83,8 @@ async function parseJsonBody(req: IncomingMessage): Promise<Record<string, unkno
 export const MAX_JSON_BODY_BYTES = 8 * 1024 * 1024;
 /** Repo bundle imports are binary git bundles - large, but still bounded. */
 export const MAX_BUNDLE_BODY_BYTES = 256 * 1024 * 1024;
+/** Tunnel gate / connector-token form bodies: a token is a few dozen bytes. */
+export const MAX_FORM_BODY_BYTES = 64 * 1024;
 
 export class BodyTooLargeError extends Error {
   constructor(readonly limitBytes: number) {

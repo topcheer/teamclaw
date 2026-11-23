@@ -527,17 +527,19 @@ export async function handleTaskCheckpointRequest(deps: ControllerTaskDomainDeps
  * ClawHub security review 2026.11.11: a submitted previewCommand is run by
  * the controller as a shell process (restricted env, confined cwd - but still
  * arbitrary code as the controller user). While device protection is off,
- * only loopback / LAN peers (the owner's own workers) may supply one; a
- * remote unpaired caller's contract is recorded WITHOUT preview fields so it
- * can never trigger a process. Protection on: the device gate authenticated
- * the caller, so nothing is stripped.
+ * NO peer except loopback (the controller host itself) may supply one - the
+ * 2026.11.11 review showed LAN peers are equally unpaired in L0, so a LAN
+ * or remote caller's contract is recorded WITHOUT preview fields so it can
+ * never trigger a process. Protection on: the device gate authenticated the
+ * caller, so nothing is stripped. Container/LAN workers that need dynamic
+ * previews must run with device pairing enabled.
  */
 export function stripPreviewCommandsForUntrustedPeer(
   body: Record<string, unknown>,
   peer: SecurityPeer | undefined,
   protectionOn: boolean,
 ): void {
-  if (protectionOn || !peer || peer.loopback || peer.lan) {
+  if (protectionOn || !peer || peer.loopback) {
     return;
   }
   for (const key of ["contract", "resultContract"]) {

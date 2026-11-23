@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026.11.13
+
+Released 2026-11-24. Security release over 2026.11.12: both findings from the
+ClawHub rescan of 2026.11.12 closed.
+
+### Security (ClawHub rescan of 2026.11.12)
+
+- **Only loopback may supply a preview command while protection is off
+  (High)**: the 2026.11.12 fix still let LAN peers submit `previewCommand` in
+  L0 - but a LAN peer is exactly as unpaired as a remote one there. In L0 the
+  strip now applies to every non-loopback peer; LAN / container workers that
+  need dynamic previews must run with device pairing enabled (static preview
+  inference is unaffected).
+- **Tunnel form endpoints bound their bodies (Medium)**: the internet-facing
+  gate-verification endpoint (and the self-hosted connector-token form) used
+  an unbounded `for await` reader. Both now read through the shared bounded
+  reader (64 KiB) and answer oversized posts with `413`.
+
 ## 2026.11.12
 
 Released 2026-11-24. Security release over 2026.11.11: the single finding from

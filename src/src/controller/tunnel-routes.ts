@@ -8,16 +8,33 @@
 // http-server.js as TYPE ONLY (ControllerHttpDeps), so the module graph
 // stays acyclic - same discipline as security.ts.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { sendJson, sendError } from "../protocol.js";
+import { sendJson, sendError, MAX_FORM_BODY_BYTES, BodyTooLargeError } from "../protocol.js";
 import { getGithubAuthManager } from "./github-auth.js";
 import { gatePageHtml, computeGateCookie, GATE_COOKIE_NAME, selfHostedTokenFromEnv, type TunnelManager } from "./tunnel-manager.js";
 import { isLanIp, isProtectionOn, secretsEqual } from "./security.js";
 import type { ControllerHttpDeps } from "./http-server.js";
 import type { RouteDef } from "./route-table.js";
 
+/**
+ * ClawHub security review 2026.11.12 (finding 2): the gate verification
+ * endpoint is reachable from the internet before any authentication; the
+ * form reader used to buffer whatever was posted. Bodies are bounded by
+ * MAX_FORM_BODY_BYTES and oversized posts surface as BodyTooLargeError (413).
+ * Kept as an async-iterator read (not the shared event-based reader) so any
+ * async-iterable request body works.
+ */
 async function readFormBody(request: IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
-  for await (const chunk of request) chunks.push(chunk as Buffer);
+  let total = 0;
+  for await (const chunk of request) {
+    const buf = chunk as Buffer;
+    total += buf.length;
+    if (total > MAX_FORM_BODY_BYTES) {
+      request.destroy?.();
+      throw new BodyTooLargeError(MAX_FORM_BODY_BYTES);
+    }
+    chunks.push(buf);
+  }
   const raw = Buffer.concat(chunks).toString("utf8");
   const out: Record<string, unknown> = {};
   for (const [k, v] of new URLSearchParams(raw)) out[k] = v;
@@ -96,7 +113,16 @@ export function createTunnelGateRoutes(tunnelManager: TunnelManager): readonly R
           sendJson(res, 429, { error: "Too many gate verification attempts. Wait a minute and try again." });
           return;
         }
-        const form = await readFormBody(req);
+        let form: Record<string, unknown>;
+        try {
+          form = await readFormBody(req);
+        } catch (err) {
+          if (err instanceof BodyTooLargeError) {
+            sendError(res, 413, err.message);
+            return;
+          }
+          throw err;
+        }
         // Issue #237 W3: gate tokens are 128-bit base64url and therefore
         // case-sensitive - only surrounding whitespace is normalized (the
         // old .toUpperCase() fold belonged to the retired 8-char token).
@@ -210,7 +236,13 @@ export function createTunnelManagementRoutes(tunnelManager: TunnelManager, deps:
         try {
           const body = await readFormBody(req) as { token?: unknown };
           token = String(body.token ?? "");
-        } catch { /* fall through to env */ }
+        } catch (err) {
+          if (err instanceof BodyTooLargeError) {
+            sendError(res, 413, err.message);
+            return;
+          }
+          /* fall through to env */
+        }
         if (!token.trim()) {
           const envToken = selfHostedTokenFromEnv();
           if (!envToken) { sendError(res, 400, "connector token required (or set TEAMCLAW_TUNNEL_TOKEN)"); return; }
