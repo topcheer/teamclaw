@@ -47,7 +47,7 @@ import http from "node:http";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawPluginApi, PluginLogger } from "../../api.js";
 import type { PluginConfig, TeamState } from "../types.js";
-import { sendJson, sendError } from "../protocol.js";
+import { sendJson, sendError, BodyTooLargeError } from "../protocol.js";
 import { getActiveProfile, type TeamProfileCapabilities } from "../profile-loader.js";
 import { TaskRouter } from "./task-router.js";
 import { MessageRouter } from "./message-router.js";
@@ -287,6 +287,10 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
       await handleRequest(req, res, pathname, deps, peer);
     } catch (err) {
       logger.error(`Controller HTTP error: ${err instanceof Error ? err.message : String(err)}`);
+      if (err instanceof BodyTooLargeError) {
+        sendError(res, 413, err.message);
+        return;
+      }
       sendError(res, 500, "Internal server error");
     }
   });

@@ -67,7 +67,7 @@ export function secretsEqual(a: string, b: string): boolean {
 }
 
 async function parseJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const raw = await readRequestBody(req);
+  const raw = await readRequestBody(req, MAX_JSON_BODY_BYTES);
   if (!raw.length) {
     return {};
   }
@@ -79,14 +79,50 @@ async function parseJsonBody(req: IncomingMessage): Promise<Record<string, unkno
   }
 }
 
-async function readRequestBody(req: IncomingMessage): Promise<Buffer> {
+/** JSON request bodies never legitimately exceed a few MiB (task text, config). */
+export const MAX_JSON_BODY_BYTES = 8 * 1024 * 1024;
+/** Repo bundle imports are binary git bundles - large, but still bounded. */
+export const MAX_BUNDLE_BODY_BYTES = 256 * 1024 * 1024;
+
+export class BodyTooLargeError extends Error {
+  constructor(readonly limitBytes: number) {
+    super(`request body exceeds the ${limitBytes}-byte limit`);
+    this.name = "BodyTooLargeError";
+  }
+}
+
+/**
+ * ClawHub security review 2026.11.9 (finding 4): the reader used to buffer
+ * whatever the peer sent before any route looked at it, so an unauthenticated
+ * caller could exhaust gateway memory with a single oversized request. The
+ * stream is aborted as soon as the limit is crossed.
+ */
+async function readRequestBody(req: IncomingMessage, maxBytes: number = MAX_JSON_BODY_BYTES): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    let total = 0;
+    let settled = false;
+    req.on("data", (chunk: Buffer) => {
+      if (settled) return;
+      total += chunk.length;
+      if (total > maxBytes) {
+        settled = true;
+        req.destroy();
+        reject(new BodyTooLargeError(maxBytes));
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on("end", () => {
+      if (settled) return;
+      settled = true;
       resolve(Buffer.concat(chunks));
     });
-    req.on("error", reject);
+    req.on("error", (err) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    });
   });
 }
 
