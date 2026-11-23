@@ -191,7 +191,11 @@ set). In the Cloudflare Zero Trust dashboard you need: a named Tunnel,
 its connector token, and a Public Hostname on that tunnel pointing at
 the controller's local URL (Service type HTTP, port = controller port).
 The hostname lives in your zone and skips the TeamClaw gate - protect it
-with Cloudflare Access if the dashboard should not be public.
+with Cloudflare Access if the dashboard should not be public. Because that
+hostname bypasses the gate entirely, the controller refuses to start (or
+recover) a self-hosted tunnel while device protection is off: enable device
+pairing first (`POST /api/v1/security/enable` from the controller host, or the
+Security panel in the web UI), then start the tunnel.
 
 **Anonymous one-off tunnels** (web UI only, no config): the settings
 popover also offers zero-account `*.trycloudflare.com` tunnels via the

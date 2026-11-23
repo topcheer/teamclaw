@@ -108,7 +108,7 @@
     },
     "security": {
       "label": "Device Pairing Security",
-      "help": "Controller device-pairing options; autoPair allows LAN devices to pair with zero input (POST /api/v1/security/pair-auto), disable it to require a pairing code for every new device"
+      "help": "Controller device-pairing options; autoPair (off by default) allows LAN devices to pair with zero input (POST /api/v1/security/pair-auto) - enable only on a trusted private network"
     },
     "agentIsolationMode": {
       "label": "Agent Isolation Mode",
@@ -313,8 +313,8 @@
         "properties": {
           "autoPair": {
             "type": "boolean",
-            "default": true,
-            "description": "Allow zero-input pairing from LAN peers (POST /api/v1/security/pair-auto); disable to require a pairing code for every new device"
+            "default": false,
+            "description": "Allow zero-input pairing from LAN peers (POST /api/v1/security/pair-auto); off by default so every new device needs a pairing code - enable only on a trusted private network"
           }
         }
       },

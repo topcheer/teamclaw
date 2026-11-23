@@ -390,9 +390,13 @@ async function dispatchTunnelRoute(deps, pathname, remoteAddress) {
 
   // start-quick vs start-self-hosted divergence for allowed origins proves
   // the guard passes them THROUGH to the endpoint's own validation.
+  // ClawHub security review 2026.11.6 (finding 4): a self-hosted tunnel's
+  // custom hostname bypasses the sharing gate, so L0 refuses to start one -
+  // even from loopback. Protection on: the endpoint's own validation runs.
   const selfHostedLocal = await dispatchTunnelRoute(l0Deps, "/api/v1/tunnel/start-self-hosted", "127.0.0.1");
-  assert.equal(selfHostedLocal.out.status, 400, "L0 loopback start-self-hosted passes the origin gate and hits its own token validation");
-  assert.match(JSON.parse(selfHostedLocal.out.body).error, /connector token required/, "the 400 is the connector-token error, not the origin refusal");
+  assert.equal(selfHostedLocal.out.status, 409, "L0 loopback start-self-hosted is refused: device protection must be on (finding 4)");
+  assert.match(JSON.parse(selfHostedLocal.out.body).error, /device protection must be enabled/, "the 409 names the protection precondition");
+  assert.equal(selfHostedLocal.manager.calls.startSelfHosted, 0, "the manager never runs for an L0 self-hosted start");
   const githubStartLocal = await dispatchTunnelRoute(l0Deps, "/api/v1/tunnel/start", "127.0.0.1");
   assert.equal(githubStartLocal.out.status, 401, "L0 loopback /tunnel/start passes the origin gate and hits the GitHub-login requirement");
   assert.match(JSON.parse(githubStartLocal.out.body).error, /GitHub login required/, "the 401 is the GitHub-login error, not the origin refusal");
@@ -412,6 +416,9 @@ async function dispatchTunnelRoute(deps, pathname, remoteAddress) {
   const remotePaired = await dispatchTunnelRoute(protectedDeps, "/api/v1/tunnel/start-quick", "8.8.8.8");
   assert.equal(remotePaired.out.status, 202, "protection on: a (gate-authenticated) remote device keeps the ability to share - origin rule steps aside");
   assert.equal(remotePaired.manager.calls.startQuick, 1, "protection on: the manager launched for the remote paired caller");
+  const selfHostedProtected = await dispatchTunnelRoute(protectedDeps, "/api/v1/tunnel/start-self-hosted", "127.0.0.1");
+  assert.equal(selfHostedProtected.out.status, 400, "protection on: start-self-hosted passes the protection precondition and hits its own token validation (finding 4)");
+  assert.match(JSON.parse(selfHostedProtected.out.body).error, /connector token required/, "protection on: the 400 is the connector-token error, not the protection refusal");
 }
 
 // --- 4b. Real-server pass: the guard inside the full http pipeline ----------

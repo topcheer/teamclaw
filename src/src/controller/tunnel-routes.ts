@@ -194,6 +194,17 @@ export function createTunnelManagementRoutes(tunnelManager: TunnelManager, deps:
         if (!tunnelStartAllowedFrom(req, res)) {
           return;
         }
+        // ClawHub security review 2026.11.6 (finding 4): a self-hosted
+        // tunnel's custom hostname is outside the built-in gate, so its
+        // requests arrive as trusted loopback peers. Without device
+        // protection that is unauthenticated public access to the API.
+        if (!isProtectionOn(deps.getTeamState())) {
+          sendJson(res, 409, {
+            error: "device protection must be enabled before starting a self-hosted tunnel",
+            hint: "A custom-domain tunnel bypasses the sharing gate (its hostname is not *.teamclaw.dev), so every request reaches this controller as a trusted local peer. Enable device pairing first (POST /api/v1/security/enable from the controller host), then start the tunnel. Managed (*.teamclaw.dev) tunnels are gate-protected and unaffected.",
+          });
+          return;
+        }
         logger.info(`TeamClaw tunnel: start-self-hosted requested (${tunnelCaller(req)})`);
         let token = "";
         try {

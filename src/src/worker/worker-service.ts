@@ -5,7 +5,7 @@ import type { PluginConfig, TaskAssignmentPayload, WorkerIdentity } from "../typ
 import { createHeartbeatPayload } from "../protocol.js";
 import { IdentityManager } from "../identity.js";
 import { MessageQueue } from "./message-queue.js";
-import { createWorkerHttpHandler } from "./http-handler.js";
+import { createWorkerHttpHandler, resolveWorkerInboundTokens } from "./http-handler.js";
 import { buildTeamClawAgentSessionKey, ensureOpenClawWorkspaceMemoryDir } from "../openclaw-workspace.js";
 
 export type TaskExecutorResultLike = string | { text: string; contract?: Record<string, unknown> };
@@ -241,6 +241,20 @@ export function createWorkerService(deps: WorkerServiceDeps): OpenClawPluginServ
 
     server = http.createServer(handler);
     const listenHost = resolveWorkerListenHost(config);
+    // ClawHub security review 2026.11.6 (finding 1): the HTTP handler's auth
+    // gate is conditional ("while this worker holds an expected token"), so a
+    // worker bound to a non-loopback address with NO token would expose task
+    // assignment / cancel / install to everyone who can reach the port. Fail
+    // closed: refuse to listen unless loopback OR a token is present. Loopback
+    // stays the zero-config L0 path (provisioned workers always carry
+    // TEAMCLAW_LAUNCH_TOKEN, so containers on 0.0.0.0 are unaffected).
+    if (!isLoopbackHost(listenHost) && resolveWorkerInboundTokens(config).length === 0) {
+      server = null;
+      throw new Error(
+        `Worker: refusing to listen on ${listenHost}:${config.port} without an inbound token - the task/message/install API would be unauthenticated on the network. ` +
+        `Keep the loopback default, or set the securityToken plugin config (or launch via the controller, which injects TEAMCLAW_LAUNCH_TOKEN).`,
+      );
+    }
     await new Promise<void>((resolve, reject) => {
       server!.listen(config.port, listenHost, () => {
         logger.info(`Worker: HTTP server listening on ${listenHost}:${config.port}`);

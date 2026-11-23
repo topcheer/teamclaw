@@ -100,6 +100,10 @@ const typesMod = await import(path.join(projectRoot, "src", "dist", "src", "type
     /cannot reach this worker/,
     "a loopback bind against a remote controller URL must produce an actionable warning",
   );
+  // ClawHub security review 2026.11.6 (finding 1): a non-loopback bind with
+  // zero inbound tokens must fail closed at startup, not serve an open API.
+  assert.match(source, /refusing to listen on/, "a non-loopback bind without an inbound token must refuse to start");
+  assert.match(source, /resolveWorkerInboundTokens\(config\)\.length === 0/, "the fail-closed check reuses the handler's token resolution (securityToken + TEAMCLAW_LAUNCH_TOKEN)");
 }
 
 // ── Contract c: listenHost config parsing ───────────────────────────────────
