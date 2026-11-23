@@ -29,6 +29,9 @@ function workspaceRequestErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : "Workspace request failed";
 }
 
+// Active content the raw route must sandbox on direct navigation (finding 6).
+const ACTIVE_CONTENT_TYPES = new Set(["text/html; charset=utf-8", "image/svg+xml"]);
+
 function workspaceStatusRoute(ctx: RouteContext): void {
   const { res } = ctx;
   sendJson(res, 200, {
@@ -193,7 +196,15 @@ async function workspaceRawFileRoute(ctx: RouteContext): Promise<void> {
   try {
     const relativePath = decodeURIComponent(rawPathname);
     const file = await readWorkspaceRawFile(relativePath);
-    res.writeHead(200, {
+    // ClawHub security review 2026.11.6 (finding 6): HTML/SVG served with
+    // their active MIME type under the controller origin execute with the
+    // owner's session on DIRECT navigation (the preview iframe's sandbox
+    // attribute does not travel with the "Open Raw" link). A response-level
+    // CSP sandbox without allow-same-origin gives the document an opaque
+    // origin even on top-level navigation: scripts may run (the preview
+    // already allows that) but cannot read controller cookies or call
+    // /api/v1/* same-origin. Mirrors the iframe flags byte for byte.
+    const headers: Record<string, string> = {
       "Content-Type": file.contentType,
       "Cache-Control": "no-store",
       // Issue #23 security review follow-up: honor a CORS origin the
@@ -202,7 +213,11 @@ async function workspaceRawFileRoute(ctx: RouteContext): Promise<void> {
       // historical "*" byte for byte (shared helper, see protocol.ts).
       "Access-Control-Allow-Origin": pinnedCorsAllowOrigin(res),
       "X-Content-Type-Options": "nosniff",
-    });
+    };
+    if (ACTIVE_CONTENT_TYPES.has(file.contentType)) {
+      headers["Content-Security-Policy"] = "sandbox allow-scripts allow-forms";
+    }
+    res.writeHead(200, headers);
     res.end(file.content);
   } catch (err) {
     sendError(res, workspaceRequestErrorStatus(err), workspaceRequestErrorMessage(err));

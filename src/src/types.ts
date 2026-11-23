@@ -608,8 +608,8 @@ export type PluginConfig = {
   agentIsolationMode: AgentIsolationMode;
   /**
    * Issue #23: controller device-pairing security options. Parsed with
-   * safe defaults (autoPair: true) so hand-built configs without the key
-   * keep the L1 zero-input LAN pairing behavior.
+   * safe defaults (autoPair: false since the ClawHub security review) so
+   * hand-built configs without the key require a pairing code per device.
    */
   security?: SecurityConfig;
   /**
@@ -663,8 +663,8 @@ export type WorkerIdentity = {
 //   L0 local   - no devices persisted => no authentication at all (the
 //                historical behavior; a state without `security` is L0)
 //   L1 LAN     - LAN peers (loopback / RFC1918 / ULA / link-local) may
-//                self-pair via POST /api/v1/security/pair-auto while
-//                config.security.autoPair is true (default)
+//                self-pair via POST /api/v1/security/pair-auto only while
+//                config.security.autoPair is true (opt-in; default false)
 //   L2 exposed - one-shot 60s pairing codes minted by an authenticated
 //                device or the loopback console
 // The user never configures a token and the UI never shows a login page.
@@ -935,14 +935,16 @@ export function parsePluginConfig(raw: Record<string, unknown> = {}): PluginConf
       ? raw.agentIsolationMode
       : "independent";
 
-  // Issue #23: security.autoPair defaults to true (L1 zero-input LAN
-  // pairing); only an explicit boolean false disables pair-auto.
+  // Issue #23: security.autoPair defaulted to true (L1 zero-input LAN
+  // pairing). ClawHub security review 2026.11.6 (finding 2) flipped the
+  // default to false: a LAN peer must now present a pairing code unless
+  // the owner opts into zero-input pairing explicitly.
   const rawSecurity = raw.security;
   const rawAutoPair = rawSecurity && typeof rawSecurity === "object" && !Array.isArray(rawSecurity)
     ? (rawSecurity as { autoPair?: unknown }).autoPair
     : undefined;
   const security: SecurityConfig = {
-    autoPair: typeof rawAutoPair === "boolean" ? rawAutoPair : true,
+    autoPair: typeof rawAutoPair === "boolean" ? rawAutoPair : false,
   };
 
   // Issue #23 (client wave): the paired device token, if this instance

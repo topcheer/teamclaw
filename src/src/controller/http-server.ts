@@ -231,7 +231,7 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
     // structure below is unchanged from the pre-PR-D if/else chain.
     let tunnelManager = tunnelManagerSingleton;
     if (!tunnelManager) {
-      tunnelManager = tunnelManagerSingleton = createTunnelManager({ logger, localPort: deps.config.port });
+      tunnelManager = tunnelManagerSingleton = createTunnelManager({ logger, localPort: deps.config.port, isProtectionOn: () => isProtectionOn(deps.getTeamState()) });
     }
     if (!tunnelRoutesSingleton) {
       tunnelRoutesSingleton = {
@@ -299,7 +299,7 @@ export function createControllerHttpServer(deps: ControllerHttpDeps): http.Serve
   // Boot reconciliation: reconnect a share persisted by a previous run
   // (gateway restart or kill -9) so the tunnel id and gate token survive.
   if (!tunnelManagerSingleton) {
-    tunnelManagerSingleton = createTunnelManager({ logger, localPort: deps.config.port });
+    tunnelManagerSingleton = createTunnelManager({ logger, localPort: deps.config.port, isProtectionOn: () => isProtectionOn(deps.getTeamState()) });
   }
   void tunnelManagerSingleton.recover().catch((err) => {
     logger.warn(`TeamClaw tunnel: boot recovery failed: ${String(err)}`);

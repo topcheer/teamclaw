@@ -2,7 +2,7 @@
 // #255 P1-8: /security/reset requires confirm:"RESET" and appends an audit
 // broadcast message; without confirm it is rejected 400.
 import assert from "node:assert/strict";
-import { handleSecurityResetRequest } from "../src/dist/src/controller/security.js";
+import { handleSecurityResetRequest, hashToken } from "../src/dist/src/controller/security.js";
 
 function fakeReq(body) {
   const payload = Buffer.from(JSON.stringify(body));
@@ -84,11 +84,26 @@ const mkCtx = (body, { loopback = true } = {}) => ({
   assert.equal(ctx.res.out.status, 400, "confirm is case-sensitive; anything but exact RESET is rejected");
 }
 
-// 4. Unauthenticated non-loopback peer -> 401 before confirm check.
+// 4. Non-loopback peer -> 403: reset is a controller-host action (ClawHub
+//    security review 2026.11.6 finding 2). Previously any paired device could
+//    drop protection for everyone; no credential helps a remote caller now.
 {
   const ctx = mkCtx({ confirm: "RESET" }, { loopback: false });
   await handleSecurityResetRequest(ctx);
-  assert.equal(ctx.res.out.status, 401, "non-loopback peers without a device token stay rejected");
+  assert.equal(ctx.res.out.status, 403, "non-loopback peers are refused before the confirm check");
+  assert.equal(ctx.res.out.body.error, "forbidden", "the refusal is a 403 forbidden, not a 401 (no credential would help)");
+  assert.ok(ctx.deps.state.security, "a refused remote reset leaves protection intact");
+}
+
+// 4b. Non-loopback peer WITH a valid device token -> still 403.
+{
+  const ctx = mkCtx({ confirm: "RESET" }, { loopback: false });
+  ctx.req.headers.authorization = "Bearer remote-device-token";
+  ctx.deps.state.security.devices[0].tokenHash = hashToken("remote-device-token");
+  await handleSecurityResetRequest(ctx);
+  assert.equal(ctx.res.out.status, 403, "a valid paired device token does not unlock the remote reset (finding 2)");
+  assert.ok(ctx.deps.state.security, "protection survives a token-bearing remote reset attempt");
+  assert.equal(ctx.deps.state.messages.length, 0, "a refused remote reset appends no audit broadcast");
 }
 
 console.log("test-security-reset-confirm: ok (confirm gate + audit broadcast)");

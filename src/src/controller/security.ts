@@ -524,6 +524,20 @@ export function createWebSocketUpgradeGuard(deps: WebSocketUpgradeGuardDeps): (r
     const viaTunnel = deps.isTunnelHost(typeof req.headers.host === "string" ? req.headers.host : undefined);
     const peer = classifySecurityPeer(req.socket.remoteAddress, viaTunnel);
     const state = deps.getTeamState();
+    // ClawHub security review 2026.11.6 (finding 3): the tunnel gate must
+    // run BEFORE the protection-off allowance. The HTTP path enforces
+    // gateAllows for every tunnel request regardless of device protection
+    // (http-server.ts), so a protection-off controller still gates its HTTP
+    // surface - but this guard used to return true first, which left /ws as
+    // the one tunnel surface a gate-cookie-less visitor could subscribe to
+    // (task/message/clarification event stream). Same layering as HTTP now.
+    if (peer.viaTunnel) {
+      if (!deps.gateAllows || !deps.gateAllows(req)) {
+        deps.logger.warn(`Controller: rejected WebSocket upgrade from ${peer.ip} (via tunnel, no gate cookie)`);
+        return false;
+      }
+      return true;
+    }
     if (!isProtectionOn(state)) {
       recordNonLanPeerSignal(deps, state, peer, "/ws");
       return true;
@@ -536,13 +550,8 @@ export function createWebSocketUpgradeGuard(deps: WebSocketUpgradeGuardDeps): (r
     if (peer.loopback) {
       return true;
     }
-    // Tunnel-origin upgrades (cloudflared loopback + tunnel Host): the
-    // visitor holds the GATE token, not a pairing token - same layering
-    // as the HTTP gate (a device token here would be an unanswerable
-    // wall, 8b03ed6). Verify the gate cookie instead.
-    if (peer.viaTunnel && deps.gateAllows && deps.gateAllows(req)) {
-      return true;
-    }
+    // Tunnel-origin upgrades were handled above (gate cookie, never a pairing
+    // token - a device token here would be an unanswerable wall, 8b03ed6).
     let token = extractDeviceToken(req);
     if (!token) {
       const url = new URL(req.url ?? "/ws", `http://${req.headers.host ?? "localhost"}`);
@@ -792,10 +801,10 @@ export async function handleSecurityPairAutoRequest(ctx: RouteContext): Promise<
     });
     return;
   }
-  if ((deps.config.security?.autoPair ?? true) !== true) {
+  if ((deps.config.security?.autoPair ?? false) !== true) {
     sendJson(res, 403, {
       error: "auto-pairing is disabled on this controller",
-      hint: "The owner disabled security.autoPair; ask for a pairing code and POST /api/v1/security/pair {\"code\",\"kind\",\"name\"}.",
+      hint: "Zero-input LAN pairing is off by default (ClawHub security review); ask for a pairing code and POST /api/v1/security/pair {\"code\",\"kind\",\"name\"}.",
     });
     return;
   }
@@ -828,7 +837,7 @@ export async function handleSecurityGetRequest(ctx: RouteContext): Promise<void>
     protection: isProtectionOn(state),
     devices: (security?.devices ?? []).map(serializeDevice),
     ...(active ? { pairingCode: { expiresAt: active.expiresAt, purpose: active.purpose } } : {}),
-    autoPair: deps.config.security?.autoPair ?? true,
+    autoPair: deps.config.security?.autoPair ?? false,
   });
 }
 
@@ -857,15 +866,21 @@ export async function handleSecurityDeviceDeleteRequest(ctx: RouteContext): Prom
   sendJson(res, 200, { ok: true, revoked: deviceId, revokedSelf, protection });
 }
 
-// POST /api/v1/security/reset - authenticated OR loopback (anti-lockout
-// hatch), plus an explicit confirm token (#255 P1-8): a paired device must
-// knowingly opt in, since the reset drops protection to L0 for EVERYONE.
+// POST /api/v1/security/reset - LOOPBACK ONLY (anti-lockout hatch), plus
+// an explicit confirm token (#255 P1-8). ClawHub security review 2026.11.6
+// (finding 2): a paired device token used to be enough to drop protection
+// for EVERYONE - any LAN device that self-paired via auto-pair could reset
+// the controller to L0. Reset is now a controller-host action only; remote
+// owners revoke devices individually or re-enable from the host.
 export async function handleSecurityResetRequest(ctx: RouteContext): Promise<void> {
   const { req, res, deps, peer } = ctx;
   const state = deps.getTeamState();
   const auth = authenticateDeviceToken(state, extractDeviceToken(req));
-  if (!auth && !(peer?.loopback ?? false)) {
-    sendUnauthorized(res);
+  if (!(peer?.loopback ?? false)) {
+    sendJson(res, 403, {
+      error: "forbidden",
+      hint: "Security reset is a controller-host action (loopback only); remote devices cannot drop protection for everyone. Revoke devices individually or run the reset from the controller host.",
+    });
     return;
   }
   const body = await parseJsonBody(req);

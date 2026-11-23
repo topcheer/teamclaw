@@ -575,8 +575,8 @@ export const controllerRouteTable: readonly RouteDef[] = [
   //   pair/start- authenticated device or loopback (mints a fresh code,
   //               invalidating the previous one)
   //   pair      - one-shot 60s code exchange -> {token, deviceId}
-  //   pair-auto - LAN peer + config.security.autoPair + protection on
-  //   reset     - authenticated device or loopback (anti-lockout hatch)
+  //   pair-auto - LAN peer + config.security.autoPair (opt-in) + protection on
+  //   reset     - loopback only (anti-lockout hatch; controller host action)
   // GET /security and DELETE /security/devices/:id are NOT exempt: the
   // middleware itself guarantees the caller holds a valid device token.
   { method: "POST", path: "/api/v1/security/enable", handler: handleSecurityEnableRequest },

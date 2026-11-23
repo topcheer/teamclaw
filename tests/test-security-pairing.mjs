@@ -134,9 +134,9 @@ async function bootScenario(options = {}) {
     teamName: "Security Team",
     port: 19530,
     gitEnabled: options.gitEnabled ?? false,
-    ...(options.autoPair === false ? { security: { autoPair: false } } : {}),
+    ...(options.autoPair === true ? { security: { autoPair: true } } : {}),
   });
-  assert.equal(config.security.autoPair, options.autoPair === false ? false : true, "config parse: security.autoPair default true, explicit false honored");
+  assert.equal(config.security.autoPair, options.autoPair === true, "config parse: security.autoPair defaults to false (ClawHub security review finding 2), explicit true honored");
 
   let teamState = options.initialState ?? softwareRdState();
   if (options.initialState) {
@@ -254,7 +254,7 @@ const mintedTokens = [];
 // Main scenario: the whole ladder end to end on one server.
 // ===========================================================================
 {
-  const scenario = await bootScenario({});
+  const scenario = await bootScenario({ autoPair: true });
   try {
     // ---- 1. L0: everything open, suggestion signal off --------------------
     const health = await scenario.call("GET", "/api/v1/health");
@@ -525,6 +525,29 @@ const mintedTokens = [];
     const persistedAfterReset = await waitForStateFile((s) => s.security === undefined);
     assert.equal(persistedAfterReset.security, undefined, "reset cleared the security state entirely");
 
+    // ClawHub security review 2026.11.6 (finding 3): the WS upgrade guard must
+    // enforce the tunnel gate BEFORE the protection-off allowance. HTTP gates
+    // tunnel traffic regardless of protection; /ws used to be the one surface
+    // a gate-cookie-less visitor could subscribe to on an L0 controller.
+    // Spoofed via-tunnel Host, no gate cookie, protection OFF:
+    const wsTunnelBlockedL0 = await Promise.race([new Promise((resolve) => {
+      const ws = new WebSocketClient(`ws://127.0.0.1:${wsPort}/ws`, { headers: { host: "attacker.apps.teamclaw.dev" } });
+      wsClients.push(ws);
+      ws.on("open", () => { ws.terminate(); resolve("open"); });
+      ws.on("error", (err) => resolve(err));
+    }), wsTimeout()]);
+    assert.match(String(wsTunnelBlockedL0), /401|Unexpected server response|forbidden|gate/i, "via-tunnel WS upgrade without a gate cookie is rejected even while device protection is OFF (finding 3)");
+    const wsLoopbackL0 = await Promise.race([new Promise((resolve) => {
+      const ws = new WebSocketClient(`ws://127.0.0.1:${wsPort}/ws`);
+      wsClients.push(ws);
+      ws.on("open", () => { ws.terminate(); resolve("open"); });
+      ws.on("error", (err) => resolve(err));
+    }), wsTimeout()]);
+    assert.equal(String(wsLoopbackL0), "open", "loopback WS upgrade still opens while protection is OFF (L0 unchanged)");
+    for (const ws of wsClients) {
+      try { ws.terminate(); } catch { /* already closed */ }
+    }
+
     // Re-enable after reset works (fresh L2), cookie-only again.
     const reenable = await scenario.call("POST", "/api/v1/security/enable");
     assert.equal(reenable.status, 201, "re-enable after reset works (fresh L2)");
@@ -631,6 +654,51 @@ const mintedTokens = [];
 }
 
 // ===========================================================================
+// ClawHub security review 2026.11.6 findings 5 + 6: workspace raw route.
+//   5. A symlink inside the workspace pointing OUTSIDE must not be readable
+//      through /api/v1/workspace/raw/ - containment is enforced on realpath,
+//      not on the lexical path.
+//   6. HTML/SVG served raw carry a response-level CSP sandbox (without
+//      allow-same-origin) so direct navigation runs in an opaque origin and
+//      cannot ride the controller session; inert types carry no CSP.
+// ===========================================================================
+{
+  const scenario = await bootScenario({});
+  try {
+    const wsDir = process.env.TEAMCLAW_WORKSPACE_DIR;
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "tc-ws-outside-"));
+    const outsideFile = path.join(outsideDir, "secret.txt");
+    fs.writeFileSync(outsideFile, "OUTSIDE-SECRET\n");
+    fs.writeFileSync(path.join(wsDir, "page.html"), "<html><script>1</script></html>\n");
+    fs.writeFileSync(path.join(wsDir, "logo.svg"), "<svg xmlns=\"http://www.w3.org/2000/svg\"><script>1</script></svg>\n");
+    fs.writeFileSync(path.join(wsDir, "note.txt"), "plain\n");
+    fs.symlinkSync(outsideFile, path.join(wsDir, "escape.txt"));
+    try {
+      const viaLink = await scenario.call("GET", "/api/v1/workspace/raw/escape.txt");
+      assert.equal(viaLink.status, 400, "finding 5: a workspace symlink to an outside file is refused (realpath containment)");
+      assert.doesNotMatch(viaLink.text, /OUTSIDE-SECRET/, "the outside file content never leaves the controller");
+
+      const html = await scenario.call("GET", "/api/v1/workspace/raw/page.html");
+      assert.equal(html.status, 200, "html preview source still serves");
+      assert.equal(html.headers.get("content-type"), "text/html; charset=utf-8");
+      assert.equal(html.headers.get("content-security-policy"), "sandbox allow-scripts allow-forms", "finding 6: raw HTML carries a response-level sandbox CSP (opaque origin on direct navigation)");
+      const svg = await scenario.call("GET", "/api/v1/workspace/raw/logo.svg");
+      assert.equal(svg.status, 200);
+      assert.equal(svg.headers.get("content-security-policy"), "sandbox allow-scripts allow-forms", "finding 6: raw SVG carries the same sandbox CSP");
+      const txt = await scenario.call("GET", "/api/v1/workspace/raw/note.txt");
+      assert.equal(txt.status, 200, "plain files still serve");
+      assert.equal(txt.headers.get("content-security-policy"), null, "inert content types carry no CSP header (unchanged)");
+      const missing = await scenario.call("GET", "/api/v1/workspace/raw/does-not-exist.txt");
+      assert.equal(missing.status, 404, "a missing path still maps to 404 (realpath ENOENT keeps the historical status)");
+    } finally {
+      fs.rmSync(outsideDir, { recursive: true, force: true });
+    }
+  } finally {
+    await scenario.close();
+  }
+}
+
+// ===========================================================================
 // State migration: legacy states without `security` stay L0; malformed
 // persisted security shapes are sanitized (fail-open to unpaired).
 // ===========================================================================
@@ -681,7 +749,7 @@ const mintedTokens = [];
   } else {
     try {
       loaderMod.setActiveProfileId("software-rd");
-      const config = parsePluginConfig({ mode: "controller", teamName: "Security Team", port: 19531, gitEnabled: false });
+      const config = parsePluginConfig({ mode: "controller", teamName: "Security Team", port: 19531, gitEnabled: false, security: { autoPair: true } });
       let teamState = softwareRdState();
       const deps = {
         config,
@@ -722,6 +790,16 @@ const mintedTokens = [];
 
         const lanTokenTasks = await fetch(`${lanBase}/api/v1/tasks`, { headers: { Authorization: `Bearer ${autoFromLan.json.token}` } });
         assert.equal(lanTokenTasks.status, 200, "the LAN-paired token authenticates");
+
+        // ClawHub security review 2026.11.6 (finding 2): reset is loopback-only.
+        // A real LAN peer holding a VALID device token must not drop protection.
+        const lanReset = await fetch(`${lanBase}/api/v1/security/reset`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${autoFromLan.json.token}` },
+          body: JSON.stringify({ confirm: "RESET" }),
+        });
+        assert.equal(lanReset.status, 403, "real LAN peer WITH a valid device token cannot reset protection (finding 2: loopback-only)");
+        assert.match((await lanReset.json()).error, /forbidden/, "the reset refusal names the loopback-only rule");
         console.log(`test-security-pairing: real-LAN probe passed against ${lanAddr}.`);
       } finally {
         await new Promise((resolve) => loopbackServer.close(resolve));

@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased
+
+### Security (ClawHub scan review of 2026.11.6 - 6 findings fixed)
+All six findings from the ClawHub security scan of `@teamclaws/teamclaw@2026.11.6`
+(scan status `suspicious`) are addressed; four of them change defaults or
+narrow who may do what, so they are listed under Changed as well.
+
+- **WebSocket tunnel gate (High)**: `/ws` upgrades through a sharing tunnel now
+  verify the gate cookie BEFORE the protection-off allowance, matching the HTTP
+  path. Previously a protection-off controller still gated HTTP but let any
+  gate-cookie-less tunnel visitor subscribe to the live task/message stream.
+- **Workspace symlink containment (Medium)**: `/api/v1/workspace/raw/` (and the
+  tree/file routes) resolve symlinks for both the workspace root and the target
+  and re-check containment on the real paths. A link inside the workspace that
+  pointed outside (for example at `~/.ssh`) used to be served straight through.
+- **Raw HTML/SVG sandboxing (Medium)**: the raw-file route now sends
+  `Content-Security-Policy: sandbox allow-scripts allow-forms` for `text/html`
+  and `image/svg+xml`, so "Open Raw" runs the document in an opaque origin on
+  direct navigation and cannot ride the controller session. Inert types are
+  unchanged.
+
+### Changed
+- **`security.autoPair` defaults to `false`** (was `true`). Zero-input LAN
+  pairing (`POST /api/v1/security/pair-auto`) is now opt-in; every new device
+  needs a one-shot pairing code unless the owner enables `autoPair` on a
+  trusted private network. The web UI and CLI pair command already fall back
+  to the pairing-code path, so the visible change is one extra code per device.
+- **`POST /api/v1/security/reset` is loopback-only.** A paired device token no
+  longer authorizes the reset (which drops protection for everyone); run it
+  from the controller host. Remote owners revoke devices individually.
+- **Self-hosted Cloudflare tunnels require device protection.** A custom
+  hostname bypasses the built-in `*.teamclaw.dev` gate, so `POST
+  /api/v1/tunnel/start-self-hosted` answers 409 while protection is off and boot
+  recovery no longer reconnects a self-hosted tunnel in that state. Managed
+  tunnels are gate-protected and unaffected.
+- **Workers fail closed without a token on a non-loopback bind.** `listenHost`
+  pointing at `0.0.0.0`/a LAN address with neither `securityToken` nor
+  `TEAMCLAW_LAUNCH_TOKEN` now refuses to start instead of serving the task API
+  unauthenticated. Loopback workers and controller-provisioned workers (always
+  launched with a token) are unaffected.
+
 ## 2026.11.5
 
 Released 2026-11-14. Patch release over 2026.11.4, cut with the full

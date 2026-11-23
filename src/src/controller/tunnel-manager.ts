@@ -193,7 +193,7 @@ function gateCookieValue(gateToken: string, tunnelId: string): string {
   return createHash("sha256").update(`${gateToken}:${tunnelId}`).digest("hex").slice(0, 32);
 }
 
-export function createTunnelManager(deps: { logger: PluginLogger; localPort: number }) {
+export function createTunnelManager(deps: { logger: PluginLogger; localPort: number; isProtectionOn?: () => boolean }) {
   const { logger } = deps;
   let child: ChildProcess | null = null;
   let handle: TunnelHandle | null = null;
@@ -470,6 +470,17 @@ export function createTunnelManager(deps: { logger: PluginLogger; localPort: num
     if (handle) return handle;
     const st = readTunnelState();
     if (!st || st.tunnelId === "quick") return null; // one-off, not recoverable
+    // ClawHub security review 2026.11.6 (finding 4): a self-hosted tunnel's
+    // custom hostname never matches the built-in gate suffixes, so its
+    // traffic arrives as a loopback peer and inherits trusted-host access.
+    // Device protection is the only thing standing between that public
+    // ingress and the API - do not reconnect one while protection is off;
+    // drop the stale state so the owner re-enables deliberately.
+    if (st.tunnelId === "self-hosted" && deps.isProtectionOn && !deps.isProtectionOn()) {
+      logger.warn("TeamClaw tunnel: NOT recovering the previous self-hosted tunnel - device protection is off and a custom-domain tunnel bypasses the sharing gate; enable device pairing (POST /api/v1/security/enable) and start it again from the Tunnel page");
+      clearTunnelState();
+      return null;
+    }
     const bin = findCloudflared();
     if (!bin) {
       logger.warn("TeamClaw tunnel: previous share found but cloudflared is not installed; not recovering");

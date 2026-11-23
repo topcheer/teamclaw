@@ -179,6 +179,21 @@ async function resolveWorkspacePath(relativePath: string): Promise<{
     throw new Error("workspace path must stay inside the workspace");
   }
 
+  // ClawHub security review 2026.11.6 (finding 5): the lexical check above
+  // does not follow symlinks, but every fs.* call below does - a link
+  // inside the workspace pointing at ~/.ssh would pass containment and be
+  // read straight through /api/v1/workspace/raw/. Resolve BOTH sides for
+  // real and re-check containment on the resolved paths. A dangling link
+  // surfaces ENOENT here (mapped to 404 by the routes, same as before).
+  // Residual: the realpath->open window is a check-to-use race; the
+  // controller trusts its own workspace tree against concurrent local
+  // tampering (an attacker who can plant links there already has the host).
+  const [realWorkspaceDir, realTarget] = await Promise.all([fs.realpath(workspaceDir), fs.realpath(absolutePath)]);
+  const relativeReal = path.relative(realWorkspaceDir, realTarget).replace(/\\/g, "/");
+  if (!relativeReal || relativeReal.startsWith("..") || path.isAbsolute(relativeReal)) {
+    throw new Error("workspace path must stay inside the workspace");
+  }
+
   return {
     workspaceDir,
     normalizedPath: relativeFromWorkspace,
