@@ -1,5 +1,24 @@
 # Changelog
 
+## 2026.11.11
+
+Released 2026-11-24. Security release over 2026.11.10: the two warnings from the
+ClawHub rescan of 2026.11.10 closed.
+
+### Security (ClawHub rescan of 2026.11.10)
+
+- **GitHub token no longer persists in `.git/config` (CWE-522)**: TeamAuto
+  authenticates git with the device-flow token inline in the URL (required for
+  GitHub's smart-HTTP redirects). `git clone <url>` stores that URL as the
+  `origin` remote; the initial clone now rewrites `origin` to the clean `https`
+  URL right afterwards, so the token never lands on disk (fetch/push already
+  used one-shot URL overrides).
+- **Git errors are redacted (CWE-209 / CWE-532)**: git echoes the failing URL on
+  stderr, and provisioning failures were logged, written to the TeamAuto store
+  and surfaced in status responses. Every git failure message is now passed
+  through `redactGitSecrets` (inline `x-access-token` userinfo, `gh?_` /
+  `github_pat_` token shapes) before it leaves the repo-sync module.
+
 ## 2026.11.10
 
 Released 2026-11-24. Security release over 2026.11.9: three of the four findings
