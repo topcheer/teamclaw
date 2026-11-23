@@ -282,7 +282,7 @@ function teamAutoRepoItemRoute(ctx: RouteContext): Promise<boolean> {
 // ---- Worker Management (pre-PR-D lines 939-960; handlers in ./worker-routes.ts) ----
 
 async function workerRegisterRoute(ctx: RouteContext): Promise<void> {
-  await handleWorkerRegisterRequest(ctx.deps, ctx.req, ctx.res);
+  await handleWorkerRegisterRequest(ctx.deps, ctx.req, ctx.res, ctx.peer);
 }
 
 async function workerDeleteRoute(ctx: RouteContext): Promise<void> {
