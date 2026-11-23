@@ -24,10 +24,23 @@ import {
   type ControllerTaskDomainDeps,
 } from "./task-execution.js";
 import { autoAssignPendingTasks, scheduleProvisioningReconcile } from "./task-assignment.js";
+import { isProtectionOn, type SecurityPeer } from "./security.js";
 
 // POST /api/v1/workers/register
-export async function handleWorkerRegisterRequest(deps: ControllerTaskDomainDeps, req: IncomingMessage, res: ServerResponse): Promise<void> {
+export async function handleWorkerRegisterRequest(deps: ControllerTaskDomainDeps, req: IncomingMessage, res: ServerResponse, peer?: SecurityPeer): Promise<void> {
   const { logger, updateTeamState, wsServer } = deps;
+  // ClawHub security review 2026.11.13 (finding 2): a registered worker URL
+  // receives task data (and, when configured, the shared security token).
+  // While device protection is off the caller is unpaired, so only the
+  // controller host / its LAN may register a worker - a remote unpaired
+  // caller must not point the controller at an attacker endpoint.
+  if (!isProtectionOn(deps.getTeamState()) && peer && !peer.loopback && !peer.lan) {
+    sendJson(res, 403, {
+      error: "forbidden",
+      hint: "Worker registration is limited to the controller host / LAN while device protection is off; pair the controller first or register from the host.",
+    });
+    return;
+  }
   const body = await parseJsonBody(req);
   const workerId = typeof body.workerId === "string" ? body.workerId : "";
   const rawRole = typeof body.role === "string" ? body.role.trim() : "";

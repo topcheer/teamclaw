@@ -547,6 +547,10 @@ export function stripPreviewCommandsForUntrustedPeer(
     if (!raw || typeof raw !== "object") {
       continue;
     }
+    // 2026.11.13 review: worker-supplied discoveredPatterns are injected into
+    // FUTURE task prompts - an unpaired peer must not plant instructions
+    // there either. Same trust rule as previewCommand.
+    delete (raw as Record<string, unknown>).discoveredPatterns;
     const deliverables = (raw as { deliverables?: unknown }).deliverables;
     if (!Array.isArray(deliverables)) {
       continue;

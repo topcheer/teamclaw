@@ -42,6 +42,17 @@ function workspaceStatusRoute(ctx: RouteContext): void {
 
 async function workspaceChangeDirRoute(ctx: RouteContext): Promise<void> {
   const { req, res, deps } = ctx;
+  // ClawHub security review 2026.11.13 (finding 1): relocating the workspace
+  // root moves the read-containment boundary with it, so it is a controller-
+  // host action like /security/enable - never something a remote (or, in L0,
+  // unpaired) caller may do.
+  if (!(ctx.peer?.loopback ?? false)) {
+    sendJson(res, 403, {
+      error: "forbidden",
+      hint: "Changing the workspace directory is a controller-host action (loopback only).",
+    });
+    return;
+  }
   let body: unknown;
   try {
     body = await parseJsonBody(req);

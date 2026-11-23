@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026.11.14
+
+Released 2026-11-24. Security release over 2026.11.13: three of the four
+findings from the ClawHub rescan of 2026.11.13 closed; the fourth is a product
+design property listed under Known limitations.
+
+### Security (ClawHub rescan of 2026.11.13)
+
+- **Workspace relocation is a controller-host action (High)**: `POST
+  /api/v1/workspace/change-dir` moves the read-containment boundary with it;
+  it is now loopback-only (like `/security/enable` and `/security/reset`).
+- **Worker registration limited to host / LAN while unpaired (High)**: a
+  registered worker URL receives task data and, when configured, the shared
+  security token. With device protection off the caller is unpaired, so only
+  loopback / LAN peers may register; a remote unpaired caller is refused (403).
+  Protection on: the device gate already authenticated the caller.
+- **`discoveredPatterns` follow the previewCommand trust rule (Medium)**:
+  worker-supplied patterns are injected into future task prompts, so an
+  unpaired non-loopback peer's result contract now has them stripped exactly
+  like `previewCommand`.
+
+### Known limitations
+
+- **Dynamic previews run project code on the controller (design)**: a
+  worker-submitted `previewCommand` is executed as the controller user with a
+  restricted environment (no credentials), a workspace-confined cwd and an
+  opaque-origin sandbox for the served page. Only loopback peers may supply
+  one while protection is off. Running LLM-authored project code is the
+  feature itself; sandboxing it further (per-preview containers) is a product
+  decision, not a patch.
+
 ## 2026.11.13
 
 Released 2026-11-24. Security release over 2026.11.12: both findings from the
