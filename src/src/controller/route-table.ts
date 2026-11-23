@@ -338,11 +338,11 @@ async function taskCheckpointRoute(ctx: RouteContext): Promise<void> {
 }
 
 async function taskResultContractRoute(ctx: RouteContext): Promise<void> {
-  await handleTaskResultContractRequest(ctx.deps, ctx.req, ctx.res, ctx.pathname);
+  await handleTaskResultContractRequest(ctx.deps, ctx.req, ctx.res, ctx.pathname, ctx.peer);
 }
 
 async function taskResultRoute(ctx: RouteContext): Promise<void> {
-  await handleTaskResultRequest(ctx.deps, ctx.req, ctx.res, ctx.pathname);
+  await handleTaskResultRequest(ctx.deps, ctx.req, ctx.res, ctx.pathname, ctx.peer);
 }
 
 async function taskExecutionEventRoute(ctx: RouteContext): Promise<void> {

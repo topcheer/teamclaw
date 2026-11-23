@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026.11.12
+
+Released 2026-11-24. Security release over 2026.11.11: the single finding from
+the ClawHub rescan of 2026.11.11 closed.
+
+### Security (ClawHub rescan of 2026.11.11)
+
+- **Unpaired remote result contracts cannot carry a preview command (High)**:
+  a submitted `previewCommand` is started by the controller as a shell process
+  (restricted environment, confined cwd - but still arbitrary code as the
+  controller user). With device protection off, any remote caller could post a
+  result for an existing task and trigger that. While protection is off, only
+  loopback / LAN peers (the owner's own workers) may supply `previewCommand` /
+  `previewCwd`; a remote unpaired caller's contract is recorded without the
+  preview fields. Protection on: the device gate already authenticated the
+  caller, nothing changes.
+
 ## 2026.11.11
 
 Released 2026-11-24. Security release over 2026.11.10: the two warnings from the
