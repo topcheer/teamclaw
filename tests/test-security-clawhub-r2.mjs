@@ -167,6 +167,9 @@ function middlewareDeps(state, tunnelMode) {
     } else if (req.url === "/api/data") {
       res.writeHead(200, { "content-type": "application/json", "set-cookie": "preview_sid=abc; Path=/" });
       res.end("{\"ok\":true}");
+    } else if (req.url === "/logo.svg") {
+      res.writeHead(200, { "content-type": "image/svg+xml" });
+      res.end("<svg xmlns=\"http://www.w3.org/2000/svg\"><script>1</script></svg>");
     } else {
       res.writeHead(404); res.end();
     }
@@ -216,10 +219,18 @@ function middlewareDeps(state, tunnelMode) {
     assert.equal(html.out.headers["content-security-policy"], "sandbox allow-scripts allow-forms", "finding 2: preview HTML carries the sandbox CSP (opaque origin under the controller host)");
     assert.equal(html.out.headers["set-cookie"], undefined, "finding 2: the preview's Set-Cookie is not planted on the controller origin");
 
+    // 2026.11.8 rescan: SVG served through the PASSTHROUGH branch is an active
+    // document too and must get the same sandbox.
+    const svg = await run("/logo.svg", credentialHeaders);
+    assert.equal(svg.out.status, 200, "SVG preview serves through the passthrough branch");
+    assert.match(svg.out.chunks.join(""), /<svg/, "the SVG body streams through unchanged");
+    assert.equal(svg.out.headers["content-security-policy"], "sandbox allow-scripts allow-forms", "2026.11.8: SVG passthrough carries the sandbox CSP (no controller-origin execution)");
+    assert.equal(svg.out.headers["content-security-policy"], previewMod.PREVIEW_SANDBOX_CSP, "the exported constant is the one applied");
+
     const json = await run("/api/data", credentialHeaders);
     assert.equal(seen.headers.cookie, undefined, "finding 2: non-HTML proxied requests are stripped too");
     assert.equal(json.out.headers["set-cookie"], undefined, "finding 2: non-HTML proxied responses drop Set-Cookie too");
-    assert.equal(json.out.headers["content-security-policy"], undefined, "non-HTML responses carry no CSP (unchanged)");
+    assert.equal(json.out.headers["content-security-policy"], previewMod.PREVIEW_SANDBOX_CSP, "every preview response carries the sandbox CSP (ignored for non-document resources)");
     assert.equal(json.out.chunks.join(""), "{\"ok\":true}", "non-HTML bodies stream through unchanged");
 
     // Every stripped header that is NOT re-derived by the proxy must be absent
@@ -238,5 +249,24 @@ function middlewareDeps(state, tunnelMode) {
   }
 }
 
-console.log("test-security-clawhub-r2: ok (self-hosted device auth, WS origin policy, preview credential stripping + CSP)");
+// ---------------------------------------------------------------------------
+// 6. Release script contract (2026.11.8 rescan root cause): the ClawHub
+//    tarball is packed from the local folder, so the script MUST build dist/
+//    before publishing and refuse a stale dist/. Source anchors.
+// ---------------------------------------------------------------------------
+{
+  const script = fs.readFileSync(path.join(projectRoot, "scripts", "teamclaw-clawhub-release.sh"), "utf8");
+  // The *_cmd arrays are first echoed by printf (plan preview) and then
+  // EXECUTED near the end - anchor on the execution lines (last occurrence).
+  const buildIdx = script.lastIndexOf('"${build_cmd[@]}"');
+  const publishIdx = script.lastIndexOf('"${publish_package_cmd[@]}"');
+  assert.ok(script.includes('build_cmd=(npm --prefix "${package_dir}" run build)'), "the release script defines a package build step");
+  assert.ok(buildIdx > 0, "the release script executes the build step");
+  assert.ok(publishIdx > buildIdx, "the build runs before the ClawHub publish command");
+  assert.match(script, /dist\/ is stale relative to/, "the release script refuses to publish a dist older than the TypeScript sources");
+  const staleGuardIdx = script.indexOf("dist/ is stale relative to");
+  assert.ok(staleGuardIdx > buildIdx && staleGuardIdx < publishIdx, "the staleness guard sits between build and publish");
+}
+
+console.log("test-security-clawhub-r2: ok (self-hosted device auth, WS origin policy, preview credential stripping + CSP on every response, release script builds before publish)");
 process.exit(0);

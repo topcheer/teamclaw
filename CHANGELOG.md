@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026.11.9
+
+Released 2026-11-24. Security release over 2026.11.8.
+
+### Security (ClawHub rescan of 2026.11.8)
+
+- **Preview proxy sandboxes every response (High)**: the 2026.11.8 fix applied the
+  opaque-origin CSP only to `text/html`; SVG / XHTML / XML served through the
+  passthrough branch still executed under the controller origin. The CSP is
+  now set once on the shared response headers for every preview response.
+- **Release script builds before publishing (process fix)**: the ClawHub
+  rescan of 2026.11.8 reported five already-fixed issues - all in `dist/`
+  compiled files. `scripts/teamclaw-clawhub-release.sh` packed the local
+  `src/` folder without building, so the tarball carried a `dist/` from before
+  the two previous security releases (the npm workflow builds in CI and was
+  unaffected). The script now runs `npm run build` first and refuses to
+  publish when `dist/` is older than any TypeScript source.
+
 ## 2026.11.8
 
 Released 2026-11-24. Security release over 2026.11.7: the three findings the

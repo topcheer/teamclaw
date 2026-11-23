@@ -13,6 +13,9 @@ import type { PluginLogger } from "../../api.js";
 import type { TeamState } from "../types.js";
 import { sendJson } from "../protocol.js";
 
+/** Opaque-origin sandbox applied to every preview-proxy response. */
+export const PREVIEW_SANDBOX_CSP = "sandbox allow-scripts allow-forms";;
+
 /**
  * Headers the preview proxy never forwards to the untrusted preview
  * subprocess (ClawHub security review 2026.11.7 finding 2): every
@@ -109,6 +112,12 @@ export function handlePreviewProxyRequest(
     (proxyRes: http.IncomingMessage) => {
       // Same review: never let the preview plant cookies on the controller origin.
       delete proxyRes.headers["set-cookie"];
+      // Every preview response is served under the controller origin (the proxy
+      // path), not just text/html: SVG, XHTML and XML passthrough are active
+      // documents too (2026.11.8 rescan finding). A response-level sandbox CSP
+      // gives each of them an opaque origin; for non-document resources (js,
+      // css, images) the directive is simply ignored.
+      proxyRes.headers["content-security-policy"] = PREVIEW_SANDBOX_CSP;
       const contentType = (proxyRes.headers["content-type"] ?? "").toLowerCase();
       if (proxyRes.statusCode !== 200 && proxyRes.statusCode !== 201 && proxyRes.statusCode !== 301 && proxyRes.statusCode !== 302 && proxyRes.statusCode !== 304) {
         res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
@@ -148,11 +157,8 @@ export function handlePreviewProxyRequest(
           // We've decoded and rewritten the body — remove upstream encoding headers.
           delete resHeaders["content-encoding"];
           delete resHeaders["transfer-encoding"];
-          // Preview HTML executes under the controller origin (the proxy path),
-          // so give it the same opaque-origin sandbox the raw workspace route
-          // uses (2026.11.6 finding 6): scripts run, but cannot read the
-          // controller session or call /api/v1/* same-origin.
-          resHeaders["content-security-policy"] = "sandbox allow-scripts allow-forms";
+          // Preview HTML executes under the controller origin (the proxy path);
+          // the sandbox CSP was already applied to the shared header object above.
           resHeaders["content-length"] = String(Buffer.byteLength(rewritten, "utf-8"));
           res.writeHead(proxyRes.statusCode ?? 200, resHeaders);
           res.end(rewritten);
