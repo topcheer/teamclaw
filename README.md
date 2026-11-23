@@ -348,6 +348,8 @@ clawhub login
 bash scripts/teamclaw-clawhub-release.sh --publish
 ```
 
+The ClawHub script builds `src/dist` first and refuses to publish a `dist/` older than the TypeScript sources - the npm workflow builds in CI, but the ClawHub tarball is packed from the local folder, so a stale `dist/` would otherwise ship compiled code from an earlier release (this is exactly how 2026.11.8 reached the registry with pre-fix compiled files).
+
 ## Repository layout
 
 ```text

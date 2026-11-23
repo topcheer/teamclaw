@@ -25,6 +25,13 @@ package_display_name="$(node -p "require('./${package_dir}/openclaw.plugin.json'
 source_commit="$(git -C "${repo_root}" rev-parse HEAD)"
 source_ref="$(git -C "${repo_root}" rev-parse --abbrev-ref HEAD)"
 
+# ClawHub packs the LOCAL package folder (dist/ included), unlike the npm
+# workflow which builds in CI first. Without this build step the tarball
+# shipped whatever dist/ happened to be on disk - the 2026.11.8 publish
+# carried a dist from before two security releases, and the ClawHub rescan
+# flagged five already-fixed issues in the stale compiled files. Build here
+# so the artifact always matches the source commit recorded below.
+build_cmd=(npm --prefix "${package_dir}" run build)
 sync_manifest_cmd=(node scripts/sync-teamclaw-plugin-manifest.mjs "${package_dir}")
 check_package_cmd=(node scripts/teamclaw-package-check.mjs "${package_dir}")
 publish_package_cmd=(
@@ -53,6 +60,10 @@ if [[ "${#skill_files[@]}" -eq 0 ]]; then
   exit 1
 fi
 
+printf 'Package build:'
+printf ' %q' "${build_cmd[@]}"
+printf '\n'
+
 printf 'Manifest sync:'
 printf ' %q' "${sync_manifest_cmd[@]}"
 printf '\n'
@@ -74,8 +85,17 @@ for skill_file in "${skill_files[@]}"; do
   printf '\n'
 done
 
+"${build_cmd[@]}"
 "${sync_manifest_cmd[@]}"
 "${check_package_cmd[@]}"
+
+# Refuse to publish a dist/ that is older than the newest TypeScript source
+# (a silent build skip must never reach the registry again).
+newest_src="$(find "${package_dir}/src" -name '*.ts' -type f -newer "${package_dir}/dist/src/controller/security.js" 2>/dev/null | head -1 || true)"
+if [[ -n "${newest_src}" ]]; then
+  echo "dist/ is stale relative to ${newest_src}; refusing to publish" >&2
+  exit 1
+fi
 
 if [[ "${mode}" == "--dry-run" ]]; then
   exit 0
