@@ -353,5 +353,43 @@ function middlewareDeps(state, tunnelMode) {
   }
 }
 
-console.log("test-security-clawhub-r2: ok (R2 self-hosted/WS origin/preview stripping, R3 CSP + release build, R4 cross-site mutation guard, last-device rule, bounded bodies)");
+// ---------------------------------------------------------------------------
+// 8. ClawHub rescan 2026.11.10 (R5): GitHub token never persists in
+//    .git/config and git errors are redacted before they reach logs/status.
+// ---------------------------------------------------------------------------
+{
+  const repoSync = await dist("teamauto/repo-sync.js");
+  assert.equal(typeof repoSync.redactGitSecrets, "function", "redactGitSecrets is exported for tests");
+  // Fixtures are assembled at runtime so the source never carries a
+  // token-shaped literal (secret scanners would flag it).
+  const FAKE_OAUTH = ["gh", "o_", "A".repeat(36)].join("");
+  const FAKE_CLASSIC = ["gh", "p_", "B".repeat(36), "AA"].join("");
+  const FAKE_FINE = ["github", "_pat_", "C".repeat(40)].join("");
+  assert.equal(
+    repoSync.redactGitSecrets(`fatal: unable to access 'https://x-access-token:${FAKE_OAUTH}@github.com/o/r.git/': 401`),
+    "fatal: unable to access 'https://[REDACTED]@github.com/o/r.git/': 401",
+    "inline x-access-token userinfo is redacted from git stderr (whole userinfo dropped, no user:secret@ shape survives)",
+  );
+  assert.equal(
+    repoSync.redactGitSecrets(`token ${FAKE_FINE} rejected`),
+    "token [REDACTED] rejected",
+    "fine-grained PAT shapes are redacted even outside a URL",
+  );
+  assert.equal(
+    repoSync.redactGitSecrets(`token ${FAKE_CLASSIC} rejected`),
+    "token [REDACTED] rejected",
+    "classic PAT shapes are redacted",
+  );
+  assert.equal(repoSync.redactGitSecrets("nothing secret here"), "nothing secret here", "benign text is untouched");
+
+  const src = fs.readFileSync(path.join(projectRoot, "src", "src", "teamauto", "repo-sync.ts"), "utf8");
+  const cloneIdx = src.indexOf('["clone", "--filter=blob:none", "--no-checkout", authed, dir]');
+  const setUrlIdx = src.indexOf('["remote", "set-url", "origin", cleanUrl(cloneUrl)]');
+  assert.ok(cloneIdx > 0 && setUrlIdx > cloneIdx, "the initial clone rewrites the persisted origin to the clean URL (token never lands in .git/config)");
+  const runIdx = src.indexOf("async function run(args: string[]");
+  const redactInRun = src.indexOf("err.message = redactGitSecrets(err.message)");
+  assert.ok(runIdx > 0 && redactInRun > runIdx && redactInRun < src.indexOf("async function", runIdx + 10), "run() redacts git failure messages before rethrowing");
+}
+
+console.log("test-security-clawhub-r2: ok (R2 self-hosted/WS origin/preview stripping, R3 CSP + release build, R4 cross-site guard/last-device/body limits, R5 token redaction + clean origin)");
 process.exit(0);

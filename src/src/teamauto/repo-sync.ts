@@ -45,9 +45,24 @@ export function teamAutoProjectDir(repoId: string): string {
  * Git operations for TeamAuto. Authentication uses the device-flow token
  * inline in the remote URL (x-access-token basic auth) - proven to survive
  * GitHub's smart-HTTP redirects where extraheader injection does not. The
- * token never touches disk: remotes are rewritten per invocation and the
- * on-disk remote stays a clean https URL.
+ * token never touches disk: fetch/push rewrite the URL per invocation, and
+ * the one command that DOES store a URL (the initial clone) has its origin
+ * remote rewritten to the clean https URL right afterwards (ClawHub security
+ * review 2026.11.10). Every git error is redacted before it can reach a log,
+ * the store or a status response.
  */
+
+/**
+ * Strip GitHub credentials from anything derived from git output: inline
+ * x-access-token userinfo and raw token shapes (gho_/ghp_..., github_pat_...).
+ * Exported for tests; applied by run() to every failure message.
+ */
+export function redactGitSecrets(text: string): string {
+  return text
+    // Drop the whole userinfo so no "user:secret@" shape survives.
+    .replace(/x-access-token:[^@\s/]+@/gi, "[REDACTED]@")
+    .replace(/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g, "[REDACTED]");
+}
 
 function gitEnv(): Record<string, string> {
   return {
@@ -59,13 +74,27 @@ function gitEnv(): Record<string, string> {
 }
 
 async function run(args: string[], cwd?: string): Promise<string> {
-  const { stdout } = await exec("git", args, {
-    cwd,
-    env: gitEnv(),
-    maxBuffer: 16 * 1024 * 1024,
-    timeout: 120_000,
-  });
-  return stdout;
+  try {
+    const { stdout } = await exec("git", args, {
+      cwd,
+      env: gitEnv(),
+      maxBuffer: 16 * 1024 * 1024,
+      timeout: 120_000,
+    });
+    return stdout;
+  } catch (err) {
+    // git echoes the failing URL on stderr (the inline token userinfo ends
+    // up in the message), and callers persist error messages into the store
+    // and status responses. Redact before the error leaves this module.
+    if (err instanceof Error) {
+      err.message = redactGitSecrets(err.message);
+      const withStderr = err as Error & { stderr?: unknown };
+      if (typeof withStderr.stderr === "string") {
+        withStderr.stderr = redactGitSecrets(withStderr.stderr);
+      }
+    }
+    throw err;
+  }
 }
 
 export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: string) => void }) {
@@ -73,6 +102,11 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     const token = await auth.getAccessToken();
     const clean = cloneUrl.replace(/^https:\/\//, "").replace(/\.git$/, "");
     return `https://x-access-token:${token}@${clean}.git`;
+  }
+
+  /** The token-less https URL that is safe to persist in .git/config. */
+  function cleanUrl(cloneUrl: string): string {
+    return `https://${cloneUrl.replace(/^https:\/\//, "").replace(/\.git$/, "")}.git`;
   }
 
   async function repoDir(repoId: string): Promise<string> {
@@ -115,6 +149,9 @@ export function createRepoSync(auth: GithubAuthManager, logger: { warn: (m: stri
     if (!exists) {
       const authed = await tokenizedUrl(cloneUrl);
       await run(["clone", "--filter=blob:none", "--no-checkout", authed, dir]);
+      // `git clone <url>` persists <url> as the origin remote - rewrite it to
+      // the clean https URL so the token never lands in .git/config.
+      await run(["remote", "set-url", "origin", cleanUrl(cloneUrl)], dir);
       await run(["checkout", defaultBranch], dir);
     } else {
       const authed = await tokenizedUrl(cloneUrl);
