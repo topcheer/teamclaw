@@ -56,6 +56,16 @@ img{display:block;max-width:100%}
 .btn-orange{background:var(--orange);color:#fff;border-color:var(--ink)}
 .btn-orange:hover{background:var(--orange-2)}
 .btn-ink{background:var(--ink);color:var(--paper)}
+.dl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;max-width:980px}
+.dl-card{display:flex;flex-direction:column;gap:6px;padding:22px 24px;background:var(--paper);border:2px solid var(--ink);box-shadow:6px 6px 0 var(--ink);color:var(--ink);text-decoration:none;transition:transform .15s ease,box-shadow .15s ease}
+.dl-card:hover{transform:translate(-2px,-2px);box-shadow:8px 8px 0 var(--ink)}
+.dl-os{font-family:var(--mono);font-weight:700;font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--orange)}
+.dl-sub{font-weight:900;font-size:22px;letter-spacing:-.02em}
+.dl-ext{font-family:var(--mono);font-size:13px;color:var(--ink-2)}
+.dl-note{margin-top:22px;font-size:14px;color:var(--ink-2)}
+.dl-note a{color:var(--ink);font-weight:700}
+@media (max-width:860px){.dl{grid-template-columns:1fr;max-width:460px}}
+
 .btn-sm{padding:7px 14px;font-size:12px;box-shadow:3px 3px 0 var(--ink)}
 .btn-sm:hover{box-shadow:4px 4px 0 var(--ink)}
 
@@ -357,6 +367,7 @@ img{display:block;max-width:100%}
       <a href="#roles">Roles</a>
       <a href="#deploy">Topology</a>
       <a href="#clarify">Clarify</a>
+      <a href="#desktop">Desktop</a>
     </div>
     <a class="btn btn-orange btn-sm nav-cta" href="#install">Get in</a>
   </div>
@@ -647,9 +658,24 @@ img{display:block;max-width:100%}
 </section>
 
 <!-- ================= CTA ================= -->
+<!-- ================= DESKTOP ================= -->
+<section class="section" id="desktop">
+  <div class="wrap">
+    <div class="sec-kicker rv">10 - DESKTOP</div>
+    <h2 class="rv" style="--d:.05s">The team, as a desktop app.</h2>
+    <p class="sec-sub rv" style="--d:.1s"><b>TeamClaw Desktop</b> bundles a fully offline OpenClaw + TeamClaw runtime behind a native cockpit - mission, tasks, clarifications, workspace, controller and TeamAuto in one window. A setup wizard wires your LLM provider; the private instance keeps its own state directory and ports and never touches an existing OpenClaw install.</p>
+    <div class="dl rv" style="--d:.2s">
+      <a class="dl-card" href="https://github.com/topcheer/teamclaw/releases/tag/desktop-latest" target="_blank" rel="noopener"><span class="dl-os">macOS</span><span class="dl-sub">Apple silicon · Intel</span><span class="dl-ext">.dmg</span></a>
+      <a class="dl-card" href="https://github.com/topcheer/teamclaw/releases/tag/desktop-latest" target="_blank" rel="noopener"><span class="dl-os">Windows</span><span class="dl-sub">x64 installer</span><span class="dl-ext">.exe</span></a>
+      <a class="dl-card" href="https://github.com/topcheer/teamclaw/releases/tag/desktop-latest" target="_blank" rel="noopener"><span class="dl-os">Linux</span><span class="dl-sub">AppImage · Debian</span><span class="dl-ext">.AppImage / .deb</span></a>
+    </div>
+    <p class="dl-note rv" style="--d:.3s">Rolling pre-release builds from <a href="https://github.com/topcheer/teamclaw/releases/tag/desktop-latest" target="_blank" rel="noopener">GitHub Releases</a>. Mac App Store and Microsoft Store listings are in submission.</p>
+  </div>
+</section>
+
 <section class="cta" id="install">
   <div class="wrap cta-in">
-    <div class="sec-kicker rv">10 - GET IN</div>
+    <div class="sec-kicker rv">11 - GET IN</div>
     <h2 class="rv" style="--d:.05s">Hire the team.</h2>
     <p class="sub rv" style="--d:.1s">One command. A controller, eleven specialists, and a flow that keeps moving until it ships.</p>
     <div class="install rv" style="--d:.2s">
