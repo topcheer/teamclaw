@@ -40,3 +40,13 @@ After `index.html` changes, bump `max-age` or purge cache if needed.
 All copy is grounded in the actual product (README.md / DESIGN.md facts:
 11 roles, 4 topologies, clarification-first flow, git collaboration, real
 config snippets, real install command). Keep it that way when editing.
+
+## Desktop links
+
+The `#desktop` section links to the rolling `desktop-latest` GitHub pre-release
+(https://github.com/topcheer/teamclaw/releases/tag/desktop-latest), which carries
+the macOS `.dmg`, Windows `Setup.exe` and Linux `AppImage`/`.deb` builds from
+`desktop-release.yml`. Do not use `/releases/latest` - it resolves to the newest
+npm version tag, which has no desktop assets. Mac App Store and Microsoft Store
+listings are still in submission (`desktop/msstore/README.md`); switch the
+buttons to the store pages once they are live.
