@@ -235,7 +235,7 @@ img{display:block;max-width:100%}
 .role:hover{box-shadow:10px 12px 0 var(--ink)}
 .role .rid{font-family:var(--mono);font-size:10px;letter-spacing:.16em;font-weight:700;color:var(--orange);display:flex;justify-content:space-between}
 .role .rid i{font-style:normal;color:var(--gold)}
-.role h3{font-size:20px;font-weight:900;letter-spacing:-.02em;margin:14px 0 6px;display:flex;align-items:center;gap:10px}
+.role h3{font-size:20px;font-weight:900;letter-spacing:-.02em;line-height:1.15;min-height:2.3em;margin:14px 0 6px;display:flex;align-items:center;gap:10px}
 .role h3 span{font-size:22px}
 .role p{font-size:14px;line-height:1.5;color:var(--ink-2);transform:translateZ(18px)}
 .role .lane{position:absolute;left:20px;right:20px;bottom:14px;height:2px;background:linear-gradient(90deg,var(--orange),var(--gold));transform:scaleX(0);transform-origin:left;transition:transform .35s ease}
@@ -376,7 +376,7 @@ img{display:block;max-width:100%}
           <button class="copy" data-copy="npx -y @teamclaws/teamclaw install" aria-label="Copy install command">COPY</button>
         </div>
       </div>
-      <p class="hero-note rv in" style="--d:.45s"><b>OpenClaw 2026.3.24+</b> · Node 22+ · process, Docker or Kubernetes workers</p>
+      <p class="hero-note rv in" style="--d:.45s"><b>OpenClaw 2026.3.24+</b> · Node 22+ · process, Docker or K8s workers</p>
     </div>
 
     <div class="hero-stage" id="stage" aria-label="TeamClaw controller dashboard (real UI) with live task, worker and clarification cards">
@@ -397,7 +397,7 @@ img{display:block;max-width:100%}
         <div class="float fc-workers">
           <div class="w"><span class="av">D</span>Developer<span class="st">IDLE</span></div>
           <div class="w"><span class="av">Q</span>QA Engineer<span class="st">IDLE</span></div>
-          <div class="w"><span class="av">A</span>Architect<span class="st" style="color:var(--wb-gold);border-color:rgba(217,166,100,.45)">RUNNING</span></div>
+          <div class="w"><span class="av">A</span>Software Architect<span class="st" style="color:var(--wb-gold);border-color:rgba(217,166,100,.45)">RUNNING</span></div>
         </div>
         <div class="float fp fp1"><i></i>4 workers · live</div>
         <div class="float fp fp2"><i class="gold"></i>git sync ok</div>
@@ -537,15 +537,15 @@ img{display:block;max-width:100%}
     <p class="sec-sub rv" style="--d:.1s">Each role runs with its own prompt, its own tools and its own lane. Handoffs go through the controller, artifacts go through git. Move your pointer over a card.</p>
     <div class="roles-grid" id="roles-grid">
       <div class="role rv"><div class="rid">ROLE 01 <i>◆</i></div><h3><span>📋</span>Product Manager</h3><p>Owns scope and priorities. Turns fuzzy asks into decidable work.</p><i class="lane"></i></div>
-      <div class="role rv" style="--d:.04s"><div class="rid">ROLE 02 <i>◆</i></div><h3><span>🏗️</span>Architect</h3><p>Designs the system and the seams between roles.</p><i class="lane"></i></div>
+      <div class="role rv" style="--d:.04s"><div class="rid">ROLE 02 <i>◆</i></div><h3><span>🏗️</span>Software Architect</h3><p>Designs the system and the seams between roles.</p><i class="lane"></i></div>
       <div class="role rv" style="--d:.08s"><div class="rid">ROLE 03 <i>◆</i></div><h3><span>💻</span>Developer</h3><p>Builds to spec, keeps the diff reviewable.</p><i class="lane"></i></div>
       <div class="role rv" style="--d:.12s"><div class="rid">ROLE 04 <i>◆</i></div><h3><span>🔍</span>QA Engineer</h3><p>Tests the claims, files the gaps, signs the release.</p><i class="lane"></i></div>
       <div class="role rv" style="--d:.16s"><div class="rid">ROLE 05 <i>◆</i></div><h3><span>🚂</span>Release Engineer</h3><p>Cuts versions, writes the changelog, tags the ship.</p><i class="lane"></i></div>
-      <div class="role rv" style="--d:.2s"><div class="rid">ROLE 06 <i>◆</i></div><h3><span>🗄️</span>Infra Engineer</h3><p>Provisioning, networks, the stuff under the app.</p><i class="lane"></i></div>
-      <div class="role rv" style="--d:.24s"><div class="rid">ROLE 07 <i>◆</i></div><h3><span>⚙️</span>DevOps</h3><p>Pipelines, deploys and the pager nobody wants to hold.</p><i class="lane"></i></div>
+      <div class="role rv" style="--d:.2s"><div class="rid">ROLE 06 <i>◆</i></div><h3><span>🗄️</span>Infrastructure Engineer</h3><p>Provisioning, networks, the stuff under the app.</p><i class="lane"></i></div>
+      <div class="role rv" style="--d:.24s"><div class="rid">ROLE 07 <i>◆</i></div><h3><span>⚙️</span>DevOps Engineer</h3><p>Pipelines, deploys and the pager nobody wants to hold.</p><i class="lane"></i></div>
       <div class="role rv" style="--d:.28s"><div class="rid">ROLE 08 <i>◆</i></div><h3><span>🔒</span>Security Engineer</h3><p>Threat-models the design and hardens the edges.</p><i class="lane"></i></div>
       <div class="role rv" style="--d:.32s"><div class="rid">ROLE 09 <i>◆</i></div><h3><span>🎨</span>UI/UX Designer</h3><p>Product and UI design with a point of view.</p><i class="lane"></i></div>
-      <div class="role rv" style="--d:.36s"><div class="rid">ROLE 10 <i>◆</i></div><h3><span>📣</span>Marketing</h3><p>Positioning, launch notes and the story around the ship.</p><i class="lane"></i></div>
+      <div class="role rv" style="--d:.36s"><div class="rid">ROLE 10 <i>◆</i></div><h3><span>📣</span>Marketing Specialist</h3><p>Positioning, launch notes and the story around the ship.</p><i class="lane"></i></div>
       <div class="role rv" style="--d:.4s"><div class="rid">ROLE 11 <i>◆</i></div><h3><span>📊</span>Data Engineer</h3><p>Pipelines, schemas and the plumbing between them.</p><i class="lane"></i></div>
     </div>
     <p class="roles-note rv" style="--d:.1s">Roles are built in. The controller routes by role - you never play matchmaker.</p>
@@ -585,7 +585,7 @@ img{display:block;max-width:100%}
     --set token.token=$(openssl rand -hex 24)
 
 <span class="ok">→ operator up - UI on :30990 - teams from the web form</span></pre>
-      <p class="sec-sub" style="margin-top:16px">Charts publish to GHCR on every merge. The runtime image layers TeamClaw onto the official openclaw base (2026.10.10) - one schema generation, no drift.</p>
+      <p class="sec-sub" style="margin-top:16px">Charts publish to GHCR on every chart change. The runtime image layers TeamClaw onto the official openclaw base (2026.10.10) - one schema generation, no drift.</p>
     </div>
   </div>
 </section>
