@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026.11.16
+
+Released 2026-11-26. Fix release over 2026.11.15: the guided installer no
+longer depends on ClawHub having already processed the new version.
+
+### Fixed
+
+- **Fresh releases could not be installed while ClawHub was still scanning
+  them**: OpenClaw resolves a bare package name through ClawHub, where a newly
+  published version stays unknown until its security scan completes. Right
+  after the 2026.11.15 release every exact-version fallback therefore failed
+  with "Version not found on ClawHub" and the installer ended with "Plugin
+  installation failed". The installer now also tries the explicit npm source
+  (`npm:@teamclaws/teamclaw@<version>`) after the ClawHub candidates, which
+  installs the version with its runtime dependencies. Dependency verification
+  covers that managed-npm layout as well.
+
+Verified in the official `ghcr.io/openclaw/openclaw` image (OpenClaw
+2026.11.10) through the real npx flow while ClawHub still lacked the new
+version: the installer completes via the npm source and the plugin is
+`enabled` with its dependencies present.
+
 ## 2026.11.15
 
 Released 2026-11-26. Fix release over 2026.11.14: the guided installer now
