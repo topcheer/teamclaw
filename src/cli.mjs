@@ -1327,10 +1327,72 @@ function inspectInstalledPlugin(configPath) {
   };
 }
 
+function inspectInstalledPluginDependencies(pluginDir) {
+  const packageJson = readJsonIfExists(path.join(pluginDir, "package.json"));
+  if (!packageJson || typeof packageJson !== "object" || Array.isArray(packageJson)) {
+    return { ok: true, missing: [] };
+  }
+  // The "openclaw" host package is linked by the host itself; only third-party
+  // runtime dependencies are expected inside the plugin's own node_modules.
+  const required = new Set();
+  const collect = (deps) => {
+    if (deps && typeof deps === "object" && !Array.isArray(deps)) {
+      for (const name of Object.keys(deps)) {
+        if (name !== "openclaw") {
+          required.add(name);
+        }
+      }
+    }
+  };
+  collect(packageJson.dependencies);
+  const optionalPeers = packageJson.peerDependenciesMeta;
+  for (const name of Object.keys(packageJson.peerDependencies ?? {})) {
+    if (name !== "openclaw" && !optionalPeers?.[name]?.optional) {
+      required.add(name);
+    }
+  }
+  const missing = [...required].filter(
+    (name) => !fsSync.existsSync(path.join(pluginDir, "node_modules", name, "package.json")),
+  );
+  return { ok: missing.length === 0, missing };
+}
+
+function verifyInstalledPluginDependencies(configPath) {
+  const installed = inspectInstalledPlugin(configPath);
+  if (!installed) {
+    return { ok: true, missing: [] };
+  }
+  return inspectInstalledPluginDependencies(installed.pluginDir);
+}
+
+// OpenClaw only runs "Installing plugin dependencies" for plugin-archive sources
+// (npm / ClawHub packages). A local-directory install copies the package without
+// its dependencies and the loader reports the missing modules instead of failing.
+function isPluginDependenciesMissing(output) {
+  return /required dependencies\s+are missing|failed during load[^\n]*is missing/i.test(String(output || ""));
+}
+
+// When the installer runs through npx, npm prepends the npx cache's
+// node_modules/.bin to PATH. That directory contains the plugin's own
+// `openclaw` dependency (an older host CLI), which installs plugins into a
+// managed npm project and links the openclaw peer into the ephemeral npx
+// cache. Always drive the host's openclaw instead; when none is installed the
+// "npm exec fallback" candidates run openclaw@latest.
+function sanitizeOpenClawCommandPath(value) {
+  if (typeof value !== "string" || !value) {
+    return value;
+  }
+  return value
+    .split(path.delimiter)
+    .filter((entry) => entry && !/[\\/]_npx[\\/]/.test(entry))
+    .join(path.delimiter);
+}
+
 function buildOpenClawCommandEnv(configPath) {
   const stateDir = resolveOpenClawStateDirForConfigPath(configPath);
   return {
     ...process.env,
+    PATH: sanitizeOpenClawCommandPath(process.env.PATH),
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
   };
@@ -1383,7 +1445,10 @@ function attemptPluginUninstall({ configPath }) {
 function attemptPluginInstall({ configPath }) {
   const env = buildOpenClawCommandEnv(configPath);
   const installedPlugin = inspectInstalledPlugin(configPath);
-  if (installedPlugin?.version === PACKAGE_VERSION) {
+  const installedDependencies = installedPlugin
+    ? inspectInstalledPluginDependencies(installedPlugin.pluginDir)
+    : { ok: true, missing: [] };
+  if (installedPlugin?.version === PACKAGE_VERSION && installedDependencies.ok) {
     console.log(
       `\nFound existing TeamClaw plugin at ${installedPlugin.pluginDir} (version ${installedPlugin.version}). Skipping plugin reinstall.`,
     );
@@ -1392,6 +1457,11 @@ function attemptPluginInstall({ configPath }) {
       method: `already installed (${installedPlugin.version})`,
       skipped: true,
     };
+  }
+  if (installedPlugin && !installedDependencies.ok) {
+    console.log(
+      `\nFound existing TeamClaw plugin at ${installedPlugin.pluginDir} without its runtime dependencies (missing: ${installedDependencies.missing.join(", ")}). Reinstalling so they are installed...`,
+    );
   }
   if (installedPlugin) {
     const installedVersion = installedPlugin.version ? `version ${installedPlugin.version}` : "an unknown version";
@@ -1474,10 +1544,27 @@ function attemptPluginInstall({ configPath }) {
       );
     }
     if (result.status === 0 && !result.error) {
-      return {
-        ok: true,
-        method: candidate.label,
-      };
+      // A local-directory install exits 0 even though OpenClaw does not install
+      // the plugin's runtime dependencies for that source kind; verify before
+      // accepting the candidate so the exact-version (plugin-archive) fallback
+      // gets a chance to install them.
+      const verification = verifyInstalledPluginDependencies(configPath);
+      const reportedMissing = isPluginDependenciesMissing(result.output);
+      if (verification.ok && !reportedMissing) {
+        return {
+          ok: true,
+          method: candidate.label,
+        };
+      }
+      const missingLabel = verification.missing.length > 0
+        ? verification.missing.join(", ")
+        : "reported by openclaw";
+      console.log(
+        `${candidate.label} installed the plugin without its runtime dependencies (missing: ${missingLabel}). Trying the next install fallback...`,
+      );
+      failures.push(`${candidate.label} left the plugin without runtime dependencies: ${missingLabel}`);
+      attemptPluginUninstall({ configPath });
+      continue;
     }
     const errorCode = result.error && typeof result.error === "object" ? result.error.code : "";
     const detail = result.error

@@ -1625,12 +1625,233 @@ async function runInstallerRetiredOwnerDisplayFreshConfigSmoke() {
   }
 }
 
+async function runInstallerPluginDependenciesFallbackSmoke() {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "teamclaw-installer-plugin-deps-test-"));
+  try {
+    const stateDir = path.join(tempRoot, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const workspacePath = path.join(tempRoot, "workspace");
+    const binDir = path.join(tempRoot, "bin");
+    const capturePath = path.join(tempRoot, "openclaw-args.txt");
+    const expectedLocalPackageDir = path.resolve(projectRoot, "src");
+    const packageMetadata = await readPackageMetadata();
+    const expectedInstallSpec = `${packageMetadata.name}@${packageMetadata.version}`;
+    const initialConfig = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5",
+                name: "GPT-5",
+              },
+            ],
+          },
+        },
+      },
+      gateway: {
+        mode: "local",
+        port: 18789,
+        bind: "lan",
+      },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5",
+          workspace: workspacePath,
+        },
+      },
+      plugins: {
+        enabled: true,
+        entries: {},
+      },
+    };
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf8");
+    // Simulates OpenClaw 2026.10+: a local-directory plugin install copies the
+    // package without installing its runtime dependencies (no "Installing plugin
+    // dependencies" step), while a package (plugin-archive) install does both.
+    await writeExecutable(
+      path.join(binDir, "openclaw"),
+      `#!/bin/sh
+if [ "$1" = "plugins" ] && [ "$2" = "install" ]; then
+  printf '%s\n' "$@" >> "$TEAMCLAW_CAPTURE_FILE"
+  printf '%s\n' '---' >> "$TEAMCLAW_CAPTURE_FILE"
+  mkdir -p "$OPENCLAW_STATE_DIR/extensions/teamclaw"
+  printf '%s\n' '{"id":"teamclaw","version":"'${packageMetadata.version}'"}' > "$OPENCLAW_STATE_DIR/extensions/teamclaw/openclaw.plugin.json"
+  printf '%s\n' '{"name":"@teamclaws/teamclaw","version":"'${packageMetadata.version}'","dependencies":{"@sinclair/typebox":"0.34.48","openclaw":"2026.10.9"}}' > "$OPENCLAW_STATE_DIR/extensions/teamclaw/package.json"
+  if [ "$4" = "$TEAMCLAW_EXPECTED_LOCAL_DIR" ]; then
+    echo "Installed plugin: teamclaw"
+    exit 0
+  fi
+  echo "Installing plugin dependencies..."
+  mkdir -p "$OPENCLAW_STATE_DIR/extensions/teamclaw/node_modules/@sinclair/typebox" "$OPENCLAW_STATE_DIR/extensions/teamclaw/node_modules/openclaw"
+  printf '%s\n' '{"name":"@sinclair/typebox","version":"0.34.48"}' > "$OPENCLAW_STATE_DIR/extensions/teamclaw/node_modules/@sinclair/typebox/package.json"
+  echo "Installed plugin: teamclaw"
+  exit 0
+fi
+if [ "$1" = "plugins" ] && [ "$2" = "uninstall" ]; then
+  printf '%s\n' "$@" >> "$TEAMCLAW_CAPTURE_FILE"
+  printf '%s\n' '---' >> "$TEAMCLAW_CAPTURE_FILE"
+  rm -r "$OPENCLAW_STATE_DIR/extensions/teamclaw" 2>/dev/null
+  exit 0
+fi
+if [ "$1" = "gateway" ] && [ "$2" = "restart" ]; then
+  echo "simulated restart unavailable" >&2
+  exit 1
+fi
+exit 0
+`,
+    );
+    await writeExecutable(
+      path.join(binDir, "npm"),
+      `#!/bin/sh
+echo "simulated npm fallback failure: $*" >&2
+exit 1
+`,
+    );
+
+    const result = spawnSync(
+      "node",
+      [cliPath, "install", "--config", configPath, "--yes"],
+      {
+        cwd: projectRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: tempRoot,
+          PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+          TEAMCLAW_CAPTURE_FILE: capturePath,
+          TEAMCLAW_EXPECTED_LOCAL_DIR: expectedLocalPackageDir,
+        },
+      },
+    );
+
+    if (result.status !== 0) {
+      throw new Error(
+        `Installer plugin-dependency fallback smoke failed with status ${result.status}.\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`,
+      );
+    }
+
+    assert.match(
+      result.stdout,
+      /installed the plugin without its runtime dependencies \(missing: @sinclair\/typebox\)/,
+      "installer must report the local-directory install that skipped runtime dependencies",
+    );
+
+    const capturedInvocations = (await fs.readFile(capturePath, "utf8"))
+      .split(/\r?\n---\r?\n/)
+      .map((chunk) => chunk.split(/\r?\n/).filter(Boolean))
+      .filter((chunk) => chunk.length > 0);
+    assert.deepEqual(
+      capturedInvocations.at(-1),
+      ["plugins", "install", "--dangerously-force-unsafe-install", expectedInstallSpec],
+      "installer must fall back to the exact TeamClaw package version when a local-directory install leaves runtime dependencies missing",
+    );
+    assert.ok(
+      capturedInvocations.some((chunk) => chunk[0] === "plugins" && chunk[1] === "uninstall"),
+      "installer must remove the dependency-less install before retrying",
+    );
+
+    console.log("Installer plugin-dependency fallback smoke passed.");
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
+async function runInstallerNpxPathSanitizationSmoke() {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "teamclaw-installer-npx-path-test-"));
+  try {
+    const stateDir = path.join(tempRoot, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const workspacePath = path.join(tempRoot, "workspace");
+    const binDir = path.join(tempRoot, "bin");
+    const npxBinDir = path.join(tempRoot, ".npm", "_npx", "abc123", "node_modules", ".bin");
+    const npxUsedPath = path.join(tempRoot, "npx-openclaw-used.txt");
+    const hostUsedPath = path.join(tempRoot, "host-openclaw-used.txt");
+    const packageMetadata = await readPackageMetadata();
+    const initialConfig = {
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5", name: "GPT-5" }],
+          },
+        },
+      },
+      gateway: { mode: "local", port: 18789, bind: "lan" },
+      agents: { defaults: { model: "openai/gpt-5", workspace: workspacePath } },
+      plugins: { enabled: true, entries: {} },
+    };
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.mkdir(npxBinDir, { recursive: true });
+    await fs.writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf8");
+    // The npx cache ships the plugin's own (older) openclaw dependency; it must never be driven.
+    await writeExecutable(
+      path.join(npxBinDir, "openclaw"),
+      `#!/bin/sh
+printf '%s\n' "$*" > "\${TEAMCLAW_NPX_USED_FILE}"
+exit 1
+`,
+    );
+    await writeExecutable(
+      path.join(binDir, "openclaw"),
+      `#!/bin/sh
+printf '%s\n' "$*" >> "\${TEAMCLAW_HOST_USED_FILE}"
+if [ "$1" = "plugins" ] && [ "$2" = "install" ]; then
+  mkdir -p "$OPENCLAW_STATE_DIR/extensions/teamclaw/node_modules/@sinclair/typebox"
+  printf '%s\n' '{"id":"teamclaw","version":"'${packageMetadata.version}'"}' > "$OPENCLAW_STATE_DIR/extensions/teamclaw/openclaw.plugin.json"
+  printf '%s\n' '{"name":"@teamclaws/teamclaw","version":"'${packageMetadata.version}'","dependencies":{"@sinclair/typebox":"0.34.48","openclaw":"2026.10.9"}}' > "$OPENCLAW_STATE_DIR/extensions/teamclaw/package.json"
+  printf '%s\n' '{"name":"@sinclair/typebox","version":"0.34.48"}' > "$OPENCLAW_STATE_DIR/extensions/teamclaw/node_modules/@sinclair/typebox/package.json"
+fi
+exit 0
+`,
+    );
+
+    const result = spawnSync(
+      "node",
+      [cliPath, "install", "--config", configPath, "--yes"],
+      {
+        cwd: projectRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: tempRoot,
+          PATH: `${npxBinDir}${path.delimiter}${binDir}${path.delimiter}${process.env.PATH || ""}`,
+          TEAMCLAW_NPX_USED_FILE: npxUsedPath,
+          TEAMCLAW_HOST_USED_FILE: hostUsedPath,
+        },
+      },
+    );
+
+    if (result.status !== 0) {
+      throw new Error(
+        `Installer npx-PATH sanitization smoke failed with status ${result.status}.\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`,
+      );
+    }
+    await assert.rejects(
+      () => fs.access(npxUsedPath),
+      "installer must never invoke the openclaw binary bundled in the npx cache",
+    );
+    const hostUsed = await fs.readFile(hostUsedPath, "utf8");
+    assert.match(hostUsed, /plugins install/, "installer should drive the host openclaw found after the npx cache entry");
+
+    console.log("Installer npx-PATH sanitization smoke passed.");
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
 await runInstallerSmoke();
 await runInstallerHostExecPreservationSmoke();
 await runInstallerDedicatedWorkspaceDefaultSmoke();
 await runInstallerExplicitProvisioningRolesSmoke();
 await runInstallerExactPluginVersionSmoke();
 await runInstallerExactVersionFallbackSmoke();
+await runInstallerPluginDependenciesFallbackSmoke();
+await runInstallerNpxPathSanitizationSmoke();
 await runInstallerExistingPluginSkipSmoke();
 await runInstallerExistingPluginUpgradeSmoke();
 await runInstallerRestartAndHealthSmoke();

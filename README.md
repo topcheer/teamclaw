@@ -344,6 +344,7 @@ When the preview looks right:
 git tag v$(node -p "require('./src/package.json').version")
 git push origin main --tags
 
+# one-time: install the ClawHub CLI (npm install -g clawhub), then:
 clawhub login
 bash scripts/teamclaw-clawhub-release.sh --publish
 ```
