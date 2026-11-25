@@ -143,7 +143,8 @@ The guided installer automatically uses OpenClaw's break-glass install flag for 
 
 The guided installer can:
 
-- install or update the TeamClaw plugin
+- install or update the TeamClaw plugin, verifying the installed plugin actually has its runtime dependencies (OpenClaw 2026.10+ does not install them for a local-directory source) and falling back to the exact npm package version when they are missing
+- always drive the host `openclaw` CLI - never the older `openclaw` copy bundled in the npx cache when the installer runs through npx
 - detect your local `openclaw.json`
 - let you choose the install mode
 - support non-interactive mode selection with `--install-mode`, including `--install-mode worker` for a dedicated worker-only node
