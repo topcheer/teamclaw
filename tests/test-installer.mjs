@@ -1844,6 +1844,130 @@ exit 0
   }
 }
 
+async function runInstallerNpmSourceFallbackSmoke() {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "teamclaw-installer-npm-source-test-"));
+  try {
+    const stateDir = path.join(tempRoot, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const workspacePath = path.join(tempRoot, "workspace");
+    const binDir = path.join(tempRoot, "bin");
+    const capturePath = path.join(tempRoot, "openclaw-args.txt");
+    const expectedLocalPackageDir = path.resolve(projectRoot, "src");
+    const packageMetadata = await readPackageMetadata();
+    const expectedInstallSpec = `${packageMetadata.name}@${packageMetadata.version}`;
+    const initialConfig = {
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5", name: "GPT-5" }],
+          },
+        },
+      },
+      gateway: { mode: "local", port: 18789, bind: "lan" },
+      agents: { defaults: { model: "openai/gpt-5", workspace: workspacePath } },
+      plugins: { enabled: true, entries: {} },
+    };
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf8");
+    // Simulates OpenClaw 2026.11 right after a release: the bare package name
+    // resolves through ClawHub where the new version is still "not found"
+    // (pending security scan), while the explicit npm source installs it into a
+    // managed npm project with its dependencies.
+    await writeExecutable(
+      path.join(binDir, "openclaw"),
+      `#!/bin/sh
+if [ "$1" = "plugins" ] && [ "$2" = "install" ]; then
+  printf '%s\n' "$@" >> "$TEAMCLAW_CAPTURE_FILE"
+  printf '%s\n' '---' >> "$TEAMCLAW_CAPTURE_FILE"
+  case "$4" in
+    "$TEAMCLAW_EXPECTED_LOCAL_DIR")
+      mkdir -p "$OPENCLAW_STATE_DIR/extensions/teamclaw"
+      printf '%s\n' '{"id":"teamclaw","version":"'${packageMetadata.version}'"}' > "$OPENCLAW_STATE_DIR/extensions/teamclaw/openclaw.plugin.json"
+      printf '%s\n' '{"name":"@teamclaws/teamclaw","version":"'${packageMetadata.version}'","dependencies":{"@sinclair/typebox":"0.34.48","openclaw":"2026.10.9"}}' > "$OPENCLAW_STATE_DIR/extensions/teamclaw/package.json"
+      echo "Installed plugin: teamclaw"
+      exit 0
+      ;;
+    "npm:$TEAMCLAW_EXPECTED_SPEC")
+      P="$OPENCLAW_STATE_DIR/npm/projects/teamclaws-teamclaw-abc123"
+      rm -r "$OPENCLAW_STATE_DIR/extensions/teamclaw" 2>/dev/null
+      mkdir -p "$P/node_modules/@sinclair/typebox" "$P/node_modules/openclaw"
+      printf '%s\n' '{"name":"@teamclaws/teamclaw","version":"'${packageMetadata.version}'","dependencies":{"@sinclair/typebox":"0.34.48","openclaw":"2026.10.9"}}' > "$P/package.json"
+      printf '%s\n' '{"name":"@sinclair/typebox","version":"0.34.48"}' > "$P/node_modules/@sinclair/typebox/package.json"
+      echo "Installing to $P"
+      echo "Installed plugin: teamclaw"
+      exit 0
+      ;;
+  esac
+  echo "Version not found on ClawHub: $4" >&2
+  exit 1
+fi
+if [ "$1" = "plugins" ] && [ "$2" = "uninstall" ]; then
+  printf '%s\n' "$@" >> "$TEAMCLAW_CAPTURE_FILE"
+  printf '%s\n' '---' >> "$TEAMCLAW_CAPTURE_FILE"
+  rm -r "$OPENCLAW_STATE_DIR/extensions/teamclaw" 2>/dev/null
+  exit 0
+fi
+if [ "$1" = "gateway" ] && [ "$2" = "restart" ]; then
+  echo "simulated restart unavailable" >&2
+  exit 1
+fi
+exit 0
+`,
+    );
+    await writeExecutable(
+      path.join(binDir, "npm"),
+      `#!/bin/sh
+echo "simulated npm fallback failure: $*" >&2
+exit 1
+`,
+    );
+
+    const result = spawnSync(
+      "node",
+      [cliPath, "install", "--config", configPath, "--yes"],
+      {
+        cwd: projectRoot,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: tempRoot,
+          PATH: `${binDir}${path.delimiter}${process.env.PATH || ""}`,
+          TEAMCLAW_CAPTURE_FILE: capturePath,
+          TEAMCLAW_EXPECTED_LOCAL_DIR: expectedLocalPackageDir,
+          TEAMCLAW_EXPECTED_SPEC: expectedInstallSpec,
+        },
+      },
+    );
+
+    if (result.status !== 0) {
+      throw new Error(
+        `Installer npm-source fallback smoke failed with status ${result.status}.\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`,
+      );
+    }
+    assert.match(
+      result.stdout,
+      new RegExp(`Plugin install: completed via openclaw \\(npm exact version fallback\\)`),
+      "installer should complete via the npm exact-version candidate when ClawHub does not know the version yet",
+    );
+
+    const capturedInvocations = (await fs.readFile(capturePath, "utf8"))
+      .split(/\r?\n---\r?\n/)
+      .map((chunk) => chunk.split(/\r?\n/).filter(Boolean))
+      .filter((chunk) => chunk.length > 0);
+    assert.deepEqual(
+      capturedInvocations.at(-1),
+      ["plugins", "install", "--dangerously-force-unsafe-install", `npm:${expectedInstallSpec}`],
+      "installer must fall back to the explicit npm source for the exact TeamClaw version",
+    );
+
+    console.log("Installer npm-source fallback smoke passed.");
+  } finally {
+    await fs.rm(tempRoot, { recursive: true, force: true });
+  }
+}
+
 await runInstallerSmoke();
 await runInstallerHostExecPreservationSmoke();
 await runInstallerDedicatedWorkspaceDefaultSmoke();
@@ -1852,6 +1976,7 @@ await runInstallerExactPluginVersionSmoke();
 await runInstallerExactVersionFallbackSmoke();
 await runInstallerPluginDependenciesFallbackSmoke();
 await runInstallerNpxPathSanitizationSmoke();
+await runInstallerNpmSourceFallbackSmoke();
 await runInstallerExistingPluginSkipSmoke();
 await runInstallerExistingPluginUpgradeSmoke();
 await runInstallerRestartAndHealthSmoke();

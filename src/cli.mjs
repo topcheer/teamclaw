@@ -17,6 +17,7 @@ const PACKAGE_ROOT = path.dirname(require.resolve("./package.json"));
 const PACKAGE_NAME = packageMetadata.name;
 const PACKAGE_VERSION = packageMetadata.version;
 const PACKAGE_INSTALL_SPEC = `${PACKAGE_NAME}@${PACKAGE_VERSION}`;
+const NPM_PACKAGE_INSTALL_SPEC = `npm:${PACKAGE_INSTALL_SPEC}`;
 const PLUGIN_ID = "teamclaw";
 const DANGEROUS_INSTALL_FLAG = "--dangerously-force-unsafe-install";
 const CAPABILITY_CONSENT_FLAG = "--accept-capabilities";
@@ -1357,12 +1358,34 @@ function inspectInstalledPluginDependencies(pluginDir) {
   return { ok: missing.length === 0, missing };
 }
 
+// OpenClaw installs npm-registry ("npm:") sources into a managed npm project
+// under <state>/npm/projects/teamclaws-teamclaw-<hash> instead of extensions/.
+function findManagedNpmProjectDir(configPath) {
+  const projectsDir = path.join(path.dirname(path.resolve(configPath)), "npm", "projects");
+  if (!fsSync.existsSync(projectsDir)) {
+    return null;
+  }
+  const candidates = fsSync
+    .readdirSync(projectsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith(`${PLUGIN_ID}s-${PLUGIN_ID}-`))
+    .map((entry) => {
+      const dir = path.join(projectsDir, entry.name);
+      return { dir, mtimeMs: fsSync.statSync(dir).mtimeMs };
+    })
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return candidates.length > 0 ? candidates[0].dir : null;
+}
+
 function verifyInstalledPluginDependencies(configPath) {
   const installed = inspectInstalledPlugin(configPath);
-  if (!installed) {
+  if (installed) {
+    return inspectInstalledPluginDependencies(installed.pluginDir);
+  }
+  const managedProjectDir = findManagedNpmProjectDir(configPath);
+  if (!managedProjectDir) {
     return { ok: true, missing: [] };
   }
-  return inspectInstalledPluginDependencies(installed.pluginDir);
+  return inspectInstalledPluginDependencies(managedProjectDir);
 }
 
 // OpenClaw only runs "Installing plugin dependencies" for plugin-archive sources
@@ -1521,6 +1544,31 @@ function attemptPluginInstall({ configPath }) {
         PACKAGE_INSTALL_SPEC,
       ],
       targetDescription: PACKAGE_INSTALL_SPEC,
+    },
+    // OpenClaw resolves a bare package name through ClawHub, where a freshly
+    // published version stays "not found" until its security scan completes.
+    // The explicit npm source installs the same version from the npm registry
+    // without depending on that window.
+    {
+      label: "openclaw (npm exact version fallback)",
+      command: "openclaw",
+      args: ["plugins", "install", DANGEROUS_INSTALL_FLAG, NPM_PACKAGE_INSTALL_SPEC],
+      targetDescription: NPM_PACKAGE_INSTALL_SPEC,
+    },
+    {
+      label: "npm exec fallback (npm exact version fallback)",
+      command: "npm",
+      args: [
+        "exec",
+        "-y",
+        "openclaw@latest",
+        "--",
+        "plugins",
+        "install",
+        DANGEROUS_INSTALL_FLAG,
+        NPM_PACKAGE_INSTALL_SPEC,
+      ],
+      targetDescription: NPM_PACKAGE_INSTALL_SPEC,
     },
   ];
 
