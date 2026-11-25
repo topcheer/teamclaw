@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026.11.15
+
+Released 2026-11-26. Fix release over 2026.11.14: the guided installer now
+produces a plugin that actually loads on a fresh OpenClaw 2026.11 host.
+
+### Fixed
+
+- **`npx -y @teamclaws/teamclaw install` installed a plugin that could not
+  load**: OpenClaw 2026.10+ only runs "Installing plugin dependencies" for
+  package sources (npm / ClawHub); the installer's first candidates install
+  the package directory from the npx cache, which exits 0 but leaves the
+  plugin without `@sinclair/typebox`, `bonjour-service`, `json5` and `ws`,
+  so the loader reported "cannot load because required dependencies are
+  missing" (`plugins list` showed the plugin in `error`). The installer now
+  verifies the installed plugin's runtime dependencies and, when they are
+  missing, uninstalls and falls through to the exact npm package version,
+  which installs them. The "already installed at the same version, skipping"
+  path performs the same check, so an existing broken install is repaired on
+  the next run.
+- **The installer drove the wrong `openclaw` under npx**: npm prepends the npx
+  cache's `node_modules/.bin` to PATH, where the plugin's own bundled
+  `openclaw@2026.10.9` dependency shadows the host CLI. That older installer
+  uses a managed-npm-project layout and links the openclaw peer into the
+  ephemeral npx cache ("install incomplete: required dependencies are missing:
+  openclaw"). The installer now strips npx-cache entries from PATH for every
+  openclaw sub-command it spawns; with no host openclaw the existing npm-exec
+  fallback still runs `openclaw@latest`.
+
+Verified in the official `ghcr.io/openclaw/openclaw` image (OpenClaw
+2026.11.10) through the real npx flow: plugin `enabled`, runtime dependencies
+present, peer linked to the host, gateway start loads the plugin and the
+controller listens on 9527.
+
 ## 2026.11.14
 
 Released 2026-11-24. Security release over 2026.11.13: three of the four
