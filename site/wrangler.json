@@ -4,7 +4,8 @@
   "main": "worker.js",
   "compatibility_date": "2025-09-01",
   "rules": [
-    { "type": "Text", "globs": ["**/*.html"], "fallthrough": true }
+    { "type": "Text", "globs": ["**/*.html", "**/*.txt", "**/*.xml"], "fallthrough": false },
+    { "type": "Data", "globs": ["**/*.png"], "fallthrough": false }
   ],
   "workers_dev": true,
   "routes": [

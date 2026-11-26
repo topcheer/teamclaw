@@ -10,6 +10,91 @@
 <meta property="og:description" content="One controller, eleven specialists, a flow that blocks on real questions instead of guessing - and ships through git.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://teamclaw.dev/">
+<meta property="og:site_name" content="TeamClaw">
+<meta property="og:locale" content="en_US">
+<meta property="og:image" content="https://teamclaw.dev/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="TeamClaw - Ship with a team, not a chat.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="TeamClaw — a full software team on OpenClaw">
+<meta name="twitter:description" content="One controller, eleven specialists, a flow that blocks on real questions instead of guessing - and ships through git.">
+<meta name="twitter:image" content="https://teamclaw.dev/og-image.png">
+<script type="application/ld+json">
+[
+ {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "TeamClaw",
+  "url": "https://teamclaw.dev/",
+  "description": "TeamClaw turns OpenClaw into a virtual software company. One controller routes execution-ready work to role-based workers, blocks on real questions instead of guessing, and syncs everything through git.",
+  "applicationCategory": "DeveloperApplication",
+  "applicationSuite": "OpenClaw",
+  "operatingSystem": "Linux, macOS, Windows",
+  "offers": {
+   "@type": "Offer",
+   "price": "0",
+   "priceCurrency": "USD"
+  }
+ },
+ {
+  "@context": "https://schema.org",
+  "@type": "Organization",
+  "name": "TeamClaw",
+  "url": "https://teamclaw.dev/",
+  "sameAs": [
+   "https://github.com/topcheer/teamclaw",
+   "https://www.npmjs.com/package/@teamclaws/teamclaw"
+  ]
+ },
+ {
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+   {
+    "@type": "Question",
+    "name": "What is TeamClaw?",
+    "acceptedAnswer": {
+     "@type": "Answer",
+     "text": "TeamClaw is an OpenClaw plugin that turns one or more OpenClaw instances into a virtual software company. One controller routes execution-ready work to role-based workers, blocks on real questions instead of guessing, and syncs everything through git."
+    }
+   },
+   {
+    "@type": "Question",
+    "name": "How does TeamClaw relate to OpenClaw?",
+    "acceptedAnswer": {
+     "@type": "Answer",
+     "text": "TeamClaw runs as a plugin inside OpenClaw (2026.3.24 or newer). By default it gets its own dedicated agent and workspace, so it never shares the host main agent; external worker nodes can also register back to a controller."
+    }
+   },
+   {
+    "@type": "Question",
+    "name": "How do I install TeamClaw?",
+    "acceptedAnswer": {
+     "@type": "Answer",
+     "text": "On a machine that already runs OpenClaw with a working model, run npx -y @teamclaws/teamclaw install and follow the guided installer to choose the install mode and the model the team should use."
+    }
+   },
+   {
+    "@type": "Question",
+    "name": "Where does my work live?",
+    "acceptedAnswer": {
+     "@type": "Answer",
+     "text": "On your own machine, in git. Workers sync before they execute and publish after they finish - nothing important lives only in a chat transcript."
+    }
+   },
+   {
+    "@type": "Question",
+    "name": "Which deployment topologies are supported?",
+    "acceptedAnswer": {
+     "@type": "Answer",
+     "text": "Start with process workers on a single machine, grow to Docker or Kubernetes pods when the work demands it, or attach external worker nodes on other machines that register back to the controller over HTTP. Same controller, same flow, same UI."
+    }
+   }
+  ]
+ }
+]
+</script>
 <meta name="theme-color" content="#121110">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cg stroke='%23FF4A1C' stroke-width='8' stroke-linecap='round' fill='none'%3E%3Cpath d='M10 56C16 40 24 22 34 8'/%3E%3Cpath d='M22 60C28 44 36 26 46 12'/%3E%3Cpath d='M36 58C41 44 48 28 56 16'/%3E%3C/g%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -64,6 +149,14 @@ img{display:block;max-width:100%}
 .dl-ext{font-family:var(--mono);font-size:13px;color:var(--ink-2)}
 .dl-note{margin-top:22px;font-size:14px;color:var(--ink-2)}
 .dl-note a{color:var(--ink);font-weight:700}
+.faq{max-width:860px;border:2px solid var(--ink);background:var(--paper);box-shadow:var(--shadow)}
+.faq-item + .faq-item{border-top:2px solid var(--ink)}
+.faq-item summary{cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 22px;font-weight:900;font-size:18px;letter-spacing:-.01em}
+.faq-item summary::-webkit-details-marker{display:none}
+.faq-item summary::after{content:"+";font-family:var(--mono);font-size:22px;color:var(--orange);flex:none}
+.faq-item[open] summary::after{content:"\2013"}
+.faq-item p{padding:0 22px 20px;font-size:16px;line-height:1.65;color:var(--ink-2)}
+@media(max-width:640px){.faq-item summary{font-size:16px}}
 @media (max-width:860px){.dl{grid-template-columns:1fr;max-width:460px}}
 
 .btn-sm{padding:7px 14px;font-size:12px;box-shadow:3px 3px 0 var(--ink)}
@@ -368,6 +461,7 @@ img{display:block;max-width:100%}
       <a href="#deploy">Topology</a>
       <a href="#clarify">Clarify</a>
       <a href="#desktop">Desktop</a>
+      <a href="#faq">FAQ</a>
     </div>
     <a class="btn btn-orange btn-sm nav-cta" href="#install">Get in</a>
   </div>
@@ -673,9 +767,39 @@ img{display:block;max-width:100%}
   </div>
 </section>
 
+<!-- ================= FAQ ================= -->
+<section class="section" id="faq">
+  <div class="wrap">
+    <div class="sec-kicker rv">11 - FAQ</div>
+    <h2 class="rv" style="--d:.05s">Straight answers.</h2>
+    <div class="faq rv" style="--d:.1s">
+      <details class="faq-item" open>
+        <summary>What is TeamClaw?</summary>
+        <p>TeamClaw is an OpenClaw plugin that turns one or more OpenClaw instances into a virtual software company. One controller routes execution-ready work to role-based workers, blocks on real questions instead of guessing, and syncs everything through git.</p>
+      </details>
+      <details class="faq-item">
+        <summary>How does TeamClaw relate to OpenClaw?</summary>
+        <p>TeamClaw runs as a plugin inside OpenClaw (2026.3.24 or newer). By default it gets its own dedicated agent and workspace, so it never shares the host main agent; external worker nodes can also register back to a controller.</p>
+      </details>
+      <details class="faq-item">
+        <summary>How do I install TeamClaw?</summary>
+        <p>On a machine that already runs OpenClaw with a working model, run npx -y @teamclaws/teamclaw install and follow the guided installer to choose the install mode and the model the team should use.</p>
+      </details>
+      <details class="faq-item">
+        <summary>Where does my work live?</summary>
+        <p>On your own machine, in git. Workers sync before they execute and publish after they finish - nothing important lives only in a chat transcript.</p>
+      </details>
+      <details class="faq-item">
+        <summary>Which deployment topologies are supported?</summary>
+        <p>Start with process workers on a single machine, grow to Docker or Kubernetes pods when the work demands it, or attach external worker nodes on other machines that register back to the controller over HTTP. Same controller, same flow, same UI.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
 <section class="cta" id="install">
   <div class="wrap cta-in">
-    <div class="sec-kicker rv">11 - GET IN</div>
+    <div class="sec-kicker rv">12 - GET IN</div>
     <h2 class="rv" style="--d:.05s">Hire the team.</h2>
     <p class="sub rv" style="--d:.1s">One command. A controller, eleven specialists, and a flow that keeps moving until it ships.</p>
     <div class="install rv" style="--d:.2s">

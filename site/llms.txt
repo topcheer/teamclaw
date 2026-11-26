@@ -1,0 +1,29 @@
+# TeamClaw
+
+> TeamClaw is an OpenClaw plugin that turns one or more OpenClaw instances into a virtual software company. One controller routes execution-ready work to role-based workers, blocks on real questions instead of guessing, and syncs everything through git.
+
+TeamClaw is for teams and solo developers who already run OpenClaw and want it to behave like a software team rather than a chat window: work arrives as intake, becomes an execution-ready task, is routed to a role-based worker (PM, Software Architect, Developer, QA, Release Engineer, Infrastructure Engineer, DevOps, Security, UI/UX, Marketing, Data), and ships through git with its evidence attached. When a role cannot safely continue it raises a clarification instead of guessing.
+
+Key facts:
+- Runs as an OpenClaw plugin; minimum OpenClaw version 2026.3.24, Node 22+.
+- Eleven role-based workers coordinated by one controller; a clarification-first task flow.
+- Four deployment topologies: process workers on one host, Docker, Kubernetes, and external worker nodes.
+- Desktop app (TeamClaw Desktop) for macOS, Windows and Linux: https://github.com/topcheer/teamclaw/releases/tag/desktop-latest
+- No lock-in on state: the workspace is git-backed and nothing important lives only in a chat transcript.
+
+## Install
+
+```bash
+npx -y @teamclaws/teamclaw install
+```
+
+Requires an OpenClaw host with at least one working model configuration.
+
+## Links
+
+- [Website](https://teamclaw.dev/): product overview, roles, topologies, FAQ
+- [GitHub repository](https://github.com/topcheer/teamclaw): source, issues, releases
+- [npm package](https://www.npmjs.com/package/@teamclaws/teamclaw): published plugin
+- [Install guide](https://github.com/topcheer/teamclaw/blob/main/INSTALL.md): install modes and packaging
+- [Design notes](https://github.com/topcheer/teamclaw/blob/main/DESIGN.md): architecture
+- [Privacy policy](https://teamclaw.dev/privacy): how the site and product handle data
