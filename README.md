@@ -57,6 +57,12 @@ The key design constraint is that TeamClaw creates **execution-ready work**, not
 
 For requirements that look medium or complex, TeamClaw can also run a **team kickoff meeting** before execution. The controller provisions candidate roles, gathers lightweight kickoff assessments from each role, and then synthesizes those assessments into a clearer task plan, dependency view, and risk summary that is visible in the UI.
 
+## License
+
+TeamClaw is free and open source under the **GNU Affero General Public License v3.0 only** (`AGPL-3.0-only`). See [LICENSE](./LICENSE).
+
+You may run, study, modify and redistribute it. If you run a modified version as a network service, you must offer that version's complete source code to its users. OpenClaw itself is MIT-licensed and is not covered by this license.
+
 ## Deploy on Kubernetes (operator)
 
 The fastest path on any cluster (k3s/minikube/cloud) is the TeamClaw

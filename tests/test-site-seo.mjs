@@ -31,12 +31,10 @@ const blocks = [...html.matchAll(/<script type="application\/ld\+json">([\s\S]*?
 // One block may hold an array of entities (or an object with @graph).
 const entities = blocks.flatMap((block) => (Array.isArray(block) ? block : block["@graph"] ? block["@graph"] : [block]));
 assert.deepEqual(entities.map((o) => o["@type"]), ["SoftwareApplication", "Organization", "FAQPage"], "JSON-LD types");
-for (const entity of entities) {
-  assert.doesNotMatch(JSON.stringify(entity), /licen[sc]e/i, "no license claim until the license is decided");
-}
+assert.equal(entities.find((o) => o["@type"] === "SoftwareApplication").license, "https://www.gnu.org/licenses/agpl-3.0.html", "SoftwareApplication license URL");
 const faq = entities.find((o) => o["@type"] === "FAQPage").mainEntity;
 const visible = [...html.matchAll(/<summary>([^<]+)<\/summary>\s*<p>([^<]+)<\/p>/g)].map((m) => ({ q: m[1], a: m[2] }));
-assert.equal(faq.length, 5, "five FAQ entries");
+assert.equal(faq.length, 6, "six FAQ entries");
 assert.deepEqual(
   faq.map((f) => ({ q: f.name, a: f.acceptedAnswer.text })),
   visible,
@@ -55,7 +53,8 @@ assert.match(sitemap, /<urlset xmlns="http:\/\/www\.sitemaps\.org\/schemas\/site
 assert.deepEqual([...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]), ["https://teamclaw.dev/", "https://teamclaw.dev/privacy"], "sitemap URLs");
 assert.ok(llms.startsWith("# TeamClaw\n"), "llms.txt H1");
 assert.ok(llms.includes("npx -y @teamclaws/teamclaw install"), "llms.txt install command");
-assert.doesNotMatch(llms, /licen[sc]e/i, "llms.txt makes no license claim yet");
+assert.match(llms, /License: GNU Affero General Public License v3\.0 only \(AGPL-3\.0-only\)/, "llms.txt states the license");
+assert.equal(JSON.parse(read("../src/package.json")).license, "AGPL-3.0-only", "package.json license matches the site claim");
 
 // --- worker route contract: explicit routes, real 404, redirects ---
 for (const route of ['"/":', '"/privacy":', '"/robots.txt":', '"/sitemap.xml":', '"/llms.txt":', '"/og-image.png":']) {

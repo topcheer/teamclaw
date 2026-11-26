@@ -138,3 +138,7 @@ the repo README's "Internet tunnel" section for the full matrix.
 - Installation guide: <https://github.com/topcheer/teamclaw/blob/main/INSTALL.md>
 - Repository overview: <https://github.com/topcheer/teamclaw/blob/main/README.md>
 - Design notes: <https://github.com/topcheer/teamclaw/blob/main/DESIGN.md>
+
+## License
+
+AGPL-3.0-only. See [LICENSE](./LICENSE). If you run a modified version as a network service, you must offer that version's complete source code to its users.
