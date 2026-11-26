@@ -57,7 +57,7 @@ buttons to the store pages once they are live.
 `X-Robots-Tag: noindex` (no catch-all homepage fallback):
 
 - `/` (`index.html`), `/privacy` (`privacy.html`); `/index.html` and `/privacy.html` 301 to them
-- `/robots.txt` - allows all crawlers, lists the common generative-engine bots and points at the sitemap
+- `/robots.txt` - wildcard `Allow: /` plus the sitemap. The generative-engine crawler policy is owned by Cloudflare at the zone level (Content Signals / AI Crawl Control): it prepends a managed block to this file and enforces it at the edge, so per-bot rules are deliberately not repeated here
 - `/sitemap.xml` - `/` and `/privacy`
 - `/llms.txt` - short factual summary for LLM crawlers (what it is, install, key links)
 - `/og-image.png` - 1200x630 social preview card
