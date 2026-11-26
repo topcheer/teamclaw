@@ -59,9 +59,9 @@ For requirements that look medium or complex, TeamClaw can also run a **team kic
 
 ## License
 
-TeamClaw is free and open source under the **GNU Affero General Public License v3.0 only** (`AGPL-3.0-only`). See [LICENSE](./LICENSE).
+TeamClaw is free and open source under the **MIT License**. See [LICENSE](./LICENSE).
 
-You may run, study, modify and redistribute it. If you run a modified version as a network service, you must offer that version's complete source code to its users. OpenClaw itself is MIT-licensed and is not covered by this license.
+You may use, copy, modify, merge, publish, distribute, sublicense and/or sell copies of it, provided the copyright and permission notice is kept with the software. It is provided "as is", without warranty of any kind.
 
 ## Deploy on Kubernetes (operator)
 

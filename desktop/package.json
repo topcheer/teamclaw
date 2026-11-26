@@ -1,7 +1,7 @@
 {
   "name": "teamclaw-desktop",
   "version": "0.1.4",
-  "license": "AGPL-3.0-only",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "description": "Cross-platform TeamClaw desktop client",
