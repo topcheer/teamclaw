@@ -47,9 +47,10 @@ assert.equal((html.match(/<h1[\s>]/g) || []).length, 1, "exactly one h1");
 // --- robots / sitemap / llms ---
 assert.match(robots, /^User-agent: \*\nAllow: \/$/m, "robots allows all");
 assert.match(robots, /Sitemap: https:\/\/teamclaw\.dev\/sitemap\.xml/, "robots references the sitemap");
-for (const bot of ["GPTBot", "ClaudeBot", "PerplexityBot", "Google-Extended", "CCBot"]) {
-  assert.ok(robots.includes(`User-agent: ${bot}\nAllow: /`), `robots allows ${bot}`);
-}
+// Cloudflare owns the generative-engine crawler policy for this zone (managed
+// robots.txt + edge enforcement); per-bot rules here would contradict it.
+const uaLines = [...robots.matchAll(/^User-agent: (.+)$/gm)].map((m) => m[1]);
+assert.deepEqual(uaLines, ["*"], "robots.txt only carries the wildcard rule");
 assert.match(sitemap, /<urlset xmlns="http:\/\/www\.sitemaps\.org\/schemas\/sitemap\/0\.9">/, "sitemap urlset");
 assert.deepEqual([...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]), ["https://teamclaw.dev/", "https://teamclaw.dev/privacy"], "sitemap URLs");
 assert.ok(llms.startsWith("# TeamClaw\n"), "llms.txt H1");
