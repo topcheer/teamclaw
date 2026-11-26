@@ -10,7 +10,7 @@ Key facts:
 - Four deployment topologies: process workers on one host, Docker, Kubernetes, and external worker nodes.
 - Desktop app (TeamClaw Desktop) for macOS, Windows and Linux: https://github.com/topcheer/teamclaw/releases/tag/desktop-latest
 - No lock-in on state: the workspace is git-backed and nothing important lives only in a chat transcript.
-- License: GNU Affero General Public License v3.0 only (AGPL-3.0-only). Source is available; if you run a modified version as a network service, you must offer that version's complete source code to its users.
+- License: MIT. Free to use, modify and redistribute, provided the copyright and permission notice is kept with the software; provided "as is", without warranty.
 
 ## Install
 

@@ -141,4 +141,4 @@ the repo README's "Internet tunnel" section for the full matrix.
 
 ## License
 
-AGPL-3.0-only. See [LICENSE](./LICENSE). If you run a modified version as a network service, you must offer that version's complete source code to its users.
+MIT. See [LICENSE](./LICENSE).

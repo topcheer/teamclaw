@@ -67,4 +67,4 @@ Structured data lives in `index.html` as JSON-LD (`SoftwareApplication`,
 visible FAQ; `tests/test-site-seo.mjs` asserts that, so edit both together.
 License statements (`license` URL in the SoftwareApplication JSON-LD, the License line in
 `llms.txt`, the last FAQ item) must stay in sync with the repository LICENSE
-(`AGPL-3.0-only`).
+(`MIT`).
