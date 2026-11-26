@@ -50,3 +50,19 @@ the macOS `.dmg`, Windows `Setup.exe` and Linux `AppImage`/`.deb` builds from
 npm version tag, which has no desktop assets. Mac App Store and Microsoft Store
 listings are still in submission (`desktop/msstore/README.md`); switch the
 buttons to the store pages once they are live.
+
+## Routes and crawler files
+
+`worker.js` serves an explicit route table; anything else is a real 404 with
+`X-Robots-Tag: noindex` (no catch-all homepage fallback):
+
+- `/` (`index.html`), `/privacy` (`privacy.html`); `/index.html` and `/privacy.html` 301 to them
+- `/robots.txt` - allows all crawlers, lists the common generative-engine bots and points at the sitemap
+- `/sitemap.xml` - `/` and `/privacy`
+- `/llms.txt` - short factual summary for LLM crawlers (what it is, install, key links)
+- `/og-image.png` - 1200x630 social preview card
+
+Structured data lives in `index.html` as JSON-LD (`SoftwareApplication`,
+`Organization`, `FAQPage`). The FAQ answers must stay verbatim identical to the
+visible FAQ; `tests/test-site-seo.mjs` asserts that, so edit both together.
+No file mentions a license until one is decided.
