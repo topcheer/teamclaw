@@ -65,4 +65,6 @@ buttons to the store pages once they are live.
 Structured data lives in `index.html` as JSON-LD (`SoftwareApplication`,
 `Organization`, `FAQPage`). The FAQ answers must stay verbatim identical to the
 visible FAQ; `tests/test-site-seo.mjs` asserts that, so edit both together.
-No file mentions a license until one is decided.
+License statements (`license` URL in the SoftwareApplication JSON-LD, the License line in
+`llms.txt`, the last FAQ item) must stay in sync with the repository LICENSE
+(`AGPL-3.0-only`).
